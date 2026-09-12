@@ -342,6 +342,25 @@ pub(crate) fn emit_denied(world: &mut World) {
         .push(denied_sfx());
 }
 
+/// Emit the bevy `SettingsBack` pop sting (`sndClickBack` 0.6 one-shot
+/// plus the `UiBack` reactive cue). The close path stays silent, so this
+/// is pushed at the site instead of the static maps (which stay silent
+/// for `SettingsBack`).
+fn emit_click_back(world: &mut World) {
+    world.init_resource::<Queue<ReactiveAudioRequest>>();
+    world
+        .resource_mut::<Queue<ReactiveAudioRequest>>()
+        .push(ReactiveAudioRequest::new(crate::audio::ReactiveCue::UiBack));
+    world.init_resource::<Queue<crate::audio::AudioCue>>();
+    world
+        .resource_mut::<Queue<crate::audio::AudioCue>>()
+        .push(crate::audio::AudioCue {
+            name: "sndClickBack",
+            volume: 0.6,
+            variance: 0.0,
+        });
+}
+
 /// Push a raw one-shot stem for site-context picks (character, skin,
 /// crown, mutation highlight).
 pub fn emit_sfx(world: &mut World, cue: crate::audio::AudioCue) {
@@ -563,9 +582,8 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                     menu.settings_page = 0;
                     menu.settings_page_stack.clear();
                 }
-                emit_cue(world, &UiAction::SettingsBack);
             } else {
-                emit_cue(world, &UiAction::SettingsBack);
+                emit_click_back(world);
             }
         }
         UiAction::ShowPauseConfirm(kind) => {
@@ -623,10 +641,7 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 // Bevy closes the loadout only for the Dog/Skeleton/Frog
                 // trio (Random keeps whatever the toggle set; the render
                 // layer hides the panel for `selected == 0`).
-                if matches!(
-                    race,
-                    RaceId::BigDog | RaceId::Skeleton | RaceId::Frog
-                ) {
+                if matches!(race, RaceId::BigDog | RaceId::Skeleton | RaceId::Frog) {
                     menu.loadout_open = false;
                 }
             }
@@ -1065,14 +1080,19 @@ fn tick_main_menu_input(world: &mut World, edge: MenuEdge) {
         return;
     }
     if nav_v != 0 {
+        let landed_available = world
+            .get_resource::<MenuState>()
+            .map(|menu| (menu.main_menu_cursor as i16 + nav_v as i16).rem_euclid(5) as usize)
+            .is_some_and(|row| matches!(row, 0 | 2 | 3 | 4));
         if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
             menu.main_menu_cursor =
                 (menu.main_menu_cursor as i16 + nav_v as i16).rem_euclid(5) as usize;
         }
-        emit_sfx(world, hover_sfx());
+        if landed_available {
+            emit_sfx(world, hover_sfx());
+        }
     }
-    // Digits jump: slot 0..4 maps straight onto rows 0..4 (Digit5 feeds
-    // slot 4 for QUIT).
+
     if let Some(slot) = slot {
         if slot < 5 {
             if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
@@ -1266,12 +1286,12 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
         // actually open — otherwise E / 1-4 / right-click would be
         // swallowed every tick and weapons could never be picked up.
         // `spec` is taken and dropped: ability lives in gameplay (gated),
-        // and overlay Back travels via Esc / right-click instead, so a
-        // Shift press never closes a menu by accident.
         let menu_open = game_over
             || world
                 .get_resource::<MenuState>()
                 .is_some_and(|menu| menu.mutation_count > 0)
+            || world.get_resource::<PendingMutation>().is_some()
+            || world.get_resource::<PendingUltra>().is_some()
             || *world.resource::<OverlayMenu>() != OverlayMenu::None
             || world
                 .get_resource::<MenuState>()
@@ -1326,7 +1346,6 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
                     return;
                 }
                 _ => {
-                    apply_menu_action(world, UiAction::CancelPauseConfirm);
                     return;
                 }
             }

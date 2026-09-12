@@ -369,8 +369,7 @@ impl GameAudio {
             return ("sndOasisShoot", 0.5, 0.1);
         }
         let n = weapon_name;
-        let is_gold =
-            n.contains("GOLDEN") || n.contains("GOLD ") || n.starts_with("GOLD");
+        let is_gold = n.contains("GOLDEN") || n.contains("GOLD ") || n.starts_with("GOLD");
         if is_gold {
             if n.contains("PISTOL") || n.contains("REVOLVER") {
                 return ("sndGoldPistol", 0.5, 0.1);
@@ -1069,8 +1068,7 @@ pub fn tick_area_audio_fades(
 
     let music_dim = if paused.0 { MUSIC_PAUSE_DIM } else { 1.0 };
     let music_base = channels.master * channels.music * music_dim;
-    let ambience_base =
-        channels.master * channels.music * AMBIENCE_BASE_SCALE * amb_filter.0;
+    let ambience_base = channels.master * channels.music * AMBIENCE_BASE_SCALE * amb_filter.0;
 
     state.music_volume = (music_base * state.music_gain).clamp(0.0, 1.0);
     state.ambience_volume = (ambience_base * state.ambience_gain).clamp(0.0, 1.0);
@@ -1414,9 +1412,18 @@ pub enum UiAction {
     SelectMutation(usize),
     PickMutation(usize),
     SettingToggle(String),
-    SettingSlider { key: String, value: f32 },
-    SettingCycle { key: String, dir: i8 },
-    SettingInput { key: String, value: String },
+    SettingSlider {
+        key: String,
+        value: f32,
+    },
+    SettingCycle {
+        key: String,
+        dir: i8,
+    },
+    SettingInput {
+        key: String,
+        value: String,
+    },
     SettingResetOptions,
     SettingEraseProgress,
     SettingViewCredits,
@@ -1462,10 +1469,10 @@ pub fn ui_action_to_cue(action: &UiAction) -> Option<ReactiveCue> {
         | UiAction::SetAmbienceVol(_)
         | UiAction::SetLanguage(_) => None,
         UiAction::SettingsCategory(_)
-        | UiAction::SettingsBack
         | UiAction::ShowPauseConfirm(_)
         | UiAction::CancelPauseConfirm
         | UiAction::ConfirmPause(_) => Some(ReactiveCue::UiClick),
+        UiAction::SettingsBack => None,
         UiAction::SettingToggle(_)
         | UiAction::SettingCycle { .. }
         | UiAction::SettingInput { .. }
@@ -1524,6 +1531,15 @@ pub fn ui_action_sfx(action: &UiAction) -> Vec<AudioCue> {
         | UiAction::SettingInput { .. } => {
             push("sndClick", 0.6);
         }
+        UiAction::SetMasterVol(_)
+        | UiAction::SetSfxVol(_)
+        | UiAction::SetMusicVol(_)
+        | UiAction::SetAmbienceVol(_) => {
+            push("sndSliderLetGo", 0.5);
+        }
+        UiAction::SetLanguage(_) | UiAction::SettingsCategory(_) => {
+            push("sndClick", 0.7);
+        }
         UiAction::SettingSlider { .. } => {
             push("sndSliderLetGo", 0.5);
         }
@@ -1539,10 +1555,6 @@ pub fn ui_action_sfx(action: &UiAction) -> Vec<AudioCue> {
         UiAction::SettingOpenSubcategory(_) => {
             push("sndClick", 0.7);
         }
-        // Silent in bevy: StartGame, Resume, OpenSettings, OpenCredits,
-        // CloseOverlay, SaveSettings, volume/language sets, categories,
-        // ToggleLoadout, weapon/crown cycles, and all context picks
-        // (character/skin/crown/mutation handled at their sites).
         _ => {}
     }
     out
@@ -1787,4 +1799,3 @@ pub fn update_combat_intensity_audio(
         layer.current = smooth_value(layer.current, target, time.delta_secs, 0.55);
     }
 }
-

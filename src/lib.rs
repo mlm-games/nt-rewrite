@@ -817,7 +817,10 @@ impl App {
                 }
             }
             if dv != 0 || dh != 0 {
-                self.sim.world.resource_mut::<NtInput>().push_menu_nav(dv, dh);
+                self.sim
+                    .world
+                    .resource_mut::<NtInput>()
+                    .push_menu_nav(dv, dh);
             }
         }
         // Right-button press: the viewport staged a buttonless pick for
@@ -1019,9 +1022,24 @@ impl App {
                 }
             }
             self.clicks.clear();
+        } else if offer_open {
+            if !rmb_down && let Some(click) = self.clicks.last().copied() {
+                let viewport_dp = self.view_viewport_dp;
+                let vw = crate::render::gml_view_size(viewport_dp)[0];
+                let k = (viewport_dp[1].max(1.0) / 240.0).max(1e-6);
+                if k.is_finite()
+                    && let Some(action) = crate::render::mutation_icon_hit_action(
+                        &mut self.sim.world,
+                        click.dp[0] / k,
+                        click.dp[1] / k,
+                        vw,
+                    )
+                {
+                    apply_menu_action(&mut self.sim.world, action);
+                }
+            }
+            self.clicks.clear();
         } else if let Some(_click) = self.clicks.last().copied() {
-            // Splash/Loading advance on any press; the mutation offer
-            // confirms the highlight. Right-button presses stay silent.
             self.clicks.clear();
             if !rmb_down {
                 self.sim.world.resource_mut::<NtInput>().press_interact();
@@ -1041,9 +1059,15 @@ impl App {
         }
         let (slot_h, crownsize, skinsize) = match &self.assets {
             Some(a) => (
-                a.native_size("images/sprCharSelect.png").map(|s| s.y).unwrap_or(20.0),
-                a.native_size("images/sprLoadoutCrown.png").map(|s| s.y - 4.0).unwrap_or(20.0),
-                a.native_size("images/sprLoadoutSkin.png").map(|s| s.x - 4.0).unwrap_or(20.0),
+                a.native_size("images/sprCharSelect.png")
+                    .map(|s| s.y)
+                    .unwrap_or(20.0),
+                a.native_size("images/sprLoadoutCrown.png")
+                    .map(|s| s.y - 4.0)
+                    .unwrap_or(20.0),
+                a.native_size("images/sprLoadoutSkin.png")
+                    .map(|s| s.x - 4.0)
+                    .unwrap_or(20.0),
             ),
             None => (20.0, 20.0, 20.0),
         };
@@ -1430,10 +1454,7 @@ impl App {
                     let app = unsafe { &mut *rmb_ptr_down };
                     app.rmb_down();
                 }
-                if matches!(
-                    ev.event,
-                    PointerEventKind::Down(PointerButton::Primary)
-                ) {
+                if matches!(ev.event, PointerEventKind::Down(PointerButton::Primary)) {
                     // SAFETY: synchronous compose-time dispatch only.
                     let app = unsafe { &mut *lmb_ptr_down };
                     app.lmb_down();
@@ -1529,8 +1550,11 @@ impl App {
                     .hit_passthrough(),
             );
             layers.push(
-                Column(Modifier::new().fill_max_size().hit_passthrough())
-                    .child(vec![bar(), spacer, bar()]),
+                Column(Modifier::new().fill_max_size().hit_passthrough()).child(vec![
+                    bar(),
+                    spacer,
+                    bar(),
+                ]),
             );
         }
         if let Some(rows) = menu_rows {
@@ -2040,13 +2064,7 @@ fn route_menu_click(
 
 /// Disabled-but-visible rows that sting `sndNoSelect` on click (GML
 /// unavailable-button parity). Today only MainMenu CO-OP.
-fn menu_row_denied(
-    kind: MenuOverlay,
-    world: &mut World,
-    gx: f32,
-    gy: f32,
-    vw: f32,
-) -> bool {
+fn menu_row_denied(kind: MenuOverlay, world: &mut World, gx: f32, gy: f32, vw: f32) -> bool {
     if kind != MenuOverlay::MainMenu {
         return false;
     }

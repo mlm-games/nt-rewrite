@@ -5133,6 +5133,58 @@ pub fn title_click_action(
     None
 }
 
+/// Mutation/ultra offer icon hit-test → [`UiAction`](crate::audio::UiAction).
+/// Geometry mirrors the offer-icon draw in `hud_sprites` exactly (same
+/// `step`/`half`/`start_x`/`icon_y` formulas over the same live `vw`,
+/// including the `-12` shift at `n >= 10`); the hit box is the bevy
+/// `mutation_panel` size (`24*scale` x `32*scale` centered on the icon,
+/// top at `icon_y - 16*scale`). Two-step bevy law: an unhighlighted card
+/// highlights (`SelectMutation`), the highlighted card commits
+/// (`PickMutation`). Stray clicks and empty offers route to nothing, so a
+/// misclick can never confirm a pick or leak into gameplay.
+pub fn mutation_icon_hit_action(
+    world: &mut World,
+    gx: f32,
+    gy: f32,
+    vw: f32,
+) -> Option<UiAction> {
+    let n = world
+        .get_resource::<PendingMutation>()
+        .map(|p| p.choices.len())
+        .or_else(|| {
+            world
+                .get_resource::<PendingUltra>()
+                .map(|u| u.choices.len())
+        })
+        .unwrap_or(0);
+    if n == 0 {
+        return None;
+    }
+    let step = (vw / (n as f32 + 1.0)).floor().min(32.0);
+    let scale = (step / 32.0).max(0.65);
+    let half = (step as i32 / 2) as f32;
+    let xview_shift = if n >= 10 { -12.0 } else { 0.0 };
+    let start_x = vw * 0.5 + xview_shift - (n as f32 - 1.0) * half;
+    let icon_y = 240.0 - 21.0;
+    let hw = 24.0 * scale * 0.5;
+    let top = icon_y - 16.0 * scale;
+    let hh = 32.0 * scale;
+    for i in 0..n {
+        let cx = start_x + i as f32 * step;
+        if (gx - cx).abs() <= hw && gy >= top && gy <= top + hh {
+            let selected = world
+                .get_resource::<MenuState>()
+                .and_then(|m| m.mutation_selected);
+            return Some(if selected == Some(i) {
+                UiAction::PickMutation(i)
+            } else {
+                UiAction::SelectMutation(i)
+            });
+        }
+    }
+    None
+}
+
 /// Loadout panel hit rects. Open-frame geometry replicates
 /// `menu_loadout_sprites` exactly (same formulas, same walk order —
 /// weapons draw last so they win overlaps); closed-frame zones are the
