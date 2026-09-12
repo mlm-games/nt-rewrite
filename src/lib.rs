@@ -753,7 +753,11 @@ impl App {
         // do hover/clicks steer aim and fire; over menus the buttons
         // stage `UiAction`s instead (a bare viewport click does nothing
         // so it can never resume through a MENU/RETRY press).
-        let live_play = state == AppState::InGame && !offer_open && !paused && !game_over;
+        let live_play = state == AppState::InGame
+            && !offer_open
+            && !paused
+            && !game_over
+            && overlay == OverlayMenu::None;
         let menu_open =
             state == AppState::InGame && (paused || overlay != OverlayMenu::None) && !game_over;
 
@@ -799,26 +803,32 @@ impl App {
                 self.sim.world.resource_mut::<NtInput>().push_menu_nav(dv, dh);
             }
         }
-        // Right-button edges: the viewport staged buttonless picks for
-        // them this window — drop the whole window (a coincident left
-        // edge is an acceptable loss) so right clicks never fire guns,
-        // confirm dialogs, or retry screens.
-        let rmb_edge = std::mem::replace(&mut self.rmb_down_edge, false)
-            | std::mem::replace(&mut self.rmb_up_edge, false);
-        if rmb_edge {
+        // Right-button press: the viewport staged a buttonless pick for
+        // it this window — drop the window so right clicks never fire
+        // guns, confirm dialogs, or retry screens. Release edges never
+        // carried a pick, so they must not eat a coincident left click.
+        let rmb_down = std::mem::replace(&mut self.rmb_down_edge, false);
+        // Release stages no pick; drain the flag so it never leaks into
+        // a later window.
+        let _ = std::mem::replace(&mut self.rmb_up_edge, false);
+        if rmb_down {
             self.clicks.clear();
         }
 
         // No fire pulses from clicks over the main menu / title: both
         // route positionally now, and Title takes `fire` (Space) as the
         // loadout toggle — a pod click must not toggle it as a side
-        // effect. (Splash/Loading keep click-as-fire: any press advances.)
+        // effect. Splash/Loading advance via the click→interact arm
+        // below, so they stage no fire pulse either (one pulse per
+        // click, not two).
         let mouse_down = !self.clicks.is_empty()
             && !menu_open
             && !game_over
             && !offer_open
             && state != AppState::MainMenu
-            && state != AppState::Title;
+            && state != AppState::Title
+            && state != AppState::Splash
+            && state != AppState::Loading;
         let mouse = MouseState {
             left_held: mouse_down,
             left_pressed: mouse_down,
@@ -854,6 +864,13 @@ impl App {
                 self.touch_new.clear();
                 sample_touch(&contacts, self.view_width / d, &mut input);
             }
+        }
+        // Right-click shares the `ShiftLeft` spec channel (GML `spec`
+        // on `mb_right`); on Title that channel toggles loadout/hardmode,
+        // so a right-click would toggle panels as a side effect. Drop
+        // the pulse — Back only travels via Esc here.
+        if rmb_down && state == AppState::Title {
+            self.sim.world.resource_mut::<NtInput>().take_spec_pressed();
         }
         // Raw Digit1-4 mutation protocol (direct `MutationChoice` write).
         {
@@ -921,7 +938,7 @@ impl App {
             // settings/credits (GML `BackButton` `mb_right` parity),
             // left clicks route at the menu buttons, then drop either
             // way.
-            if rmb_edge && matches!(overlay, OverlayMenu::Settings | OverlayMenu::Credits) {
+            if rmb_down && matches!(overlay, OverlayMenu::Settings | OverlayMenu::Credits) {
                 apply_menu_action(&mut self.sim.world, UiAction::CloseOverlay);
             } else if let Some(click) = self.clicks.last().copied() {
                 let viewport_dp = self.view_viewport_dp;
@@ -941,11 +958,12 @@ impl App {
             }
             self.clicks.clear();
         } else if game_over {
-            // GML `GameOver`: left click retries through the same
-            // `MenuEdge` restart as KeyR (Loading). Right-button windows
-            // were already cleared above.
-            if !rmb_edge && self.clicks.last().copied().is_some() {
-                self.sim.world.resource_mut::<MenuEdge>().restart_pressed = true;
+            // Bevy `game_over_panel`: full-panel click goes to the menu
+            // (`QuitToTitle`); retry travels via KeyR (`restart_pressed`,
+            // staged by the shell or the game-over R hint). Right-button
+            // windows were already cleared above.
+            if !rmb_down && self.clicks.last().copied().is_some() {
+                apply_menu_action(&mut self.sim.world, UiAction::QuitToTitle);
             }
             self.clicks.clear();
         } else if state == AppState::MainMenu {
@@ -975,9 +993,9 @@ impl App {
             self.clicks.clear();
         } else if let Some(_click) = self.clicks.last().copied() {
             // Splash/Loading advance on any press; the mutation offer
-            // confirms the highlight. Right-button windows stay silent.
+            // confirms the highlight. Right-button presses stay silent.
             self.clicks.clear();
-            if !rmb_edge {
+            if !rmb_down {
                 self.sim.world.resource_mut::<NtInput>().press_interact();
             }
         } else {

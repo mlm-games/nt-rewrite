@@ -383,12 +383,15 @@ pub fn tick_escape_pause(
                 } else {
                     menu.settings_page = 0;
                 }
+                menu.settings_cursor = 0;
             } else if paused.0 {
                 *overlay = OverlayMenu::Pause;
                 menu.settings_page = 0;
                 menu.settings_page_stack.clear();
+                menu.settings_cursor = 0;
             } else {
                 *overlay = OverlayMenu::None;
+                menu.settings_cursor = 0;
             }
         }
         // `None` while already paused (Resume path owns that edge).

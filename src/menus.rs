@@ -411,6 +411,7 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                     if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
                         menu.settings_page = 0;
                         menu.settings_page_stack.clear();
+                        menu.settings_cursor = 0;
                     }
                 }
                 OverlayMenu::Pause if paused => {
@@ -619,11 +620,12 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
                 menu.title_cursor = i;
                 menu.title_go_visible = true;
-                // GML `scrLoadoutMenuInit`: no loadout for Random (nor
-                // the Dog/Skeleton/Frog trio).
+                // Bevy closes the loadout only for the Dog/Skeleton/Frog
+                // trio (Random keeps whatever the toggle set; the render
+                // layer hides the panel for `selected == 0`).
                 if matches!(
                     race,
-                    RaceId::Random | RaceId::BigDog | RaceId::Skeleton | RaceId::Frog
+                    RaceId::BigDog | RaceId::Skeleton | RaceId::Frog
                 ) {
                     menu.loadout_open = false;
                 }
@@ -659,21 +661,9 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             }
         }
         UiAction::ToggleLoadout => {
-            // GML `scr_loadout_is_available_for_race`: Random and the
-            // Dog/Skeleton/Frog trio have no loadout panel.
-            world.init_resource::<SelectedCharacter>();
-            let race = world.resource::<SelectedCharacter>().0;
-            let available = !matches!(
-                race,
-                RaceId::Random | RaceId::BigDog | RaceId::Skeleton | RaceId::Frog
-            );
-            if !available {
-                if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
-                    menu.loadout_open = false;
-                }
-                emit_denied(world);
-                return;
-            }
+            // Bevy flips unconditionally; the render layer hides the
+            // panel for Random (`selected == 0`), and trio gating lives
+            // in the select-close above.
             if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
                 menu.loadout_open = !menu.loadout_open;
             }
@@ -692,7 +682,7 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             if unlocked {
                 emit_cue(world, &UiAction::ToggleHardmode);
             } else {
-                emit_cue(world, &UiAction::CancelPauseConfirm);
+                emit_denied(world);
             }
         }
         UiAction::CycleStartWeapon(_) => {
@@ -767,11 +757,24 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             }
         }
         UiAction::SelectMutation(idx) => {
-            // Bevy: first click highlights (no bounds check there either).
-            if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
-                menu.mutation_selected = Some(idx);
+            // Bevy: already-highlighted card commits (`MutationChoice`)
+            // and clears; otherwise it highlights with `sndHover`.
+            let commit = world
+                .get_resource::<MenuState>()
+                .and_then(|menu| menu.mutation_selected)
+                == Some(idx);
+            if commit {
+                world.init_resource::<MutationChoice>();
+                world.resource_mut::<MutationChoice>().0 = Some(idx);
+                if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+                    menu.mutation_selected = None;
+                }
+            } else {
+                if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+                    menu.mutation_selected = Some(idx);
+                }
+                emit_sfx(world, hover_sfx());
             }
-            emit_sfx(world, hover_sfx());
             emit_cue(world, &UiAction::SelectMutation(idx));
         }
         UiAction::PickMutation(idx) => {
@@ -1005,6 +1008,7 @@ pub fn tick_menus(world: &mut World) {
                 input.take_fire_pressed()
                     || input.take_interact_pressed()
                     || input.take_spec_pressed()
+                    || input.take_ability_pressed()
             };
             crate::state::tick_splash(world, dt, pressed);
         }
@@ -1040,7 +1044,7 @@ fn tick_main_menu_input(world: &mut World, edge: MenuEdge) {
         apply_menu_action(world, UiAction::CloseOverlay);
         return;
     }
-    let (nav_v, _nav_h, slot, confirm) = {
+    let (nav_v, nav_h, slot, confirm) = {
         let mut input = world.resource_mut::<NtInput>();
         let (dv, dh) = input.take_menu_nav();
         (
@@ -1050,6 +1054,16 @@ fn tick_main_menu_input(world: &mut World, edge: MenuEdge) {
             input.take_interact_pressed(),
         )
     };
+    // Settings opened from the main menu owns the keyboard: Up/Down move
+    // the settings cursor, Left/Right step values, Enter activates (same
+    // as the InGame settings arm below).
+    if world
+        .get_resource::<OverlayMenu>()
+        .is_some_and(|o| *o == OverlayMenu::Settings)
+    {
+        tick_settings_nav(world, nav_v, nav_h, confirm);
+        return;
+    }
     if nav_v != 0 {
         if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
             menu.main_menu_cursor =
@@ -1296,35 +1310,58 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
     // Keyboard shortcuts for the pause buttons (1-4): MENU / RETRY /
     // SETTINGS / CONTINUE. Mouse already works via `route_menu_click`;
     // without this the buttons are unreachable from the keyboard.
+    // While the quit/restart confirm is open, Enter commits it and
+    // digits 1-2 pick MENU/RETRY directly (Escape dismisses via the
+    // escape tick); other rows are inert until the confirm resolves.
     if overlay_kind == OverlayMenu::Pause
-        && world
-            .get_resource::<MenuState>()
-            .is_some_and(|m| m.pause_confirm.is_none())
         && let Some(slot) = slot
     {
-        match slot {
-            0 => {
-                apply_menu_action(world, UiAction::ShowPauseConfirm(0));
-                return;
+        let confirming = world
+            .get_resource::<MenuState>()
+            .and_then(|m| m.pause_confirm);
+        if let Some(_kind) = confirming {
+            match slot {
+                0 | 1 => {
+                    apply_menu_action(world, UiAction::ConfirmPause(slot as u8));
+                    return;
+                }
+                _ => {
+                    apply_menu_action(world, UiAction::CancelPauseConfirm);
+                    return;
+                }
             }
-            1 => {
-                apply_menu_action(world, UiAction::ShowPauseConfirm(1));
-                return;
+        } else {
+            match slot {
+                0 => {
+                    apply_menu_action(world, UiAction::ShowPauseConfirm(0));
+                    return;
+                }
+                1 => {
+                    apply_menu_action(world, UiAction::ShowPauseConfirm(1));
+                    return;
+                }
+                2 => {
+                    apply_menu_action(world, UiAction::OpenSettings);
+                    return;
+                }
+                3 => {
+                    apply_menu_action(world, UiAction::Resume);
+                    return;
+                }
+                _ => {}
             }
-            2 => {
-                apply_menu_action(world, UiAction::OpenSettings);
-                return;
-            }
-            3 => {
-                apply_menu_action(world, UiAction::Resume);
-                return;
-            }
-            _ => {}
         }
     }
     match overlay_kind {
         OverlayMenu::Pause if confirm => {
-            apply_menu_action(world, UiAction::Resume);
+            if let Some(kind) = world
+                .get_resource::<MenuState>()
+                .and_then(|m| m.pause_confirm)
+            {
+                apply_menu_action(world, UiAction::ConfirmPause(kind));
+            } else {
+                apply_menu_action(world, UiAction::Resume);
+            }
             return;
         }
         OverlayMenu::None => {
@@ -1354,7 +1391,9 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
 
     let offer_open = world
         .get_resource::<MenuState>()
-        .is_some_and(|menu| menu.mutation_count > 0);
+        .is_some_and(|menu| menu.mutation_count > 0)
+        || world.get_resource::<PendingMutation>().is_some()
+        || world.get_resource::<PendingUltra>().is_some();
     if offer_open {
         if let Some(slot) = slot {
             let routed = world
