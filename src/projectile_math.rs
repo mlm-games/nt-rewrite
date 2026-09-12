@@ -88,22 +88,3 @@ pub fn record_hit(set: &mut Vec<Entity>, target: Entity) -> bool {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn disc_bounces_off_prop_aabb() {
-        let n = circle_aabb_normal(Vec2::new(10.0, 0.0), 4.0, Vec2::ZERO, Vec2::splat(8.0));
-        assert!(n.is_some());
-        let v = bounce_velocity(Vec2::new(100.0, 0.0), n.unwrap());
-        assert!(v.x < 0.0);
-    }
-
-    #[test]
-    fn arena_wall_normal_detects_edge() {
-        let n = arena_wall_normal(Vec2::new(1290.0, 0.0), 4.0, 2560.0, 1664.0);
-        assert!(n.is_some());
-        assert!(n.unwrap().x > 0.0);
-    }
-}

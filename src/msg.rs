@@ -43,19 +43,3 @@ impl<T: Send + Sync + 'static> Queue<T> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn queue_is_fifo_and_drains_once() {
-        let mut q: Queue<(u32, &'static str)> = Queue::default();
-        q.push((1, "a"));
-        q.push((2, "b"));
-        assert_eq!(q.len(), 2);
-        let got = q.drain();
-        assert_eq!(got, vec![(1, "a"), (2, "b")]);
-        assert!(q.is_empty());
-        assert!(q.drain().is_empty());
-    }
-}

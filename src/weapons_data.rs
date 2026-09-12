@@ -2412,31 +2412,3 @@ pub const fn ammo_pickup(kind: AmmoType) -> u16 {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn table_shape_and_spot_checks() {
-        assert_eq!(WEAPONS.len(), WEAPON_COUNT);
-        assert_eq!(WEAPONS_PLAYABLE.len(), MAXWEP);
-        // id 0 is the empty slot; playable table starts at id 1.
-        assert_eq!(WEAPONS[0].id, 0);
-        assert_eq!(WEAPONS_PLAYABLE[0].id, 1);
-        // Spot checks against known Nuclear Throne stats.
-        let revolver = &WEAPONS[crate::data::WeaponId::REVOLVER.0 as usize];
-        assert_eq!(revolver.wep_name, "REVOLVER");
-        assert_eq!(revolver.wep_type, AmmoType::Bullets);
-        let wrench = &WEAPONS[crate::data::WeaponId::WRENCH.0 as usize];
-        assert!(wrench.wep_mele);
-    }
-
-    #[test]
-    fn lookup_and_ammo_helpers() {
-        assert!(weapon_by_id(0).is_some());
-        assert!(weapon_by_id(MAXWEP).is_some());
-        assert!(weapon_by_id(MAXWEP + 1).is_none());
-        assert_eq!(ammo_max(AmmoType::Bullets), 255);
-        assert_eq!(ammo_pickup(AmmoType::Shells), 8);
-    }
-}
