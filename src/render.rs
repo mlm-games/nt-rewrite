@@ -5148,13 +5148,16 @@ pub fn mutation_icon_hit_action(
     gy: f32,
     vw: f32,
 ) -> Option<UiAction> {
+    // Ultra offers win over normal ones (same precedence as `sync_hud_state`
+    // and `tick_mutation_mirror`, bevy `hud.rs`): when both resources
+    // coexist the screen shows ultra cards, so hit-testing must too.
     let n = world
-        .get_resource::<PendingMutation>()
-        .map(|p| p.choices.len())
+        .get_resource::<PendingUltra>()
+        .map(|u| u.choices.len())
         .or_else(|| {
             world
-                .get_resource::<PendingUltra>()
-                .map(|u| u.choices.len())
+                .get_resource::<PendingMutation>()
+                .map(|p| p.choices.len())
         })
         .unwrap_or(0);
     if n == 0 {

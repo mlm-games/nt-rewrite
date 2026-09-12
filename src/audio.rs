@@ -1469,10 +1469,10 @@ pub fn ui_action_to_cue(action: &UiAction) -> Option<ReactiveCue> {
         | UiAction::SetAmbienceVol(_)
         | UiAction::SetLanguage(_) => None,
         UiAction::SettingsCategory(_)
+        | UiAction::SettingsBack
         | UiAction::ShowPauseConfirm(_)
         | UiAction::CancelPauseConfirm
         | UiAction::ConfirmPause(_) => Some(ReactiveCue::UiClick),
-        UiAction::SettingsBack => None,
         UiAction::SettingToggle(_)
         | UiAction::SettingCycle { .. }
         | UiAction::SettingInput { .. }

@@ -91,7 +91,7 @@ use crate::comps_b::{Enemy, Pickup, Prop};
 use crate::data::AreaId;
 use crate::input::{
     GamepadState, KeyCode, MouseState, NtInput, TouchContact, sample_gamepads, sample_keyboard,
-    sample_mutation_digits, sample_touch,
+    sample_touch,
 };
 use crate::render::{
     ATLAS_PAGES, ATLAS_SIZE, CamPoi, CamStepInput, GmlCamera, RenderAssets, background_color,
@@ -714,8 +714,6 @@ impl App {
     /// Drain staged shell input into sim resources (runs before
     /// [`App::advance`] each frame; pulses are take-once downstream).
     fn feed_input(&mut self) {
-        use crate::comps_a::MutationChoice;
-
         // Staged menu button actions (pause/settings/credits `on_click`
         // handlers): apply headlessly before the sim advances, so a
         // click lands the same tick as a keyboard edge would.
@@ -823,17 +821,15 @@ impl App {
                     .push_menu_nav(dv, dh);
             }
         }
-        // Right-button press: the viewport staged a buttonless pick for
-        // it this window — drop the window so right clicks never fire
-        // guns, confirm dialogs, or retry screens. Release edges never
-        // carried a pick, so they must not eat a coincident left click.
+        // Right-button press: no viewport pick is staged for it (RMB is
+        // handled via `rmb_down_edge` only), so there is nothing to drop
+        // here. Each arm below decides what RMB means (Back over
+        // settings/credits, silent elsewhere) without eating a coincident
+        // left click.
         let rmb_down = std::mem::replace(&mut self.rmb_down_edge, false);
         // Release stages no pick; drain the flag so it never leaks into
         // a later window.
         let _ = std::mem::replace(&mut self.rmb_up_edge, false);
-        if rmb_down {
-            self.clicks.clear();
-        }
 
         // No fire pulses from clicks over the main menu / title: both
         // route positionally now, and Title takes `fire` (Space) as the
@@ -903,12 +899,14 @@ impl App {
         if rmb_down && state == AppState::Title {
             self.sim.world.resource_mut::<NtInput>().take_spec_pressed();
         }
-        // Raw Digit1-4 mutation protocol (direct `MutationChoice` write).
-        {
-            let mut choice = self.sim.world.resource_mut::<MutationChoice>();
-            sample_mutation_digits(&just, &mut choice);
-        }
+        // Mutation digits travel the bevy two-step (`weapon_slot` pulse →
+        // `route_mutation_digit` → Select/Pick). No direct `MutationChoice`
+        // write here: that committed on the first press, bypassing the
+        // highlight law (`handle_mutation_keys`).
         // Shell edges with no `KeyCode` (Esc / R / Enter).
+        let had_pause = self.pause_edge;
+        let had_restart = self.restart_edge;
+        let had_interact = self.interact_edge;
         if self.pause_edge || self.restart_edge {
             let mut edge = self.sim.world.resource_mut::<MenuEdge>();
             edge.pause_pressed |= self.pause_edge;
@@ -919,6 +917,19 @@ impl App {
         if self.interact_edge {
             self.sim.world.resource_mut::<NtInput>().press_interact();
             self.interact_edge = false;
+        }
+        // Splash advances on any key/mouse edge (bevy `boot_intro` law):
+        // arrows/WASD/digits never stage fire/interact/spec pulses, so
+        // without this a keyboard-only shell stalls on the logo until the
+        // timeout. Any `just` key, pad edge, or staged click counts.
+        if state == AppState::Splash
+            && (!just.is_empty()
+                || had_pause
+                || had_restart
+                || had_interact
+                || !self.clicks.is_empty())
+        {
+            self.sim.world.resource_mut::<NtInput>().press_interact();
         }
 
         // Per-frame cursor aim (bevy `player_aim` mouse path): the latest
@@ -965,11 +976,14 @@ impl App {
             }
             self.clicks.clear();
         } else if menu_open {
-            // Open menu over a live run: right-click backs out of
-            // settings/credits (GML `BackButton` `mb_right` parity),
-            // left clicks route at the menu buttons, then drop either
-            // way.
-            if rmb_down && matches!(overlay, OverlayMenu::Settings | OverlayMenu::Credits) {
+            // Open menu over a live run: right-click steps back (GML
+            // `BackButton` `mb_right` parity — Settings pops one level
+            // via `SettingsBack`, Credits closes), left clicks route at
+            // the menu buttons, then drop either way. A coincident left
+            // click still routes (RMB never eats it).
+            if rmb_down && overlay == OverlayMenu::Settings {
+                apply_menu_action(&mut self.sim.world, UiAction::SettingsBack);
+            } else if rmb_down && overlay == OverlayMenu::Credits {
                 apply_menu_action(&mut self.sim.world, UiAction::CloseOverlay);
             } else if let Some(click) = self.clicks.last().copied() {
                 let viewport_dp = self.view_viewport_dp;
@@ -989,41 +1003,76 @@ impl App {
             }
             self.clicks.clear();
         } else if game_over {
-            // Bevy `game_over_panel`: full-panel click goes to the menu
-            // (`QuitToTitle`); retry travels via KeyR (`restart_pressed`,
-            // staged by the shell or the game-over R hint). Right-button
-            // windows were already cleared above.
-            if !rmb_down && self.clicks.last().copied().is_some() {
+            // Bevy `game_over_panel`: full-panel left click goes to the
+            // menu (`QuitToTitle`); retry travels via KeyR
+            // (`restart_pressed`). Right-button is a silent no-op here and
+            // never suppresses a coincident left click.
+            if self.clicks.last().copied().is_some() {
                 apply_menu_action(&mut self.sim.world, UiAction::QuitToTitle);
             }
             self.clicks.clear();
         } else if state == AppState::MainMenu {
-            // Positional buttons (PLAY/SETTINGS/STATS/QUIT; CO-OP stings
-            // denied inside the router); strays are dropped.
-            if let Some(click) = self.clicks.last().copied() {
+            // Settings/Credits/Stats open over the buttons (GML MenuOptions
+            // / DrawStats parity): route through the live overlay kind so
+            // mouse works on those pages, not just the keyboard. RMB steps
+            // back (Settings pops a level, others close).
+            if rmb_down && overlay == OverlayMenu::Settings {
+                apply_menu_action(&mut self.sim.world, UiAction::SettingsBack);
+            } else if rmb_down
+                && matches!(
+                    overlay,
+                    OverlayMenu::Credits | OverlayMenu::Stats
+                )
+            {
+                apply_menu_action(&mut self.sim.world, UiAction::CloseOverlay);
+            } else if let Some(click) = self.clicks.last().copied() {
                 let viewport_dp = self.view_viewport_dp;
-                if let Some(action) = route_menu_click(
-                    &mut self.sim.world,
-                    MenuOverlay::MainMenu,
-                    click.dp,
-                    viewport_dp,
-                ) {
+                let kind = menu_overlay_kind(
+                    state,
+                    overlay,
+                    &self.sim.world.resource::<MenuState>(),
+                    game_over,
+                )
+                .unwrap_or(MenuOverlay::MainMenu);
+                if let Some(action) =
+                    route_menu_click(&mut self.sim.world, kind, click.dp, viewport_dp)
+                {
                     apply_menu_action(&mut self.sim.world, action);
                 }
             }
             self.clicks.clear();
         } else if state == AppState::Title {
-            // Pods / GO / loadout zones (GML campfire parity); strays do
-            // nothing (the old confirm-anywhere retired).
-            if let Some(click) = self.clicks.last().copied() {
+            // Settings/Credits open over the campfire: route those through
+            // the menu router (mouse + RMB-back); otherwise pods / GO /
+            // loadout zones (GML campfire parity, strays do nothing).
+            if rmb_down && overlay == OverlayMenu::Settings {
+                apply_menu_action(&mut self.sim.world, UiAction::SettingsBack);
+            } else if rmb_down && overlay == OverlayMenu::Credits {
+                apply_menu_action(&mut self.sim.world, UiAction::CloseOverlay);
+            } else if let Some(click) = self.clicks.last().copied() {
                 let viewport_dp = self.view_viewport_dp;
-                if let Some(action) = self.route_title_click(click.dp, viewport_dp) {
+                if overlay == OverlayMenu::Settings || overlay == OverlayMenu::Credits {
+                    let kind = menu_overlay_kind(
+                        state,
+                        overlay,
+                        &self.sim.world.resource::<MenuState>(),
+                        game_over,
+                    );
+                    if let Some(kind) = kind
+                        && let Some(action) =
+                            route_menu_click(&mut self.sim.world, kind, click.dp, viewport_dp)
+                    {
+                        apply_menu_action(&mut self.sim.world, action);
+                    }
+                } else if let Some(action) = self.route_title_click(click.dp, viewport_dp) {
                     apply_menu_action(&mut self.sim.world, action);
                 }
             }
             self.clicks.clear();
         } else if offer_open {
-            if !rmb_down && let Some(click) = self.clicks.last().copied() {
+            // Mutation/ultra offer: right-button is silent (never confirms
+            // or eats the left click).
+            if let Some(click) = self.clicks.last().copied() {
                 let viewport_dp = self.view_viewport_dp;
                 let vw = crate::render::gml_view_size(viewport_dp)[0];
                 let k = (viewport_dp[1].max(1.0) / 240.0).max(1e-6);
@@ -1040,10 +1089,10 @@ impl App {
             }
             self.clicks.clear();
         } else if let Some(_click) = self.clicks.last().copied() {
+            // Splash/Loading advance on any mouse button (bevy `boot_intro`
+            // any-key/mouse law).
             self.clicks.clear();
-            if !rmb_down {
-                self.sim.world.resource_mut::<NtInput>().press_interact();
-            }
+            self.sim.world.resource_mut::<NtInput>().press_interact();
         } else {
             self.clicks.clear();
         }
@@ -2106,7 +2155,13 @@ pub fn menu_overlay_kind(
             _ => Some(MenuOverlay::MainMenu),
         },
         AppState::Loading => Some(MenuOverlay::Loading),
-        AppState::Title => Some(MenuOverlay::Title),
+        // Settings/Credits opened over the campfire surface above it
+        // (same as MainMenu); otherwise the title pods own the clicks.
+        AppState::Title => match overlay {
+            OverlayMenu::Settings => Some(MenuOverlay::Settings),
+            OverlayMenu::Credits => Some(MenuOverlay::Credits),
+            _ => Some(MenuOverlay::Title),
+        },
         AppState::InGame => {
             if game_over || menu.game_over.is_some() {
                 return Some(MenuOverlay::GameOver);

@@ -19,19 +19,16 @@
 //!   `weapon_slot` jumps to a pod, `interact` confirms (re-clicking the
 //!   selected race starts loading, bevy parity), `spec` toggles the
 //!   loadout panel shut when open.
-//! - Mutation: `weapon_slot` routes through the bevy two-step
+//! - Mutation: `weapon_slot` (Digit1-4) routes through the bevy two-step
 //!   (`SelectMutation` highlight then `PickMutation` commit, same as
 //!   bevy `handle_mutation_keys`), `cycle_weapon` moves the highlight,
-//!   `interact` commits the highlight. Raw Digit1-4 shell edges should
-//!   keep using `sample_mutation_digits` (direct `MutationChoice`
-//!   protocol, `input.rs`); both feed `handle_mutation_choice`
-//!   identically.
+//!   `interact` commits the highlight.
 //! - Pause: `interact` resumes, `spec` closes the top overlay,
 //!   `MenuEdge::pause_pressed` (Escape) toggles with bevy's confirm/
 //!   settings-stack laws.
-//! - Game over: `MenuEdge::restart_pressed` (KeyR) restarts via Loading,
-//!   `interact` quits to the menu.
-//! - Splash: any of fire/interact/spec advances (bevy: any key/mouse).
+//! - Game over: `MenuEdge::restart_pressed` (KeyR) restarts via Loading;
+//!   left-click quits to the menu (no keyboard-interact quit, bevy parity).
+//! - Splash: any key/mouse edge advances (bevy `boot_intro` law).
 //! - MainMenu: `interact` plays (bevy PLAY item).
 //!
 //! Fidelity compromises (need shell/window services):
@@ -342,15 +339,10 @@ pub(crate) fn emit_denied(world: &mut World) {
         .push(denied_sfx());
 }
 
-/// Emit the bevy `SettingsBack` pop sting (`sndClickBack` 0.6 one-shot
-/// plus the `UiBack` reactive cue). The close path stays silent, so this
-/// is pushed at the site instead of the static maps (which stay silent
-/// for `SettingsBack`).
+/// Emit the bevy `SettingsBack` pop one-shot (`sndClickBack` 0.6). The
+/// reactive `UiClick` cue comes from the static `ui_action_to_cue` map via
+/// `emit_cue` (both pop and close paths emit it, bevy parity).
 fn emit_click_back(world: &mut World) {
-    world.init_resource::<Queue<ReactiveAudioRequest>>();
-    world
-        .resource_mut::<Queue<ReactiveAudioRequest>>()
-        .push(ReactiveAudioRequest::new(crate::audio::ReactiveCue::UiBack));
     world.init_resource::<Queue<crate::audio::AudioCue>>();
     world
         .resource_mut::<Queue<crate::audio::AudioCue>>()
@@ -385,6 +377,12 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
         UiAction::StartGame => {
             if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
                 menu.title_go_visible = false;
+                // Fresh run: drop any stale mutation highlight (bevy
+                // `reset_hud_flags` clears `mutation_selected`; the mirror
+                // only resets on count change, so a same-length offer in
+                // the next run would otherwise inherit it and commit on
+                // one click).
+                menu.mutation_selected = None;
             }
             emit_cue(world, &UiAction::StartGame);
             goto_state(world, AppState::Loading);
@@ -419,6 +417,8 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
         UiAction::CloseOverlay => {
             // Bevy restores the saved locale here; headless applies the
             // language immediately, so there is nothing to restore.
+            // Bevy never resets the settings page/stack here (that lives
+            // only in the `SettingsBack` close path).
             world.init_resource::<crate::state::Paused>();
             let paused = world.resource::<crate::state::Paused>().0;
             world.init_resource::<OverlayMenu>();
@@ -426,12 +426,6 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             match *overlay {
                 OverlayMenu::Settings | OverlayMenu::Credits if paused => {
                     *overlay = OverlayMenu::Pause;
-                    drop(overlay);
-                    if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
-                        menu.settings_page = 0;
-                        menu.settings_page_stack.clear();
-                        menu.settings_cursor = 0;
-                    }
                 }
                 OverlayMenu::Pause if paused => {
                     *overlay = OverlayMenu::None;
@@ -582,7 +576,9 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                     menu.settings_page = 0;
                     menu.settings_page_stack.clear();
                 }
+                emit_cue(world, &UiAction::SettingsBack);
             } else {
+                emit_cue(world, &UiAction::SettingsBack);
                 emit_click_back(world);
             }
         }
@@ -606,9 +602,12 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 emit_cue(world, &UiAction::ConfirmPause(kind));
                 goto_state(world, AppState::MainMenu);
             } else {
-                // Restart via loading.
+                // Restart via loading (fresh run: drop stale highlight).
                 world.init_resource::<crate::state::Paused>();
                 world.resource_mut::<crate::state::Paused>().0 = false;
+                if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+                    menu.mutation_selected = None;
+                }
                 emit_cue(world, &UiAction::ConfirmPause(kind));
                 goto_state(world, AppState::Loading);
             }
@@ -628,6 +627,7 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             if already {
                 if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
                     menu.title_go_visible = false;
+                    menu.mutation_selected = None;
                 }
                 emit_cue(world, &UiAction::SelectCharacter(i));
                 goto_state(world, AppState::Loading);
@@ -1034,7 +1034,7 @@ pub fn tick_menus(world: &mut World) {
             tick_main_menu_input(world, edge);
         }
         AppState::Title => {
-            tick_title_input(world);
+            tick_title_input(world, edge);
         }
         AppState::InGame => {
             tick_ingame_menu(world, edge);
@@ -1049,14 +1049,22 @@ pub fn tick_menus(world: &mut World) {
 /// like GML's early-`exit` on `!available`.
 fn tick_main_menu_input(world: &mut World, edge: MenuEdge) {
     world.init_resource::<MenuState>();
-    // Escape over an open overlay closes it (the InGame escape tick
-    // never runs here).
+    // Escape over an open overlay steps back (Settings pops one level via
+    // `SettingsBack`, Credits/Stats close; the InGame escape tick never
+    // runs here).
     if edge.pause_pressed
         && world
             .get_resource::<OverlayMenu>()
             .is_some_and(|o| *o != OverlayMenu::None)
     {
-        apply_menu_action(world, UiAction::CloseOverlay);
+        let is_settings = world
+            .get_resource::<OverlayMenu>()
+            .is_some_and(|o| *o == OverlayMenu::Settings);
+        if is_settings {
+            apply_menu_action(world, UiAction::SettingsBack);
+        } else {
+            apply_menu_action(world, UiAction::CloseOverlay);
+        }
         return;
     }
     let (nav_v, nav_h, slot, confirm) = {
@@ -1123,8 +1131,52 @@ fn activate_main_menu_row(world: &mut World, row: usize) {
     }
 }
 
-/// Title input routing (cursor nav + confirm + loadout back).
-fn tick_title_input(world: &mut World) {
+/// Title input routing (cursor nav + confirm + loadout back). Settings /
+/// Credits opened over the campfire own the keyboard first (settings nav
+/// + Escape-back, credits Escape-back); otherwise cursor nav + confirm +
+/// loadout back.
+fn tick_title_input(world: &mut World, edge: MenuEdge) {
+    // Overlay-first: Escape steps back, settings arrows/enter drive the
+    // hot rows. Credits has no rows (Back/Esc only).
+    let overlay = world
+        .get_resource::<OverlayMenu>()
+        .copied()
+        .unwrap_or(OverlayMenu::None);
+    if overlay == OverlayMenu::Settings || overlay == OverlayMenu::Credits {
+        if edge.pause_pressed {
+            if overlay == OverlayMenu::Settings {
+                apply_menu_action(world, UiAction::SettingsBack);
+            } else {
+                apply_menu_action(world, UiAction::CloseOverlay);
+            }
+            return;
+        }
+        if overlay == OverlayMenu::Credits {
+            // Swallow title keys under Credits so Space/E can't toggle
+            // panels or confirm pods behind it.
+            let mut input = world.resource_mut::<NtInput>();
+            let _ = input.take_cycle_weapon();
+            let _ = input.take_weapon_slot();
+            let _ = input.take_interact_pressed();
+            let _ = input.take_spec_pressed();
+            let _ = input.take_fire_pressed();
+            let _ = input.take_menu_nav();
+            return;
+        }
+        let (nav_v, nav_h, confirm) = {
+            let mut input = world.resource_mut::<NtInput>();
+            let (dv, dh) = input.take_menu_nav();
+            // Swallow title-only pulses under settings so they can't leak
+            // to pods/loadout behind the panel.
+            let _ = input.take_cycle_weapon();
+            let _ = input.take_weapon_slot();
+            let _ = input.take_spec_pressed();
+            let _ = input.take_fire_pressed();
+            (dv, dh, input.take_interact_pressed())
+        };
+        tick_settings_nav(world, nav_v, nav_h, confirm);
+        return;
+    }
     let (cycle, slot, confirm, back, fire) = {
         let mut input = world.resource_mut::<NtInput>();
         (
@@ -1313,14 +1365,15 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
     };
 
     if game_over {
-        // Bevy `handle_death_restart` (KeyR) + game-over click (menu).
+        // Bevy `handle_death_restart` (KeyR) + game-over click in `lib.rs`
+        // (full-panel `QuitToTitle`). Keyboard interact/Enter never quits
+        // here — bevy has no such path.
         if edge.restart_pressed {
             if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
                 menu.title_go_visible = false;
+                menu.mutation_selected = None;
             }
             goto_state(world, AppState::Loading);
-        } else if confirm {
-            apply_menu_action(world, UiAction::QuitToTitle);
         }
         return;
     }

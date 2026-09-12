@@ -9,8 +9,6 @@ use bevy_ecs::prelude::*;
 use glam::Vec2;
 use std::collections::HashSet;
 
-use crate::comps_a::MutationChoice;
-
 /// Sampled player intent for one tick.
 #[derive(Resource, Debug, Clone)]
 pub struct NtInput {
@@ -445,32 +443,6 @@ pub fn sample_touch(contacts: &[TouchContact], window_width: f32, output: &mut N
 
     output.move_axis = output.move_axis.clamp_length_max(1.0);
     output.aim_axis = output.aim_axis.clamp_length_max(1.0);
-}
-
-/// Digit1-4 -> pending mutation pick (headless equivalent of the digit
-/// read at the top of bevy `handle_mutation_choice`: independent `if`s,
-/// so a later digit wins when several edges land the same tick; never
-/// overwrites a pick the UI already wrote).
-pub fn sample_mutation_digits(just_pressed: &HashSet<KeyCode>, choice: &mut MutationChoice) {
-    if choice.0.is_some() {
-        return;
-    }
-    let mut picked: Option<usize> = None;
-    if just_pressed.contains(&KeyCode::Digit1) {
-        picked = Some(0);
-    }
-    if just_pressed.contains(&KeyCode::Digit2) {
-        picked = Some(1);
-    }
-    if just_pressed.contains(&KeyCode::Digit3) {
-        picked = Some(2);
-    }
-    if just_pressed.contains(&KeyCode::Digit4) {
-        picked = Some(3);
-    }
-    if picked.is_some() {
-        choice.0 = picked;
-    }
 }
 
 /// Drop everything when the sim isn't live (paused, overlay open, or out
