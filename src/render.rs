@@ -4309,8 +4309,11 @@ pub fn hud_sprites(
         let frac = (hud.hp as f32 / hud.max_hp.max(1) as f32).clamp(0.0, 1.0);
         let gfrac = (last_hp / hud.max_hp.max(1) as f32).clamp(0.0, 1.0);
         // Fill quads keep their left edge at GUI x=22 while the width
-        // shrinks (GML `draw_sprite_ext` xscale from (22,7)).
-        let fill_at = |w: f32| hud_gui_to_world(gm, view, 22.0 + w * 0.5, 7.0 + 4.0);
+        // shrinks (GML `draw_sprite_ext` xscale from (22,7) with a
+        // (0,0)-origin 1x8 strip). `sprite_sized` anchors (0,0) at the
+        // passed center, so the center IS the top-left: pass (22,7),
+        // not the quad middle.
+        let fill_at = |_w: f32| hud_gui_to_world(gm, view, 22.0, 7.0);
         let fill_size = |w: f32, h: f32| Vec2::new((w * gm.s).max(0.001), h * gm.s);
         let bg_tint = healthcol_dark(healthcol);
         if gfrac > 0.0 {
@@ -4509,17 +4512,20 @@ pub fn hud_sprites(
     // ultra offers ride `sprEGSkillIcon` at `(race-1)*3+tier-1`
     // (unscaled — GML only scales SkillIcon).
     {
+        // Ultra offers win over normal ones (same precedence as
+        // `sync_hud_state`, `tick_mutation_mirror` and the click
+        // hit-test; bevy `hud.rs`): when both resources coexist the
+        // screen shows ultra cards.
         let n = world
-            .get_resource::<PendingMutation>()
-            .map(|p| p.choices.len())
+            .get_resource::<PendingUltra>()
+            .map(|u| u.choices.len())
             .or_else(|| {
                 world
-                    .get_resource::<PendingUltra>()
-                    .map(|u| u.choices.len())
+                    .get_resource::<PendingMutation>()
+                    .map(|p| p.choices.len())
             })
             .unwrap_or(0);
-        let is_ultra = world.get_resource::<PendingMutation>().is_none()
-            && world.get_resource::<PendingUltra>().is_some();
+        let is_ultra = world.get_resource::<PendingUltra>().is_some();
         if n > 0 {
             let selected = world
                 .get_resource::<MenuState>()
@@ -5028,20 +5034,27 @@ pub fn bloom_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInst
     }
     out
 }
-/// Char-pod layout (GML campfire pods in view px): `count`
-/// pods of height `slot_h` on a `wh` view. `step = min(20,
-/// floor((W-40)/count))`, `xstart = 8`,
-/// `ystart = H-slot_h-((36-slot_h) div 2)`.
+/// Char-pod layout (GML `Menu/Create_0` campfire law verbatim): `count`
+/// pods of height `slot_h` on a 240-tall view. `step = min(20,
+/// floor((320-40)/count))` over the fixed `game_screen_width` (320, NOT
+/// the live view width), `xstart = 8`,
+/// `ystart = H-slot_h-((36-slot_h) div 2)`. `wh[1]` is the view height
+/// (always 240); `wh[0]` is accepted for call-site symmetry but ignored
+/// for the step so widescreen keeps the GML left-clustered pods.
 pub fn char_pod_layout(wh: [f32; 2], count: usize, slot_h: f32) -> Vec<[f32; 2]> {
-    let step = 20.0_f32.min(((wh[0] - 40.0) / count.max(1) as f32).floor());
+    let step = 20.0_f32.min(((320.0 - 40.0) / count.max(1) as f32).floor());
     let y = wh[1] - slot_h - ((36.0 - slot_h) / 2.0).floor();
     (0..count).map(|i| [8.0 + i as f32 * step, y]).collect()
 }
 
-/// GO-button position (GML: past the last pod, `y = H-36+bbox_h/2-2`
-/// with `div`; the caller passes the sprite bbox height).
+/// GO-button position (GML `Menu/Create_0`: past the last pod,
+/// `y = H-36+bbox_h div 2-2`; x from the same 320-base step as the pods).
+/// Returns the GML instance position (sprite origin). Note
+/// `sprGoButtonSymbolic` has origin `(0,-2)`, so the drawn pixels/bbox sit
+/// 2 px below this (see `title_click_action` / `menu_sprites`).
 pub fn go_button_pos(wh: [f32; 2], count: usize, bbox_h: f32) -> [f32; 2] {
-    let step = 20.0_f32.min(((wh[0] - 40.0) / count.max(1) as f32).floor());
+    let step = 20.0_f32.min(((320.0 - 40.0) / count.max(1) as f32).floor());
+    let _ = wh[0];
     [
         8.0 + count as f32 * step + 2.0,
         wh[1] - 36.0 + (bbox_h / 2.0).floor() - 2.0,
@@ -5110,10 +5123,14 @@ pub fn title_click_action(
             return Some(a);
         }
     }
-    // GO button (armed only).
+    // GO button (armed only). `go_button_pos` is the GML instance position
+    // (sprite origin); `sprGoButtonSymbolic` origin is (0,-2) so the
+    // drawn pixels and bbox sit 2 px below it: hit box
+    // [go.x, go.x+31] x [go.y+2, go.y+21] (bbox 0..30/0..18 shifted).
     if menu.title_go_visible {
         let go = go_button_pos([vw, 240.0], CHAR_SELECT_ORDER.len(), 19.0);
-        if gx >= go[0] && gx <= go[0] + TITLE_GO_W && gy >= go[1] && gy <= go[1] + TITLE_GO_H {
+        let top = go[1] + 2.0;
+        if gx >= go[0] && gx <= go[0] + TITLE_GO_W && gy >= top && gy <= top + TITLE_GO_H {
             return Some(UiAction::StartGame);
         }
     }
@@ -5973,12 +5990,15 @@ pub fn menu_sprites(
             // uses the bigname text (the overlay lines), so no sprite
             // here — it would double-draw under the text.
             if go_visible {
-                // GML `sprGoButtonSymbolic` bbox height 19 (`div 2` = 9).
+                // GML `sprGoButtonSymbolic` bbox height 19 (`div 2` = 9),
+                // origin (0,-2): instance pos from `go_button_pos`, pixels
+                // drawn 2 px below it (the catalog anchor clamps the -2,
+                // so offset explicitly for GML parity).
                 let dp = go_button_pos([vw, 240.0], CHAR_SELECT_ORDER.len(), 19.0);
                 if let Some(s) = assets.sprite_for(
                     "images/sprGoButtonSymbolic.png",
                     0,
-                    gui_to_world(dp[0], dp[1]),
+                    gui_to_world(dp[0], dp[1] + 2.0),
                     false,
                     0.0,
                     [1.0; 4],
