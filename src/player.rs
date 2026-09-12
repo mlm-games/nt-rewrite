@@ -850,14 +850,22 @@ pub fn held_weapon_angle(aim_angle: f32, wep_angle_deg: f32, wkick: f32) -> f32 
     aim_angle + wep_angle_deg.to_radians() * (1.0 - wkick / 20.0)
 }
 
-/// Exact GML Player/Step_0 facing quadrant law.
+/// Exact GML Player/Step_0 facing quadrant law (`Step_0:442-450`):
+/// `right = -1` when `90 < gunangle < 270`, else `1`;
+/// `back = 1` when `0 < gunangle < 180`, else `-1`.
+///
+/// `gunangle` is GML degrees (`lengthdir` convention: 0 = right,
+/// 90 = screen-up). The sim `aim` is y-down, so convert first:
+/// GML-degrees = `atan2(-aim.y, aim.x)`. (The y-down `atan2` value
+/// mirrors the quadrants: feeding it straight into the GML thresholds
+/// inverts `back`, drawing the gun behind the body when aiming down.)
 ///
 /// Returns `(right, back)`, where:
 /// - `right` is the sprite xscale side: `-1` when aiming left, `1` otherwise.
-/// - `back` decides weapon/body ordering: `1` when aiming upward/front-side in
-///   GML angle space, `-1` otherwise.
+/// - `back` decides weapon/body ordering: `1` when aiming up (GML angle
+///   space), `-1` otherwise.
 pub fn gml_player_right_back_from_aim(aim: Vec2) -> (f32, f32) {
-    let a = aim.y.atan2(aim.x).to_degrees().rem_euclid(360.0);
+    let a = (-aim.y).atan2(aim.x).to_degrees().rem_euclid(360.0);
     let right = if a > 90.0 && a < 270.0 { -1.0 } else { 1.0 };
     let back = if a > 0.0 && a < 180.0 { 1.0 } else { -1.0 };
     (right, back)

@@ -28,7 +28,7 @@ use rand::RngExt;
 use repame_anim::AnimCatalog;
 use repame_fx::{DamageNumber, Particle};
 
-use crate::anim::PlayerAnim;
+use crate::anim::{PlayerAnim, SpriteAnim};
 use crate::comps_a::{
     ARENA_H, ARENA_W, AimDir, CrownState, Euphoria, FireCooldown, FloorMask, FloorStarted,
     GameCleanup, Health, HeavyHeart, Hitbox, Inventory, LevelCleanup, MAX_AMMO_TYPES,
@@ -741,6 +741,163 @@ fn pick_prop_idle(
     (idle, flip)
 }
 
+/// Prop hurt/dead art for a picked idle strip (GML prop objects carry
+/// `spr_idle / spr_hurt / spr_dead` triples; the pack mirrors them as
+/// `sprXHurt.png` / `sprXDead.png`, with `*Idle` idles stripping the
+/// suffix — except `sprCarIdle`, whose hurt strip is `sprCarHurt`).
+/// Returns static candidates; callers keep `idle` when the catalog lacks
+/// the strip (GML-equivalent: no hit anim / plain debris).
+fn prop_hurt_dead_paths(idle: &'static str) -> (&'static str, &'static str) {
+    match idle {
+        "images/sprBushIdle.png" => ("images/sprBushHurt.png", "images/sprBushDead.png"),
+        "images/sprBigFlowerIdle.png" => (
+            "images/sprBigFlowerHurt.png",
+            "images/sprBigFlowerDead.png",
+        ),
+        "images/sprBonePileIdle.png" => (
+            "images/sprBonePileHurt.png",
+            "images/sprBonePileDead.png",
+        ),
+        "images/sprNightBonePileIdle.png" => (
+            "images/sprNightBonePileHurt.png",
+            "images/sprNightBonePileDead.png",
+        ),
+        "images/sprPlantPotIdle.png" => (
+            "images/sprPlantPotHurt.png",
+            "images/sprPlantPotDead.png",
+        ),
+        "images/sprCarIdle.png" => ("images/sprCarHurt.png", "images/sprCarIdle.png"),
+        "images/sprMine.png" | "images/sprMineIdle.png" => {
+            ("images/sprMine.png", "images/sprMine.png")
+        }
+        "images/sprCactus.png" => ("images/sprCactusHurt.png", "images/sprCactusDead.png"),
+        "images/sprCactus2.png" => ("images/sprCactus2Hurt.png", "images/sprCactus2Dead.png"),
+        "images/sprCactus3.png" => ("images/sprCactus3Hurt.png", "images/sprCactus3Dead.png"),
+        "images/sprBigSkullOpen.png" => (
+            "images/sprBigSkullOpenHurt.png",
+            "images/sprBigSkullOpen.png",
+        ),
+        "images/sprBarrel.png" => ("images/sprBarrelHurt.png", "images/sprBarrelDead.png"),
+        "images/sprSewerPipe.png" => (
+            "images/sprSewerPipeHurt.png",
+            "images/sprSewerPipeDead.png",
+        ),
+        "images/sprTires.png" => ("images/sprTiresHurt.png", "images/sprTiresDead.png"),
+        "images/sprToxicBarrel.png" => (
+            "images/sprToxicBarrelHurt.png",
+            "images/sprToxicBarrelDead.png",
+        ),
+        "images/sprCocoon.png" => ("images/sprCocoonHurt.png", "images/sprCocoonDead.png"),
+        "images/sprSnowMan.png" => ("images/sprSnowManHurt.png", "images/sprSnowManDead.png"),
+        "images/sprTorch.png" => ("images/sprTorchHurt.png", "images/sprTorchDead.png"),
+        "images/sprGoldBarrel.png" => (
+            "images/sprGoldBarrelHurt.png",
+            "images/sprGoldBarrelDead.png",
+        ),
+        "images/sprNightCactus.png" => (
+            "images/sprNightCactusHurt.png",
+            "images/sprNightCactusDead.png",
+        ),
+        "images/sprNightCactus2.png" => (
+            "images/sprNightCactus2Hurt.png",
+            "images/sprNightCactus2Dead.png",
+        ),
+        "images/sprNightCactus3.png" => (
+            "images/sprNightCactus3Hurt.png",
+            "images/sprNightCactus3Dead.png",
+        ),
+        "images/sprCrystalProp.png" => (
+            "images/sprCrystalPropHurt.png",
+            "images/sprCrystalPropDead.png",
+        ),
+        "images/sprHydrant.png" => ("images/sprHydrantHurt.png", "images/sprHydrantDead.png"),
+        "images/sprIcicle.png" => ("images/sprIcicleHurt.png", "images/sprIcicleDead.png"),
+        "images/sprStreetLight.png" => (
+            "images/sprStreetLightHurt.png",
+            "images/sprStreetLightDead.png",
+        ),
+        "images/sprSodaMachine.png" => (
+            "images/sprSodaMachineHurt.png",
+            "images/sprSodaMachineDead.png",
+        ),
+        "images/sprNewsStand.png" => (
+            "images/sprNewsStandHurt.png",
+            "images/sprNewsStandDead.png",
+        ),
+        "images/sprTube.png" => ("images/sprTubeHurt.png", "images/sprTubeDead.png"),
+        "images/sprMutantTube.png" => (
+            "images/sprMutantTubeHurt.png",
+            "images/sprMutantTubeDead.png",
+        ),
+        "images/sprNuclearPillar.png" => (
+            "images/sprNuclearPillarHurt.png",
+            "images/sprNuclearPillarDead.png",
+        ),
+        "images/sprSmallGenerator.png" => (
+            "images/sprSmallGeneratorHurt.png",
+            "images/sprSmallGeneratorDead.png",
+        ),
+        "images/sprAnchor.png" => ("images/sprAnchorHurt.png", "images/sprAnchorDead.png"),
+        "images/sprWaterPlant.png" => (
+            "images/sprWaterPlantHurt.png",
+            "images/sprWaterPlantDead.png",
+        ),
+        "images/sprWaterPlant2.png" => (
+            "images/sprWaterPlant2Hurt.png",
+            "images/sprWaterPlant2Dead.png",
+        ),
+        "images/sprOasisBarrel.png" => (
+            "images/sprOasisBarrelHurt.png",
+            "images/sprOasisBarrelDead.png",
+        ),
+        "images/sprWaterMine.png" => (
+            "images/sprWaterMineHurt.png",
+            "images/sprWaterMineDead.png",
+        ),
+        "images/sprMoneyPile.png" => (
+            "images/sprMoneyPileHurt.png",
+            "images/sprMoneyPileDead.png",
+        ),
+        "images/sprYVStatue.png" => (
+            "images/sprYVStatueHurt.png",
+            "images/sprYVStatueDead.png",
+        ),
+        "images/sprPizzaBox.png" => (
+            "images/sprPizzaBoxHurt.png",
+            "images/sprPizzaBoxDead.png",
+        ),
+        "images/sprBigGenerator.png" => (
+            "images/sprBigGeneratorHurt.png",
+            "images/sprBigGeneratorDead.png",
+        ),
+        "images/sprThroneStatue.png" => (
+            "images/sprThroneStatue.png",
+            "images/sprThroneStatueDead.png",
+        ),
+        _ => (idle, idle),
+    }
+}
+
+/// Resolve idle → hurt/dead against the catalog (missing strips fall
+/// back to idle, which keeps the generic hurt flash / plain debris).
+fn resolve_prop_art(
+    catalog: &repame_anim::AnimCatalog,
+    idle: &'static str,
+) -> (&'static str, &'static str) {
+    let (hurt_c, dead_c) = prop_hurt_dead_paths(idle);
+    let hurt = if catalog.def(hurt_c).is_some() {
+        hurt_c
+    } else {
+        idle
+    };
+    let dead = if catalog.def(dead_c).is_some() {
+        dead_c
+    } else {
+        idle
+    };
+    (hurt, dead)
+}
+
 /// Prop sim half (bevy `world::spawn_prop` minus sprites/anchors:
 /// `Prop` + tracker + `NextHurt` + recorded art paths + death effect +
 /// kind markers). Functional kinds: `FireTrap` emits its hazard (plus
@@ -840,34 +997,36 @@ pub fn spawn_prop_sim(
         PropKind::Mine => {
             let idle_path: &'static str = "images/sprMine.png";
             let flip = prop_hash_flip(run.gen_seed, pos, 0x51);
-            return Some(
-                commands
-                    .spawn((
-                        GameCleanup,
-                        LevelCleanup,
-                        Prop {
-                            size: glam::Vec2::splat(18.0),
-                            hp: 2,
-                            destructible: true,
-                            explosive: false,
-                        },
-                        PropHpTracker { last_hp: 2 },
-                        NextHurt::default(),
-                        PropSprites {
-                            idle: idle_path,
-                            hurt: idle_path,
-                            dead: idle_path,
-                            flip_x: flip,
-                        },
-                        ProximityMine::default(),
-                        PropDeathEffect::mine(),
-                        // Bevy mine arm: the prop sprite itself throbs
-                        // (`SurfacePulse::hazard(pos.y * 0.019)`).
-                        SurfacePulse::hazard(pos.y * 0.019),
-                        Pos(pos),
-                    ))
-                    .id(),
-            );
+            let (hurt, dead) = resolve_prop_art(catalog, idle_path);
+            let mut ec = commands.spawn((
+                GameCleanup,
+                LevelCleanup,
+                Prop {
+                    size: glam::Vec2::splat(18.0),
+                    hp: 2,
+                    destructible: true,
+                    explosive: false,
+                },
+                PropHpTracker { last_hp: 2 },
+                NextHurt::default(),
+                PropSprites {
+                    idle: idle_path,
+                    hurt,
+                    dead,
+                    flip_x: flip,
+                },
+                ProximityMine::default(),
+                PropDeathEffect::mine(),
+                // Bevy mine arm: the prop sprite itself throbs
+                // (`SurfacePulse::hazard(pos.y * 0.019)`).
+                SurfacePulse::hazard(pos.y * 0.019),
+                Pos(pos),
+            ));
+            // Hurt-flash tracker: `prop_hurt_on_damage` bails without it.
+            if let Some(def) = catalog.def(idle_path) {
+                ec.insert(SpriteAnim::new(idle_path, def));
+            }
+            return Some(ec.id());
         }
         PropKind::GroundDecal => {
             // Bevy draws the route floor's top-decal strip here (gray
@@ -901,6 +1060,12 @@ pub fn spawn_prop_sim(
 
     let (size, hp, explosive, effect) = prop_stats(kind, run.loop_count);
     let (idle, flip) = pick_prop_idle(catalog, run.gen_seed, kind, pos);
+    // GML prop objects swap to hurt/dead strips on damage/death; the
+    // hurt system (`prop_hurt_on_damage`) and corpse spawner
+    // (`spawn_prop_corpse`) both read these, and the hurt system bails
+    // without a `SpriteAnim` tracker — so record real paths and insert
+    // the tracker (missing strips fall back to idle).
+    let (hurt, dead) = resolve_prop_art(catalog, idle);
     let mut ec = commands.spawn((
         GameCleanup,
         LevelCleanup,
@@ -914,12 +1079,15 @@ pub fn spawn_prop_sim(
         NextHurt::default(),
         PropSprites {
             idle,
-            hurt: idle,
-            dead: idle,
+            hurt,
+            dead,
             flip_x: flip,
         },
         Pos(pos),
     ));
+    if let Some(def) = catalog.def(idle) {
+        ec.insert(SpriteAnim::new(idle, def));
+    }
     if let Some(fx) = effect {
         ec.insert(fx);
     }
@@ -950,30 +1118,40 @@ pub fn spawn_prop_sim(
 /// Rad chest container (bevy `spawn_rad_container` sim half: destructible
 /// prop + container marker; opening logic lives in
 /// `tick_rad_container_contact`'s port phase).
-pub fn spawn_rad_container(commands: &mut Commands, seed: u64, pos: glam::Vec2) -> Entity {
+pub fn spawn_rad_container(
+    commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
+    seed: u64,
+    pos: glam::Vec2,
+) -> Entity {
     let idle_path: &'static str = "images/sprRadChest.png";
-    commands
-        .spawn((
-            GameCleanup,
-            LevelCleanup,
-            Prop {
-                size: glam::Vec2::splat(26.0),
-                hp: 4,
-                destructible: true,
-                explosive: false,
-            },
-            PropHpTracker { last_hp: 4 },
-            NextHurt::default(),
-            PropSprites {
-                idle: idle_path,
-                hurt: idle_path,
-                dead: idle_path,
-                flip_x: prop_hash_flip(seed, pos, 0x54),
-            },
-            RadChestContainer,
-            Pos(pos),
-        ))
-        .id()
+    // `play_hurt` falls back to idle when the strip is absent, so the
+    // literal is safe without a catalog gate here.
+    let hurt_path: &'static str = "images/sprRadChestHurt.png";
+    let mut ec = commands.spawn((
+        GameCleanup,
+        LevelCleanup,
+        Prop {
+            size: glam::Vec2::splat(26.0),
+            hp: 4,
+            destructible: true,
+            explosive: false,
+        },
+        PropHpTracker { last_hp: 4 },
+        NextHurt::default(),
+        PropSprites {
+            idle: idle_path,
+            hurt: hurt_path,
+            dead: idle_path,
+            flip_x: prop_hash_flip(seed, pos, 0x54),
+        },
+        RadChestContainer,
+        Pos(pos),
+    ));
+    if let Some(def) = catalog.def(idle_path) {
+        ec.insert(SpriteAnim::new(idle_path, def));
+    }
+    ec.id()
 }
 
 /// Secret entrances for the run's area slot (bevy
@@ -1145,7 +1323,7 @@ pub fn spawn_level(
             ChestSpawn::Ammo(p) => spawn_chest(commands, catalog, ChestKind::Ammo, p),
             ChestSpawn::Custom(kind, p) => spawn_chest(commands, catalog, kind, p),
             ChestSpawn::Rad(p) => {
-                spawn_rad_container(commands, run.gen_seed, p);
+                spawn_rad_container(commands, catalog, run.gen_seed, p);
             }
         }
     }

@@ -2457,12 +2457,14 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                     let back = back_v > 0.0;
                     let melee = weapon_meta(gun.wep_id).wep_mele;
                     let facing = if aim.x < 0.0 { -1.0 } else { 1.0 };
-                    let upright = if melee {
-                        if gun.slot == 1 {
-                            inv.bwepflip
-                        } else {
-                            inv.wepflip
-                        }
+                    // GML `Player/Draw_0` mirror law: primary yscale is
+                    // `wepright` (`wepflip` for melee, else facing); the
+                    // slot-1 secondary draws with yscale `-bwepright`
+                    // (`-(bwepflip)` for melee, else `-facing`).
+                    let upright = if gun.slot == 1 {
+                        -(if melee { inv.bwepflip } else { facing })
+                    } else if melee {
+                        inv.wepflip
                     } else {
                         facing
                     };
