@@ -227,6 +227,10 @@ pub struct App {
     shift_held: bool,
     /// Right mouse held (GML `spec`/ability on `mb_right` parity).
     rmb_held: bool,
+    /// Left mouse held (GML `fire` on `mb_left` parity): set on primary
+    /// pointer-down, cleared on primary pointer-up, so automatic weapons
+    /// keep firing while held (clicks alone are single-frame edges).
+    lmb_held: bool,
     /// Right-button down/up edges staged this window. The viewport emits
     /// buttonless [`PickEvent`]s for right clicks too, so these flags let
     /// [`App::feed_input`] drop the spurious picks (and route Back over
@@ -335,6 +339,7 @@ impl App {
             interact_edge: false,
             shift_held: false,
             rmb_held: false,
+            lmb_held: false,
             rmb_down_edge: false,
             rmb_up_edge: false,
             pads: Vec::new(),
@@ -648,6 +653,18 @@ impl App {
         }
     }
 
+    /// Left mouse button down (root pointer handler, `Primary` only):
+    /// latches [`App::lmb_held`] so automatic weapons keep firing while
+    /// held. The viewport `Press` still stages the aim/fire click edge.
+    fn lmb_down(&mut self) {
+        self.lmb_held = true;
+    }
+
+    /// Left mouse button up: release the held latch.
+    fn lmb_up(&mut self) {
+        self.lmb_held = false;
+    }
+
     /// Stage one gamepad snapshot for this tick (shells map
     /// `repame-shell` `GamepadEvent`s / platform pad state onto
     /// [`GamepadState`]; drained by [`App::feed_input`] in stage order).
@@ -821,7 +838,11 @@ impl App {
         // effect. Splash/Loading advance via the click→interact arm
         // below, so they stage no fire pulse either (one pulse per
         // click, not two).
-        let mouse_down = !self.clicks.is_empty()
+        // `clicks` are single-frame edges (staged on Press, drained at the
+        // end of this fn); `lmb_held` latches primary down/up at the root
+        // so automatic weapons keep firing while the button is held.
+        let mouse_down_edge = !self.clicks.is_empty();
+        let mouse_down = (mouse_down_edge || self.lmb_held)
             && !menu_open
             && !game_over
             && !offer_open
@@ -831,7 +852,14 @@ impl App {
             && state != AppState::Loading;
         let mouse = MouseState {
             left_held: mouse_down,
-            left_pressed: mouse_down,
+            left_pressed: mouse_down_edge
+                && !menu_open
+                && !game_over
+                && !offer_open
+                && state != AppState::MainMenu
+                && state != AppState::Title
+                && state != AppState::Splash
+                && state != AppState::Loading,
             ..MouseState::default()
         };
         {
@@ -1332,6 +1360,7 @@ impl App {
                 let app = unsafe { &mut *app_ptr };
                 match ev {
                     PickEvent::Press { world, screen } | PickEvent::Click { world, screen } => {
+                        app.lmb_down();
                         app.stage_click(world, screen)
                     }
                     PickEvent::Hover { world } => app.hover = Some(world),
@@ -1353,6 +1382,7 @@ impl App {
                 let app = unsafe { &mut *app_ptr };
                 match ev {
                     PickEvent::Press { world, screen } | PickEvent::Click { world, screen } => {
+                        app.lmb_down();
                         app.stage_click(world, screen)
                     }
                     PickEvent::Hover { world } => app.hover = Some(world),
@@ -1391,6 +1421,8 @@ impl App {
         // `feed_input` via the rmb edges).
         let rmb_ptr_down = self as *mut App;
         let rmb_ptr_up = self as *mut App;
+        let lmb_ptr_down = self as *mut App;
+        let lmb_ptr_up = self as *mut App;
         let root_mod = root_mod
             .on_pointer_down(move |ev: PointerEvent| {
                 if matches!(ev.event, PointerEventKind::Down(PointerButton::Secondary)) {
@@ -1398,12 +1430,25 @@ impl App {
                     let app = unsafe { &mut *rmb_ptr_down };
                     app.rmb_down();
                 }
+                if matches!(
+                    ev.event,
+                    PointerEventKind::Down(PointerButton::Primary)
+                ) {
+                    // SAFETY: synchronous compose-time dispatch only.
+                    let app = unsafe { &mut *lmb_ptr_down };
+                    app.lmb_down();
+                }
             })
             .on_pointer_up(move |ev: PointerEvent| {
                 if matches!(ev.event, PointerEventKind::Up(PointerButton::Secondary)) {
                     // SAFETY: synchronous compose-time dispatch only.
                     let app = unsafe { &mut *rmb_ptr_up };
                     app.rmb_up();
+                }
+                if matches!(ev.event, PointerEventKind::Up(PointerButton::Primary)) {
+                    // SAFETY: synchronous compose-time dispatch only.
+                    let app = unsafe { &mut *lmb_ptr_up };
+                    app.lmb_up();
                 }
             });
 

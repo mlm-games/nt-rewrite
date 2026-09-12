@@ -251,6 +251,39 @@ pub fn slow_motion(slow_mo: &mut SlowMotion, scale: f32, duration_secs: f32) {
     slow_mo.active = true;
 }
 
+/// Tick HitStop/SlowMotion recovery so neither can stick active.
+///
+/// Call from `step_fx` ordering or `Always`: uses real fixed dt, eases
+/// HitStop scale back to 1, and clears both flags when their timers finish.
+pub fn tick_hitstop_slowmo(
+    time: Res<SimTime>,
+    mut hs: Option<ResMut<HitStop>>,
+    mut sm: Option<ResMut<SlowMotion>>,
+) {
+    let dt = time.delta_secs;
+    if let Some(hs) = hs.as_mut() {
+        if hs.active {
+            hs.recover.tick(dt);
+            if hs.recover.finished() {
+                hs.active = false;
+                hs.scale = 1.0;
+            } else {
+                let f = hs.recover.fraction().clamp(0.0, 1.0);
+                hs.scale = hs.start_scale + (1.0 - hs.start_scale) * f;
+            }
+        }
+    }
+    if let Some(sm) = sm.as_mut() {
+        if sm.active {
+            sm.timer.tick(dt);
+            if sm.timer.finished() {
+                sm.active = false;
+                sm.scale = 1.0;
+            }
+        }
+    }
+}
+
 /// Chromatic aberration strength (game-utils parity).
 #[derive(Resource, Clone, Copy, Debug, Default)]
 pub struct ChromaticAberration(pub f32);

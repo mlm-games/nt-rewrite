@@ -850,6 +850,56 @@ pub fn held_weapon_angle(aim_angle: f32, wep_angle_deg: f32, wkick: f32) -> f32 
     aim_angle + wep_angle_deg.to_radians() * (1.0 - wkick / 20.0)
 }
 
+/// Exact GML Player/Step_0 facing quadrant law.
+///
+/// Returns `(right, back)`, where:
+/// - `right` is the sprite xscale side: `-1` when aiming left, `1` otherwise.
+/// - `back` decides weapon/body ordering: `1` when aiming upward/front-side in
+///   GML angle space, `-1` otherwise.
+pub fn gml_player_right_back_from_aim(aim: Vec2) -> (f32, f32) {
+    let a = aim.y.atan2(aim.x).to_degrees().rem_euclid(360.0);
+    let right = if a > 90.0 && a < 270.0 { -1.0 } else { 1.0 };
+    let back = if a > 0.0 && a < 180.0 { 1.0 } else { -1.0 };
+    (right, back)
+}
+
+/// GML Player/Step_0 parity: after weapon/spec logic, the player velocity is
+/// capped back to maxspeed.
+///
+/// In GameMaker this is the literal:
+///
+/// ```gml
+/// if speed > maxspeed {
+///     speed = maxspeed
+/// }
+/// ```
+///
+/// Keep this separate from `player_move` because the Rust schedule performs
+/// `player_fire` after `player_move`, while GML's player Step contains both and
+/// clamps after firing/recoil has already been applied.
+pub fn player_post_fire_speed_cap(
+    mut q: Query<(&Player, &mut Velocity, Option<&Dash>), With<Player>>,
+) {
+    for (player, mut vel, dash) in &mut q {
+        // Fish roll / dash-like states are already governed by their own
+        // fixed-speed code path; do not squash them here.
+        if dash.is_some() {
+            continue;
+        }
+
+        let max_speed = player.speed * player.speed_mult;
+        if max_speed <= 0.0 {
+            vel.0 = Vec2::ZERO;
+            continue;
+        }
+
+        let speed = vel.0.length();
+        if speed > max_speed {
+            vel.0 *= max_speed / speed;
+        }
+    }
+}
+
 /// Steroids second slot mirrors the other live slot. Verbatim bevy helper,
 /// shared with the fire path (`player_fire` imports this instead of
 /// keeping a second copy).

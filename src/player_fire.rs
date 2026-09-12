@@ -53,7 +53,8 @@ use crate::comps_a::{
     AbilityHazard, AimDir, BouncesLeft, ChainLightning, DamageSource, DiscFlight, FireCooldown,
     FlameShellSlowDeath, FlameTrail, GameCleanup, GrenadeFuse, HammerheadBudget, Health, HitId,
     Hitbox, HitsAllTeams, Homing, Inventory, LevelCleanup, PendingWallBreak, PiercesLeft, Player,
-    Projectile, ProjectileFade, ProjectileFriction, ProjectileHitSet, ProjectileTyp, RaceState,
+    Projectile, ProjectileFade, ProjectileFriction, ProjectileHitSet, ProjectileTyp,
+    ProjectileVisual, RaceState,
     Run, SaveDirty, ShellBonus, ShellWallBounce, SlashProjectile, SpawnGrace, SpawnHazardOnDeath,
     SplitOnDeath, Sticky, Team, Toast, Velocity, WallCell, WallTile,
 };
@@ -843,7 +844,15 @@ fn spawn_pellets(commands: &mut Commands, fx: &mut FireFx, shot: &GunShot, playe
         }
     }
 
-    let muzzle = shot.pos + shot.aim * 24.0;
+    // GML `scrFire` style: Bullet1 spawns near the body (player x/y plus a
+    // tiny forward nudge), not a fixed 24px out. Keep longer muzzles for
+    // bolts/beams/launchers whose strips originate ahead of the grip.
+    let muzzle_dist = match shot.def.ammo {
+        AmmoKind::Bullets | AmmoKind::Shells => 8.0,
+        _ if shot.def.melee.is_some() => 0.0,
+        _ => 24.0,
+    };
+    let muzzle = shot.pos + shot.aim.normalize_or_zero() * muzzle_dist;
     // Render-phase muzzle tongue (3-tick marker; expiry in Always tail).
     // Firing logic untouched: bursts/pellets/beams below are unchanged.
     commands.spawn(FiredWeapon::new(muzzle, shot.aim));
@@ -1487,7 +1496,43 @@ pub fn spawn_player_projectile_with_source(
         ec.insert(ProjectileTyp(typ));
     }
 
+    // Exact GML projectile object art. `ProjectileTyp` is not enough:
+    // Bullet1.typ == 1 and Bullet2.typ == 1 in the GameMaker source.
+    let projectile_visual: Option<ProjectileVisual> = (|| {
+        let w = weapon?;
+        let ammo = weapon_ammo(w);
+        let base = base_weapon_name(weapon_meta(w).wep_name);
+
+        if shell_kind == Some(ShellKind::Bullet2) {
+            return Some(ProjectileVisual {
+                sprite: "images/sprBullet2.png",
+                mask: Some("images/mskBullet2.png"),
+                fade: Some("images/sprBullet2Disappear.png"),
+            });
+        }
+
+        if ammo == AmmoKind::Bullets
+            && !base.contains("DISC")
+            && !base.contains("BOUNCER")
+        {
+            return Some(ProjectileVisual {
+                sprite: "images/sprBullet1.png",
+                mask: Some("images/mskBullet1.png"),
+                fade: Some("images/sprBulletHit.png"),
+            });
+        }
+
+        None
+    })();
+
+    if let Some(v) = projectile_visual {
+        ec.insert(v);
+    }
+
     let fade: Option<ProjectileFade> = (|| {
+        if let Some(v) = projectile_visual {
+            return v.fade.map(ProjectileFade);
+        }
         if let Some(st) = shell_stats {
             return st.fade.map(ProjectileFade);
         }

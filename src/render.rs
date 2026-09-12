@@ -835,11 +835,20 @@ pub fn pickup_art(kind: &PickupKind) -> Cow<'static, str> {
 }
 
 /// Resolve one projectile entity to its strip.
-/// Priority: melee slash flags → player weapon table → enemy-kind table
-/// → team fallback. (nt-rewrite projectiles carry no art path; bevy
-/// attached `Sprite` + candidates at spawn, so this inverts the
-/// `player_projectile_candidates` / `enemy_projectile_sprite` choice.)
-fn projectile_art(proj: &Projectile, team: &Team, slash: Option<&SlashProjectile>) -> &'static str {
+/// Priority: explicit GML visual (Bullet1/Bullet2) → melee slash flags →
+/// player weapon table → enemy-kind table → team fallback. (nt-rewrite
+/// projectiles carry no art path; bevy attached `Sprite` + candidates at
+/// spawn, so this inverts the `player_projectile_candidates` /
+/// `enemy_projectile_sprite` choice.)
+fn projectile_art(
+    proj: &Projectile,
+    team: &Team,
+    slash: Option<&SlashProjectile>,
+    visual: Option<&crate::comps_a::ProjectileVisual>,
+) -> &'static str {
+    if let Some(v) = visual {
+        return v.sprite;
+    }
     if let Some(s) = slash {
         if s.blood {
             return "images/sprBloodSlash.png";
@@ -1029,9 +1038,10 @@ fn place_top_left(
 
 fn projectile_frame(assets: &RenderAssets, path: &str, life: &crate::time::GTimer) -> i32 {
     match assets.uv(path, 0) {
-        Some((_, def)) if def.frames == 2 => 1,
-        Some((_, def)) if def.frames > 2 => {
-            ((life.elapsed_secs() * 12.0).floor() as u32 % def.frames) as i32
+        Some((_, def)) if def.frames <= 1 => 0,
+        Some((_, def)) => {
+            // GML image_speed ~0.4 → 12 fps at 30Hz.
+            ((life.elapsed_secs() * 12.0).floor() as u32 % def.frames.max(1)) as i32
         }
         _ => 0,
     }
@@ -1944,12 +1954,12 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
 
     /// Current-slot recoil for the behind-gun draw (GML `wkick` rides the
     /// weapon visual; the player block reads it back).
-    fn weapon_visual_kick(kicks: &[(Entity, usize, f32)], owner: Entity, slot: usize) -> f32 {
+    fn weapon_visual_kick(kicks: &[(Entity, usize, f32, f32)], owner: Entity, slot: usize) -> (f32, f32) {
         kicks
             .iter()
-            .find(|(o, s, _)| *o == owner && *s == slot)
-            .map(|(_, _, k)| *k)
-            .unwrap_or(0.0)
+            .find(|(o, s, _, _)| *o == owner && *s == slot)
+            .map(|(_, _, k, a)| (*k, *a))
+            .unwrap_or((0.0, 0.0))
     }
 
     // Player: GML `Player/Draw_0` order verbatim — Eyes underlay, back
@@ -1963,10 +1973,10 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             .unwrap_or(0.0);
         // Recoil snapshot for the behind-gun draw (ends before the
         // player query borrows).
-        let kicks: Vec<(Entity, usize, f32)> = world
+        let kicks: Vec<(Entity, usize, f32, f32)> = world
             .query::<&WeaponVisual>()
             .iter(world)
-            .map(|v| (v.owner, v.slot as usize, v.wkick))
+            .map(|v| (v.owner, v.slot as usize, v.wkick, v.wep_angle))
             .collect();
         let mut q = world.query::<(
             Entity,
@@ -2018,14 +2028,22 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                 Some(base) => (base.as_str(), sit_fr),
                 None => (anim_path, anim_frame),
             };
-            // Bevy `face_aim`: aim.x when aim is live, else velocity.x.
-            let right: f32 = {
-                let x = aim
-                    .map(|a| a.0)
-                    .filter(|a| a.length_squared() > 0.001)
-                    .map(|a| a.x)
-                    .unwrap_or_else(|| vel.map(|v| v.0.x).unwrap_or(0.0));
-                if x < 0.0 { -1.0 } else { 1.0 }
+            // GML Player/Step_0 facing quadrant law (`right`/`back` from
+            // `gunangle`): `right = -1` when 90 < gunangle < 270, else 1;
+            // `back` when 0 < gunangle < 180. Falls back to velocity.x
+            // when aim is dead.
+            let (right, back): (f32, bool) = match aim
+                .map(|a| a.0)
+                .filter(|a| a.length_squared() > 0.001)
+            {
+                Some(a) => {
+                    let (r, b) = crate::player::gml_player_right_back_from_aim(a);
+                    (r, b > 0.0)
+                }
+                None => {
+                    let x = vel.map(|v| v.0.x).unwrap_or(0.0);
+                    (if x < 0.0 { -1.0 } else { 1.0 }, false)
+                }
             };
             let flip = right < 0.0;
             let gunangle = aim.map(|a| a.0.y.atan2(a.0.x)).unwrap_or(if flip {
@@ -2033,9 +2051,6 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             } else {
                 0.0
             });
-            // GML `Step_0:441-450`: `back` while aiming up-screen
-            // (gunangle 0..180 in y-down degrees).
-            let back = gunangle > 0.0 && gunangle < std::f32::consts::PI;
             let is_eyes = race.is_some_and(|rs| rs.race == RaceId::Eyes);
             let is_steroids = race.is_some_and(|rs| rs.race == RaceId::Steroids);
             let swapanim = inv_opt.map(|inv| inv.swapanim).unwrap_or(0.0);
@@ -2152,8 +2167,11 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                         std::borrow::Cow::Borrowed("images/sprRevolver.png")
                     };
                     if w != WeaponId::NONE {
-                        let wkick = weapon_visual_kick(&kicks, entity, inv.current);
-                        let ang = gunangle;
+                        // GML Draw_0: gunangle + wepangle*(1 - wkick/20),
+                        // positioned at player + lengthdir(-wkick, swing).
+                        // Kick/wep_angle come from the slot-0 WeaponVisual.
+                        let (wkick, wep_ang) = weapon_visual_kick(&kicks, entity, 0);
+                        let ang = crate::player::held_weapon_angle(gunangle, wep_ang, wkick);
                         let at = Vec2::new(
                             pos.0.x + (-wkick) * ang.cos(),
                             pos.0.y + (-wkick) * ang.sin() - swapanim,
@@ -2231,16 +2249,17 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
     // tint half): white/black strobe under 0.334 s, solid white once
     // the friction switch armed.
     {
-        let mut q = world.query::<(
-            &Pos,
-            &Projectile,
-            Option<&Velocity>,
-            &Team,
-            Option<&SlashProjectile>,
-            Option<&GrenadeFuse>,
-        )>();
-        for (pos, proj, vel, team, slash, fuse) in q.iter(world) {
-            let path = projectile_art(proj, team, slash);
+    let mut q = world.query::<(
+        &Pos,
+        &Projectile,
+        Option<&Velocity>,
+        &Team,
+        Option<&SlashProjectile>,
+        Option<&GrenadeFuse>,
+        Option<&crate::comps_a::ProjectileVisual>,
+    )>();
+    for (pos, proj, vel, team, slash, fuse, visual) in q.iter(world) {
+        let path = projectile_art(proj, team, slash, visual);
             let frame = projectile_frame(assets, path, &proj.life);
             let rotation = vel
                 .filter(|v| v.0.length_squared() > 1e-6)
@@ -2404,10 +2423,9 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
         }
     }
 
-    // Held guns: bevy `tick_weapon_visuals` pose parity — hold point
-    // `owner + forward * (12 - wkick) + side`, rotation from
-    // `held_weapon_angle`, `flip_y` when aiming left (engine channel,
-    // same as bevy `sprite.flip_y = aim.0.x < 0.0`).
+    // Held guns: GML Player/Draw_0 verbatim.
+    // Position = player + lengthdir(-wkick, gunangle + wepangle*(1 - wkick/20))
+    // NO +12 forward hold. Sprite origin is the grip.
     {
         // Wall centers for the bolt-weapon laser-sight march.
         let walls: Vec<Vec2> = world
@@ -2428,10 +2446,15 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             // player block above), never here. Frame rides
             // `trigger_fingers_shine`; y-mirror rides `wepflip` for
             // melee (`wepright`/`bwepright`, else facing).
-            let (back_current, shine, mirror) = world
+            let (back_current, shine, mirror, is_steroids_slot1) = world
                 .get::<Inventory>(gun.owner)
                 .map(|inv| {
-                    let back = aim.y > 0.0 && aim.length_squared() > 0.001;
+                    let (_, back_v) = if aim.length_squared() > 0.001 {
+                        crate::player::gml_player_right_back_from_aim(aim)
+                    } else {
+                        (if aim.x < 0.0 { -1.0 } else { 1.0 }, -1.0)
+                    };
+                    let back = back_v > 0.0;
                     let melee = weapon_meta(gun.wep_id).wep_mele;
                     let facing = if aim.x < 0.0 { -1.0 } else { 1.0 };
                     let upright = if melee {
@@ -2447,9 +2470,10 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                         back && gun.slot as usize == inv.current,
                         inv.shine.floor() as i32,
                         upright < 0.0,
+                        gun.slot == 1,
                     )
                 })
-                .unwrap_or((false, 0, aim.x < 0.0));
+                .unwrap_or((false, 0, aim.x < 0.0, false));
             if back_current {
                 continue;
             }
@@ -2460,26 +2484,31 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                 Cow::Borrowed("images/sprRevolver.png")
             };
             let angle = aim.y.atan2(aim.x);
+            // GML: gunangle + (wepangle * (1 - wkick/20))
             let swing = crate::player::held_weapon_angle(angle, gun.wep_angle, gun.wkick);
             let forward = Vec2::new(swing.cos(), swing.sin());
-            let perp = Vec2::new(-forward.y, forward.x);
-            let side = if gun.slot == 1 {
-                perp * 8.0
-            } else {
-                Vec2::ZERO
-            };
-            let hold = pos.0 + forward * (12.0 - gun.wkick) + side;
+
+            // GML lengthdir(-wkick, swing). Steroids bwep: y - 4.
+            let mut hold = pos.0 + forward * (-gun.wkick);
+            if is_steroids_slot1 {
+                hold.y -= 4.0;
+            }
             if let Some(s) =
                 assets.sprite_for_full(&path, shine.max(0), hold, false, mirror, swing, [1.0; 4])
             {
                 out.push(s);
             }
             // GML bolt-weapon laser sight (not the disc gun): 2 px
-            // march to the first wall (1000-step cap), strip drawn
-            // `dist / 2 + 2` wide at the aim angle from the muzzle.
+            // march to the first wall (1000-step cap). Origin is the
+            // player (Steroids second: y - 4), NOT the muzzle/hold.
             if meta.wep_type == AmmoType::Bolts && meta.wep_name != "DISC GUN" {
+                let origin = if is_steroids_slot1 {
+                    Vec2::new(pos.0.x, pos.0.y - 4.0)
+                } else {
+                    pos.0
+                };
                 let step = Vec2::new(angle.cos(), angle.sin()) * 2.0;
-                let mut tip = hold;
+                let mut tip = origin;
                 for _ in 0..1000 {
                     let next = tip + step;
                     let hit = walls.iter().any(|w| w.distance(next) < 8.0);
@@ -2488,10 +2517,11 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                         break;
                     }
                 }
-                let dist = hold.distance(tip);
+                let dist = origin.distance(tip);
                 if let Some(native) = assets.native_size("images/sprLaserSightPlayer.png") {
                     let size = Vec2::new(native.x * (dist / 2.0 + 2.0), native.y);
-                    let mid = hold + Vec2::new(angle.cos(), angle.sin()) * (size.x * 0.5);
+                    // Origin of laser strip is at player; with center-anchor mid-point:
+                    let mid = origin + Vec2::new(angle.cos(), angle.sin()) * (size.x * 0.5);
                     let mut s = match assets.sprite_sized(
                         "images/sprLaserSightPlayer.png",
                         0,
@@ -4966,9 +4996,10 @@ pub fn bloom_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInst
         Option<&Velocity>,
         &Team,
         Option<&SlashProjectile>,
+        Option<&crate::comps_a::ProjectileVisual>,
     )>();
-    for (pos, proj, vel, team, slash) in q.iter(world) {
-        let path = projectile_art(proj, team, slash);
+    for (pos, proj, vel, team, slash, visual) in q.iter(world) {
+        let path = projectile_art(proj, team, slash, visual);
         let frame = projectile_frame(assets, path, &proj.life);
         let rotation = vel
             .filter(|v| v.0.length_squared() > 1e-6)

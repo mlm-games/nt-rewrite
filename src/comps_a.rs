@@ -802,6 +802,31 @@ pub struct ProjectileFade(pub &'static str);
 #[derive(Component, Clone, Copy, Debug)]
 pub struct ProjectileTyp(pub u8);
 
+/// Exact GML object art identity (Bullet1 vs Bullet2).
+///
+/// Do not derive render art from [`ProjectileTyp`]: in the GML project both
+/// Bullet1 and Bullet2 have `typ = 1`, but they are different objects with
+/// different sprites, masks, fade animations, friction, and hit behavior.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectileVisual {
+    pub sprite: &'static str,
+    pub mask: Option<&'static str>,
+    pub fade: Option<&'static str>,
+}
+
+/// Data-driven GML prop hurt/broken art identity.
+///
+/// GameMaker props do not share one hit animation: some swap to a hurt
+/// strip for a few ticks, some swap into broken variants, some are
+/// already correct with no hurt sprite.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GmlHurtSprite {
+    pub normal: &'static str,
+    pub hurt: Option<&'static str>,
+    pub broken: Option<&'static str>,
+    pub hit_ticks: u8,
+}
+
 #[derive(Component)]
 pub struct Projectile {
     pub damage: i32,

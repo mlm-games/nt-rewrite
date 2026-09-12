@@ -9,7 +9,7 @@ use bevy_ecs::prelude::*;
 use repame_anim::AnimCatalog;
 use repame_sim::SimTime;
 
-use crate::comps_a::{Health, Player, Velocity};
+use crate::comps_a::{GmlHurtSprite, Health, Player, Velocity};
 use crate::comps_b::{
     Enemy, EnemySprites, FireAnim, HurtAnim, PlayerDying, Prop, PropHpTracker, PropSprites,
 };
@@ -263,11 +263,12 @@ pub fn prop_hurt_on_damage(
             &mut PropHpTracker,
             &PropSprites,
             Option<&mut SpriteAnim>,
+            Option<&GmlHurtSprite>,
         ),
         (With<Prop>, Without<HurtAnim>),
     >,
 ) {
-    for (e, prop, mut tracker, sprites, anim_opt) in &mut q {
+    for (e, prop, mut tracker, sprites, anim_opt, gml_opt) in &mut q {
         if !prop.destructible {
             tracker.last_hp = prop.hp;
             continue;
@@ -285,6 +286,29 @@ pub fn prop_hurt_on_damage(
         let Some(mut anim) = anim_opt else {
             continue;
         };
+
+        // GML object identity wins when present: props with `hurt: None`
+        // keep the existing generic flash (no path swap), others swap to
+        // the extracted hurt strip.
+        if let Some(gml) = gml_opt {
+            match gml.hurt {
+                Some(hurt) => {
+                    play_hurt(
+                        &mut commands,
+                        e,
+                        &catalog,
+                        &mut anim,
+                        hurt,
+                        gml.normal,
+                        None,
+                    );
+                }
+                None => {
+                    // No hit anim: keep existing behavior (no path swap).
+                }
+            }
+            continue;
+        }
 
         play_hurt(
             &mut commands,

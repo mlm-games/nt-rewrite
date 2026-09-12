@@ -191,6 +191,7 @@ pub fn build_sim_schedule() -> Schedule {
             (
                 effects::tick_fired_weapons.in_set(NtSimSet::Always),
                 effects::step_fx.in_set(NtSimSet::Always),
+                effects::tick_hitstop_slowmo.in_set(NtSimSet::Always),
             )
                 .chain(),
             (
@@ -223,9 +224,14 @@ pub fn build_sim_schedule() -> Schedule {
             )
                 .chain(),
             (
-                player_fire::player_fire
-                    .in_set(NtSimSet::Combat)
-                    .run_if(gameplay_active),
+                (
+                    player_fire::player_fire
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    player::player_post_fire_speed_cap
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                ),
                 player_fire::move_swing_fx
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
