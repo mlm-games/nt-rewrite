@@ -80,6 +80,9 @@ pub enum OverlayMenu {
     Settings,
     Credits,
     Pause,
+    /// Run-stats panel over the main menu (GML `DrawStats` parity;
+    /// bevy left STATS inert, so this variant is port-only).
+    Stats,
 }
 
 /// Delayed unpause (bevy `PendingUnpause` verbatim law: 0.2 s `Once`
@@ -197,6 +200,13 @@ pub fn goto_state(world: &mut World, next: AppState) {
         }
     }
     match next {
+        AppState::MainMenu => {
+            world.init_resource::<menus::MenuState>();
+            if let Some(mut menu) = world.get_resource_mut::<menus::MenuState>() {
+                menu.main_menu_cursor = 0;
+                menu.settings_cursor = 0;
+            }
+        }
         AppState::Loading => {
             world.insert_resource(LoadingState::default());
         }
@@ -245,6 +255,7 @@ pub fn reset_pause_state(world: &mut World) {
         menu.settings_page_stack.clear();
         menu.mutation_selected = None;
         menu.game_over = None;
+        menu.settings_cursor = 0;
     }
 }
 
@@ -382,6 +393,11 @@ pub fn tick_escape_pause(
         }
         // `None` while already paused (Resume path owns that edge).
         OverlayMenu::None => {}
+        // Stats only ever opens over the main menu (never InGame, so
+        // this arm is unreachable in practice); close it like Credits.
+        OverlayMenu::Stats => {
+            *overlay = OverlayMenu::None;
+        }
     }
 }
 

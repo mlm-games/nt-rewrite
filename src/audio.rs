@@ -1421,6 +1421,9 @@ pub enum UiAction {
     SettingEraseProgress,
     SettingViewCredits,
     SettingOpenSubcategory(u8),
+    /// Open the run-stats panel (GML `DrawStats` parity over the main
+    /// menu; bevy left STATS inert).
+    ShowStats,
 }
 
 /// Bridged menu action (bevy `UiBridgeAction` message -> [`Queue`]).
@@ -1469,7 +1472,8 @@ pub fn ui_action_to_cue(action: &UiAction) -> Option<ReactiveCue> {
         | UiAction::SettingResetOptions
         | UiAction::SettingEraseProgress
         | UiAction::SettingViewCredits
-        | UiAction::SettingOpenSubcategory(_) => Some(ReactiveCue::UiClick),
+        | UiAction::SettingOpenSubcategory(_)
+        | UiAction::ShowStats => Some(ReactiveCue::UiClick),
         UiAction::SettingSlider { .. } => None,
     }
 }
@@ -1528,6 +1532,9 @@ pub fn ui_action_sfx(action: &UiAction) -> Vec<AudioCue> {
         }
         UiAction::SettingViewCredits => {
             push("sndMenuCredits", 0.7);
+        }
+        UiAction::ShowStats => {
+            push("sndMenuStats", 0.7);
         }
         UiAction::SettingOpenSubcategory(_) => {
             push("sndClick", 0.7);

@@ -47,20 +47,23 @@ use crate::comps_a::{
     SlashProjectile, TILE, Team, Velocity, WallCell, WallTile,
 };
 use crate::comps_b::{
-    Beam, BossBrain, BossPhase, Corpse, Enemy, EnemyBrain, FxAngle, GroundDecalTint, HazardCloud, OpenedChest, Pickup,
-    PickupKind, ChestKind, PickupLifetime, Portal, PortalClear, PortalShock, PortalStrike,
-    PropSprites, Prop, StaticFx, SwingFx, Telekinesis, ThroneCarpet, ThroneSit, WeaponVisual,
-    YvCouch,
+    Beam, BossBrain, BossPhase, ChestKind, Corpse, Enemy, EnemyBrain, FxAngle, GroundDecalTint,
+    HazardCloud, OpenedChest, Pickup, PickupKind, PickupLifetime, Portal, PortalClear, PortalShock,
+    PortalStrike, Prop, PropSprites, StaticFx, SwingFx, Telekinesis, ThroneCarpet, ThroneSit,
+    WeaponVisual, YvCouch,
+};
+use crate::data::{
+    AreaId, CrownKind, EnemyKind, HazardKind, MutationId, RaceId, UltraMutationId, WeaponId,
 };
 use crate::environment::{EnvironmentHazard, PulseSprite, SurfacePulse};
-use crate::data::{AreaId, CrownKind, EnemyKind, HazardKind, MutationId, RaceId, UltraMutationId, WeaponId};
-use crate::weapons_data::AmmoType;
 use crate::hud::{HudState, ability_name, run_area_string, run_timer_string, sync_hud_state};
 use crate::savedata_part::{character_def, race_passive_text};
+use crate::spatial::Pos;
 use crate::state::menus::{CHAR_SELECT_ORDER, MenuState};
 use crate::state::{SPLASH_GUN_STEPS, SplashState};
-use crate::spatial::Pos;
 use crate::weapon_runtime::{sanitize_weapon_id, weapon_meta};
+use crate::weapons_data::AmmoType;
+use crate::audio::UiAction;
 
 /// Atlas page edge for full-catalog loads (matches the engine default).
 pub const ATLAS_SIZE: u32 = 2048;
@@ -82,8 +85,7 @@ pub struct RenderAssets {
 
 impl RenderAssets {
     fn build(json: &str, assets_dir: &Path, desc: AtlasDesc) -> anyhow::Result<Self> {
-        let mut catalog =
-            AnimCatalog::from_json(json, desc).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut catalog = AnimCatalog::from_json(json, desc).map_err(|e| anyhow::anyhow!("{e}"))?;
         // Decode every strip PNG the catalog references. Missing art is a
         // magenta placeholder (visible bug, never a panic or a hole).
         let mut strips = HashMap::new();
@@ -149,7 +151,7 @@ impl RenderAssets {
             AtlasDesc {
                 size: ATLAS_SIZE,
                 max_pages: ATLAS_PAGES,
-            padding: 0,
+                padding: 0,
             },
         )
     }
@@ -170,8 +172,10 @@ impl RenderAssets {
     ) -> anyhow::Result<Self> {
         let json = std::fs::read_to_string(assets_dir.join("images").join("anims.json"))?;
         let raw: HashMap<String, serde_json::Value> = serde_json::from_str(&json)?;
-        let want: std::collections::HashSet<String> =
-            names.iter().map(|n| repame_anim::stem(n).to_string()).collect();
+        let want: std::collections::HashSet<String> = names
+            .iter()
+            .map(|n| repame_anim::stem(n).to_string())
+            .collect();
         let filtered: HashMap<String, serde_json::Value> = raw
             .into_iter()
             .filter(|(k, _)| want.contains(repame_anim::stem(k)))
@@ -184,7 +188,11 @@ impl RenderAssets {
         Self::build(
             &serde_json::to_string(&filtered)?,
             assets_dir,
-            AtlasDesc { size, max_pages, padding: 0 },
+            AtlasDesc {
+                size,
+                max_pages,
+                padding: 0,
+            },
         )
     }
 
@@ -369,11 +377,7 @@ fn blit_cell(strip: &[u8], strip_w: u32, src: [u32; 4]) -> Vec<u8> {
 /// areas plus HQ hold 3 subareas, everything else 1.
 pub fn area_max_subarea(area: AreaId) -> u32 {
     match area {
-        AreaId::Desert
-        | AreaId::Scrapyards
-        | AreaId::FrozenCity
-        | AreaId::Palace
-        | AreaId::HQ => 3,
+        AreaId::Desert | AreaId::Scrapyards | AreaId::FrozenCity | AreaId::Palace | AreaId::HQ => 3,
         _ => 1,
     }
 }
@@ -430,7 +434,15 @@ fn area_sprites(floor: u32) -> (&'static str, &'static str, &'static str) {
 
 /// Route floor/wall/out/trans strips for a route floor, mirroring bevy
 /// `world.rs::area_sprites` (out/trans follow the same per-floor arms).
-fn area_sprites_full(floor: u32) -> (&'static str, &'static str, &'static str, &'static str, &'static str) {
+fn area_sprites_full(
+    floor: u32,
+) -> (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+) {
     let (f, b, t) = area_sprites(floor);
     let rf = ((floor.max(1) - 1) % 15) + 1;
     let n: u8 = match rf {
@@ -538,7 +550,13 @@ fn area_sprites_full_for_run(
     floor: u32,
     area: AreaId,
     has: impl Fn(&str) -> bool + Copy,
-) -> (&'static str, &'static str, &'static str, &'static str, &'static str) {
+) -> (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+) {
     let route = area_sprites_full(floor);
     let num: u8 = match area {
         AreaId::Oasis => 101,
@@ -821,11 +839,7 @@ pub fn pickup_art(kind: &PickupKind) -> Cow<'static, str> {
 /// → team fallback. (nt-rewrite projectiles carry no art path; bevy
 /// attached `Sprite` + candidates at spawn, so this inverts the
 /// `player_projectile_candidates` / `enemy_projectile_sprite` choice.)
-fn projectile_art(
-    proj: &Projectile,
-    team: &Team,
-    slash: Option<&SlashProjectile>,
-) -> &'static str {
+fn projectile_art(proj: &Projectile, team: &Team, slash: Option<&SlashProjectile>) -> &'static str {
     if let Some(s) = slash {
         if s.blood {
             return "images/sprBloodSlash.png";
@@ -1008,8 +1022,8 @@ fn place_top_left(
         uv_max: Vec2::new(uv.max[0], uv.max[1]),
         color: tint_to_linear(tint),
         page: uv.page,
-            z: 0.0,
-            blend: SpriteBlend::Alpha,
+        z: 0.0,
+        blend: SpriteBlend::Alpha,
     })
 }
 
@@ -1163,7 +1177,11 @@ pub fn gml_camera_step(cam: &mut GmlCamera, vw: f32, vh: f32, s: &CamStepInput, 
             sy += s.jy * cam.shake * s.shake_scale;
         }
     }
-    let m = if cam.snap { 1.0 } else { gml_rate(CAM_LERP, dt) };
+    let m = if cam.snap {
+        1.0
+    } else {
+        gml_rate(CAM_LERP, dt)
+    };
     cam.x = lerp_f(cam.x, s.player.x - vw * 0.5 + cam.viewx2 + sx, m).round();
     cam.y = lerp_f(cam.y, s.player.y - vh * 0.5 + cam.viewy2 + sy, m).round();
     cam.snap = false;
@@ -1249,23 +1267,14 @@ pub const SIDEART_TILE: f32 = 64.0;
 /// World-space view rect `[x, y, w, h]` under the live camera fit
 /// (top-left + extent in world units; degenerate fits yield a zero
 /// rect so atmosphere draws park at the look point).
-pub fn view_rect_world(
-    canvas_dp: [f32; 2],
-    world_size: [f32; 2],
-    cam: &Camera2d,
-) -> [f32; 4] {
+pub fn view_rect_world(canvas_dp: [f32; 2], world_size: [f32; 2], cam: &Camera2d) -> [f32; 4] {
     let center = cam.effective_center();
     let fit = effective_fit(canvas_dp, world_size, cam);
     if !fit.0.is_finite() || fit.0 <= 1e-6 {
         return [center[0], center[1], 0.0, 0.0];
     }
     let tl = dp_to_world([0.0, 0.0], world_size, center, fit);
-    [
-        tl[0],
-        tl[1],
-        canvas_dp[0] / fit.0,
-        canvas_dp[1] / fit.0,
-    ]
+    [tl[0], tl[1], canvas_dp[0] / fit.0, canvas_dp[1] / fit.0]
 }
 
 /// Fog strip for an area (GML `TopCont/Draw_0` verbatim: pizza sewers
@@ -1291,10 +1300,7 @@ pub fn fog_tiles(view_x: f32, view_y: f32, scroll: f32) -> Vec<[f32; 2]> {
     let mut out = Vec::with_capacity(9);
     for ix in -1..=1 {
         for iy in -1..=1 {
-            out.push([
-                fogx + ix as f32 * FOG_TILE_W,
-                fogy + iy as f32 * FOG_TILE_H,
-            ]);
+            out.push([fogx + ix as f32 * FOG_TILE_W, fogy + iy as f32 * FOG_TILE_H]);
         }
     }
     out
@@ -1387,17 +1393,17 @@ pub fn sideart_sprites(
         .unwrap_or(0);
     let frames = strip_frames(assets, "images/sprSideArt.png").max(1) as i32;
     let frame = opt.clamp(0, frames - 1);
-    let fit = effective_fit(canvas_dp, world_size, cam);
-    let center = cam.effective_center();
-    let to_world = |dp: [f32; 2]| {
-        let w = dp_to_world(dp, world_size, center, fit);
-        Vec2::new(w[0], w[1])
-    };
-    for [x, y] in sideart_tiles(canvas_dp[0], canvas_dp[1]) {
+    // Tile law is in GML view px (426x240 at 16:9), not dp: tiling
+    // `canvas_dp` (1280x720) spawns ~3x too many tiles at third-size
+    // offsets. Tile the live GUI view and map 1:1 through the view rect.
+    let vw = gml_view_size(canvas_dp)[0];
+    let view = view_rect_world(canvas_dp, world_size, cam);
+    let gm = hud_gui_map(view);
+    for [x, y] in sideart_tiles(vw, 240.0) {
         if let Some(s) = assets.sprite_for(
             "images/sprSideArt.png",
             frame,
-            to_world([x, y]),
+            hud_gui_to_world(gm, view, x, y),
             false,
             0.0,
             [1.0; 4],
@@ -1441,8 +1447,7 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
         let (floor_png, wall_bot_png, wall_top_png, wall_out_png, wall_trans_png) =
             area_sprites_full_for_run(floor, area, has);
         let outside_png = outside_sprite_for_run(floor, has);
-        let (mut minx, mut miny, mut maxx, mut maxy) =
-            (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+        let (mut minx, mut miny, mut maxx, mut maxy) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
         for &(cx, cy) in &cells {
             minx = minx.min(cx);
             miny = miny.min(cy);
@@ -1452,17 +1457,11 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
         if minx <= maxx {
             for cy in (miny - 6)..=(maxy + 6) {
                 for cx in (minx - 6)..=(maxx + 6) {
-                    let top_left =
-                        Vec2::new(cx as f32 * TILE, cy as f32 * TILE);
+                    let top_left = Vec2::new(cx as f32 * TILE, cy as f32 * TILE);
                     if cells.contains(&(cx, cy)) {
-                        if let Some(s) = place_top_left(
-                            assets,
-                            floor_png,
-                            0,
-                            top_left,
-                            [1.0; 4],
-                            GRID_OVERLAP,
-                        ) {
+                        if let Some(s) =
+                            place_top_left(assets, floor_png, 0, top_left, [1.0; 4], GRID_OVERLAP)
+                        {
                             out.push(s);
                         }
                     } else if let Some(s) = place_top_left(
@@ -1620,12 +1619,7 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
         let mut q = world.query::<(&Pos, &ThroneCarpet)>();
         for (pos, carpet) in q.iter(world) {
             let size = carpet.half_extents * 2.0;
-            out.push(white_quad(
-                pos.0,
-                0.0,
-                size,
-                [0.75, 0.12, 0.14, 0.85],
-            ));
+            out.push(white_quad(pos.0, 0.0, size, [0.75, 0.12, 0.14, 0.85]));
         }
     }
 
@@ -1642,14 +1636,9 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             tint[3] = pulse.alpha_at(now);
             match vis.path {
                 Some(path) => {
-                    if let Some(s) = assets.sprite_sized(
-                        path,
-                        0,
-                        pos.0,
-                        Vec2::splat(vis.size),
-                        vis.flip_x,
-                        tint,
-                    ) {
+                    if let Some(s) =
+                        assets.sprite_sized(path, 0, pos.0, Vec2::splat(vis.size), vis.flip_x, tint)
+                    {
                         out.push(s);
                     }
                 }
@@ -1685,14 +1674,7 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             if let Some(pulse) = pulse {
                 tint[3] *= pulse.alpha_at(now);
             }
-            if let Some(s) = assets.sprite_for(
-                path,
-                frame,
-                pos.0,
-                sprites.flip_x,
-                0.0,
-                tint,
-            ) {
+            if let Some(s) = assets.sprite_for(path, frame, pos.0, sprites.flip_x, 0.0, tint) {
                 out.push(s);
             }
         }
@@ -1790,9 +1772,8 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             {
                 continue;
             }
-            let is_corpse = corpse.is_some()
-                || (sprites.is_some() && prop.is_none())
-                || portal.is_some();
+            let is_corpse =
+                corpse.is_some() || (sprites.is_some() && prop.is_none()) || portal.is_some();
             if !is_corpse {
                 continue;
             }
@@ -1805,14 +1786,9 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             // Corpses keep the facing recorded at death.
             let flip = sprites.map(|s| s.flip_x).unwrap_or(false)
                 || corpse.map(|c| c.flip_x).unwrap_or(false);
-            if let Some(s) = assets.sprite_for(
-                &anim.path,
-                anim.frame as i32,
-                pos.0,
-                flip,
-                rotation,
-                tint,
-            ) {
+            if let Some(s) =
+                assets.sprite_for(&anim.path, anim.frame as i32, pos.0, flip, rotation, tint)
+            {
                 out.push(s);
             }
         }
@@ -1900,9 +1876,7 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                 Vec2::new(-89.0, 13.0),
                 Vec2::new(91.0, 13.0),
             ] {
-                if let Some(s) =
-                    assets.sprite_for(path, frame, pos.0 + off, false, 0.0, [1.0; 4])
-                {
+                if let Some(s) = assets.sprite_for(path, frame, pos.0 + off, false, 0.0, [1.0; 4]) {
                     out.push(s);
                 }
             }
@@ -1927,9 +1901,7 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             if gunangle.to_degrees().rem_euclid(360.0) > 180.0 {
                 continue;
             }
-            let flip = vel
-                .map(|v| v.0.x < 0.0)
-                .unwrap_or(false)
+            let flip = vel.map(|v| v.0.x < 0.0).unwrap_or(false)
                 || aim.map(|a| a.0.x < 0.0).unwrap_or(false);
             if let Some(s) =
                 assets.sprite_for_full(gun_path, 0, pos.0, false, flip, gunangle, [1.0; 4])
@@ -1943,9 +1915,7 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                 Some(a) => (a.path.as_str(), a.frame as i32),
                 None => (crate::enemy_data::enemy_def(enemy.kind).sprite, 0),
             };
-            let flip = vel
-                .map(|v| v.0.x < 0.0)
-                .unwrap_or(false)
+            let flip = vel.map(|v| v.0.x < 0.0).unwrap_or(false)
                 || aim.map(|a| a.0.x < 0.0).unwrap_or(false);
             if let Some(s) = assets.sprite_for(path, frame, pos.0, flip, 0.0, flash_tint(flash)) {
                 out.push(s);
@@ -1962,9 +1932,7 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             if gunangle.to_degrees().rem_euclid(360.0) <= 180.0 {
                 continue;
             }
-            let flip = vel
-                .map(|v| v.0.x < 0.0)
-                .unwrap_or(false)
+            let flip = vel.map(|v| v.0.x < 0.0).unwrap_or(false)
                 || aim.map(|a| a.0.x < 0.0).unwrap_or(false);
             if let Some(s) =
                 assets.sprite_for_full(gun_path, 0, pos.0, false, flip, gunangle, [1.0; 4])
@@ -1974,15 +1942,15 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
         }
     }
 
-/// Current-slot recoil for the behind-gun draw (GML `wkick` rides the
-/// weapon visual; the player block reads it back).
-fn weapon_visual_kick(kicks: &[(Entity, usize, f32)], owner: Entity, slot: usize) -> f32 {
-    kicks
-        .iter()
-        .find(|(o, s, _)| *o == owner && *s == slot)
-        .map(|(_, _, k)| *k)
-        .unwrap_or(0.0)
-}
+    /// Current-slot recoil for the behind-gun draw (GML `wkick` rides the
+    /// weapon visual; the player block reads it back).
+    fn weapon_visual_kick(kicks: &[(Entity, usize, f32)], owner: Entity, slot: usize) -> f32 {
+        kicks
+            .iter()
+            .find(|(o, s, _)| *o == owner && *s == slot)
+            .map(|(_, _, k)| *k)
+            .unwrap_or(0.0)
+    }
 
     // Player: GML `Player/Draw_0` order verbatim — Eyes underlay, back
     // guns (extra-wep fan + silver bwep), behind-gun or body, bubble.
@@ -2015,8 +1983,8 @@ fn weapon_visual_kick(kicks: &[(Entity, usize, f32)], owner: Entity, slot: usize
             Option<&Telekinesis>,
             Option<&ThroneSit>,
         )>();
-        for (entity, pos, player, pa, aim, vel, anim, flash, health, race, inv_opt, telek, sit)
-        in q.iter(world)
+        for (entity, pos, player, pa, aim, vel, anim, flash, health, race, inv_opt, telek, sit) in
+            q.iter(world)
         {
             let (anim_path, anim_frame) = match anim {
                 Some(a) => (a.path.as_str(), a.frame as i32),
@@ -2030,8 +1998,7 @@ fn weapon_visual_kick(kicks: &[(Entity, usize, f32)], owner: Entity, slot: usize
             let (sit_base, sit_fr): (Option<String>, i32) = match sit {
                 Some(s) if anim_path.contains("Idle") => {
                     let going = s.timer.remaining_secs() > 0.5;
-                    let base =
-                        anim_path.replace("Idle", if going { "GoSit" } else { "Sit" });
+                    let base = anim_path.replace("Idle", if going { "GoSit" } else { "Sit" });
                     let frames = strip_frames(assets, &base).max(1);
                     let elapsed = 11.5 - s.timer.remaining_secs().min(11.5);
                     let fr = if going {
@@ -2061,41 +2028,33 @@ fn weapon_visual_kick(kicks: &[(Entity, usize, f32)], owner: Entity, slot: usize
                 if x < 0.0 { -1.0 } else { 1.0 }
             };
             let flip = right < 0.0;
-            let gunangle = aim
-                .map(|a| a.0.y.atan2(a.0.x))
-                .unwrap_or(if flip {
-                    std::f32::consts::PI
-                } else {
-                    0.0
-                });
+            let gunangle = aim.map(|a| a.0.y.atan2(a.0.x)).unwrap_or(if flip {
+                std::f32::consts::PI
+            } else {
+                0.0
+            });
             // GML `Step_0:441-450`: `back` while aiming up-screen
             // (gunangle 0..180 in y-down degrees).
             let back = gunangle > 0.0 && gunangle < std::f32::consts::PI;
             let is_eyes = race.is_some_and(|rs| rs.race == RaceId::Eyes);
             let is_steroids = race.is_some_and(|rs| rs.race == RaceId::Steroids);
             let swapanim = inv_opt.map(|inv| inv.swapanim).unwrap_or(0.0);
-            let shine = inv_opt.map(|inv| inv.shine.floor() as i32).unwrap_or(0).max(0);
+            let shine = inv_opt
+                .map(|inv| inv.shine.floor() as i32)
+                .unwrap_or(0)
+                .max(0);
 
             // Eyes underlay: held-spec mind power, else MonsterStyle body.
             if is_eyes {
                 let img = ((blink_t * 12.0).floor() as i32).max(0);
                 if telek.is_some() {
-                    let tb = player
-                        .mutations
-                        .contains(&MutationId::ThroneButt);
+                    let tb = player.mutations.contains(&MutationId::ThroneButt);
                     let path = if tb {
                         "images/sprMindPowerTB.png"
                     } else {
                         "images/sprMindPower.png"
                     };
-                    if let Some(s) = assets.sprite_for(
-                        path,
-                        img % 3,
-                        pos.0,
-                        flip,
-                        0.0,
-                        [1.0; 4],
-                    ) {
+                    if let Some(s) = assets.sprite_for(path, img % 3, pos.0, flip, 0.0, [1.0; 4]) {
                         out.push(s);
                     }
                 } else if player.ultra == Some(UltraMutationId::EyesMonsterStyle) {
@@ -2144,10 +2103,7 @@ fn weapon_visual_kick(kicks: &[(Entity, usize, f32)], owner: Entity, slot: usize
                         let t = i as f32 / count;
                         // `merge_color(c_silver, c_black, i / count)`.
                         let silver = 0.75 * (1.0 - t);
-                        let at = Vec2::new(
-                            pos.0.x - right * (2.0 + i as f32),
-                            pos.0.y + swapanim,
-                        );
+                        let at = Vec2::new(pos.0.x - right * (2.0 + i as f32), pos.0.y + swapanim);
                         if let Some(s) = assets.sprite_for_full(
                             &format!("images/{}.png", meta.wep_sprt),
                             0,
@@ -2168,8 +2124,7 @@ fn weapon_visual_kick(kicks: &[(Entity, usize, f32)], owner: Entity, slot: usize
                         && !meta.wep_sprt.is_empty()
                         && meta.wep_sprt != "mskNone"
                     {
-                        let at =
-                            Vec2::new(pos.0.x - right * 2.0, pos.0.y + swapanim);
+                        let at = Vec2::new(pos.0.x - right * 2.0, pos.0.y + swapanim);
                         if let Some(s) = assets.sprite_for_full(
                             &format!("images/{}.png", meta.wep_sprt),
                             0,
@@ -2208,15 +2163,9 @@ fn weapon_visual_kick(kicks: &[(Entity, usize, f32)], owner: Entity, slot: usize
                         } else {
                             flip
                         };
-                        if let Some(s) = assets.sprite_for_full(
-                            &path,
-                            shine,
-                            at,
-                            false,
-                            mirror,
-                            ang,
-                            [1.0; 4],
-                        ) {
+                        if let Some(s) =
+                            assets.sprite_for_full(&path, shine, at, false, mirror, ang, [1.0; 4])
+                        {
                             out.push(s);
                         }
                     }
@@ -2246,8 +2195,7 @@ fn weapon_visual_kick(kicks: &[(Entity, usize, f32)], owner: Entity, slot: usize
             });
             if area == AreaId::Oasis && race_ok {
                 let frames = strip_frames(assets, "images/sprPlayerBubble.png").max(1);
-                let bframe =
-                    ((blink_t * 8.0).floor() as u32 % frames) as i32;
+                let bframe = ((blink_t * 8.0).floor() as u32 % frames) as i32;
                 if let Some(s) = assets.sprite_for(
                     "images/sprPlayerBubble.png",
                     bframe,
@@ -2352,9 +2300,14 @@ fn weapon_visual_kick(kicks: &[(Entity, usize, f32)], owner: Entity, slot: usize
             let elapsed = clear.timer.duration() - clear.timer.remaining_secs();
             let frames = strip_frames(assets, "images/sprPortalClear.png").max(1);
             let frame = ((elapsed * 30.0).floor() as u32).min(frames - 1) as i32;
-            if let Some(s) =
-                assets.sprite_for("images/sprPortalClear.png", frame, pos.0, false, 0.0, [1.0; 4])
-            {
+            if let Some(s) = assets.sprite_for(
+                "images/sprPortalClear.png",
+                frame,
+                pos.0,
+                false,
+                0.0,
+                [1.0; 4],
+            ) {
                 out.push(s);
             }
         }
@@ -2363,9 +2316,14 @@ fn weapon_visual_kick(kicks: &[(Entity, usize, f32)], owner: Entity, slot: usize
             let elapsed = strike.timer.duration() - strike.timer.remaining_secs();
             let frames = strip_frames(assets, "images/sprRogueStrike.png").max(1);
             let frame = ((elapsed * 30.0).floor() as u32).min(frames - 1) as i32;
-            if let Some(s) =
-                assets.sprite_for("images/sprRogueStrike.png", frame, pos.0, false, 0.0, [1.0; 4])
-            {
+            if let Some(s) = assets.sprite_for(
+                "images/sprRogueStrike.png",
+                frame,
+                pos.0,
+                false,
+                0.0,
+                [1.0; 4],
+            ) {
                 out.push(s);
             }
         }
@@ -2416,9 +2374,8 @@ fn weapon_visual_kick(kicks: &[(Entity, usize, f32)], owner: Entity, slot: usize
             {
                 continue;
             }
-            let is_corpse = corpse.is_some()
-                || (sprites.is_some() && prop.is_none())
-                || portal.is_some();
+            let is_corpse =
+                corpse.is_some() || (sprites.is_some() && prop.is_none()) || portal.is_some();
             if is_corpse {
                 continue;
             }
@@ -2427,14 +2384,9 @@ fn weapon_visual_kick(kicks: &[(Entity, usize, f32)], owner: Entity, slot: usize
             if let Some(lt) = lifetime {
                 tint[3] *= (lt.timer.remaining_secs() / 0.12).clamp(0.0, 1.0);
             }
-            if let Some(s) = assets.sprite_for(
-                &anim.path,
-                anim.frame as i32,
-                pos.0,
-                false,
-                rotation,
-                tint,
-            ) {
+            if let Some(s) =
+                assets.sprite_for(&anim.path, anim.frame as i32, pos.0, false, rotation, tint)
+            {
                 out.push(s);
             }
         }
@@ -2446,8 +2398,7 @@ fn weapon_visual_kick(kicks: &[(Entity, usize, f32)], owner: Entity, slot: usize
             if let Some(lt) = lifetime {
                 tint[3] *= (lt.timer.remaining_secs() / 0.12).clamp(0.0, 1.0);
             }
-            if let Some(s) = assets.sprite_for(fx.path, 0, pos.0, false, rotation, tint)
-            {
+            if let Some(s) = assets.sprite_for(fx.path, 0, pos.0, false, rotation, tint) {
                 out.push(s);
             }
         }
@@ -2569,9 +2520,7 @@ fn weapon_visual_kick(kicks: &[(Entity, usize, f32)], owner: Entity, slot: usize
                 Some(a) => (a.path.as_str(), a.frame as i32),
                 None => ("images/sprMeleeHitWall.png", 0),
             };
-            if let Some(s) =
-                assets.sprite_for(path, frame, pos.0, false, fx.angle, [1.0; 4])
-            {
+            if let Some(s) = assets.sprite_for(path, frame, pos.0, false, fx.angle, [1.0; 4]) {
                 out.push(s);
             }
         }
@@ -2621,8 +2570,8 @@ fn white_quad(center: Vec2, rotation: f32, size: Vec2, tint: [f32; 4]) -> Sprite
         uv_max: Vec2::ONE,
         color: tint_to_linear(tint),
         page: 0,
-            z: 0.0,
-            blend: SpriteBlend::Alpha,
+        z: 0.0,
+        blend: SpriteBlend::Alpha,
     }
 }
 
@@ -2687,10 +2636,7 @@ pub fn hud_gui_map(view: [f32; 4]) -> HudGuiMap {
 
 /// GUI point → world point through [`hud_gui_map`].
 pub fn hud_gui_to_world(map: HudGuiMap, view: [f32; 4], gx: f32, gy: f32) -> Vec2 {
-    Vec2::new(
-        view[0] + map.ox + gx * map.s,
-        view[1] + map.oy + gy * map.s,
-    )
+    Vec2::new(view[0] + map.ox + gx * map.s, view[1] + map.oy + gy * map.s)
 }
 
 /// Place a strip by its art top-left in GUI px (bevy `gm_sprite`
@@ -2722,8 +2668,8 @@ pub fn hud_gui_place(
         uv_max: Vec2::new(uv.max[0], uv.max[1]),
         color: tint_to_linear(tint),
         page: uv.page,
-            z: 0.0,
-            blend: SpriteBlend::Alpha,
+        z: 0.0,
+        blend: SpriteBlend::Alpha,
     })
 }
 
@@ -2986,13 +2932,18 @@ pub fn gui_texts_dp(canvas_dp: [f32; 2], items: Vec<MenuGuiText>) -> Vec<GuiRow>
         .map(|t| {
             let font_px = (t.px * k).round().clamp(8.0, 180.0);
             let (left, box_w, centered) = if t.centered {
-                let bw = (2.0 * t.gx * k).max(font_px);
+                // Keep the box inside the canvas: the 2*gx law overflows
+                // past the right edge for gx > vw/2 (e.g. GameOver
+                // KILLED BY at cx+86), so clamp to the symmetric fit.
+                let bw = (2.0 * t.gx.min(vw - t.gx).max(1.0) * k).max(font_px);
                 (t.gx * k - bw * 0.5, bw, true)
             } else if t.right {
-                let bw = (2.0 * (vw - t.gx) * k).max(font_px);
+                let bw = (120.0 * k).max(font_px);
                 (w - (vw - t.gx) * k - bw, bw, false)
             } else {
-                (t.gx * k, 200.0 * k, false)
+                let left = t.gx * k;
+                let bw = (200.0 * k).max(font_px).min((w - left).max(font_px));
+                (left, bw, false)
             };
             let top = if t.middle_y {
                 t.gy * k - font_px * 0.5
@@ -3022,8 +2973,15 @@ pub fn gui_texts_dp(canvas_dp: [f32; 2], items: Vec<MenuGuiText>) -> Vec<GuiRow>
 /// [`gui_texts_dp`] (7px Silkscreen rows). Right-anchored misc-HUD rows
 /// (clock/area) ride the live GUI width (`view_width - 2` verbatim).
 pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
+    let show_hud = world
+        .get_resource::<crate::savedata_part::SaveData>()
+        .is_none_or(|s| s.settings.show_hud);
+    if !show_hud {
+        return Vec::new();
+    }
     let vw = gml_view_size(canvas_dp)[0];
-    let items: Vec<MenuGuiText> = hud_gui_texts(world)
+    let cx = vw * 0.5;
+    let mut items: Vec<MenuGuiText> = hud_gui_texts(world)
         .into_iter()
         .map(|t| MenuGuiText {
             text: t.text,
@@ -3036,6 +2994,43 @@ pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
             right: t.right,
         })
         .collect();
+    let hud: HudState = sync_hud_state(world);
+    if !hud.toast.is_empty() {
+        items.push(MenuGuiText {
+            text: hud.toast.clone(),
+            gx: cx,
+            gy: 200.0,
+            color: [255, 255, 255, 255],
+            px: 7.0,
+            centered: true,
+            middle_y: false,
+            right: false,
+        });
+    }
+    if hud.boss_max > 0 {
+        items.push(MenuGuiText {
+            text: format!("{} {}/{}", hud.boss_name, hud.boss_hp, hud.boss_max),
+            gx: cx,
+            gy: 20.0,
+            color: [255, 64, 64, 255],
+            px: 7.0,
+            centered: true,
+            middle_y: false,
+            right: false,
+        });
+    }
+    if hud.idpd_warning {
+        items.push(MenuGuiText {
+            text: "!! IDPD INCOMING !!".to_string(),
+            gx: cx,
+            gy: 32.0,
+            color: [255, 64, 64, 255],
+            px: 7.0,
+            centered: true,
+            middle_y: false,
+            right: false,
+        });
+    }
     gui_texts_dp(canvas_dp, items)
 }
 
@@ -3122,11 +3117,7 @@ fn mutation_choice_parts(choice: &str) -> (bool, String, String) {
 /// 16:9): view-centered rows use `vw / 2`, right-anchored rows
 /// `vw - N` (`scrMakePauseButtons`, `scrDrawMiscHUD` verbatim);
 /// left-anchored rows keep literal x.
-pub fn menu_gui_texts_vw(
-    kind: crate::MenuOverlay,
-    world: &mut World,
-    vw: f32,
-) -> Vec<MenuGuiText> {
+pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -> Vec<MenuGuiText> {
     let cx = vw * 0.5;
     match kind {
         // Boot reel captions (`Vlambeer/Draw_0` verbatim): mode 0 save
@@ -3201,7 +3192,10 @@ pub fn menu_gui_texts_vw(
                 .map(|l| l.progress)
                 .unwrap_or(1.0);
             let mut out = vec![gui_center(
-                format!("GENERATING... {}%", (progress.clamp(0.0, 1.0) * 100.0).round() as u32),
+                format!(
+                    "GENERATING... {}%",
+                    (progress.clamp(0.0, 1.0) * 100.0).round() as u32
+                ),
                 cx,
                 66.0,
                 GUI_GRAY,
@@ -3239,15 +3233,25 @@ pub fn menu_gui_texts_vw(
                 ("STATS", 3),
                 ("QUIT", 4),
             ];
+            let cursor = world
+                .get_resource::<MenuState>()
+                .map(|m| m.main_menu_cursor)
+                .unwrap_or(0);
             LABELS
                 .iter()
                 .map(|(label, index)| {
                     // GML `MainMenuButton` Draw: white on hover, uigray
                     // when available, uidark when not. Only CO-OP is
-                    // gated (no multiplayer shell); STATS stays
-                    // available like GML.
+                    // gated (`MultiplayerConfig false`); STATS opens the
+                    // stats panel like GML `DrawStats`.
                     let available = matches!(index, 0 | 2 | 3 | 4);
-                    let color = if available { GUI_MID } else { GUI_UIDARK };
+                    let color = if !available {
+                        GUI_UIDARK
+                    } else if *index as usize == cursor {
+                        GUI_WHITE
+                    } else {
+                        GUI_MID
+                    };
                     MenuGuiText {
                         text: label.to_string(),
                         gx: cx,
@@ -3260,6 +3264,45 @@ pub fn menu_gui_texts_vw(
                     }
                 })
                 .collect()
+        }
+        crate::MenuOverlay::Stats => {
+            // GML `DrawStats` text half (port extra: the sprite trophy
+            // rows need unported art, so lifetime totals land as text).
+            use crate::savedata_part::SaveData;
+            let save = world.get_resource::<SaveData>().cloned().unwrap_or_default();
+            vec![
+                gui_center("STATS", cx, 40.0, GUI_CREAM),
+                gui_center(
+                    format!("HIGH SCORE {}", save.high_score),
+                    cx,
+                    80.0,
+                    GUI_CREAM,
+                ),
+                gui_center(
+                    format!("BEST FLOOR {}", save.best_floor),
+                    cx,
+                    100.0,
+                    GUI_CREAM,
+                ),
+                gui_center(format!("RUNS {}", save.total_runs), cx, 120.0, GUI_CREAM),
+                gui_center(
+                    format!("KILLS {}", save.total_kills),
+                    cx,
+                    140.0,
+                    GUI_CREAM,
+                ),
+                gui_center(
+                    format!(
+                        "HUNTERS {}/{}",
+                        save.unlocked_characters.len().min(CHAR_SELECT_ORDER.len()),
+                        CHAR_SELECT_ORDER.len()
+                    ),
+                    cx,
+                    160.0,
+                    GUI_CREAM,
+                ),
+                gui_button("BACK", cx, 200.0, GUI_GRAY),
+            ]
         }
         crate::MenuOverlay::Title => {
             let selected = world
@@ -3374,8 +3417,7 @@ pub fn menu_gui_texts_vw(
             let mut out = Vec::new();
             if let Some(run) = run {
                 let max_sub = area_max_subarea(run.area);
-                let palace_final =
-                    run.area == AreaId::Palace && run.floor_in_area >= max_sub;
+                let palace_final = run.area == AreaId::Palace && run.floor_in_area >= max_sub;
                 let hq_final = run.area == AreaId::HQ && run.floor_in_area >= max_sub;
                 let text = if run.won && hq_final {
                     "THE STRUGGLE IS OVER"
@@ -3493,9 +3535,7 @@ pub fn menu_gui_texts_vw(
                 ]
             }
         }
-        crate::MenuOverlay::Settings => {
-            settings_gui_texts(world, vw)
-        }
+        crate::MenuOverlay::Settings => settings_gui_texts(world, vw),
         crate::MenuOverlay::Credits => {
             vec![
                 gui_center("CREDITS", cx, 40.0, GUI_CREAM),
@@ -3519,6 +3559,285 @@ fn push_toggle(out: &mut Vec<MenuGuiText>, label: &str, y: f32, on: bool) {
     out.push(gui_body(if on { "ON" } else { "OFF" }, 200.0, y, GUI_GRAY));
 }
 
+// ---------------------------------------------------------------------------
+// Settings hot rows: the single source of truth for what each settings
+// row DOES, shared by mouse hit-testing (`settings_click_action`) and
+// keyboard nav (`tick_settings_nav` in `menus.rs`). `gy` mirrors
+// `settings_gui_texts` exactly (same literals); `cx`/`hw` is the mouse
+// hit box in GUI px (centered buttons at `vw/2`, value cells at 200,
+// toggle rows spanning 40..240).
+// ---------------------------------------------------------------------------
+
+/// Player color presets cycled by the COLOR page button (bevy verbatim).
+pub const COLOR_PRESETS: [&str; 5] = ["FF0000", "00FF00", "0000FF", "", "FF00FF"];
+
+/// Volume channel with absolute `Set*Vol` steppers (bevy ±0.1 buttons).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VolumeChannel {
+    Master,
+    Music,
+    Ambience,
+    Sfx,
+}
+
+/// One actionable settings row.
+#[derive(Clone, Copy, Debug)]
+pub struct SettingHotRow {
+    pub gy: f32,
+    pub cx: f32,
+    pub hw: f32,
+    pub op: SettingHotOp,
+}
+
+/// What activating the row does (`dir`: click half / arrow key; ignored
+/// by toggles, buttons and language rows).
+#[derive(Clone, Copy, Debug)]
+pub enum SettingHotOp {
+    Category(u8),
+    Toggle(&'static str),
+    Slider(&'static str),
+    Cycle(&'static str),
+    Volume(VolumeChannel),
+    Language(&'static str),
+    Back,
+    Credits,
+    ColorCycle,
+    ResetOptions,
+    EraseProgress,
+}
+
+/// Actionable rows for a settings page in visual order (headers and
+/// static display rows excluded). `vw` is the live GUI width (only the
+/// centered-button `cx` depends on it; pass anything for keyboard nav).
+pub fn settings_hot_rows(page: u8, vw: f32) -> Vec<SettingHotRow> {
+    let cx = vw * 0.5;
+    // (gy, cx, hw, op)
+    let btn = |gy: f32, op: SettingHotOp| SettingHotRow { gy, cx, hw: 100.0, op };
+    let tog = |gy: f32, op: SettingHotOp| SettingHotRow {
+        gy,
+        cx: 140.0,
+        hw: 100.0,
+        op,
+    };
+    let val = |gy: f32, op: SettingHotOp| SettingHotRow {
+        gy,
+        cx: 200.0,
+        hw: 60.0,
+        op,
+    };
+    match page {
+        0 => vec![
+            btn(72.0, SettingHotOp::Category(1)),
+            btn(96.0, SettingHotOp::Category(2)),
+            btn(120.0, SettingHotOp::Category(4)),
+            btn(144.0, SettingHotOp::Category(8)),
+            btn(168.0, SettingHotOp::Category(12)),
+            btn(220.0, SettingHotOp::Back),
+        ],
+        1 => vec![
+            val(56.0, SettingHotOp::Volume(VolumeChannel::Master)),
+            val(76.0, SettingHotOp::Volume(VolumeChannel::Music)),
+            val(96.0, SettingHotOp::Volume(VolumeChannel::Ambience)),
+            val(116.0, SettingHotOp::Volume(VolumeChannel::Sfx)),
+            tog(140.0, SettingHotOp::Toggle("volume_3dsound")),
+            btn(200.0, SettingHotOp::Back),
+        ],
+        2 => vec![
+            val(48.0, SettingHotOp::Cycle("crosshair")),
+            val(66.0, SettingHotOp::Cycle("sideart")),
+            val(84.0, SettingHotOp::Slider("screenshake")),
+            val(102.0, SettingHotOp::Slider("freezeframes")),
+            tog(120.0, SettingHotOp::Toggle("bloom")),
+            tog(138.0, SettingHotOp::Toggle("particles")),
+            tog(156.0, SettingHotOp::Toggle("show_hud")),
+            val(174.0, SettingHotOp::Cycle("pixel_mode")),
+            btn(192.0, SettingHotOp::Category(3)),
+            btn(220.0, SettingHotOp::Back),
+        ],
+        3 => vec![
+            tog(56.0, SettingHotOp::Toggle("widescreen")),
+            tog(76.0, SettingHotOp::Toggle("fullscreen")),
+            tog(96.0, SettingHotOp::Toggle("vsync")),
+            btn(200.0, SettingHotOp::Back),
+        ],
+        4 => vec![
+            tog(48.0, SettingHotOp::Toggle("boss_intros")),
+            tog(62.0, SettingHotOp::Toggle("show_tutorial")),
+            tog(76.0, SettingHotOp::Toggle("show_timer")),
+            tog(90.0, SettingHotOp::Toggle("show_area")),
+            tog(104.0, SettingHotOp::Toggle("pause_button")),
+            tog(118.0, SettingHotOp::Toggle("achievements_popup")),
+            tog(132.0, SettingHotOp::Toggle("auto_pause")),
+            btn(146.0, SettingHotOp::Credits),
+            btn(162.0, SettingHotOp::Category(5)),
+            btn(178.0, SettingHotOp::Category(6)),
+            btn(194.0, SettingHotOp::Category(7)),
+            btn(228.0, SettingHotOp::Back),
+        ],
+        5 => vec![
+            btn(88.0, SettingHotOp::Category(6)),
+            btn(200.0, SettingHotOp::Back),
+        ],
+        6 => vec![
+            btn(90.0, SettingHotOp::ColorCycle),
+            btn(200.0, SettingHotOp::Back),
+        ],
+        7 => vec![
+            btn(80.0, SettingHotOp::ResetOptions),
+            btn(110.0, SettingHotOp::EraseProgress),
+            btn(200.0, SettingHotOp::Back),
+        ],
+        8 => vec![
+            tog(48.0, SettingHotOp::Toggle("gamepad_enabled")),
+            tog(62.0, SettingHotOp::Toggle("aim_assist")),
+            tog(76.0, SettingHotOp::Toggle("auto_aim")),
+            tog(90.0, SettingHotOp::Toggle("volume_controls")),
+            tog(104.0, SettingHotOp::Toggle("split_fire")),
+            tog(118.0, SettingHotOp::Toggle("fixed_sight")),
+            val(132.0, SettingHotOp::Cycle("gamepad_type")),
+            val(146.0, SettingHotOp::Slider("controls_scale")),
+            btn(160.0, SettingHotOp::Category(9)),
+            btn(176.0, SettingHotOp::Category(10)),
+            btn(192.0, SettingHotOp::Category(11)),
+            btn(228.0, SettingHotOp::Back),
+        ],
+        9 => vec![btn(200.0, SettingHotOp::Back)],
+        10 => {
+            // 18px rows like the rendered page (48..174), BACK at 200.
+            let mut rows: Vec<SettingHotRow> = (0..8)
+                .map(|i| {
+                    let key: &'static str = match i {
+                        0 => "cprefs_0",
+                        1 => "cprefs_1",
+                        2 => "cprefs_2",
+                        3 => "cprefs_3",
+                        4 => "cprefs_4",
+                        5 => "cprefs_5",
+                        6 => "cprefs_6",
+                        _ => "cprefs_7",
+                    };
+                    tog(48.0 + i as f32 * 18.0, SettingHotOp::Toggle(key))
+                })
+                .collect();
+            rows.push(btn(200.0, SettingHotOp::Back));
+            rows
+        }
+        11 => vec![btn(200.0, SettingHotOp::Back)],
+        12 => {
+            let mut rows: Vec<SettingHotRow> = crate::state::menus::AVAILABLE_LANGUAGES
+                .iter()
+                .enumerate()
+                .map(|(i, lang)| SettingHotRow {
+                    gy: 60.0 + i as f32 * 20.0,
+                    cx,
+                    hw: 60.0,
+                    op: SettingHotOp::Language(lang),
+                })
+                .collect();
+            rows.push(btn(200.0, SettingHotOp::Back));
+            rows
+        }
+        _ => vec![],
+    }
+}
+
+/// Resolve one hot-row activation into a [`UiAction`]. `dir` is the
+/// stepper direction (-1/+1; 0 = keyboard Enter, treated as +1).
+/// Reads live values from `SaveData` for the ±0.1 steppers.
+pub fn settings_hot_action(
+    world: &mut World,
+    page: u8,
+    idx: usize,
+    dir: i8,
+) -> Option<UiAction> {
+    use crate::savedata_part::SaveData;
+    let rows = settings_hot_rows(page, 320.0);
+    let row = rows.get(idx)?;
+    let step = if dir >= 0 { 1.0 } else { -1.0 };
+    match row.op {
+        SettingHotOp::Category(c) => Some(UiAction::SettingsCategory(c)),
+        SettingHotOp::Toggle(k) => Some(UiAction::SettingToggle(k.to_string())),
+        SettingHotOp::Slider(k) => {
+            let v = world.get_resource::<SaveData>().map(|s| match k {
+                "screenshake" => s.settings.screenshake,
+                "freezeframes" => s.settings.freezeframes,
+                "controls_scale" => s.settings.controls_scale,
+                _ => 0.0,
+            });
+            v.map(|v| UiAction::SettingSlider {
+                key: k.to_string(),
+                value: v + step * 0.1,
+            })
+        }
+        SettingHotOp::Cycle(k) => Some(UiAction::SettingCycle {
+            key: k.to_string(),
+            dir: if dir == 0 { 1 } else { dir },
+        }),
+        SettingHotOp::Volume(ch) => {
+            let v = world.get_resource::<SaveData>().map(|s| match ch {
+                VolumeChannel::Master => s.settings.master_volume,
+                VolumeChannel::Music => s.settings.music_volume,
+                VolumeChannel::Ambience => s.settings.ambience_volume,
+                VolumeChannel::Sfx => s.settings.sfx_volume,
+            });
+            v.map(|v| {
+                let nv = (v + step * 0.1).clamp(0.0, 1.0);
+                match ch {
+                    VolumeChannel::Master => UiAction::SetMasterVol(nv),
+                    VolumeChannel::Music => UiAction::SetMusicVol(nv),
+                    VolumeChannel::Ambience => UiAction::SetAmbienceVol(nv),
+                    VolumeChannel::Sfx => UiAction::SetSfxVol(nv),
+                }
+            })
+        }
+        SettingHotOp::Language(code) => Some(UiAction::SetLanguage(code.to_string())),
+        SettingHotOp::Back => Some(UiAction::SettingsBack),
+        SettingHotOp::Credits => Some(UiAction::SettingViewCredits),
+        SettingHotOp::ColorCycle => {
+            let cur = world
+                .get_resource::<SaveData>()
+                .map(|s| s.settings.player_color_hex.clone())
+                .unwrap_or_default();
+            let i = COLOR_PRESETS.iter().position(|p| *p == cur).unwrap_or(3);
+            Some(UiAction::SettingInput {
+                key: "player_color_hex".to_string(),
+                value: COLOR_PRESETS[(i + 1) % COLOR_PRESETS.len()].to_string(),
+            })
+        }
+        SettingHotOp::ResetOptions => Some(UiAction::SettingResetOptions),
+        SettingHotOp::EraseProgress => Some(UiAction::SettingEraseProgress),
+    }
+}
+
+/// Mouse hit-test for a settings page: GUI-px click → [`UiAction`].
+/// Stepper direction comes from the click half (left = -1, right = +1).
+pub fn settings_click_action(
+    world: &mut World,
+    page: u8,
+    gx: f32,
+    gy: f32,
+    vw: f32,
+) -> Option<UiAction> {
+    let rows = settings_hot_rows(page, vw);
+    // Tight vertical band (rows sit 14px apart on dense pages).
+    const HH: f32 = 7.0;
+    let (idx, row) = rows
+        .iter()
+        .enumerate()
+        .find(|(_, r)| (gy - r.gy).abs() <= HH && (gx - r.cx).abs() <= r.hw)?;
+    let dir = match row.op {
+        SettingHotOp::Slider(_) | SettingHotOp::Cycle(_) | SettingHotOp::Volume(_) => {
+            if gx >= row.cx {
+                1
+            } else {
+                -1
+            }
+        }
+        _ => 0,
+    };
+    settings_hot_action(world, page, idx, dir)
+}
+
 /// Settings pages (bevy `settings_ui` arms verbatim: headers, rows,
 /// buttons; dynamic values read from [`SaveData`](crate::savedata_part::SaveData)
 /// + [`MenuState`](crate::state::menus::MenuState)).
@@ -3529,16 +3848,24 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
         .get_resource::<MenuState>()
         .map(|m| m.settings_page)
         .unwrap_or(0);
-    let save = world.get_resource::<SaveData>().cloned().unwrap_or_default();
+    let save = world
+        .get_resource::<SaveData>()
+        .cloned()
+        .unwrap_or_default();
     let s = &save.settings;
     let mut out = Vec::new();
     match page {
         0 => {
             out.push(gui_center("OPTIONS", cx, 24.0, GUI_MID));
-            for (i, (label, _)) in
-                [("AUDIO", 1u8), ("VIDEO", 2), ("GAME", 4), ("CONTROLS", 8), ("LANGUAGE", 12)]
-                    .iter()
-                    .enumerate()
+            for (i, (label, _)) in [
+                ("AUDIO", 1u8),
+                ("VIDEO", 2),
+                ("GAME", 4),
+                ("CONTROLS", 8),
+                ("LANGUAGE", 12),
+            ]
+            .iter()
+            .enumerate()
             {
                 out.push(gui_button(*label, cx, 72.0 + i as f32 * 24.0, GUI_MID));
             }
@@ -3553,7 +3880,12 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
                 (116.0, "EFFECTS VOLUME", s.sfx_volume),
             ] {
                 out.push(gui_body(label, 80.0, gy, GUI_CREAM));
-                out.push(gui_body(format!("{:.0}%", val * 100.0), 200.0, gy, GUI_GRAY));
+                out.push(gui_body(
+                    format!("{:.0}%", val * 100.0),
+                    200.0,
+                    gy,
+                    GUI_GRAY,
+                ));
             }
             out.push(gui_body("3D SOUND", 80.0, 140.0, GUI_CREAM));
             out.push(gui_body(
@@ -3568,12 +3900,20 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             out.push(gui_center("VIDEO", cx, 24.0, GUI_MID));
             let mut y = 48.0;
             out.push(gui_body("CROSSHAIR", 80.0, y, GUI_CREAM));
-            out.push(gui_body(format!("< {} >", s.crosshair + 1), 200.0, y, GUI_GRAY));
+            out.push(gui_body(
+                format!("< {} >", s.crosshair + 1),
+                200.0,
+                y,
+                GUI_GRAY,
+            ));
             y += 18.0;
             out.push(gui_body("SIDE ART", 80.0, y, GUI_CREAM));
             out.push(gui_body(format!("< {} >", s.sideart), 200.0, y, GUI_GRAY));
             y += 18.0;
-            for (label, val) in [("SCREENSHAKE", s.screenshake), ("FREEZE FRAMES", s.freezeframes)] {
+            for (label, val) in [
+                ("SCREENSHAKE", s.screenshake),
+                ("FREEZE FRAMES", s.freezeframes),
+            ] {
                 out.push(gui_body(label, 80.0, y, GUI_CREAM));
                 out.push(gui_body(
                     format!("{:.0}%", (val * 100.0).clamp(0.0, 200.0)),
@@ -3590,10 +3930,17 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             push_toggle(&mut out, "HIDE HUD", y, !s.show_hud);
             y += 18.0;
             out.push(gui_body("PIXEL MODE", 80.0, y, GUI_CREAM));
-            out.push(gui_body(format!("< {} >", s.pixel_mode), 200.0, y, GUI_GRAY));
+            out.push(gui_body(
+                format!("< {} >", s.pixel_mode),
+                200.0,
+                y,
+                GUI_GRAY,
+            ));
             y += 18.0;
             out.push(gui_button("DISPLAY SETTINGS", cx, y, GUI_MID));
-            out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
+            // DISPLAY lands at y=192; BACK at 200 would overlap its
+            // 10px button box, so sit BACK at 220 like the OPTIONS page.
+            out.push(gui_button("BACK", cx, 220.0, GUI_GRAY));
         }
         3 => {
             out.push(gui_center("DISPLAY", cx, 24.0, GUI_MID));
@@ -3606,6 +3953,10 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
         }
         4 => {
+            // Dense page: 7 toggles + 4 buttons must fit above BACK.
+            // At 18/20px spacing DATA landed at y=234 (off the 240 GUI
+            // and on top of BACK at 200); compress to 14/16px and sit
+            // BACK at 228.
             out.push(gui_center("GAME", cx, 24.0, GUI_MID));
             let mut y = 48.0;
             for (label, on) in [
@@ -3618,18 +3969,21 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
                 ("AUTO PAUSE", s.auto_pause),
             ] {
                 push_toggle(&mut out, label, y, on);
-                y += 18.0;
+                y += 14.0;
             }
             out.push(gui_button("VIEW CREDITS", cx, y, GUI_MID));
-            y += 20.0;
+            y += 16.0;
             out.push(gui_button("PROFILE", cx, y, GUI_MID));
-            y += 20.0;
+            y += 16.0;
             out.push(gui_button("COLOR", cx, y, GUI_MID));
-            y += 20.0;
+            y += 16.0;
             out.push(gui_button("DATA", cx, y, GUI_MID));
-            out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
+            out.push(gui_button("BACK", cx, 228.0, GUI_GRAY));
         }
         8 => {
+            // Dense page (same overflow as GAME): compress to 14/16px,
+            // BACK at 228 so EXPERIMENTAL no longer lands at y=232 on
+            // top of BACK at 200.
             out.push(gui_center("CONTROLS", cx, 24.0, GUI_MID));
             let mut y = 48.0;
             for (label, on) in [
@@ -3641,7 +3995,7 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
                 ("FIXED SIGHT", s.fixed_sight),
             ] {
                 push_toggle(&mut out, label, y, on);
-                y += 18.0;
+                y += 14.0;
             }
             out.push(gui_body("GAMEPAD STYLE", 80.0, y, GUI_CREAM));
             let names = ["XBONE", "PS4", "Switch", "SteamDeck"];
@@ -3651,7 +4005,7 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
                 y,
                 GUI_GRAY,
             ));
-            y += 18.0;
+            y += 14.0;
             out.push(gui_body("SIZE SCALE", 80.0, y, GUI_CREAM));
             out.push(gui_body(
                 format!("{:.0}%", s.controls_scale * 100.0),
@@ -3659,13 +4013,13 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
                 y,
                 GUI_GRAY,
             ));
-            y += 18.0;
+            y += 14.0;
             out.push(gui_button("REMAP", cx, y, GUI_MID));
-            y += 20.0;
+            y += 16.0;
             out.push(gui_button("CHAR PREFS", cx, y, GUI_MID));
-            y += 20.0;
+            y += 16.0;
             out.push(gui_button("EXPERIMENTAL", cx, y, GUI_MID));
-            out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
+            out.push(gui_button("BACK", cx, 228.0, GUI_GRAY));
         }
         5 => {
             out.push(gui_center("PROFILE", cx, 24.0, GUI_MID));
@@ -3776,6 +4130,21 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
         }
         _ => {}
     }
+    // Keyboard cursor highlight (bevy hover parity): the cursor row
+    // renders white so arrow-key nav is visible, not blind.
+    let cursor = world
+        .get_resource::<MenuState>()
+        .map(|m| m.settings_cursor)
+        .unwrap_or(usize::MAX);
+    if cursor != usize::MAX {
+        if let Some(row) = settings_hot_rows(page, vw).get(cursor) {
+            for t in out.iter_mut() {
+                if (t.gy - row.gy).abs() < 0.5 {
+                    t.color = GUI_WHITE;
+                }
+            }
+        }
+    }
     out
 }
 
@@ -3814,6 +4183,12 @@ pub fn hud_sprites(
     dt_secs: f32,
 ) -> Vec<SpriteInstance> {
     let mut out = Vec::new();
+    if world
+        .get_resource::<crate::savedata_part::SaveData>()
+        .is_some_and(|s| !s.settings.show_hud)
+    {
+        return out;
+    }
     let hud: HudState = sync_hud_state(world);
     let player = world
         .query::<(&Player, Option<&RaceState>)>()
@@ -3832,8 +4207,17 @@ pub fn hud_sprites(
                 rs.map(|r| (r.race, r.skin)),
             )
         });
-    let Some((rogue_ammo, rogue_max, cuz_ammo, cuz_max, ultra, mutations, patience_used, back_muscle, race_skin)) =
-        player
+    let Some((
+        rogue_ammo,
+        rogue_max,
+        cuz_ammo,
+        cuz_max,
+        ultra,
+        mutations,
+        patience_used,
+        back_muscle,
+        race_skin,
+    )) = player
     else {
         return out;
     };
@@ -4024,8 +4408,7 @@ pub fn hud_sprites(
             0
         };
         let dx = 2.0 + t as f32 * 10.0 - if t >= 2 { 2.0 } else { 0.0 };
-        if let Some(s) = hud_gui_place(assets, bg, bg_frame, dx, 32.0, 1.0, [1.0; 4], gm, view)
-        {
+        if let Some(s) = hud_gui_place(assets, bg, bg_frame, dx, 32.0, 1.0, [1.0; 4], gm, view) {
             out.push(s);
         }
         let frames = strip_frames(assets, icon).max(1) as f32 - 1.0;
@@ -4136,9 +4519,7 @@ pub fn hud_sprites(
                         .get_resource::<PendingMutation>()
                         .and_then(|p| p.choices.get(i))
                         .copied();
-                    let frame = m
-                        .map(crate::hud::mutation_skill_index)
-                        .unwrap_or(0) as i32;
+                    let frame = m.map(crate::hud::mutation_skill_index).unwrap_or(0) as i32;
                     ("images/sprSkillIcon.png", frame, scale)
                 };
                 // Fall back to the HUD strip when the offer strip is
@@ -4178,9 +4559,7 @@ pub fn hud_sprites(
     // +16).
     {
         let vw = view[2];
-        let held_race = race_skin
-            .map(|(r, _)| r)
-            .unwrap_or(RaceId::Fish);
+        let held_race = race_skin.map(|(r, _)| r).unwrap_or(RaceId::Fish);
         let mut ultras: Vec<(&str, i32)> = Vec::new();
         if let Some(u) = ultra {
             ultras.push(("images/sprEGIconHUD.png", ultra_hud_frame(held_race, u)));
@@ -4287,10 +4666,7 @@ pub fn fainted_bar_sprites(
     if hud.fainted_bars.is_empty() {
         return out;
     }
-    let tottimer = world
-        .get_resource::<Run>()
-        .map(|r| r.tottimer)
-        .unwrap_or(0);
+    let tottimer = world.get_resource::<Run>().map(|r| r.tottimer).unwrap_or(0);
     for bar in &hud.fainted_bars {
         let x = bar.x.clamp(view[0] + 30.0, view[0] + view[2] - 30.0);
         let y = (bar.y - 16.0).clamp(view[1] + 6.0, view[1] + view[3] - 6.0);
@@ -4376,10 +4752,24 @@ pub fn crosshair_sprites(
     dt_secs: f32,
 ) -> Vec<SpriteInstance> {
     let mut out = Vec::new();
-    if world
-        .get_resource::<crate::state::Paused>()
-        .is_some_and(|p| p.0)
-    {
+    // Live gameplay only: paused/menus/offers/game-over keep the last
+    // aim but hide the cursor (previously it drew over game-over/title
+    // from stale sim entities once `Paused` was forced false on death).
+    let live = world
+        .get_resource::<crate::state::AppState>()
+        .is_some_and(|s| *s == crate::state::AppState::InGame)
+        && !world
+            .get_resource::<crate::state::Paused>()
+            .is_some_and(|p| p.0)
+        && world
+            .get_resource::<crate::state::OverlayMenu>()
+            .is_none_or(|o| *o == crate::state::OverlayMenu::None)
+        && !world
+            .get_resource::<crate::comps_a::Run>()
+            .is_some_and(|r| r.game_over)
+        && world.get_resource::<crate::comps_a::PendingMutation>().is_none()
+        && world.get_resource::<crate::comps_a::PendingUltra>().is_none();
+    if !live {
         return out;
     }
     let player = world
@@ -4390,9 +4780,7 @@ pub fn crosshair_sprites(
     let Some((pp, aim)) = player else {
         return out;
     };
-    let hover = world
-        .get_resource::<HoverWorld>()
-        .and_then(|h| h.0);
+    let hover = world.get_resource::<HoverWorld>().and_then(|h| h.0);
     let dir = if aim.length_squared() > 1e-6 {
         aim.normalize_or_zero()
     } else {
@@ -4449,6 +4837,14 @@ pub fn portal_indicator_sprites(
     cam: &Camera2d,
 ) -> Vec<SpriteInstance> {
     let mut out = Vec::new();
+    // Live runs only: stale portals from a previous run must not draw
+    // arrows over title/menus.
+    if world
+        .get_resource::<crate::state::AppState>()
+        .is_some_and(|s| *s != crate::state::AppState::InGame)
+    {
+        return out;
+    }
     let view = view_rect_world(canvas_dp, world_size, cam);
     let (vx, vy, vw, vh) = (view[0], view[1], view[2], view[3]);
     let mut q = world.query::<(&Pos, &Portal)>();
@@ -4587,9 +4983,14 @@ pub fn bloom_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInst
     }
     let mut q = world.query::<(&Pos, &Portal, &SpriteAnim)>();
     for (pos, _, anim) in q.iter(world) {
-        if let Some(mut s) =
-            assets.sprite_scaled_rotated(&anim.path, anim.frame as i32, pos.0, 2.0, 0.0, [1.0, 1.0, 1.0, 0.1])
-        {
+        if let Some(mut s) = assets.sprite_scaled_rotated(
+            &anim.path,
+            anim.frame as i32,
+            pos.0,
+            2.0,
+            0.0,
+            [1.0, 1.0, 1.0, 0.1],
+        ) {
             s.blend = SpriteBlend::Additive;
             out.push(s);
         }
@@ -4616,8 +5017,214 @@ pub fn go_button_pos(wh: [f32; 2], count: usize, bbox_h: f32) -> [f32; 2] {
     ]
 }
 
+// ---------------------------------------------------------------------------
+// Title click routing (GML campfire pods + GO + loadout zones).
+// ---------------------------------------------------------------------------
+
+/// Character-pod hit size (bevy `title_screen` hover law: 16x24 at the
+/// layout origin).
+pub const TITLE_POD_W: f32 = 16.0;
+/// Character-pod hit height.
+pub const TITLE_POD_H: f32 = 24.0;
+/// GO button hit size (bevy `GO_W`/`GO_H`).
+pub const TITLE_GO_W: f32 = 31.0;
+/// GO button hit height.
+pub const TITLE_GO_H: f32 = 19.0;
+
+/// Loadout availability (GML `scr_loadout_is_available_for_race` +
+/// `scrLoadoutMenuInit`: no panel for Random and the trio).
+pub fn loadout_available_for_race(race: RaceId) -> bool {
+    !matches!(
+        race,
+        RaceId::Random | RaceId::BigDog | RaceId::Skeleton | RaceId::Frog
+    )
+}
+
+/// Title click → [`UiAction`](crate::audio::UiAction). `slot_h`,
+/// `crownsize` and `skinsize` are the same native-size values
+/// `menu_sprites` draws with (callers pass the catalog sizes or the
+/// 20px fallback); all other geometry mirrors the draw code so clicks
+/// land on the sprites. Stray clicks route to nothing (the old blind
+/// confirm-anywhere is gone).
+pub fn title_click_action(
+    world: &mut World,
+    gx: f32,
+    gy: f32,
+    vw: f32,
+    slot_h: f32,
+    crownsize: f32,
+    skinsize: f32,
+) -> Option<UiAction> {
+    let menu = world.get_resource::<MenuState>().cloned()?;
+    // Gml id doubles as the `CHAR_SELECT_ORDER` index (order matches
+    // discriminants, Random 0 .. Cuz 16).
+    let selected = world
+        .get_resource::<SelectedCharacter>()
+        .map(|s| s.0 as usize)
+        .unwrap_or(1);
+    let race = CHAR_SELECT_ORDER[selected.min(CHAR_SELECT_ORDER.len() - 1)];
+    // Loadout zones first (the panel floats over the pods' right end).
+    if loadout_available_for_race(race) {
+        if let Some(a) = loadout_click_action(
+            world,
+            race,
+            selected,
+            gx,
+            gy,
+            vw,
+            crownsize,
+            skinsize,
+            menu.loadout_open,
+        ) {
+            return Some(a);
+        }
+    }
+    // GO button (armed only).
+    if menu.title_go_visible {
+        let go = go_button_pos([vw, 240.0], CHAR_SELECT_ORDER.len(), 19.0);
+        if gx >= go[0] && gx <= go[0] + TITLE_GO_W && gy >= go[1] && gy <= go[1] + TITLE_GO_H {
+            return Some(UiAction::StartGame);
+        }
+    }
+    // Pods (bevy hover law: `[x, x+16] x [ystart, ystart+24]`).
+    for (i, pos) in char_pod_layout([vw, 240.0], CHAR_SELECT_ORDER.len(), slot_h)
+        .iter()
+        .enumerate()
+    {
+        if gx >= pos[0]
+            && gx <= pos[0] + TITLE_POD_W
+            && gy >= pos[1]
+            && gy <= pos[1] + TITLE_POD_H
+        {
+            return Some(UiAction::SelectCharacter(CHAR_SELECT_ORDER[i] as usize));
+        }
+    }
+    None
+}
+
+/// Loadout panel hit rects. Open-frame geometry replicates
+/// `menu_loadout_sprites` exactly (same formulas, same walk order —
+/// weapons draw last so they win overlaps); closed-frame zones are the
+/// bevy invisible zones (`title_screen.rs`) scaled by `vw/320`.
+#[allow(clippy::too_many_arguments)]
+fn loadout_click_action(
+    world: &mut World,
+    race: RaceId,
+    selected: usize,
+    gx: f32,
+    gy: f32,
+    vw: f32,
+    crownsize: f32,
+    skinsize: f32,
+    open: bool,
+) -> Option<UiAction> {
+    use crate::savedata_part::SaveData;
+    let (w, h) = (vw, 240.0);
+    if open && selected != 0 {
+        let save = world.get_resource::<SaveData>().cloned();
+        let crown_row = save
+            .as_ref()
+            .and_then(|s| s.crown_got.get(&race))
+            .copied()
+            .unwrap_or({
+                let mut r = [false; 14];
+                r[0] = true;
+                r[1] = true;
+                r
+            });
+        let total_unlocked = crown_row.iter().filter(|b| **b).count();
+        let crowntop = 72.0;
+        let crownbottom = h - 72.0;
+        let space = crownbottom - crowntop;
+        let per_column = (space as i32 / crownsize.max(1.0) as i32).max(1);
+        let per_row = 14 / per_column;
+        let crownright = w + 12.0;
+        let crownleft = crownright - per_row as f32 * crownsize;
+        let half = crownsize * 0.5 + 3.0;
+        let mut cx = crownright - crownsize * 3.0;
+        let mut cy = crowntop - 24.0;
+        let mut crown_hit: Option<UiAction> = None;
+        for id in 0..14u8 {
+            if id == 0 && total_unlocked == 0 {
+                cx += crownsize;
+                continue;
+            }
+            if crown_hit.is_none()
+                && (gx - cx).abs() <= half
+                && (gy - cy).abs() <= half
+            {
+                crown_hit = Some(UiAction::SelectCrown(id));
+            }
+            cx += crownsize;
+            if cx >= crownright || id == 0 {
+                cx = crownleft;
+                cy += crownsize;
+            }
+        }
+        if crown_hit.is_some() {
+            return crown_hit;
+        }
+        // Skin column.
+        let skin_count = race_max_skin_count(race);
+        let skins_x = crownleft - (crownsize / 2.0).floor() - 22.0;
+        let skins_y = (h / 2.0).floor() - (skinsize * 0.5) * skin_count as f32 - 2.0;
+        let shalf = skinsize * 0.5 + 2.0;
+        for j in 0..skin_count {
+            let sy = skins_y + j as f32 * skinsize;
+            if (gx - skins_x).abs() <= shalf && (gy - sy).abs() <= shalf {
+                return Some(UiAction::SelectSkin(j as u8));
+            }
+        }
+        // Weapon row (same slot list as the draw: default + stored).
+        let weaponsize = 44.0;
+        let weapons_x = ((crownright + crownleft) / 2.0).floor() - weaponsize * 0.5 * 2.0 + 20.0;
+        let weapons_y = crownbottom + (crownsize / 2.0).floor() - 19.0;
+        let loadout = save.as_ref().map(|s| s.race_loadout(race).clone());
+        let default_weapon = race_default_weapon(race);
+        let stored = loadout
+            .as_ref()
+            .map(|l| l.stored_weapon)
+            .unwrap_or(WeaponId::NONE);
+        let nslots = if stored != WeaponId::NONE && stored != default_weapon {
+            2
+        } else {
+            1
+        };
+        for k in 0..nslots {
+            let wx = weapons_x + k as f32 * weaponsize;
+            if (gx - wx).abs() <= weaponsize * 0.5 && (gy - weapons_y).abs() <= weaponsize * 0.5 {
+                return Some(UiAction::CycleStartWeapon(1));
+            }
+        }
+        // Close arrow at the splat.
+        let splat = [w + 2.0, h - 36.0 + 2.0];
+        if (gx - (splat[0] - 16.0)).abs() <= 14.0 && (gy - (splat[1] - 16.0)).abs() <= 14.0 {
+            return Some(UiAction::ToggleLoadout);
+        }
+        return None;
+    }
+    if !open {
+        // Closed-frame invisible zones (bevy `loadout_layer` closed arm,
+        // scaled from 320-space by the live width).
+        let sx = vw / 320.0;
+        let rect = |x: f32, y: f32, rw: f32, rh: f32| {
+            gx >= x * sx && gx <= (x + rw) * sx && gy >= y && gy <= y + rh
+        };
+        if rect(213.0, 136.0, 109.0, 69.0) {
+            return Some(UiAction::ToggleLoadout);
+        }
+        if rect(234.0, 172.0, 58.0, 36.0) {
+            return Some(UiAction::CycleStartWeapon(1));
+        }
+        if rect(246.0, 149.0, 32.0, 32.0) {
+            return Some(UiAction::CycleCrown(1));
+        }
+    }
+    None
+}
+
 /// GML `scrRaceGetMaxSkinCount` verbatim (hidden-NTT access assumed,
-/// like the reference build): BigDog/Frog 1, Skeleton 2, Robot 4,
+// like the reference build): BigDog/Frog 1, Skeleton 2, Robot 4,
 // otherwise 3.
 pub fn race_max_skin_count(race: RaceId) -> usize {
     match race {
@@ -4757,7 +5364,10 @@ fn menu_loadout_sprites(
     // Skin column for the selected race (GML frames are skin
     // subimages, not column positions; the preferred skin draws white,
     // others uigray).
-    let skins = loadout.as_ref().map(|l| l.unlocked_skins).unwrap_or([true, false, false, false]);
+    let skins = loadout
+        .as_ref()
+        .map(|l| l.unlocked_skins)
+        .unwrap_or([true, false, false, false]);
     let preferred = loadout.as_ref().map(|l| l.preferred_skin).unwrap_or(0);
     let mut sy = skins_y;
     for j in 0..skin_count {
@@ -4790,8 +5400,14 @@ fn menu_loadout_sprites(
     // sprite at 2x rotated 30 degrees).
     let mut wx = weapons_x;
     let default_weapon = race_default_weapon(race);
-    let stored = loadout.as_ref().map(|l| l.stored_weapon).unwrap_or(WeaponId::NONE);
-    let chosen = loadout.as_ref().map(|l| l.start_weapon).unwrap_or(WeaponId::NONE);
+    let stored = loadout
+        .as_ref()
+        .map(|l| l.stored_weapon)
+        .unwrap_or(WeaponId::NONE);
+    let chosen = loadout
+        .as_ref()
+        .map(|l| l.start_weapon)
+        .unwrap_or(WeaponId::NONE);
     let mut slots = vec![default_weapon];
     if stored != WeaponId::NONE && stored != default_weapon {
         slots.push(stored);
@@ -4805,7 +5421,8 @@ fn menu_loadout_sprites(
         let meta = weapon_meta(wid);
         if let Some(lout) = meta.wep_lout {
             let path = format!("images/{lout}.png");
-            if let Some(s) = assets.sprite_for(&path, 0, to_world([wx, weapons_y]), false, 0.0, tint)
+            if let Some(s) =
+                assets.sprite_for(&path, 0, to_world([wx, weapons_y]), false, 0.0, tint)
             {
                 out.push(s);
             }
@@ -5124,8 +5741,11 @@ pub fn splash_sprites(
                 let wave = t * 3.9;
                 for i in 0..8u32 {
                     let ang = i as f32 * 45.0 * std::f32::consts::PI / 180.0;
-                    let r_extra =
-                        hash01(3000u32.wrapping_add(i).wrapping_add(step.wrapping_mul(12979)));
+                    let r_extra = hash01(
+                        3000u32
+                            .wrapping_add(i)
+                            .wrapping_add(step.wrapping_mul(12979)),
+                    );
                     let radius = 4.0 + (wave + i as f32 * 0.02).sin() * (2.0 + r_extra);
                     if let Some(mut s) = assets.sprite_scaled_rotated(
                         "images/sprLogoGlow.png",
@@ -5168,14 +5788,6 @@ pub fn menu_sprites(
     cam: &Camera2d,
 ) -> Vec<SpriteInstance> {
     let mut out = Vec::new();
-    let fit = effective_fit(canvas_dp, world_size, cam);
-    let center = cam.effective_center();
-    let to_world = |dp: [f32; 2]| {
-        let w = dp_to_world(dp, world_size, center, fit);
-        Vec2::new(w[0], w[1])
-    };
-    // GML view-space layer: the live view rect + identity GUI map, so
-    // campfire pods/portrait/loadout land in view px verbatim.
     let view = view_rect_world(canvas_dp, world_size, cam);
     let gm = hud_gui_map(view);
     let vw = view[2];
@@ -5188,7 +5800,9 @@ pub fn menu_sprites(
         }
         crate::MenuOverlay::Title => {
             let menu = world.get_resource::<MenuState>().cloned();
-            let save = world.get_resource::<crate::savedata_part::SaveData>().cloned();
+            let save = world
+                .get_resource::<crate::savedata_part::SaveData>()
+                .cloned();
             let selected = world
                 .get_resource::<SelectedCharacter>()
                 .map(|s| s.0 as usize)
@@ -5206,8 +5820,7 @@ pub fn menu_sprites(
                 .enumerate()
             {
                 let race = CHAR_SELECT_ORDER[i];
-                let locked =
-                    save.as_ref().is_none_or(|s| !s.race_unlocked(race));
+                let locked = save.as_ref().is_none_or(|s| !s.race_unlocked(race));
                 let (path, tint): (&str, [f32; 4]) = if locked {
                     ("images/sprCharSelectLocked.png", [0.5, 0.5, 0.5, 1.0])
                 } else if i == cursor {
@@ -5215,9 +5828,14 @@ pub fn menu_sprites(
                 } else {
                     ("images/sprCharSelect.png", [0.5, 0.5, 0.5, 1.0])
                 };
-                if let Some(s) =
-                    assets.sprite_for(path, i as i32, gui_to_world(pos[0], pos[1]), false, 0.0, tint)
-                {
+                if let Some(s) = assets.sprite_for(
+                    path,
+                    i as i32,
+                    gui_to_world(pos[0], pos[1]),
+                    false,
+                    0.0,
+                    tint,
+                ) {
                     out.push(s);
                 }
             }
@@ -5296,14 +5914,10 @@ pub fn menu_sprites(
             }
         }
         crate::MenuOverlay::GameOver => {
-            // GML `GameOver/Draw_0` splats at rest (`offsety = 0`):
-            // center splat along the bottom, killed-by splat right of
-            // view center.
-            let dp = [canvas_dp[0] / 2.0, canvas_dp[1] - 32.0];
             if let Some(s) = assets.sprite_for(
                 "images/sprGameOverCenterSplat.png",
                 0,
-                to_world(dp),
+                gui_to_world(vw * 0.5, 240.0 - 10.0),
                 false,
                 0.0,
                 [1.0; 4],
@@ -5313,7 +5927,7 @@ pub fn menu_sprites(
             if let Some(s) = assets.sprite_for(
                 "images/sprKilledBySplat.png",
                 0,
-                to_world([canvas_dp[0] / 2.0 + 86.0, canvas_dp[1] / 2.0 - 32.0]),
+                gui_to_world(vw * 0.5 + 86.0, 110.0),
                 false,
                 0.0,
                 [1.0; 4],
@@ -5537,7 +6151,10 @@ pub fn hud_texts(world: &mut World) -> Vec<(String, [f32; 2])> {
         }
     }
     out.push((
-        format!("FLOOR {}  SCORE {}  KILLS {}", hud.floor, hud.score, hud.kills),
+        format!(
+            "FLOOR {}  SCORE {}  KILLS {}",
+            hud.floor, hud.score, hud.kills
+        ),
         [-ARENA_W / 2.0 + 16.0, -ARENA_H / 2.0 + 8.0],
     ));
     // GML `scrDrawMiscHUD` bottom-right rows: timer + map name.
@@ -5567,10 +6184,7 @@ pub fn hud_texts(world: &mut World) -> Vec<(String, [f32; 2])> {
     }
     if hud.game_over {
         out.push((
-            format!(
-                "GAME OVER  SCORE {}  BEST {}",
-                hud.score, hud.high_score
-            ),
+            format!("GAME OVER  SCORE {}  BEST {}", hud.score, hud.high_score),
             [0.0, 0.0],
         ));
     }
@@ -5581,10 +6195,7 @@ pub fn hud_texts(world: &mut World) -> Vec<(String, [f32; 2])> {
         if let Some(target) = label.target {
             if let Some(gun) = world.get::<Pos>(target) {
                 if !label.text.is_empty() {
-                    out.push((
-                        label.text.clone(),
-                        [gun.0.x, gun.0.y + 31.0],
-                    ));
+                    out.push((label.text.clone(), [gun.0.x, gun.0.y + 31.0]));
                 }
                 out.push(("E".to_string(), [gun.0.x, gun.0.y]));
             }
@@ -5655,4 +6266,3 @@ pub fn hud_texts_dp(
 //   orandom shake, snap, round, knock decay; view-layer state in
 //   `App`); the only deviation is no per-run snap reset beyond boot
 //   and floor starts, so transitions don't re-swoop from the origin.
-

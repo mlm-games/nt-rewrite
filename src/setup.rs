@@ -486,6 +486,11 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
             menu.game_over = None;
         }
         *world.resource_mut::<LoopTransition>() = LoopTransition::default();
+        // Fresh-run HUD/view transients: ghost-fill + crosshair lerp must
+        // not carry the death position/HP into the new run (one-frame
+        // flash / crosshair swoop on spawn).
+        world.remove_resource::<crate::hud::HudBars>();
+        world.remove_resource::<crate::render::CrosshairState>();
         world.resource_mut::<MutationChoice>().0 = None;
         world.resource_mut::<ScarierFace>().0 = false;
         world.resource_mut::<Euphoria>().0 = false;

@@ -26,6 +26,13 @@ pub struct NtInput {
     spec_pressed: bool,
     weapon_slot: Option<usize>,
     cycle_weapon: i8,
+    /// Menu cursor steps staged by the shell feed (`feed_input`) for
+    /// keyboard navigation where no gameplay channel exists: vertical
+    /// (Up/Down: main-menu rows, settings rows) and horizontal
+    /// (Left/Right: settings sliders/cycles). Take-once, like
+    /// `cycle_weapon`; consumed by `tick_menus`.
+    menu_nav_v: i8,
+    menu_nav_h: i8,
 }
 
 impl Default for NtInput {
@@ -41,6 +48,8 @@ impl Default for NtInput {
             spec_pressed: false,
             weapon_slot: None,
             cycle_weapon: 0,
+            menu_nav_v: 0,
+            menu_nav_h: 0,
         }
     }
 }
@@ -72,6 +81,20 @@ impl NtInput {
 
     pub fn take_cycle_weapon(&mut self) -> i8 {
         std::mem::take(&mut self.cycle_weapon)
+    }
+
+    /// Take staged menu cursor steps `(vertical, horizontal)`.
+    pub fn take_menu_nav(&mut self) -> (i8, i8) {
+        (
+            std::mem::take(&mut self.menu_nav_v),
+            std::mem::take(&mut self.menu_nav_h),
+        )
+    }
+
+    /// Stage a menu cursor step (saturating; the menu tick takes it once).
+    pub fn push_menu_nav(&mut self, dv: i8, dh: i8) {
+        self.menu_nav_v = self.menu_nav_v.saturating_add(dv);
+        self.menu_nav_h = self.menu_nav_h.saturating_add(dh);
     }
 
     /// Test/sampler hook: inject a pulse the systems will take once.
@@ -107,6 +130,8 @@ impl NtInput {
         self.spec_held = false;
         self.weapon_slot = None;
         self.cycle_weapon = 0;
+        self.menu_nav_v = 0;
+        self.menu_nav_h = 0;
     }
 }
 
@@ -154,6 +179,7 @@ pub enum KeyCode {
     Digit2,
     Digit3,
     Digit4,
+    Digit5,
 }
 
 /// Backend-neutral mouse button state for one tick: held vs pressed
@@ -271,9 +297,13 @@ pub fn sample_keyboard(
         weapon_slot = Some(1);
     } else if just_pressed.contains(&KeyCode::Digit3) {
         weapon_slot = Some(2);
+    } else if just_pressed.contains(&KeyCode::Digit4) {
+        weapon_slot = Some(3);
+    } else if just_pressed.contains(&KeyCode::Digit5) {
+        // Main-menu 5th row (QUIT); gameplay consumers ignore it.
+        weapon_slot = Some(4);
     }
-    // Keyboard contributes no cycle step (bevy: gamepad North / touch
-    // button only).
+
     let cycle_weapon = 0_i8;
 
     output.move_axis = move_axis.clamp_length_max(1.0);
@@ -443,16 +473,19 @@ pub fn sample_mutation_digits(just_pressed: &HashSet<KeyCode>, choice: &mut Muta
     }
 }
 
-/// Drop everything when the sim isn't live (paused or out of game —
-/// bevy `clear_input_when_inactive` parity).
+/// Drop everything when the sim isn't live (paused, overlay open, or out
+/// of game — bevy `clear_input_when_inactive` parity plus the overlay
+/// conjunct: an overlay opened without the `Paused` flag must still
+/// swallow gameplay pulses like ability/spec).
 pub fn clear_input_when_inactive(
     paused: Res<crate::state::Paused>,
     state: Res<crate::state::AppState>,
+    overlay: Option<Res<crate::state::OverlayMenu>>,
     mut input: ResMut<NtInput>,
 ) {
     use crate::state::AppState;
-    if paused.0 || *state != AppState::InGame {
+    let overlay_open = overlay.is_some_and(|o| *o != crate::state::OverlayMenu::None);
+    if paused.0 || overlay_open || *state != AppState::InGame {
         input.clear_transient();
     }
 }
-

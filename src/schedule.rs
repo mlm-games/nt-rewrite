@@ -40,16 +40,21 @@ pub fn gameplay_active(
     ft: Option<Res<FloorTransition>>,
     pending_mut: Option<Res<PendingMutation>>,
     pending_ultra: Option<Res<PendingUltra>>,
+    overlay: Option<Res<crate::state::OverlayMenu>>,
 ) -> bool {
     let loading = ft.map(|f| f.active).unwrap_or(false);
     let picking = pending_mut.is_some() || pending_ultra.is_some();
     let blocked = transition.is_some_and(|t| t.0);
+    // Overlay menus (pause/settings/credits) freeze gameplay even on
+    // paths that open them without the `Paused` flag.
+    let overlay_open = overlay.is_some_and(|o| *o != crate::state::OverlayMenu::None);
     *state == AppState::InGame
         && !paused.0
         && !blocked
         && !run.game_over
         && !loading
         && !picking
+        && !overlay_open
 }
 
 /// In-game gate for the cleanup tail (bevy `in_state(InGame)` parity).

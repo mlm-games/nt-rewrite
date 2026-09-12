@@ -172,7 +172,7 @@ pub fn capture_game_over(world: &mut World) -> Option<GameOverScreen> {
     }
     let screen = GameOverScreen {
         world: run.world,
-        floor_in_world: run.floor_in_area,
+        floor_in_world: crate::worldgen::floor_in_world(run.floor),
         loop_count: run.loop_count,
         total_kills: run.total_kills,
         score: world.get_resource::<Score>().map(|s| s.0).unwrap_or(0),
@@ -219,6 +219,12 @@ pub struct MenuState {
     /// Settings page + drill stack (bevy `settings_page[_stack]`).
     pub settings_page: u8,
     pub settings_page_stack: Vec<u8>,
+    /// Main-menu keyboard cursor over the 5 labels (GML gamepad_sel /
+    /// bevy `main_menu_hover` parity; 0 PLAY .. 4 QUIT).
+    pub main_menu_cursor: usize,
+    /// Settings keyboard cursor over the page's actionable rows
+    /// (`settings_hot_rows` order in `render.rs`; GML `pointed_item`).
+    pub settings_cursor: usize,
     /// Pending unlock popups (producer deferred; see module docs).
     pub unlock_queue: Vec<UnlockPopup>,
     /// Live game-over snapshot (`None` until the run ends).
@@ -238,6 +244,8 @@ impl Default for MenuState {
             hardmode_selected: false,
             settings_page: 0,
             settings_page_stack: Vec::new(),
+            main_menu_cursor: 0,
+            settings_cursor: 0,
             unlock_queue: Vec::new(),
             game_over: None,
         }
@@ -325,7 +333,9 @@ fn emit_cue(world: &mut World, action: &UiAction) {
 }
 
 /// Emit a denial sting (locked pick; bevy `sndNoSelect` 0.5).
-fn emit_denied(world: &mut World) {
+/// `pub(crate)` so the shell click router (`lib.rs`) can sting
+/// disabled rows (CO-OP) that carry no [`UiAction`].
+pub(crate) fn emit_denied(world: &mut World) {
     world.init_resource::<Queue<crate::audio::AudioCue>>();
     world
         .resource_mut::<Queue<crate::audio::AudioCue>>()
@@ -369,10 +379,18 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 menu.settings_page = 0;
                 menu.settings_page_stack.clear();
                 menu.pause_confirm = None;
+                menu.settings_cursor = 0;
             }
             world.init_resource::<OverlayMenu>();
             *world.resource_mut::<OverlayMenu>() = OverlayMenu::Settings;
             emit_cue(world, &UiAction::OpenSettings);
+        }
+        UiAction::ShowStats => {
+            // GML `DrawStats` parity over the main menu (stats read live
+            // from `SaveData` in the render layer; no page state).
+            world.init_resource::<OverlayMenu>();
+            *world.resource_mut::<OverlayMenu>() = OverlayMenu::Stats;
+            emit_cue(world, &UiAction::ShowStats);
         }
         UiAction::OpenCredits => {
             world.init_resource::<OverlayMenu>();
@@ -505,6 +523,7 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 let cur = menu.settings_page;
                 menu.settings_page_stack.push(cur);
                 menu.settings_page = cat;
+                menu.settings_cursor = 0;
             }
             emit_cue(world, &UiAction::SettingsCategory(cat));
         }
@@ -512,6 +531,7 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             let should_close = {
                 match world.get_resource_mut::<MenuState>() {
                     Some(mut menu) => {
+                        menu.settings_cursor = 0;
                         if let Some(prev) = menu.settings_page_stack.pop() {
                             menu.settings_page = prev;
                             false
@@ -599,7 +619,12 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
                 menu.title_cursor = i;
                 menu.title_go_visible = true;
-                if matches!(race, RaceId::BigDog | RaceId::Skeleton | RaceId::Frog) {
+                // GML `scrLoadoutMenuInit`: no loadout for Random (nor
+                // the Dog/Skeleton/Frog trio).
+                if matches!(
+                    race,
+                    RaceId::Random | RaceId::BigDog | RaceId::Skeleton | RaceId::Frog
+                ) {
                     menu.loadout_open = false;
                 }
             }
@@ -634,6 +659,21 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             }
         }
         UiAction::ToggleLoadout => {
+            // GML `scr_loadout_is_available_for_race`: Random and the
+            // Dog/Skeleton/Frog trio have no loadout panel.
+            world.init_resource::<SelectedCharacter>();
+            let race = world.resource::<SelectedCharacter>().0;
+            let available = !matches!(
+                race,
+                RaceId::Random | RaceId::BigDog | RaceId::Skeleton | RaceId::Frog
+            );
+            if !available {
+                if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+                    menu.loadout_open = false;
+                }
+                emit_denied(world);
+                return;
+            }
             if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
                 menu.loadout_open = !menu.loadout_open;
             }
@@ -831,6 +871,7 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 let cur = menu.settings_page;
                 menu.settings_page_stack.push(cur);
                 menu.settings_page = cat;
+                menu.settings_cursor = 0;
             }
             emit_cue(world, &UiAction::SettingOpenSubcategory(cat));
         }
@@ -971,10 +1012,7 @@ pub fn tick_menus(world: &mut World) {
             crate::state::tick_loading(world, dt);
         }
         AppState::MainMenu => {
-            let confirm = world.resource_mut::<NtInput>().take_interact_pressed();
-            if confirm {
-                apply_menu_action(world, UiAction::MainMenuPlay);
-            }
+            tick_main_menu_input(world, edge);
         }
         AppState::Title => {
             tick_title_input(world);
@@ -985,17 +1023,90 @@ pub fn tick_menus(world: &mut World) {
     }
 }
 
+/// Main-menu input routing (GML `MainMenuButton` parity): Up/Down move
+/// the cursor over the 5 labels, Enter/interact activates, Digit1-5
+/// jump straight to a row, Escape closes an open overlay
+/// (Settings/Stats/Credits). Disabled rows (CO-OP) sting `sndNoSelect`
+/// like GML's early-`exit` on `!available`.
+fn tick_main_menu_input(world: &mut World, edge: MenuEdge) {
+    world.init_resource::<MenuState>();
+    // Escape over an open overlay closes it (the InGame escape tick
+    // never runs here).
+    if edge.pause_pressed
+        && world
+            .get_resource::<OverlayMenu>()
+            .is_some_and(|o| *o != OverlayMenu::None)
+    {
+        apply_menu_action(world, UiAction::CloseOverlay);
+        return;
+    }
+    let (nav_v, _nav_h, slot, confirm) = {
+        let mut input = world.resource_mut::<NtInput>();
+        let (dv, dh) = input.take_menu_nav();
+        (
+            dv,
+            dh,
+            input.take_weapon_slot(),
+            input.take_interact_pressed(),
+        )
+    };
+    if nav_v != 0 {
+        if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+            menu.main_menu_cursor =
+                (menu.main_menu_cursor as i16 + nav_v as i16).rem_euclid(5) as usize;
+        }
+        emit_sfx(world, hover_sfx());
+    }
+    // Digits jump: slot 0..4 maps straight onto rows 0..4 (Digit5 feeds
+    // slot 4 for QUIT).
+    if let Some(slot) = slot {
+        if slot < 5 {
+            if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+                menu.main_menu_cursor = slot;
+            }
+            activate_main_menu_row(world, slot);
+            return;
+        }
+    }
+    if confirm {
+        let cursor = world
+            .get_resource::<MenuState>()
+            .map(|menu| menu.main_menu_cursor)
+            .unwrap_or(0);
+        activate_main_menu_row(world, cursor);
+    }
+}
+
+/// Activate one main-menu row (cursor or digit path shared).
+fn activate_main_menu_row(world: &mut World, row: usize) {
+    match row {
+        0 => apply_menu_action(world, UiAction::MainMenuPlay),
+        1 => emit_denied(world),
+        2 => apply_menu_action(world, UiAction::OpenSettings),
+        3 => apply_menu_action(world, UiAction::ShowStats),
+        4 => apply_menu_action(world, UiAction::QuitApp),
+        _ => {}
+    }
+}
+
 /// Title input routing (cursor nav + confirm + loadout back).
 fn tick_title_input(world: &mut World) {
-    let (cycle, slot, confirm, back) = {
+    let (cycle, slot, confirm, back, fire) = {
         let mut input = world.resource_mut::<NtInput>();
         (
             input.take_cycle_weapon(),
             input.take_weapon_slot(),
             input.take_interact_pressed(),
             input.take_spec_pressed(),
+            input.take_fire_pressed(),
         )
     };
+    // Space (fire) toggles the loadout panel: `spec` (Shift/right-click)
+    // has no shell key mapping, so without this the loadout/hardmode
+    // switch is unreachable from the keyboard.
+    if fire {
+        apply_menu_action(world, UiAction::ToggleLoadout);
+    }
     if cycle != 0 {
         if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
             let len = CHAR_SELECT_ORDER.len() as i16;
@@ -1026,28 +1137,54 @@ fn tick_title_input(world: &mut World) {
     }
 }
 
-/// In-game menu routing (game-over > mutation offer > pause > unlocks).
+/// Settings keyboard driver: cursor over the page's hot rows (Up/Down
+/// with `sndHover` feedback + white highlight in the render layer),
+/// values stepped with Left/Right, rows committed with Enter (steppers
+/// treat Enter as +1, like the `>` button).
+fn tick_settings_nav(world: &mut World, nav_v: i8, nav_h: i8, confirm: bool) {
+    let page = world
+        .get_resource::<MenuState>()
+        .map(|m| m.settings_page)
+        .unwrap_or(0);
+    let n = crate::render::settings_hot_rows(page, 320.0).len();
+    if n == 0 {
+        return;
+    }
+    if nav_v != 0 {
+        if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+            let cur = menu.settings_cursor.min(n - 1);
+            menu.settings_cursor = (cur as i16 + nav_v as i16).rem_euclid(n as i16) as usize;
+        }
+        emit_sfx(world, hover_sfx());
+    }
+    // Re-clamp after page jumps (cursor resets to 0 on drill, but a
+    // language set keeps the page with new length).
+    let cursor = world
+        .get_resource::<MenuState>()
+        .map(|m| m.settings_cursor.min(n - 1))
+        .unwrap_or(0);
+    if nav_h != 0 {
+        if let Some(action) = crate::render::settings_hot_action(world, page, cursor, nav_h) {
+            apply_menu_action(world, action);
+        }
+    } else if confirm {
+        // Enter resolves with dir 0, which steppers treat as +1 (same
+        // as the `>` button).
+        if let Some(action) = crate::render::settings_hot_action(world, page, cursor, 0) {
+            apply_menu_action(world, action);
+        }
+    }
+}
+
+/// In-game menu routing (game-over > pause/overlay > mutation offer).
 fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
-    // Offer mirror (bevy hud sync ran before input handling).
+    // Offer mirror (bevy hud sync ran before input handling; same law
+    // as `tick_mutation_mirror`, inlined for the borrow checker).
     {
-        let has_pending = world.get_resource::<PendingMutation>().is_some();
-        let has_ultra = world.get_resource::<PendingUltra>().is_some();
-        let (count, is_ultra) = if has_ultra {
-            (
-                world
-                    .get_resource::<PendingUltra>()
-                    .map(|p| p.choices.len())
-                    .unwrap_or(0),
-                true,
-            )
-        } else if has_pending {
-            (
-                world
-                    .get_resource::<PendingMutation>()
-                    .map(|p| p.choices.len())
-                    .unwrap_or(0),
-                false,
-            )
+        let (count, is_ultra) = if let Some(ultra) = world.get_resource::<PendingUltra>() {
+            (ultra.choices.len(), true)
+        } else if let Some(pending) = world.get_resource::<PendingMutation>() {
+            (pending.choices.len(), false)
         } else {
             (0, false)
         };
@@ -1107,13 +1244,16 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
         }
     }
 
-    let (cycle, slot, confirm, back) = {
+    let (cycle, slot, confirm, nav_v, nav_h) = {
         // Take-once pulses are shared with gameplay systems that run
         // later in the schedule (`weapon_switch` takes cycle/slot,
         // `collect_pickups` takes interact, weapons/abilities take spec;
         // bevy has no menu consumer for these). Only take when a menu is
         // actually open — otherwise E / 1-4 / right-click would be
         // swallowed every tick and weapons could never be picked up.
+        // `spec` is taken and dropped: ability lives in gameplay (gated),
+        // and overlay Back travels via Esc / right-click instead, so a
+        // Shift press never closes a menu by accident.
         let menu_open = game_over
             || world
                 .get_resource::<MenuState>()
@@ -1124,14 +1264,17 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
                 .is_some_and(|menu| !menu.unlock_queue.is_empty());
         if menu_open {
             let mut input = world.resource_mut::<NtInput>();
+            let _ = input.take_spec_pressed();
+            let (dv, dh) = input.take_menu_nav();
             (
                 input.take_cycle_weapon(),
                 input.take_weapon_slot(),
                 input.take_interact_pressed(),
-                input.take_spec_pressed(),
+                dv,
+                dh,
             )
         } else {
-            (0, None, false, false)
+            (0, None, false, 0, 0)
         }
     };
 
@@ -1146,6 +1289,67 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
             apply_menu_action(world, UiAction::QuitToTitle);
         }
         return;
+    }
+
+    let overlay = world.resource::<OverlayMenu>();
+    let overlay_kind = *overlay;
+    // Keyboard shortcuts for the pause buttons (1-4): MENU / RETRY /
+    // SETTINGS / CONTINUE. Mouse already works via `route_menu_click`;
+    // without this the buttons are unreachable from the keyboard.
+    if overlay_kind == OverlayMenu::Pause
+        && world
+            .get_resource::<MenuState>()
+            .is_some_and(|m| m.pause_confirm.is_none())
+        && let Some(slot) = slot
+    {
+        match slot {
+            0 => {
+                apply_menu_action(world, UiAction::ShowPauseConfirm(0));
+                return;
+            }
+            1 => {
+                apply_menu_action(world, UiAction::ShowPauseConfirm(1));
+                return;
+            }
+            2 => {
+                apply_menu_action(world, UiAction::OpenSettings);
+                return;
+            }
+            3 => {
+                apply_menu_action(world, UiAction::Resume);
+                return;
+            }
+            _ => {}
+        }
+    }
+    match overlay_kind {
+        OverlayMenu::Pause if confirm => {
+            apply_menu_action(world, UiAction::Resume);
+            return;
+        }
+        OverlayMenu::None => {
+            let has_unlocks = world
+                .get_resource::<MenuState>()
+                .is_some_and(|menu| !menu.unlock_queue.is_empty());
+            if confirm && has_unlocks {
+                if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+                    dismiss_unlock(&mut menu);
+                }
+                return;
+            }
+        }
+        // Settings keyboard nav (GML `pointed_item`/`kh` parity):
+        // Up/Down move the cursor, Left/Right step values, Enter
+        // activates. Overlay Back travels via Esc / right-click, never
+        // Shift (which now carries ability pulses).
+        OverlayMenu::Settings => {
+            tick_settings_nav(world, nav_v, nav_h, confirm);
+            return;
+        }
+        // Credits/Stats have no rows: BACK/Esc/right-click only.
+        _ => {
+            return;
+        }
     }
 
     let offer_open = world
@@ -1177,30 +1381,5 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
         }
         return;
     }
-
-    let overlay = world.resource::<OverlayMenu>();
-    let overlay_kind = *overlay;
-    match overlay_kind {
-        OverlayMenu::Pause if confirm => {
-            apply_menu_action(world, UiAction::Resume);
-        }
-        OverlayMenu::None => {
-            // Unlock popups dismiss on confirm when nothing else owns it.
-            let has_unlocks = world
-                .get_resource::<MenuState>()
-                .is_some_and(|menu| !menu.unlock_queue.is_empty());
-            if confirm && has_unlocks {
-                if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
-                    dismiss_unlock(&mut menu);
-                }
-            }
-        }
-        _ => {
-            if back {
-                apply_menu_action(world, UiAction::CloseOverlay);
-            }
-        }
-    }
     let _ = (cycle, slot);
 }
-

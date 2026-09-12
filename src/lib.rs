@@ -36,18 +36,23 @@
 //! viewport `on_event` [`PickEvent`], both through the pilot-style raw-pointer
 //! staging pattern):
 //! - WASD/arrows -> move, mouse cursor position -> aim (every frame),
-//!   Space / left-click -> fire, E/F/Q/G/Tab/Enter ->
-//!   interact/confirm, 1-4 -> weapon slots / mutation picks / title cursor,
-//!   Left/Right arrows -> title cursor + mutation highlight, click in game ->
-//!   aim-at-click + fire, click in menus -> confirm (pause/settings/
-//!   credits buttons are clickable and stage `UiAction`s instead; bare
-//!   viewport clicks over those menus are dropped), Esc -> pause toggle,
-//!   R -> game-over retry.
+//!   Space / left-click -> fire, Shift / right-click -> ability+spec
+//!   (GML `spec` on `mb_right`; Shift synthesizes the same codes from
+//!   `KeyEvent.modifiers`), E/F/Q/G/Tab/Enter -> interact/confirm,
+//!   1-5 -> weapon slots / mutation picks / title cursor / main-menu+
+//!   pause rows, Left/Right arrows -> title cursor + mutation highlight,
+//!   Up/Down (+Left/Right) -> main-menu cursor + settings cursor/values,
+//!   click in game -> aim-at-click + fire, click in menus -> positional
+//!   buttons (main-menu rows, title pods/GO/loadout, pause/settings/
+//!   credits/stats buttons via screen-position routing; strays dropped),
+//!   right-click in settings/credits -> Back (GML `BackButton`
+//!   `mb_right`), Space on title -> loadout panel, Esc -> pause toggle
+//!   (+ overlay unwind + main-menu overlay close), R -> game-over retry.
 //! - NOT wired (needs shell services this repose version lacks): held-mouse
 //!   continuous fire (clicks are single-frame edges; hover aims every
-//!   frame), right-mouse / Shift ability+spec pulses (`Key` has no Shift
-//!   variant and picks carry no button), gamepad sticks/triggers, settings sliders/buttons (pause
-//!   menu buttons work via screen-position routing; settings rows are display-only).
+//!   frame), gamepad sticks/triggers (buttons/axes drain through
+//!   `stage_gamepad`), text entry for profile/color inputs (buttons only;
+//!   color cycles presets), key rebinding (REMAP screen is display-only).
 //!
 //! Fidelity notes: view-layer camera smoothing never feeds back into the
 //! sim; [`SpiralCtl`] steps at the fixed cadence inside [`App::advance`]
@@ -69,7 +74,9 @@ use repame_sprite::{
 };
 use repose_canvas::Embedded;
 use repose_core::PaddingValues;
-use repose_core::input::{Key, KeyEvent, KeyEventType};
+use repose_core::input::{
+    Key, KeyEvent, KeyEventType, PointerButton, PointerEvent, PointerEventKind,
+};
 use repose_core::prelude::{AlignItems, Modifier};
 use repose_core::{
     Color, Dp, FocusRequester, RenderContext, Scheduler, Sp, View, remember, request_frame,
@@ -191,6 +198,9 @@ pub struct App {
     gml_cam: GmlCamera,
     /// Previous frame's floor-transition flag (generation end snaps).
     was_transitioning: bool,
+    /// Previous frame's app state (entering InGame snaps the camera on
+    /// the fresh player instead of swooping from the menu look point).
+    was_state: AppState,
     spiral: SpiralCtl,
     assets: Option<RenderAssets>,
     /// Art dir the catalog loaded from (vortex background textures
@@ -211,6 +221,18 @@ pub struct App {
     pause_edge: bool,
     restart_edge: bool,
     interact_edge: bool,
+    /// Physical keyboard Shift held (tracked from `KeyEvent.modifiers`;
+    /// `Key` has no Shift variant, so this owns the release edge the
+    /// synthesized [`KeyCode::ShiftLeft`] cannot).
+    shift_held: bool,
+    /// Right mouse held (GML `spec`/ability on `mb_right` parity).
+    rmb_held: bool,
+    /// Right-button down/up edges staged this window. The viewport emits
+    /// buttonless [`PickEvent`]s for right clicks too, so these flags let
+    /// [`App::feed_input`] drop the spurious picks (and route Back over
+    /// settings/credits like GML `BackButton`).
+    rmb_down_edge: bool,
+    rmb_up_edge: bool,
     /// Staged gamepad snapshots, one per pad (bevy `sample_input`
     /// `gamepads` query order verbatim: keyboard, then pads in order,
     /// then touch).
@@ -298,6 +320,7 @@ impl App {
                 ..Default::default()
             },
             was_transitioning: false,
+            was_state: AppState::default(),
             spiral,
             assets: None,
             assets_dir: None,
@@ -310,6 +333,10 @@ impl App {
             pause_edge: false,
             restart_edge: false,
             interact_edge: false,
+            shift_held: false,
+            rmb_held: false,
+            rmb_down_edge: false,
+            rmb_up_edge: false,
             pads: Vec::new(),
             touch_active: HashMap::new(),
             touch_new: HashSet::new(),
@@ -537,6 +564,22 @@ impl App {
     /// handler; see the module docs for the mapping table).
     fn handle_key(&mut self, ke: &KeyEvent) {
         let down = matches!(ke.event_type, KeyEventType::Down);
+        // Shift has no `Key` variant, but every `KeyEvent` carries
+        // `modifiers.shift`: synthesize the `ShiftLeft` codes bevy
+        // `sample_input` reads (ability/spec) from it. Release clears
+        // unless the right mouse button holds the shared code.
+        if ke.modifiers.shift {
+            self.shift_held = true;
+            if down && !ke.is_repeat && !self.held.contains(&KeyCode::ShiftLeft) {
+                self.held.insert(KeyCode::ShiftLeft);
+                self.edges.push(KeyCode::ShiftLeft);
+            }
+        } else {
+            self.shift_held = false;
+            if !self.rmb_held {
+                self.held.remove(&KeyCode::ShiftLeft);
+            }
+        }
         match &ke.key {
             Key::Escape => {
                 if down && !ke.is_repeat {
@@ -578,6 +621,30 @@ impl App {
             }
         } else {
             self.held.remove(&code);
+        }
+    }
+
+    /// Right mouse button down (root pointer handler, `Secondary` only):
+    /// GML `spec` on `mb_right` shares the synthesized [`KeyCode::ShiftLeft`]
+    /// channel so `sample_keyboard` raises spec/ability through the bevy
+    /// path. The viewport also stages a buttonless pick for the press;
+    /// [`App::feed_input`] drops it via [`App::rmb_down_edge`].
+    fn rmb_down(&mut self) {
+        if !self.held.contains(&KeyCode::ShiftLeft) {
+            self.held.insert(KeyCode::ShiftLeft);
+            self.edges.push(KeyCode::ShiftLeft);
+        }
+        self.rmb_down_edge = true;
+        self.rmb_held = true;
+    }
+
+    /// Right mouse button up: release the shared code unless the
+    /// physical Shift key is still down.
+    fn rmb_up(&mut self) {
+        self.rmb_held = false;
+        self.rmb_up_edge = true;
+        if !self.shift_held {
+            self.held.remove(&KeyCode::ShiftLeft);
         }
     }
 
@@ -667,12 +734,21 @@ impl App {
                 .world
                 .get_resource::<MenuState>()
                 .is_some_and(|m| m.game_over.is_some());
+        // Read the pending offer directly, not the `MenuState` mirror
+        // (the mirror updates inside the schedule, a frame after the
+        // offer opens/closes — the stale frame fired the gun on level-up
+        // and let one aim frame through).
         let offer_open = state == AppState::InGame
-            && self
+            && (self
                 .sim
                 .world
-                .get_resource::<MenuState>()
-                .is_some_and(|m| m.mutation_count > 0);
+                .get_resource::<crate::comps_a::PendingMutation>()
+                .is_some()
+                || self
+                    .sim
+                    .world
+                    .get_resource::<crate::comps_a::PendingUltra>()
+                    .is_some());
         // Live gameplay: no pause, no overlay, no game over. Only here
         // do hover/clicks steer aim and fire; over menus the buttons
         // stage `UiAction`s instead (a bare viewport click does nothing
@@ -696,8 +772,53 @@ impl App {
                 self.sim.world.resource_mut::<NtInput>().cycle_weapon(cycle);
             }
         }
+        // Menu cursor nav (take-once steps for `tick_menus`): main-menu
+        // rows (Up/Down) and settings rows/values (Up/Down/Left/Right).
+        // Gameplay is gated off in both places, so the arrows are free.
+        {
+            let settings_open = overlay == OverlayMenu::Settings;
+            let mut dv: i8 = 0;
+            let mut dh: i8 = 0;
+            if state == AppState::MainMenu || settings_open {
+                if just.contains(&KeyCode::ArrowUp) {
+                    dv -= 1;
+                }
+                if just.contains(&KeyCode::ArrowDown) {
+                    dv += 1;
+                }
+            }
+            if settings_open {
+                if just.contains(&KeyCode::ArrowLeft) {
+                    dh -= 1;
+                }
+                if just.contains(&KeyCode::ArrowRight) {
+                    dh += 1;
+                }
+            }
+            if dv != 0 || dh != 0 {
+                self.sim.world.resource_mut::<NtInput>().push_menu_nav(dv, dh);
+            }
+        }
+        // Right-button edges: the viewport staged buttonless picks for
+        // them this window — drop the whole window (a coincident left
+        // edge is an acceptable loss) so right clicks never fire guns,
+        // confirm dialogs, or retry screens.
+        let rmb_edge = std::mem::replace(&mut self.rmb_down_edge, false)
+            | std::mem::replace(&mut self.rmb_up_edge, false);
+        if rmb_edge {
+            self.clicks.clear();
+        }
 
-        let mouse_down = !self.clicks.is_empty() && !menu_open && !game_over;
+        // No fire pulses from clicks over the main menu / title: both
+        // route positionally now, and Title takes `fire` (Space) as the
+        // loadout toggle — a pod click must not toggle it as a side
+        // effect. (Splash/Loading keep click-as-fire: any press advances.)
+        let mouse_down = !self.clicks.is_empty()
+            && !menu_open
+            && !game_over
+            && !offer_open
+            && state != AppState::MainMenu
+            && state != AppState::Title;
         let mouse = MouseState {
             left_held: mouse_down,
             left_pressed: mouse_down,
@@ -715,17 +836,23 @@ impl App {
             // map (bevy `touches.iter()` yields all pressed contacts;
             // `touch_new` marks this tick's `iter_just_pressed`).
             if !self.touch_active.is_empty() {
+                // `PickEvent` screens and `sched.size` are physical px;
+                // `sample_touch` zones are authored in dp (96dp button
+                // strip, 56dp stick scale). Convert both to dp so HiDPI
+                // windows keep dp-sized zones instead of shrinking them
+                // by the density.
+                let d = repose_core::locals::effective_density_scale().max(1e-6);
                 let contacts: Vec<TouchContact> = self
                     .touch_active
                     .iter()
                     .map(|(id, (start, pos))| TouchContact {
-                        start: *start,
-                        pos: *pos,
+                        start: *start / d,
+                        pos: *pos / d,
                         just_pressed: self.touch_new.contains(id),
                     })
                     .collect();
                 self.touch_new.clear();
-                sample_touch(&contacts, self.view_width, &mut input);
+                sample_touch(&contacts, self.view_width / d, &mut input);
             }
         }
         // Raw Digit1-4 mutation protocol (direct `MutationChoice` write).
@@ -790,9 +917,13 @@ impl App {
             }
             self.clicks.clear();
         } else if menu_open {
-            // Open menu over a live run: route the click at the menu
-            // buttons, then drop it either way.
-            if let Some(click) = self.clicks.last().copied() {
+            // Open menu over a live run: right-click backs out of
+            // settings/credits (GML `BackButton` `mb_right` parity),
+            // left clicks route at the menu buttons, then drop either
+            // way.
+            if rmb_edge && matches!(overlay, OverlayMenu::Settings | OverlayMenu::Credits) {
+                apply_menu_action(&mut self.sim.world, UiAction::CloseOverlay);
+            } else if let Some(click) = self.clicks.last().copied() {
                 let viewport_dp = self.view_viewport_dp;
                 let kind = menu_overlay_kind(
                     state,
@@ -810,18 +941,75 @@ impl App {
             }
             self.clicks.clear();
         } else if game_over {
-            // GML `GameOver`: any click retries through the same
-            // `MenuEdge` restart as KeyR (Loading).
-            if self.clicks.last().copied().is_some() {
+            // GML `GameOver`: left click retries through the same
+            // `MenuEdge` restart as KeyR (Loading). Right-button windows
+            // were already cleared above.
+            if !rmb_edge && self.clicks.last().copied().is_some() {
                 self.sim.world.resource_mut::<MenuEdge>().restart_pressed = true;
             }
             self.clicks.clear();
-        } else if let Some(_click) = self.clicks.last().copied() {
+        } else if state == AppState::MainMenu {
+            // Positional buttons (PLAY/SETTINGS/STATS/QUIT; CO-OP stings
+            // denied inside the router); strays are dropped.
+            if let Some(click) = self.clicks.last().copied() {
+                let viewport_dp = self.view_viewport_dp;
+                if let Some(action) = route_menu_click(
+                    &mut self.sim.world,
+                    MenuOverlay::MainMenu,
+                    click.dp,
+                    viewport_dp,
+                ) {
+                    apply_menu_action(&mut self.sim.world, action);
+                }
+            }
             self.clicks.clear();
-            self.sim.world.resource_mut::<NtInput>().press_interact();
+        } else if state == AppState::Title {
+            // Pods / GO / loadout zones (GML campfire parity); strays do
+            // nothing (the old confirm-anywhere retired).
+            if let Some(click) = self.clicks.last().copied() {
+                let viewport_dp = self.view_viewport_dp;
+                if let Some(action) = self.route_title_click(click.dp, viewport_dp) {
+                    apply_menu_action(&mut self.sim.world, action);
+                }
+            }
+            self.clicks.clear();
+        } else if let Some(_click) = self.clicks.last().copied() {
+            // Splash/Loading advance on any press; the mutation offer
+            // confirms the highlight. Right-button windows stay silent.
+            self.clicks.clear();
+            if !rmb_edge {
+                self.sim.world.resource_mut::<NtInput>().press_interact();
+            }
         } else {
             self.clicks.clear();
         }
+    }
+
+    /// Title click router with asset-aware geometry (same native sizes
+    /// the sprite layer draws with, else the 20px fallback).
+    fn route_title_click(&mut self, dp: [f32; 2], viewport_dp: [f32; 2]) -> Option<UiAction> {
+        let vw = gml_view_size(viewport_dp)[0];
+        let k = (viewport_dp[1].max(1.0) / 240.0).max(1e-6);
+        if !k.is_finite() {
+            return None;
+        }
+        let (slot_h, crownsize, skinsize) = match &self.assets {
+            Some(a) => (
+                a.native_size("images/sprCharSelect.png").map(|s| s.y).unwrap_or(20.0),
+                a.native_size("images/sprLoadoutCrown.png").map(|s| s.y - 4.0).unwrap_or(20.0),
+                a.native_size("images/sprLoadoutSkin.png").map(|s| s.x - 4.0).unwrap_or(20.0),
+            ),
+            None => (20.0, 20.0, 20.0),
+        };
+        crate::render::title_click_action(
+            &mut self.sim.world,
+            dp[0] / k,
+            dp[1] / k,
+            vw,
+            slot_h,
+            crownsize,
+            skinsize,
+        )
     }
 
     /// Build this frame's view: stage input, advance the sim, snapshot
@@ -836,6 +1024,16 @@ impl App {
         }
         self.feed_input();
         self.advance(dt);
+        // GML `game_end` parity for the QUIT row (bevy `AppExit` has no
+        // headless window service; the desktop shell exits here).
+        if self
+            .sim
+            .world
+            .get_resource::<crate::state::QuitRequested>()
+            .is_some_and(|q| q.0)
+        {
+            std::process::exit(0);
+        }
 
         let viewport_px = {
             let (w, h) = sched.size;
@@ -1020,13 +1218,9 @@ impl App {
         // snapshot drives `VortexPass` (GML `scrDrawSpiral` fullscreen
         // quad) mounted as the bottom layer, so the swirling portal
         // shows behind sprites in game and menus alike (pause/game
-        // over dim it through the viewport overlay).
-        let bg_alpha = if state == AppState::InGame && menu_kind.is_none() && !paused && !game_over
-        {
-            1.0
-        } else {
-            0.0
-        };
+        // over dim it through the scrim overlay, never by hiding it:
+        // mutation/title read through to the spiral underneath).
+        let bg_alpha = if state == AppState::InGame { 1.0 } else { 0.0 };
         let snap = self.spiral.snapshot(bg_alpha);
         self.last_bg_alpha = snap.bg_alpha;
         // Vortex art follows the GML area (debris strip is per-area);
@@ -1075,6 +1269,7 @@ impl App {
                 | Some(MenuOverlay::Settings)
                 | Some(MenuOverlay::Credits)
                 | Some(MenuOverlay::GameOver)
+                | Some(MenuOverlay::Stats)
         );
         let overlay_color = crate::effects::flash_rgba(&self.sim.world);
 
@@ -1172,6 +1367,27 @@ impl App {
                 app.handle_key(&ke);
                 false
             });
+        // Right mouse button (GML `mb_right` ability / menu Back): the
+        // viewport reports buttonless picks, so stage spec here from the
+        // raw event (the viewport's spurious pick is dropped in
+        // `feed_input` via the rmb edges).
+        let rmb_ptr_down = self as *mut App;
+        let rmb_ptr_up = self as *mut App;
+        let root_mod = root_mod
+            .on_pointer_down(move |ev: PointerEvent| {
+                if matches!(ev.event, PointerEventKind::Down(PointerButton::Secondary)) {
+                    // SAFETY: synchronous compose-time dispatch only.
+                    let app = unsafe { &mut *rmb_ptr_down };
+                    app.rmb_down();
+                }
+            })
+            .on_pointer_up(move |ev: PointerEvent| {
+                if matches!(ev.event, PointerEventKind::Up(PointerButton::Secondary)) {
+                    // SAFETY: synchronous compose-time dispatch only.
+                    let app = unsafe { &mut *rmb_ptr_up };
+                    app.rmb_up();
+                }
+            });
 
         // HUD overlay (GML `scrDrawPlayerHUD` + `scrDrawMiscHUD`
         // verbatim): Silkscreen rows at 320x240 GUI positions over the
@@ -1185,7 +1401,7 @@ impl App {
         layers.push(viewport);
         if !hud_rows.is_empty() {
             layers.push(
-                ZStack(Modifier::new().fill_max_size())
+                ZStack(Modifier::new().fill_max_size().hit_passthrough())
                     .child(hud_rows.iter().map(gui_text_layer).collect::<Vec<_>>()),
             );
         }
@@ -1210,6 +1426,13 @@ impl App {
             self.gml_cam.snap = true;
         }
         self.was_transitioning = transitioning;
+        // Fresh runs (Loading -> InGame via `setup_run`) snap onto the
+        // new player instead of lerping across the map from the old
+        // menu look point.
+        if self.was_state != AppState::InGame && state == AppState::InGame {
+            self.gml_cam.snap = true;
+        }
+        self.was_state = state;
         // No bars over the pre-run rooms (boot reel, logo menu and
         // campfire run on a bare view; GML only letterboxes gameplay
         // menus, transitions and intros).
@@ -1242,7 +1465,10 @@ impl App {
                     .fill_max_height()
                     .hit_passthrough(),
             );
-            layers.push(Column(Modifier::new().fill_max_size()).child(vec![bar(), spacer, bar()]));
+            layers.push(
+                Column(Modifier::new().fill_max_size().hit_passthrough())
+                    .child(vec![bar(), spacer, bar()]),
+            );
         }
         if let Some(rows) = menu_rows {
             // Bevy `scrim` / game-over panel parity: Pause/Settings/
@@ -1260,10 +1486,8 @@ impl App {
             }
             if !rows.is_empty() {
                 // Plain text rows (GML draws the buttons as text;
-                // clicks route by dp position in `feed_input` via
-                // `route_menu_click`, repose-hit-test independent).
                 layers.push(
-                    ZStack(Modifier::new().fill_max_size())
+                    ZStack(Modifier::new().fill_max_size().hit_passthrough())
                         .child(rows.iter().map(gui_text_layer).collect::<Vec<_>>()),
                 );
             }
@@ -1501,6 +1725,7 @@ fn keycode_for_char(c: char) -> Option<KeyCode> {
         '2' => Some(KeyCode::Digit2),
         '3' => Some(KeyCode::Digit3),
         '4' => Some(KeyCode::Digit4),
+        '5' => Some(KeyCode::Digit5),
         _ => None,
     }
 }
@@ -1618,9 +1843,18 @@ fn gui_text_layer(row: &crate::render::GuiRow) -> View {
                 top: Dp(row.1[1]),
                 bottom: Dp(0.0),
             })
-            .align_items(AlignItems::FLEX_START),
+            .align_items(AlignItems::FLEX_START)
+            .hit_passthrough(),
     )
-    .child(Column(Modifier::new().width(Dp(row.5)).align_items(align)).child(text))
+    .child(
+        Column(
+            Modifier::new()
+                .width(Dp(row.5))
+                .align_items(align)
+                .hit_passthrough(),
+        )
+        .child(text),
+    )
 }
 
 /// Menu button click routing (GML `PauseButton` objects +
@@ -1636,6 +1870,19 @@ fn menu_button_action(
     pause_confirm: Option<u8>,
 ) -> Option<UiAction> {
     match kind {
+        MenuOverlay::MainMenu => match text {
+            // CO-OP has no action (GML early-exits on `!available`);
+            // the router stings `sndNoSelect` via `menu_row_denied`.
+            "PLAY" => Some(UiAction::MainMenuPlay),
+            "SETTINGS" => Some(UiAction::OpenSettings),
+            "STATS" => Some(UiAction::ShowStats),
+            "QUIT" => Some(UiAction::QuitApp),
+            _ => None,
+        },
+        MenuOverlay::Stats => match text {
+            "BACK" => Some(UiAction::CloseOverlay),
+            _ => None,
+        },
         MenuOverlay::Pause => match pause_confirm {
             None => match text {
                 "CONTINUE" => Some(UiAction::Resume),
@@ -1686,10 +1933,21 @@ fn route_menu_click(
     if !k.is_finite() {
         return None;
     }
+    let gx = dp[0] / k;
+    let gy = dp[1] / k;
+    // Settings rows route through the hot table (per-row toggle /
+    // stepper semantics live there, next to the layout).
+    if kind == MenuOverlay::Settings {
+        let page = world
+            .get_resource::<MenuState>()
+            .map(|m| m.settings_page)
+            .unwrap_or(0);
+        return crate::render::settings_click_action(world, page, gx, gy, vw);
+    }
     let confirm = world
         .get_resource::<MenuState>()
         .and_then(|m| m.pause_confirm);
-    menu_gui_texts_vw(kind, world, vw)
+    let hit = menu_gui_texts_vw(kind, world, vw)
         .into_iter()
         .find_map(|t| {
             let action = menu_button_action(kind, &t.text, confirm)?;
@@ -1700,14 +1958,38 @@ fn route_menu_click(
             // at this size.
             const HW: f32 = 60.0;
             const HH: f32 = 11.0;
-            let gx = dp[0] / k;
-            let gy = dp[1] / k;
             if (gx - t.gx).abs() <= HW && (gy - t.gy).abs() <= HH {
                 Some(action)
             } else {
                 None
             }
-        })
+        });
+    if hit.is_some() {
+        return hit;
+    }
+    // Disabled rows sting instead of acting (GML `sndNoSelect` on
+    // unavailable buttons; currently only MainMenu CO-OP).
+    if menu_row_denied(kind, world, gx, gy, vw) {
+        crate::state::menus::emit_denied(world);
+    }
+    None
+}
+
+/// Disabled-but-visible rows that sting `sndNoSelect` on click (GML
+/// unavailable-button parity). Today only MainMenu CO-OP.
+fn menu_row_denied(
+    kind: MenuOverlay,
+    world: &mut World,
+    gx: f32,
+    gy: f32,
+    vw: f32,
+) -> bool {
+    if kind != MenuOverlay::MainMenu {
+        return false;
+    }
+    menu_gui_texts_vw(kind, world, vw)
+        .into_iter()
+        .any(|t| t.text == "CO-OP" && (gx - t.gx).abs() <= 60.0 && (gy - t.gy).abs() <= 11.0)
 }
 
 /// Menu overlay selection from state (pure view-model; priority:
@@ -1723,6 +2005,7 @@ pub enum MenuOverlay {
     Credits,
     Mutation,
     GameOver,
+    Stats,
 }
 
 pub fn menu_overlay_kind(
@@ -1733,7 +2016,14 @@ pub fn menu_overlay_kind(
 ) -> Option<MenuOverlay> {
     match state {
         AppState::Splash => Some(MenuOverlay::Splash),
-        AppState::MainMenu => Some(MenuOverlay::MainMenu),
+        // Overlays surface over the main menu (GML spawns MenuOptions /
+        // DrawStats over the buttons); gameplay has no other path here.
+        AppState::MainMenu => match overlay {
+            OverlayMenu::Settings => Some(MenuOverlay::Settings),
+            OverlayMenu::Credits => Some(MenuOverlay::Credits),
+            OverlayMenu::Stats => Some(MenuOverlay::Stats),
+            _ => Some(MenuOverlay::MainMenu),
+        },
         AppState::Loading => Some(MenuOverlay::Loading),
         AppState::Title => Some(MenuOverlay::Title),
         AppState::InGame => {
@@ -1744,6 +2034,9 @@ pub fn menu_overlay_kind(
                 OverlayMenu::Pause => Some(MenuOverlay::Pause),
                 OverlayMenu::Settings => Some(MenuOverlay::Settings),
                 OverlayMenu::Credits => Some(MenuOverlay::Credits),
+                // Stats only opens over the main menu; it can never be
+                // live here, so there is nothing to show.
+                OverlayMenu::Stats => None,
                 OverlayMenu::None => {
                     if menu.mutation_count > 0 {
                         Some(MenuOverlay::Mutation)
@@ -1771,4 +2064,3 @@ pub fn menu_overlay_lines(kind: MenuOverlay, world: &mut World) -> Vec<String> {
 pub fn root_view(sched: &mut Scheduler, ctx: &RenderContext, app: &mut App, dt: Duration) -> View {
     app.view(sched, ctx, dt)
 }
-
