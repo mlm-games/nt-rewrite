@@ -57,6 +57,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::vortex_pass::{VortexPass, VortexTexture};
 use bevy_ecs::prelude::*;
 use glam::Vec2;
 use rand::RngExt;
@@ -66,32 +67,32 @@ use repame_sprite::{
     BatchDesc, Camera2d, FrameInput, GeomHandle, PickEvent, SpriteBatch, SpriteInstance,
     Viewport2d, Viewport2dGpu,
 };
-use crate::vortex_pass::{VortexPass, VortexTexture};
 use repose_canvas::Embedded;
+use repose_core::PaddingValues;
 use repose_core::input::{Key, KeyEvent, KeyEventType};
 use repose_core::prelude::{AlignItems, Modifier};
-use repose_core::PaddingValues;
-use repose_core::{Color, Dp, FocusRequester, RenderContext, Scheduler, Sp, View, remember, request_frame};
+use repose_core::{
+    Color, Dp, FocusRequester, RenderContext, Scheduler, Sp, View, remember, request_frame,
+};
 use repose_render_wgpu::Callback;
 use repose_ui::{Box as UiBox, Column, Text, TextStyle, ViewExt, ZStack};
 
+use crate::audio::UiAction;
 use crate::comps_a::CurrentFrame as CombatFrame;
 use crate::comps_a::{NT_CAM_SCALE, Player, Projectile, WallCell, WallTile};
 use crate::comps_b::{Enemy, Pickup, Prop};
-use crate::audio::UiAction;
 use crate::data::AreaId;
 use crate::input::{
     GamepadState, KeyCode, MouseState, NtInput, TouchContact, sample_gamepads, sample_keyboard,
     sample_mutation_digits, sample_touch,
 };
 use crate::render::{
-    ATLAS_PAGES, ATLAS_SIZE, CamPoi, CamStepInput, GmlCamera, RenderAssets,
-    background_color, bloom_sprites, cam_viewdist_for, crosshair_sprites, decode_png,
-    fainted_bar_sprites, fog_sprites, fx_instances, fx_texts, gml_camera_step,
-    gml_view_scale, gml_view_size, hud_gui_texts_dp, hud_sprites, menu_gui_texts,
-    menu_gui_texts_dp, menu_gui_texts_vw, menu_sprites, portal_indicator_sprites,
-    shadow_sprites, sideart_sprites, splash_sprites, spiral_figures, view_rect_world,
-    world_camera, world_instances,
+    ATLAS_PAGES, ATLAS_SIZE, CamPoi, CamStepInput, GmlCamera, RenderAssets, background_color,
+    bloom_sprites, cam_viewdist_for, crosshair_sprites, decode_png, fainted_bar_sprites,
+    fog_sprites, fx_instances, fx_texts, gml_camera_step, gml_view_scale, gml_view_size,
+    hud_gui_texts_dp, hud_sprites, menu_gui_texts, menu_gui_texts_dp, menu_gui_texts_vw,
+    menu_sprites, portal_indicator_sprites, shadow_sprites, sideart_sprites, spiral_figures,
+    splash_sprites, view_rect_world, world_camera, world_instances,
 };
 use crate::schedule::build_sim_schedule;
 use crate::setup::setup_run_with_seed;
@@ -292,7 +293,10 @@ impl App {
             schedule: build_sim_schedule(),
             accum: Duration::ZERO,
             cam,
-            gml_cam: GmlCamera { snap: true, ..Default::default() },
+            gml_cam: GmlCamera {
+                snap: true,
+                ..Default::default()
+            },
             was_transitioning: false,
             spiral,
             assets: None,
@@ -338,7 +342,7 @@ impl App {
             AtlasDesc {
                 size: ATLAS_SIZE,
                 max_pages: ATLAS_PAGES,
-            padding: 0,
+                padding: 0,
             },
         )
         .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -520,10 +524,7 @@ impl App {
     }
 
     fn maybe_rewarm_spiral(&mut self) {
-        let run = self
-            .sim
-            .world
-            .get_resource::<crate::comps_a::Run>();
+        let run = self.sim.world.get_resource::<crate::comps_a::Run>();
         let (area, seed) = run
             .map(|r| (r.area, r.gen_seed))
             .unwrap_or((AreaId::Desert, 0));
@@ -676,8 +677,7 @@ impl App {
         // do hover/clicks steer aim and fire; over menus the buttons
         // stage `UiAction`s instead (a bare viewport click does nothing
         // so it can never resume through a MENU/RETRY press).
-        let live_play =
-            state == AppState::InGame && !offer_open && !paused && !game_over;
+        let live_play = state == AppState::InGame && !offer_open && !paused && !game_over;
         let menu_open =
             state == AppState::InGame && (paused || overlay != OverlayMenu::None) && !game_over;
 
@@ -826,12 +826,7 @@ impl App {
 
     /// Build this frame's view: stage input, advance the sim, snapshot
     /// sim+render+vortex+HUD+menus into repose views.
-    pub fn view(
-        &mut self,
-        sched: &mut Scheduler,
-        _ctx: &RenderContext,
-        dt: Duration,
-    ) -> View {
+    pub fn view(&mut self, sched: &mut Scheduler, _ctx: &RenderContext, dt: Duration) -> View {
         request_frame();
         // Touch button zones read the viewport width (bevy
         // `window.width()`); shells must stage contacts in the same px
@@ -957,11 +952,7 @@ impl App {
             s.extend(fainted_bar_sprites(&mut self.sim.world, assets, view));
             // World crosshair + offscreen portal arrow (GML
             // `TopCont/Draw_0`, over the room, under the HUD text).
-            s.extend(crosshair_sprites(
-                &mut self.sim.world,
-                assets,
-                hud_dt,
-            ));
+            s.extend(crosshair_sprites(&mut self.sim.world, assets, hud_dt));
             s.extend(portal_indicator_sprites(
                 &mut self.sim.world,
                 assets,
@@ -988,10 +979,7 @@ impl App {
             // crown orbit + player hurt figures over the vortex
             // background, i.e. whenever the live-gameplay background is
             // off.
-            let live = state == AppState::InGame
-                && menu_kind.is_none()
-                && !paused
-                && !game_over;
+            let live = state == AppState::InGame && menu_kind.is_none() && !paused && !game_over;
             if !live {
                 s.extend(spiral_figures(
                     &mut self.sim.world,
@@ -1033,10 +1021,7 @@ impl App {
         // quad) mounted as the bottom layer, so the swirling portal
         // shows behind sprites in game and menus alike (pause/game
         // over dim it through the viewport overlay).
-        let bg_alpha = if state == AppState::InGame
-            && menu_kind.is_none()
-            && !paused
-            && !game_over
+        let bg_alpha = if state == AppState::InGame && menu_kind.is_none() && !paused && !game_over
         {
             1.0
         } else {
@@ -1098,8 +1083,7 @@ impl App {
         } else {
             Vec::new()
         };
-        let menu_rows =
-            menu_kind.map(|k| menu_gui_texts_dp(k, &mut self.sim.world, viewport_dp));
+        let menu_rows = menu_kind.map(|k| menu_gui_texts_dp(k, &mut self.sim.world, viewport_dp));
 
         // Viewport input snapshot (owned from here on; handlers below only
         // touch staged input through the raw pointer).
@@ -1134,8 +1118,7 @@ impl App {
                 // shape as the rozvp pilot runner).
                 let app = unsafe { &mut *app_ptr };
                 match ev {
-                    PickEvent::Press { world, screen }
-                    | PickEvent::Click { world, screen } => {
+                    PickEvent::Press { world, screen } | PickEvent::Click { world, screen } => {
                         app.stage_click(world, screen)
                     }
                     PickEvent::Hover { world } => app.hover = Some(world),
@@ -1156,8 +1139,9 @@ impl App {
                 // SAFETY: synchronous compose-time dispatch only.
                 let app = unsafe { &mut *app_ptr };
                 match ev {
-                    PickEvent::Press { world, screen }
-                    | PickEvent::Click { world, screen } => app.stage_click(world, screen),
+                    PickEvent::Press { world, screen } | PickEvent::Click { world, screen } => {
+                        app.stage_click(world, screen)
+                    }
                     PickEvent::Hover { world } => app.hover = Some(world),
                     PickEvent::TouchDown { id, screen } => {
                         app.touch_down(id, Vec2::new(screen[0], screen[1]))
@@ -1208,10 +1192,7 @@ impl App {
         // GML `scrLetterbox` (36 px bars): cinematic chrome over menus,
         // transitions, game over, and boss intros — but NOT the
         // campfire title (`Menu/Create_0`: `scrLetterbox(false, 0)`).
-        let live_now = state == AppState::InGame
-            && menu_kind.is_none()
-            && !paused
-            && !game_over;
+        let live_now = state == AppState::InGame && menu_kind.is_none() && !paused && !game_over;
         let boss_intro = self
             .sim
             .world
@@ -1261,10 +1242,7 @@ impl App {
                     .fill_max_height()
                     .hit_passthrough(),
             );
-            layers.push(
-                Column(Modifier::new().fill_max_size())
-                    .child(vec![bar(), spacer, bar()]),
-            );
+            layers.push(Column(Modifier::new().fill_max_size()).child(vec![bar(), spacer, bar()]));
         }
         if let Some(rows) = menu_rows {
             // Bevy `scrim` / game-over panel parity: Pause/Settings/
@@ -1318,8 +1296,8 @@ fn init_schedule_resources(world: &mut World) {
     use crate::combat::DeathEvents;
     use crate::comps_a::{
         CurrentFrame as CombatFrame, Euphoria, FloorMask, FloorStarted, HammerheadBudget,
-        HeavyHeart, LastDamageTaken, MutationChoice, OpenMind, Run, SaveDirty, ScarierFace,
-        Score, SelectedCharacter, Toast,
+        HeavyHeart, LastDamageTaken, MutationChoice, OpenMind, Run, SaveDirty, ScarierFace, Score,
+        SelectedCharacter, Toast,
     };
     use crate::comps_b::{
         FloorTransition, IdpdRaidState, LoopTransition, PortalCarriedWeapons, ThroneRoomState,
@@ -1410,10 +1388,7 @@ pub fn resolve_assets_dir() -> Option<PathBuf> {
         }
     }
     if let Ok(cwd) = std::env::current_dir() {
-        for cand in [
-            cwd.join("assets"),
-            cwd.join("../nt-recreated-bevy/assets"),
-        ] {
+        for cand in [cwd.join("assets"), cwd.join("../nt-recreated-bevy/assets")] {
             if has_catalog(&cand) {
                 return Some(cand);
             }
@@ -1462,7 +1437,13 @@ fn nearest_poi(world: &mut World, player: Vec2) -> Option<CamPoi> {
         for (p, _) in q.iter(world) {
             let d = player.distance(p.0);
             if best.is_none_or(|(bd, _)| d < bd) {
-                best = Some((d, CamPoi { pos: p.0, capped: true }));
+                best = Some((
+                    d,
+                    CamPoi {
+                        pos: p.0,
+                        capped: true,
+                    },
+                ));
             }
         }
     }
@@ -1474,7 +1455,13 @@ fn nearest_poi(world: &mut World, player: Vec2) -> Option<CamPoi> {
         for (p, _) in q.iter(world) {
             let d = player.distance(p.0);
             if best.is_none_or(|(bd, _)| d < bd) {
-                best = Some((d, CamPoi { pos: p.0, capped: false }));
+                best = Some((
+                    d,
+                    CamPoi {
+                        pos: p.0,
+                        capped: false,
+                    },
+                ));
             }
         }
     }
@@ -1483,7 +1470,13 @@ fn nearest_poi(world: &mut World, player: Vec2) -> Option<CamPoi> {
         for (p, _) in q.iter(world) {
             let d = player.distance(p.0);
             if best.is_none_or(|(bd, _)| d < bd) {
-                best = Some((d, CamPoi { pos: p.0, capped: false }));
+                best = Some((
+                    d,
+                    CamPoi {
+                        pos: p.0,
+                        capped: false,
+                    },
+                ));
             }
         }
     }
@@ -1579,10 +1572,7 @@ pub fn placeholder_instances(world: &mut World) -> Vec<SpriteInstance> {
 /// ([`gui_texts_dp`](crate::render::gui_texts_dp): GUI height 240,
 /// full live width). `LOW HP` blinks on the shell beat (GML
 /// `sin(wave)` gate over the `drawlowhp` hurt window).
-pub fn hud_overlay_lines(
-    world: &mut World,
-    canvas_dp: [f32; 2],
-) -> Vec<crate::render::GuiRow> {
+pub fn hud_overlay_lines(world: &mut World, canvas_dp: [f32; 2]) -> Vec<crate::render::GuiRow> {
     let blink = world
         .get_resource::<crate::SimTime>()
         .map(|t| (t.elapsed_secs * 12.0).sin() > 0.0)
@@ -1699,23 +1689,25 @@ fn route_menu_click(
     let confirm = world
         .get_resource::<MenuState>()
         .and_then(|m| m.pause_confirm);
-    menu_gui_texts_vw(kind, world, vw).into_iter().find_map(|t| {
-        let action = menu_button_action(kind, &t.text, confirm)?;
-        // Bevy `bigname_button_at` parity: every menu button owns a
-        // fixed 120x22 GUI box centered on its (gx, gy) (the dp text
-        // boxes are full-width alignment boxes and overlap, so they
-        // can never route). The pause columns and rows stay disjoint
-        // at this size.
-        const HW: f32 = 60.0;
-        const HH: f32 = 11.0;
-        let gx = dp[0] / k;
-        let gy = dp[1] / k;
-        if (gx - t.gx).abs() <= HW && (gy - t.gy).abs() <= HH {
-            Some(action)
-        } else {
-            None
-        }
-    })
+    menu_gui_texts_vw(kind, world, vw)
+        .into_iter()
+        .find_map(|t| {
+            let action = menu_button_action(kind, &t.text, confirm)?;
+            // Bevy `bigname_button_at` parity: every menu button owns a
+            // fixed 120x22 GUI box centered on its (gx, gy) (the dp text
+            // boxes are full-width alignment boxes and overlap, so they
+            // can never route). The pause columns and rows stay disjoint
+            // at this size.
+            const HW: f32 = 60.0;
+            const HH: f32 = 11.0;
+            let gx = dp[0] / k;
+            let gy = dp[1] / k;
+            if (gx - t.gx).abs() <= HW && (gy - t.gy).abs() <= HH {
+                Some(action)
+            } else {
+                None
+            }
+        })
 }
 
 /// Menu overlay selection from state (pure view-model; priority:
@@ -1776,12 +1768,7 @@ pub fn menu_overlay_lines(kind: MenuOverlay, world: &mut World) -> Vec<String> {
 
 /// Root view: playable game view (sim + render + vortex + HUD + menus).
 /// Thin wrapper over [`App::view`] so `main.rs` stays trivial.
-pub fn root_view(
-    sched: &mut Scheduler,
-    ctx: &RenderContext,
-    app: &mut App,
-    dt: Duration,
-) -> View {
+pub fn root_view(sched: &mut Scheduler, ctx: &RenderContext, app: &mut App, dt: Duration) -> View {
     app.view(sched, ctx, dt)
 }
 
@@ -1795,9 +1782,7 @@ mod tests {
         // Probe: logo reel frames, glow, and spiral strips must all
         // resolve UVs in the full production catalog.
         let home = std::env::var("HOME").unwrap_or_default();
-        let dir = std::path::PathBuf::from(format!(
-            "{home}/Documents/nt-recreated-bevy/assets"
-        ));
+        let dir = std::path::PathBuf::from(format!("{home}/Documents/nt-recreated-bevy/assets"));
         let mut app = App::new_with_seed(0x109001);
         app.load_assets_from(&dir).expect("app assets load");
         let assets = app.assets.as_ref().expect("assets");
@@ -1862,11 +1847,12 @@ mod tests {
         // End-to-end boot with art: splash reel → logo menu, sprites
         // on screen the whole way (GML boot flow).
         let home = std::env::var("HOME").unwrap_or_default();
-        let dir = std::path::PathBuf::from(format!(
-            "{home}/Documents/nt-recreated-bevy/assets"
-        ));
+        let dir = std::path::PathBuf::from(format!("{home}/Documents/nt-recreated-bevy/assets"));
         let mut app = App::new();
         app.load_assets_from(&dir).expect("app assets load");
+        app.sim
+            .world
+            .insert_resource(crate::state::SplashAutoAdvance(true));
         let mut sched = Scheduler::new();
         sched.size = (1280, 720);
         let ctx = RenderContext::new();
@@ -1881,14 +1867,8 @@ mod tests {
                 break;
             }
         }
-        assert_eq!(
-            *app.sim.world.resource::<AppState>(),
-            AppState::MainMenu
-        );
-        assert!(
-            app.last_sprite_count() > 0,
-            "menu art reaches the batch"
-        );
+        assert_eq!(*app.sim.world.resource::<AppState>(), AppState::MainMenu);
+        assert!(app.last_sprite_count() > 0, "menu art reaches the batch");
     }
 
     #[test]
@@ -2003,15 +1983,19 @@ mod tests {
         // Bevy `char_text_layer` reads the SELECTED race (not the pod
         // cursor): FISH then ROBOT with passive/active rows.
         let mut app = App::new_with_seed(1);
-        app.sim.world.resource_mut::<crate::comps_a::SelectedCharacter>().0 =
-            crate::data::RaceId::Fish;
+        app.sim
+            .world
+            .resource_mut::<crate::comps_a::SelectedCharacter>()
+            .0 = crate::data::RaceId::Fish;
         let lines = menu_overlay_lines(MenuOverlay::Title, &mut app.sim.world);
         assert_eq!(lines[0], "FISH");
         // GML `scrCampfireMenuDrawCharText`: raw passive/active lines.
         assert!(lines.iter().any(|l| l.contains("Kills drop extra ammo")));
         assert!(lines.iter().any(|l| l == "Flip"));
-        app.sim.world.resource_mut::<crate::comps_a::SelectedCharacter>().0 =
-            crate::data::RaceId::Robot;
+        app.sim
+            .world
+            .resource_mut::<crate::comps_a::SelectedCharacter>()
+            .0 = crate::data::RaceId::Robot;
         let lines = menu_overlay_lines(MenuOverlay::Title, &mut app.sim.world);
         assert_eq!(lines[0], "ROBOT");
     }
@@ -2299,7 +2283,8 @@ mod tests {
     }
 
     #[test]
-    fn camera_snaps_on_first_fixed_tick() {        // Boot parity (`force_snap_camera_position`): the first sim
+    fn camera_snaps_on_first_fixed_tick() {
+        // Boot parity (`force_snap_camera_position`): the first sim
         // tick snaps the look point onto the player, no view needed.
         let mut app = App::new_with_seed(0xC0FFEE);
         assert!(app.gml_cam.snap);
@@ -2319,16 +2304,10 @@ mod tests {
     fn camera_fit_extent_is_viewport_in_dp() {
         // The bevy zoom lives in the camera (`units_per_pixel`), not the
         // extent: pre-scaling here would apply NT_CAM_SCALE twice.
-        assert_eq!(
-            camera_fit_extent([1280.0, 720.0], 1.0),
-            [1280.0, 720.0]
-        );
+        assert_eq!(camera_fit_extent([1280.0, 720.0], 1.0), [1280.0, 720.0]);
         // HiDPI: physical px collapse back to dp, so the visible world
         // stays 1280x720 * 0.45 whatever the scale.
-        assert_eq!(
-            camera_fit_extent([1600.0, 900.0], 1.25),
-            [1280.0, 720.0]
-        );
+        assert_eq!(camera_fit_extent([1600.0, 900.0], 1.25), [1280.0, 720.0]);
         // Degenerate density falls back to 1.0, never div-by-zero.
         assert_eq!(camera_fit_extent([800.0, 600.0], 0.0), [800.0, 600.0]);
     }
@@ -2355,10 +2334,7 @@ mod tests {
         // Still there next tick (continuous tracking, not an edge).
         app.feed_input();
         let input = app.sim.world.resource::<NtInput>();
-        assert!(
-            input.aim_axis.x < -0.9,
-            "aim tracks the cursor every frame"
-        );
+        assert!(input.aim_axis.x < -0.9, "aim tracks the cursor every frame");
     }
 
     #[test]
@@ -2407,7 +2383,12 @@ mod tests {
         let mut sched = Scheduler::new();
         sched.size = (1280, 720);
         let ctx = RenderContext::new();
-        let _view = root_view(&mut sched, &ctx, &mut app, Duration::from_secs_f64(1.0 / 30.0));
+        let _view = root_view(
+            &mut sched,
+            &ctx,
+            &mut app,
+            Duration::from_secs_f64(1.0 / 30.0),
+        );
         assert!(
             app.last_sprite_count() > 0,
             "placeholder sprites reach the batch"
@@ -2416,7 +2397,12 @@ mod tests {
         // Paused: menus take over, vortex bg drops.
         app.sim.world.resource_mut::<crate::state::Paused>().0 = true;
         *app.sim.world.resource_mut::<OverlayMenu>() = OverlayMenu::Pause;
-        let _view = root_view(&mut sched, &ctx, &mut app, Duration::from_secs_f64(1.0 / 30.0));
+        let _view = root_view(
+            &mut sched,
+            &ctx,
+            &mut app,
+            Duration::from_secs_f64(1.0 / 30.0),
+        );
         assert_eq!(app.last_bg_alpha(), 0.0, "menus dim the vortex bg");
     }
 }

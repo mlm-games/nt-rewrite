@@ -26,14 +26,15 @@
 use bevy_ecs::prelude::*;
 use rand::RngExt;
 use repame_anim::AnimCatalog;
+use repame_fx::{DamageNumber, Particle};
 
 use crate::anim::PlayerAnim;
 use crate::comps_a::{
-    ARENA_H, ARENA_W, AimDir, CrownState, FireCooldown, FloorMask, FloorStarted, GameCleanup,
-    Health, Hitbox, Inventory, LevelCleanup, MutationChoice, NextHurt, OpenMind, Euphoria,
-    HeavyHeart, Player, RaceState, Run, SaveDirty, ScarierFace, Score, SelectedCharacter, Team,
-    Toast, Velocity, WallCell, WallTile, MAX_AMMO_TYPES, MAX_WEAPON_SLOTS, PLAYER_BASE_SPEED,
-    PLAYER_RADIUS,
+    ARENA_H, ARENA_W, AimDir, CrownState, Euphoria, FireCooldown, FloorMask, FloorStarted,
+    GameCleanup, Health, HeavyHeart, Hitbox, Inventory, LevelCleanup, MAX_AMMO_TYPES,
+    MAX_WEAPON_SLOTS, MutationChoice, NextHurt, OpenMind, PLAYER_BASE_SPEED, PLAYER_RADIUS, Player,
+    RaceState, Run, SaveDirty, ScarierFace, Score, SelectedCharacter, Team, Toast, Velocity,
+    WallCell, WallTile,
 };
 use crate::comps_b::{
     BigGenerator, BloodFlower, ChestKind, CrownPedestal, Enemy, GoldBarrelDrop, GoldCar,
@@ -43,8 +44,8 @@ use crate::comps_b::{
 };
 use crate::crown::{apply_crown_to_spawn, crown_name_for_toast};
 use crate::data::{
-    AmmoKind, AreaId, CrownKind, EnemyKind, RaceId, SecretTarget, SkinLetter, WeaponId,
-    WEAPON_REVOLVER, area_for_floor, resolve_start_weapon,
+    AmmoKind, AreaId, CrownKind, EnemyKind, RaceId, SecretTarget, SkinLetter, WEAPON_REVOLVER,
+    WeaponId, area_for_floor, resolve_start_weapon,
 };
 use crate::enemies::{difficulty_multiplier, spawn_enemy_at};
 use crate::enemy_data::enemy_def;
@@ -74,11 +75,13 @@ pub fn build_floor_mask(plan: &LevelPlan) -> FloorMask {
 /// Player spawn with default Fish stats (kept byte-identical: the
 /// enemy-phase test dummies use this as a targeting stand-in).
 /// Loadout-driven spawns go through `spawn_player_loaded`.
+/// Tag is `GameCleanup` only (bevy parity): the player survives portal
+/// floor swaps (`tick_portal_suck` despawns `LevelCleanup`) and dies
+/// with the run (`teardown_game` despawns `GameCleanup`).
 pub fn spawn_player(commands: &mut Commands, pos: glam::Vec2) -> Entity {
     commands
         .spawn((
             GameCleanup,
-            LevelCleanup,
             Player::default(),
             Team::Player,
             Pos(pos),
@@ -280,11 +283,7 @@ pub fn build_player_bundle(race: RaceId, loadout: &RunLoadout) -> PlayerBundle {
         pickup_range: def.pickup_range,
         fire_rate_mult,
 
-        spread_mult: if race == RaceId::Steroids {
-            1.8
-        } else {
-            1.0
-        },
+        spread_mult: if race == RaceId::Steroids { 1.8 } else { 1.0 },
         chain_explosions: def.passive == PassiveKind::ChainExplosions,
         shield_on_hit: def.passive == PassiveKind::ShieldOnHit,
         ability: def.ability,
@@ -348,7 +347,8 @@ pub fn build_player_bundle(race: RaceId, loadout: &RunLoadout) -> PlayerBundle {
 }
 
 /// Spawn a loadout-built player (tags + aim + position; shared by
-/// `setup_run` so spawn code is not duplicated).
+/// `setup_run` so spawn code is not duplicated). `GameCleanup` only —
+/// same portal-survival reason as [`spawn_player`].
 pub fn spawn_player_loaded(
     commands: &mut Commands,
     pos: glam::Vec2,
@@ -357,7 +357,6 @@ pub fn spawn_player_loaded(
     commands
         .spawn((
             GameCleanup,
-            LevelCleanup,
             bundle.player,
             bundle.race_state,
             bundle.inv,
@@ -388,6 +387,23 @@ pub fn setup_run(world: &mut World) {
 
 /// Deterministic `setup_run` (tests pin the floor seed).
 pub fn setup_run_with_seed(world: &mut World, seed: u64) {
+    {
+        let stale: Vec<Entity> = world
+            .query_filtered::<Entity, Or<(With<GameCleanup>, With<LevelCleanup>)>>()
+            .iter(world)
+            .collect();
+        for e in stale {
+            world.despawn(e);
+        }
+        let floaters: Vec<Entity> = world
+            .query_filtered::<Entity, Or<(With<DamageNumber>, With<Particle>)>>()
+            .iter(world)
+            .collect();
+        for e in floaters {
+            world.despawn(e);
+        }
+    }
+
     world.init_resource::<Score>();
     world.init_resource::<Run>();
     world.init_resource::<FloorMask>();
@@ -422,6 +438,8 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
 
     world.remove_resource::<crate::comps_a::PendingMutation>();
     world.remove_resource::<crate::comps_a::PendingUltra>();
+    world.insert_resource(crate::comps_b::FloorTransition::default());
+    world.resource_mut::<Queue<FloorStarted>>().drain();
 
     {
         world.resource_mut::<Score>().0 = 0;
@@ -477,9 +495,9 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
         // setup; the ambience duck keys off its presence). Streams roll
         // from the run seed so equal seeds snapshot identically.
         let area = world.resource::<Run>().area;
-        world.insert_resource(
-            crate::vortex::SpiralCtl::warmed_up_for_area_seeded(area, seed),
-        );
+        world.insert_resource(crate::vortex::SpiralCtl::warmed_up_for_area_seeded(
+            area, seed,
+        ));
     }
 
     let race = world.resource::<SelectedCharacter>().0;
@@ -489,10 +507,7 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
 
     spawn_player_loaded(
         &mut world.commands(),
-        glam::Vec2::new(
-            crate::comps_a::TILE * 0.5,
-            crate::comps_a::TILE * 0.5,
-        ),
+        glam::Vec2::new(crate::comps_a::TILE * 0.5, crate::comps_a::TILE * 0.5),
         bundle,
     );
     // `World::commands` only queues: flush so the player exists before
@@ -519,16 +534,17 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
     world.flush();
     world.insert_resource(run);
 
-    world.resource_mut::<Queue<FloorStarted>>().push(FloorStarted {
-        floor: 1,
-        area: area_for_floor(1, 0),
-    });
+    world
+        .resource_mut::<Queue<FloorStarted>>()
+        .push(FloorStarted {
+            floor: 1,
+            area: area_for_floor(1, 0),
+        });
 
     if loadout.crown != CrownKind::None {
-        world.resource_mut::<Toast>().show(&format!(
-            "{} equipped",
-            crown_name_for_toast(loadout.crown)
-        ));
+        world
+            .resource_mut::<Toast>()
+            .show(&format!("{} equipped", crown_name_for_toast(loadout.crown)));
     }
 }
 
@@ -570,7 +586,7 @@ pub fn empty_anim_catalog() -> repame_anim::AnimCatalog {
         repame_anim::AtlasDesc {
             size: 128,
             max_pages: 1,
-        padding: 0,
+            padding: 0,
         },
     )
     .expect("empty catalog parses")
@@ -631,10 +647,7 @@ fn prop_candidates(kind: PropKind) -> &'static [&'static str] {
 
 /// Ordinary-prop combat stats: (collision size, hp, legacy explosive,
 /// death effect). Bevy `spawn_prop` table verbatim, art columns dropped.
-fn prop_stats(
-    kind: PropKind,
-    loop_count: u32,
-) -> (f32, i32, bool, Option<PropDeathEffect>) {
+fn prop_stats(kind: PropKind, loop_count: u32) -> (f32, i32, bool, Option<PropDeathEffect>) {
     match kind {
         PropKind::Cactus | PropKind::NightCactus => (24.0, 2, false, None),
         PropKind::BigSkull => (32.0, 50, false, None),
@@ -666,16 +679,13 @@ fn prop_stats(
         PropKind::BigFlower => (24.0, 8, false, None),
         PropKind::PizzaBox => (22.0, 4, false, None),
         PropKind::PlantPot => (20.0, 3, false, None),
-        PropKind::BigGenerator => (
-            40.0,
-            if loop_count == 0 { 230 } else { 50 },
-            false,
-            None,
-        ),
+        PropKind::BigGenerator => (40.0, if loop_count == 0 { 230 } else { 50 }, false, None),
         PropKind::ThroneStatue => (32.0, 1000, false, None),
-        PropKind::GroundDecal | PropKind::Cobweb | PropKind::IcePatch | PropKind::FireTrap | PropKind::Mine => {
-            (0.0, 9_999, false, None)
-        }
+        PropKind::GroundDecal
+        | PropKind::Cobweb
+        | PropKind::IcePatch
+        | PropKind::FireTrap
+        | PropKind::Mine => (0.0, 9_999, false, None),
     }
 }
 
@@ -798,11 +808,7 @@ pub fn spawn_prop_sim(
             // Bevy FireTrap arm verbatim: hazard entity (which carries
             // the hazard pulse via `spawn_environment_hazard`) plus the
             // 32px fire visual with the same fire tint.
-            let e = spawn_environment_hazard(
-                commands,
-                pos,
-                EnvironmentHazardSpec::fire_trap(),
-            );
+            let e = spawn_environment_hazard(commands, pos, EnvironmentHazardSpec::fire_trap());
             commands.entity(e).insert(PulseSprite {
                 path: pick_first_present(
                     catalog,
@@ -939,11 +945,7 @@ pub fn spawn_prop_sim(
 /// Rad chest container (bevy `spawn_rad_container` sim half: destructible
 /// prop + container marker; opening logic lives in
 /// `tick_rad_container_contact`'s port phase).
-pub fn spawn_rad_container(
-    commands: &mut Commands,
-    seed: u64,
-    pos: glam::Vec2,
-) -> Entity {
+pub fn spawn_rad_container(commands: &mut Commands, seed: u64, pos: glam::Vec2) -> Entity {
     let idle_path: &'static str = "images/sprRadChest.png";
     commands
         .spawn((
@@ -978,17 +980,19 @@ pub fn spawn_secret_entrances(
     run: &Run,
 ) {
     let slot: Option<(SecretTarget, glam::Vec2, f32)> = match (run.area, run.floor_in_area) {
-        (AreaId::Sewers, _) => Some((SecretTarget::PizzaSewers, glam::Vec2::new(220.0, -120.0), 28.0)),
+        (AreaId::Sewers, _) => Some((
+            SecretTarget::PizzaSewers,
+            glam::Vec2::new(220.0, -120.0),
+            28.0,
+        )),
         (AreaId::Desert, 2) | (AreaId::Scrapyards, 2) | (AreaId::FrozenCity, 2) => Some((
             SecretTarget::CrownVault,
             glam::Vec2::new(-240.0, 160.0),
             34.0,
         )),
-        (AreaId::Scrapyards, 1) => Some((
-            SecretTarget::YvMansion,
-            glam::Vec2::new(260.0, 140.0),
-            36.0,
-        )),
+        (AreaId::Scrapyards, 1) => {
+            Some((SecretTarget::YvMansion, glam::Vec2::new(260.0, 140.0), 36.0))
+        }
         (AreaId::FrozenCity, 1) => {
             Some((SecretTarget::Jungle, glam::Vec2::new(-260.0, -140.0), 30.0))
         }
@@ -997,10 +1001,7 @@ pub fn spawn_secret_entrances(
     let Some((target, pos, size)) = slot else {
         return;
     };
-    let hp = if matches!(
-        target,
-        SecretTarget::CrownVault | SecretTarget::Vault
-    ) {
+    let hp = if matches!(target, SecretTarget::CrownVault | SecretTarget::Vault) {
         120 + run.loop_count as i32 * 12
     } else {
         6
@@ -1121,9 +1122,7 @@ pub fn spawn_level(
         match *chest {
             // GML `scrPopChests` cursed-caves arm: every WeaponChest
             // becomes a CursedBigChest plus a `PortalClear`.
-            ChestSpawn::Weapon(p)
-                if run.area == AreaId::CursedCaves =>
-            {
+            ChestSpawn::Weapon(p) if run.area == AreaId::CursedCaves => {
                 spawn_chest(commands, catalog, ChestKind::CursedBig, p);
                 commands.spawn((
                     GameCleanup,
@@ -1198,7 +1197,16 @@ pub fn spawn_level(
                     EnemyKind::Hyper => glam::Vec2::new(0.0, 0.0),
                     _ => glam::Vec2::new(320.0, -160.0),
                 };
-                spawn_enemy_at(commands, catalog, other, pos, difficulty, false, false, run.loop_count);
+                spawn_enemy_at(
+                    commands,
+                    catalog,
+                    other,
+                    pos,
+                    difficulty,
+                    false,
+                    false,
+                    run.loop_count,
+                );
             }
         }
     }
@@ -1287,7 +1295,7 @@ mod tests {
             repame_anim::AtlasDesc {
                 size: 128,
                 max_pages: 1,
-            padding: 0,
+                padding: 0,
             },
         )
         .unwrap()
@@ -1314,7 +1322,10 @@ mod tests {
             .unwrap();
         assert_eq!(zone.half_size, glam::Vec2::splat(18.0));
         assert!((pulse.phase - 1.7).abs() < 1e-4, "got {}", pulse.phase);
-        assert_eq!((pulse.speed, pulse.min_alpha, pulse.max_alpha), (1.8, 0.55, 0.86));
+        assert_eq!(
+            (pulse.speed, pulse.min_alpha, pulse.max_alpha),
+            (1.8, 0.55, 0.86)
+        );
         assert_eq!((vis.size, vis.path), (36.0, None));
         assert_eq!(vis.tint, [0.78, 0.78, 0.72, 0.62]);
         let _ = pos;
@@ -1341,13 +1352,33 @@ mod tests {
         // Mine + torch throbs ride the prop entities.
         let mut world = bevy_ecs::prelude::World::new();
         let mut cmds = world.commands();
-        let mine = spawn_prop_sim(&mut cmds, &catalog, &run, PropKind::Mine, glam::Vec2::new(0.0, 100.0));
-        let torch = spawn_prop_sim(&mut cmds, &catalog, &run, PropKind::Torch, glam::Vec2::new(10.0, 20.0));
+        let mine = spawn_prop_sim(
+            &mut cmds,
+            &catalog,
+            &run,
+            PropKind::Mine,
+            glam::Vec2::new(0.0, 100.0),
+        );
+        let torch = spawn_prop_sim(
+            &mut cmds,
+            &catalog,
+            &run,
+            PropKind::Torch,
+            glam::Vec2::new(10.0, 20.0),
+        );
         world.flush();
         let mine_pulse = world.get::<SurfacePulse>(mine.unwrap()).unwrap();
-        assert!((mine_pulse.phase - 1.9).abs() < 1e-4, "got {}", mine_pulse.phase);
+        assert!(
+            (mine_pulse.phase - 1.9).abs() < 1e-4,
+            "got {}",
+            mine_pulse.phase
+        );
         let torch_pulse = world.get::<SurfacePulse>(torch.unwrap()).unwrap();
-        assert!((torch_pulse.phase - 0.5).abs() < 1e-4, "got {}", torch_pulse.phase);
+        assert!(
+            (torch_pulse.phase - 0.5).abs() < 1e-4,
+            "got {}",
+            torch_pulse.phase
+        );
         let _ = hazard;
     }
 
@@ -1356,7 +1387,10 @@ mod tests {
         let mut world = bevy_ecs::prelude::World::new();
         setup_run_with_seed(&mut world, 0x1234_5678);
 
-        assert_eq!(world.resource::<crate::state::AppState>(), &crate::state::AppState::InGame);
+        assert_eq!(
+            world.resource::<crate::state::AppState>(),
+            &crate::state::AppState::InGame
+        );
         assert_eq!(world.resource::<Score>().0, 0);
         assert!(!world.resource::<SaveDirty>().0);
         assert!(!world.resource::<crate::state::Paused>().0);
@@ -1390,8 +1424,16 @@ mod tests {
         // No crown: no toast.
         assert!(world.resource::<Toast>().text.is_empty());
         // Mutation-flag resources reset.
-        assert!(world.get_resource::<crate::comps_a::PendingMutation>().is_none());
-        assert!(world.get_resource::<crate::comps_a::PendingUltra>().is_none());
+        assert!(
+            world
+                .get_resource::<crate::comps_a::PendingMutation>()
+                .is_none()
+        );
+        assert!(
+            world
+                .get_resource::<crate::comps_a::PendingUltra>()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1434,10 +1476,7 @@ mod tests {
         // Destiny fills the empty stored slot + owes a mutation pick.
         assert_eq!(inv.weapons[1], WeaponId::ASSAULT_RIFLE);
         assert_eq!(player.mutation_picks_owed, 1);
-        assert_eq!(
-            world.resource::<Toast>().text,
-            "Crown of Destiny equipped"
-        );
+        assert_eq!(world.resource::<Toast>().text, "Crown of Destiny equipped");
     }
 
     #[test]
@@ -1538,11 +1577,9 @@ mod tests {
         setup_run_with_seed(&mut world, 1);
         world.resource_mut::<DeferredFloorGen>().0 = true;
         let mut sched = bevy_ecs::schedule::Schedule::default();
-        sched.add_systems(
-            |mut commands: Commands, run: Res<Run>| {
-                try_start_pending_floor_gen(&mut commands, &run);
-            },
-        );
+        sched.add_systems(|mut commands: Commands, run: Res<Run>| {
+            try_start_pending_floor_gen(&mut commands, &run);
+        });
         sched.run(&mut world);
         assert!(
             world
@@ -1611,7 +1648,11 @@ mod tests {
                 .get_resource::<FloorTransition>()
                 .is_some_and(|t| t.active)
         );
-        assert!(world.get_resource::<crate::comps_a::PendingMutation>().is_none());
+        assert!(
+            world
+                .get_resource::<crate::comps_a::PendingMutation>()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1635,17 +1676,11 @@ mod tests {
             expected_walls.insert((wx as i32, wy as i32));
         }
         assert_eq!(
-            world
-                .query::<(&WallTile, &WallCell)>()
-                .iter(&world)
-                .count(),
+            world.query::<(&WallTile, &WallCell)>().iter(&world).count(),
             expected_walls.len()
         );
         // Enemies + props landed as sim entities.
-        assert!(
-            world.query::<&crate::comps_b::Enemy>().iter(&world).count()
-                >= plan.enemies.len()
-        );
+        assert!(world.query::<&crate::comps_b::Enemy>().iter(&world).count() >= plan.enemies.len());
         let sim_props = plan
             .props
             .iter()
@@ -1656,14 +1691,53 @@ mod tests {
                 )
             })
             .count();
-        let spawned_props = world
-            .query::<&PropSprites>()
-            .iter(&world)
-            .count();
+        let spawned_props = world.query::<&PropSprites>().iter(&world).count();
         assert!(
             spawned_props >= sim_props,
             "props spawned ({spawned_props}) cover plan props ({sim_props})"
         );
+    }
+
+    /// Retry/new-game parity (bevy `OnExit(InGame) -> teardown_game`):
+    /// a second `setup_run` must replace the previous run, not pile onto
+    /// it — otherwise old walls/props render as stray geometry outside
+    /// the new floor. The player also stays exactly one entity and must
+    /// not carry `LevelCleanup` (portal suck despawns those; the player
+    /// rides out floor swaps and dies with the run via `GameCleanup`).
+    #[test]
+    fn setup_run_replaces_previous_run_without_leftovers() {
+        let mut world = bevy_ecs::prelude::World::new();
+        setup_run_with_seed(&mut world, 0x1234_5678);
+        let walls_first = world.query::<(&WallTile, &WallCell)>().iter(&world).count();
+        assert!(walls_first > 0);
+
+        setup_run_with_seed(&mut world, 0x9ABC_DEF0);
+
+        let players: Vec<Entity> = world
+            .query_filtered::<Entity, With<Player>>()
+            .iter(&world)
+            .collect();
+        assert_eq!(players.len(), 1, "retry must not duplicate the player");
+        assert!(world.get::<GameCleanup>(players[0]).is_some());
+        assert!(
+            world.get::<LevelCleanup>(players[0]).is_none(),
+            "player must survive portal-suck level wipes"
+        );
+
+        let mut fresh = bevy_ecs::prelude::World::new();
+        setup_run_with_seed(&mut fresh, 0x9ABC_DEF0);
+        let walls_fresh = fresh.query::<(&WallTile, &WallCell)>().iter(&fresh).count();
+        let walls_second = world.query::<(&WallTile, &WallCell)>().iter(&world).count();
+        assert_eq!(
+            walls_second, walls_fresh,
+            "stale walls survived the retry ({walls_second} vs clean {walls_fresh})"
+        );
+        assert_eq!(
+            world.resource::<FloorMask>().cells,
+            fresh.resource::<FloorMask>().cells
+        );
+        assert_eq!(world.resource::<Queue<FloorStarted>>().len(), 1);
+        assert!(!world.resource::<crate::comps_b::FloorTransition>().active);
     }
 
     #[test]

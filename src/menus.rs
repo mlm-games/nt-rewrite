@@ -61,8 +61,7 @@ use crate::audio::{
     race_select_sfx, skin_select_sfx, ui_action_sfx, ui_action_to_cue,
 };
 use crate::comps_a::{
-    MutationChoice, PendingMutation, PendingUltra, Player, Run, SaveDirty, Score,
-    SelectedCharacter,
+    MutationChoice, PendingMutation, PendingUltra, Player, Run, SaveDirty, Score, SelectedCharacter,
 };
 use crate::data::{CrownKind, RaceId};
 use crate::input::NtInput;
@@ -98,7 +97,10 @@ pub const CHAR_SELECT_ORDER: [RaceId; 17] = [
 
 /// Bevy `race_from_gml_id` verbatim over the headless roster.
 pub fn race_from_gml_id(id: usize) -> Option<RaceId> {
-    CHAR_SELECT_ORDER.iter().copied().find(|r| *r as usize == id)
+    CHAR_SELECT_ORDER
+        .iter()
+        .copied()
+        .find(|r| *r as usize == id)
 }
 
 /// Crown port id (`CrownKind` discriminant).
@@ -174,8 +176,14 @@ pub fn capture_game_over(world: &mut World) -> Option<GameOverScreen> {
         loop_count: run.loop_count,
         total_kills: run.total_kills,
         score: world.get_resource::<Score>().map(|s| s.0).unwrap_or(0),
-        high_score: world.get_resource::<SaveData>().map(|s| s.high_score).unwrap_or(0),
-        best_floor: world.get_resource::<SaveData>().map(|s| s.best_floor).unwrap_or(0),
+        high_score: world
+            .get_resource::<SaveData>()
+            .map(|s| s.high_score)
+            .unwrap_or(0),
+        best_floor: world
+            .get_resource::<SaveData>()
+            .map(|s| s.best_floor)
+            .unwrap_or(0),
         mutation_count: world
             .query::<&Player>()
             .iter(world)
@@ -391,8 +399,10 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                     *overlay = OverlayMenu::None;
                     drop(overlay);
                     world.init_resource::<PendingUnpause>();
-                    world.resource_mut::<PendingUnpause>().0 =
-                        Some(GTimer::from_seconds(crate::state::UNPAUSE_DELAY_SECS, TimerMode::Once));
+                    world.resource_mut::<PendingUnpause>().0 = Some(GTimer::from_seconds(
+                        crate::state::UNPAUSE_DELAY_SECS,
+                        TimerMode::Once,
+                    ));
                 }
                 _ => {
                     *overlay = OverlayMenu::None;
@@ -404,8 +414,10 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             world.init_resource::<OverlayMenu>();
             *world.resource_mut::<OverlayMenu>() = OverlayMenu::None;
             world.init_resource::<PendingUnpause>();
-            world.resource_mut::<PendingUnpause>().0 =
-                Some(GTimer::from_seconds(crate::state::UNPAUSE_DELAY_SECS, TimerMode::Once));
+            world.resource_mut::<PendingUnpause>().0 = Some(GTimer::from_seconds(
+                crate::state::UNPAUSE_DELAY_SECS,
+                TimerMode::Once,
+            ));
             if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
                 menu.pause_confirm = None;
             }
@@ -459,8 +471,11 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             world.init_resource::<crate::state::Paused>();
             let paused = world.resource::<crate::state::Paused>().0;
             world.init_resource::<OverlayMenu>();
-            *world.resource_mut::<OverlayMenu>() =
-                if paused { OverlayMenu::Pause } else { OverlayMenu::None };
+            *world.resource_mut::<OverlayMenu>() = if paused {
+                OverlayMenu::Pause
+            } else {
+                OverlayMenu::None
+            };
             emit_cue(world, &UiAction::SaveSettings);
         }
         UiAction::NextLanguage => {
@@ -514,9 +529,10 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 world.init_resource::<crate::state::Paused>();
                 let paused = world.resource::<crate::state::Paused>().0;
                 world.init_resource::<OverlayMenu>();
-                let paused_overlay =
-                    matches!(*world.resource::<OverlayMenu>(), OverlayMenu::Settings | OverlayMenu::Credits)
-                        && paused;
+                let paused_overlay = matches!(
+                    *world.resource::<OverlayMenu>(),
+                    OverlayMenu::Settings | OverlayMenu::Credits
+                ) && paused;
                 if paused_overlay {
                     *world.resource_mut::<OverlayMenu>() = OverlayMenu::Pause;
                 } else {
@@ -597,12 +613,19 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 return;
             }
             world.init_resource::<SaveData>();
-            let already = world.resource::<SaveData>().race_loadout(race).preferred_skin == s;
+            let already = world
+                .resource::<SaveData>()
+                .race_loadout(race)
+                .preferred_skin
+                == s;
             if already {
                 return;
             }
             if world.resource::<SaveData>().skin_unlocked(race, s) {
-                world.resource_mut::<SaveData>().race_loadout_mut(race).preferred_skin = s;
+                world
+                    .resource_mut::<SaveData>()
+                    .race_loadout_mut(race)
+                    .preferred_skin = s;
                 mark_dirty(world);
                 emit_sfx(world, skin_select_sfx(s));
                 emit_cue(world, &UiAction::SelectSkin(s));
@@ -672,7 +695,10 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                     break;
                 }
             }
-            world.resource_mut::<SaveData>().race_loadout_mut(race).start_crown = next;
+            world
+                .resource_mut::<SaveData>()
+                .race_loadout_mut(race)
+                .start_crown = next;
             mark_dirty(world);
             emit_cue(world, &UiAction::CycleCrown(dir));
         }
@@ -689,8 +715,10 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 return;
             }
             if world.resource::<SaveData>().crown_unlocked(race, crown_id) {
-                world.resource_mut::<SaveData>().race_loadout_mut(race).start_crown =
-                    crown_gml_to_port(crown_id);
+                world
+                    .resource_mut::<SaveData>()
+                    .race_loadout_mut(race)
+                    .start_crown = crown_gml_to_port(crown_id);
                 mark_dirty(world);
                 emit_sfx(world, crown_select_sfx());
                 emit_cue(world, &UiAction::SelectCrown(crown_id));
@@ -971,8 +999,7 @@ fn tick_title_input(world: &mut World) {
     if cycle != 0 {
         if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
             let len = CHAR_SELECT_ORDER.len() as i16;
-            menu.title_cursor =
-                (menu.title_cursor as i16 + cycle as i16).rem_euclid(len) as usize;
+            menu.title_cursor = (menu.title_cursor as i16 + cycle as i16).rem_euclid(len) as usize;
         }
     }
     if let Some(slot) = slot {
@@ -1007,12 +1034,18 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
         let has_ultra = world.get_resource::<PendingUltra>().is_some();
         let (count, is_ultra) = if has_ultra {
             (
-                world.get_resource::<PendingUltra>().map(|p| p.choices.len()).unwrap_or(0),
+                world
+                    .get_resource::<PendingUltra>()
+                    .map(|p| p.choices.len())
+                    .unwrap_or(0),
                 true,
             )
         } else if has_pending {
             (
-                world.get_resource::<PendingMutation>().map(|p| p.choices.len()).unwrap_or(0),
+                world
+                    .get_resource::<PendingMutation>()
+                    .map(|p| p.choices.len())
+                    .unwrap_or(0),
                 false,
             )
         } else {
@@ -1039,9 +1072,13 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
         world.init_resource::<OverlayMenu>();
         world.init_resource::<PendingUnpause>();
         world.init_resource::<MenuState>();
-        let mut paused = world.remove_resource::<crate::state::Paused>().unwrap_or_default();
+        let mut paused = world
+            .remove_resource::<crate::state::Paused>()
+            .unwrap_or_default();
         let mut overlay = world.remove_resource::<OverlayMenu>().unwrap_or_default();
-        let mut pending = world.remove_resource::<PendingUnpause>().unwrap_or_default();
+        let mut pending = world
+            .remove_resource::<PendingUnpause>()
+            .unwrap_or_default();
         let mut menu = world.remove_resource::<MenuState>().unwrap_or_default();
         crate::state::tick_escape_pause(
             &mut paused,
@@ -1060,7 +1097,9 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
 
     // Snapshot the game-over screen once per death.
     let needs_capture = game_over
-        && world.get_resource::<MenuState>().is_some_and(|menu| menu.game_over.is_none());
+        && world
+            .get_resource::<MenuState>()
+            .is_some_and(|menu| menu.game_over.is_none());
     if needs_capture {
         let screen = capture_game_over(world);
         if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
@@ -1125,8 +1164,7 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
             if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
                 let count = menu.mutation_count.max(1) as i16;
                 let cur = menu.mutation_selected.unwrap_or(0) as i16;
-                menu.mutation_selected =
-                    Some((cur + cycle as i16).rem_euclid(count) as usize);
+                menu.mutation_selected = Some((cur + cycle as i16).rem_euclid(count) as usize);
             }
         }
         if confirm {
@@ -1205,7 +1243,9 @@ mod tests {
     }
 
     fn drained_sfx(world: &mut World) -> Vec<crate::audio::AudioCue> {
-        world.resource_mut::<Queue<crate::audio::AudioCue>>().drain()
+        world
+            .resource_mut::<Queue<crate::audio::AudioCue>>()
+            .drain()
     }
 
     #[test]
@@ -1266,6 +1306,7 @@ mod tests {
     #[test]
     fn splash_reaches_menu_through_driver() {
         let mut world = menu_world(AppState::Splash);
+        world.insert_resource(crate::state::SplashAutoAdvance(true));
         for _ in 0..600 {
             tick_menus(&mut world);
             if *world.resource::<AppState>() == AppState::MainMenu {
@@ -1385,7 +1426,10 @@ mod tests {
     fn character_select_gates_locked_races() {
         let mut world = menu_world(AppState::Title);
         // Crystal (gml 2) starts locked: denied, selection kept, denial sting.
-        apply_menu_action(&mut world, UiAction::SelectCharacter(RaceId::Crystal as usize));
+        apply_menu_action(
+            &mut world,
+            UiAction::SelectCharacter(RaceId::Crystal as usize),
+        );
         assert_eq!(world.resource::<SelectedCharacter>().0, RaceId::Fish);
         let sfx = drained_sfx(&mut world);
         assert_eq!(sfx.len(), 1);
@@ -1397,8 +1441,14 @@ mod tests {
         assert_eq!(world.resource::<SelectedCharacter>().0, RaceId::Fish);
 
         // Unlock -> select writes character + arms GO + confirm cue.
-        assert!(try_unlock_race(world.resource_mut::<SaveData>().into_inner(), RaceId::Crystal));
-        apply_menu_action(&mut world, UiAction::SelectCharacter(RaceId::Crystal as usize));
+        assert!(try_unlock_race(
+            world.resource_mut::<SaveData>().into_inner(),
+            RaceId::Crystal
+        ));
+        apply_menu_action(
+            &mut world,
+            UiAction::SelectCharacter(RaceId::Crystal as usize),
+        );
         assert_eq!(world.resource::<SelectedCharacter>().0, RaceId::Crystal);
         assert!(world.resource::<MenuState>().title_go_visible);
         let cues = drained_cues(&mut world);
@@ -1410,27 +1460,48 @@ mod tests {
         assert!((sfx[0].volume - 1.0).abs() < 1e-6);
 
         // Re-clicking the selected race starts loading (bevy law).
-        apply_menu_action(&mut world, UiAction::SelectCharacter(RaceId::Crystal as usize));
+        apply_menu_action(
+            &mut world,
+            UiAction::SelectCharacter(RaceId::Crystal as usize),
+        );
         assert_eq!(*world.resource::<AppState>(), AppState::Loading);
     }
 
     #[test]
     fn skin_select_gates_locked_skins() {
         let mut world = menu_world(AppState::Title);
-        assert!(try_unlock_race(world.resource_mut::<SaveData>().into_inner(), RaceId::Crystal));
+        assert!(try_unlock_race(
+            world.resource_mut::<SaveData>().into_inner(),
+            RaceId::Crystal
+        ));
         world.resource_mut::<SelectedCharacter>().0 = RaceId::Crystal;
         // Locked B skin: denied, preferred kept.
         apply_menu_action(&mut world, UiAction::SelectSkin(1));
-        assert_eq!(world.resource::<SaveData>().race_loadout(RaceId::Crystal).preferred_skin, 0);
+        assert_eq!(
+            world
+                .resource::<SaveData>()
+                .race_loadout(RaceId::Crystal)
+                .preferred_skin,
+            0
+        );
         assert!(!world.resource::<SaveDirty>().0);
         // Random race ignores skin picks entirely.
         world.resource_mut::<SelectedCharacter>().0 = RaceId::Random;
         apply_menu_action(&mut world, UiAction::SelectSkin(1));
         // Unlock path writes + dirties.
         world.resource_mut::<SelectedCharacter>().0 = RaceId::Crystal;
-        world.resource_mut::<SaveData>().race_loadout_mut(RaceId::Crystal).unlocked_skins[1] = true;
+        world
+            .resource_mut::<SaveData>()
+            .race_loadout_mut(RaceId::Crystal)
+            .unlocked_skins[1] = true;
         apply_menu_action(&mut world, UiAction::SelectSkin(1));
-        assert_eq!(world.resource::<SaveData>().race_loadout(RaceId::Crystal).preferred_skin, 1);
+        assert_eq!(
+            world
+                .resource::<SaveData>()
+                .race_loadout(RaceId::Crystal)
+                .preferred_skin,
+            1
+        );
         assert!(world.resource::<SaveDirty>().0);
     }
 
@@ -1439,14 +1510,34 @@ mod tests {
         let mut world = menu_world(AppState::Title);
         // Locked crown (gml 5): denied, stamp kept.
         apply_menu_action(&mut world, UiAction::SelectCrown(5));
-        assert_eq!(world.resource::<SaveData>().race_loadout(RaceId::Fish).start_crown, 0);
+        assert_eq!(
+            world
+                .resource::<SaveData>()
+                .race_loadout(RaceId::Fish)
+                .start_crown,
+            0
+        );
         // Unlocking auto-equips (bevy `unlock_crown` stamps the port id),
         // so pick another open crown: gml 0-1 start open (port 0).
-        world.resource_mut::<SaveData>().unlock_crown(RaceId::Fish, 3);
-        assert_eq!(world.resource::<SaveData>().race_loadout(RaceId::Fish).start_crown, 2);
+        world
+            .resource_mut::<SaveData>()
+            .unlock_crown(RaceId::Fish, 3);
+        assert_eq!(
+            world
+                .resource::<SaveData>()
+                .race_loadout(RaceId::Fish)
+                .start_crown,
+            2
+        );
         world.resource_mut::<SaveDirty>().0 = false;
         apply_menu_action(&mut world, UiAction::SelectCrown(1));
-        assert_eq!(world.resource::<SaveData>().race_loadout(RaceId::Fish).start_crown, 0);
+        assert_eq!(
+            world
+                .resource::<SaveData>()
+                .race_loadout(RaceId::Fish)
+                .start_crown,
+            0
+        );
         assert!(world.resource::<SaveDirty>().0);
         // Re-selecting the equipped crown is a silent no-op.
         let _ = drained_cues(&mut world);
@@ -1454,11 +1545,23 @@ mod tests {
         assert!(drained_cues(&mut world).is_empty());
         // Cycling forward from None skips locked ports, lands port 2.
         apply_menu_action(&mut world, UiAction::CycleCrown(1));
-        assert_eq!(world.resource::<SaveData>().race_loadout(RaceId::Fish).start_crown, 2);
+        assert_eq!(
+            world
+                .resource::<SaveData>()
+                .race_loadout(RaceId::Fish)
+                .start_crown,
+            2
+        );
         // Random race ignores crown picks (stamp untouched).
         world.resource_mut::<SelectedCharacter>().0 = RaceId::Random;
         apply_menu_action(&mut world, UiAction::SelectCrown(3));
-        assert_eq!(world.resource::<SaveData>().race_loadout(RaceId::Fish).start_crown, 2);
+        assert_eq!(
+            world
+                .resource::<SaveData>()
+                .race_loadout(RaceId::Fish)
+                .start_crown,
+            2
+        );
     }
 
     #[test]
@@ -1467,21 +1570,32 @@ mod tests {
         // No stored gun: no-op (bevy guard), still an accepted action.
         apply_menu_action(&mut world, UiAction::CycleStartWeapon(1));
         assert_eq!(
-            world.resource::<SaveData>().race_loadout(RaceId::Fish).start_weapon,
+            world
+                .resource::<SaveData>()
+                .race_loadout(RaceId::Fish)
+                .start_weapon,
             WeaponId::NONE
         );
         assert!(!world.resource::<SaveDirty>().0);
         // Stored gun present: toggles start between stored and none.
-        world.resource_mut::<SaveData>().race_loadout_mut(RaceId::Fish).stored_weapon =
-            WeaponId::REVOLVER;
+        world
+            .resource_mut::<SaveData>()
+            .race_loadout_mut(RaceId::Fish)
+            .stored_weapon = WeaponId::REVOLVER;
         apply_menu_action(&mut world, UiAction::CycleStartWeapon(1));
         assert_eq!(
-            world.resource::<SaveData>().race_loadout(RaceId::Fish).start_weapon,
+            world
+                .resource::<SaveData>()
+                .race_loadout(RaceId::Fish)
+                .start_weapon,
             WeaponId::REVOLVER
         );
         apply_menu_action(&mut world, UiAction::CycleStartWeapon(1));
         assert_eq!(
-            world.resource::<SaveData>().race_loadout(RaceId::Fish).start_weapon,
+            world
+                .resource::<SaveData>()
+                .race_loadout(RaceId::Fish)
+                .start_weapon,
             WeaponId::NONE
         );
         // Stored-weapon cycle is a bevy empty-body no-op; the raw row
@@ -1489,7 +1603,10 @@ mod tests {
         // orphan stored guns on read — bevy `race_loadout` law).
         apply_menu_action(&mut world, UiAction::CycleStoredWeapon(1));
         assert_eq!(
-            world.resource_mut::<SaveData>().race_loadout_mut(RaceId::Fish).stored_weapon,
+            world
+                .resource_mut::<SaveData>()
+                .race_loadout_mut(RaceId::Fish)
+                .stored_weapon,
             WeaponId::REVOLVER
         );
     }
@@ -1504,35 +1621,65 @@ mod tests {
         assert_eq!(world.resource::<SaveData>().settings.sfx_volume, 0.0);
         apply_menu_action(
             &mut world,
-            UiAction::SettingSlider { key: "screenshake".to_string(), value: 5.0 },
+            UiAction::SettingSlider {
+                key: "screenshake".to_string(),
+                value: 5.0,
+            },
         );
         assert_eq!(world.resource::<SaveData>().settings.screenshake, 2.0);
         apply_menu_action(
             &mut world,
-            UiAction::SettingSlider { key: "freezeframes".to_string(), value: -1.0 },
+            UiAction::SettingSlider {
+                key: "freezeframes".to_string(),
+                value: -1.0,
+            },
         );
         assert_eq!(world.resource::<SaveData>().settings.freezeframes, 0.0);
         apply_menu_action(
             &mut world,
-            UiAction::SettingSlider { key: "controls_scale".to_string(), value: 9.0 },
+            UiAction::SettingSlider {
+                key: "controls_scale".to_string(),
+                value: 9.0,
+            },
         );
         assert_eq!(world.resource::<SaveData>().settings.controls_scale, 1.0);
         // Unknown sliders are ignored without dirtying.
         world.resource_mut::<SaveDirty>().0 = false;
         apply_menu_action(
             &mut world,
-            UiAction::SettingSlider { key: "nope".to_string(), value: 1.0 },
+            UiAction::SettingSlider {
+                key: "nope".to_string(),
+                value: 1.0,
+            },
         );
         assert!(!world.resource::<SaveDirty>().0);
 
         // Cycles wrap (mod 4; 1-based pixel_mode).
-        apply_menu_action(&mut world, UiAction::SettingCycle { key: "crosshair".to_string(), dir: 1 });
+        apply_menu_action(
+            &mut world,
+            UiAction::SettingCycle {
+                key: "crosshair".to_string(),
+                dir: 1,
+            },
+        );
         assert_eq!(world.resource::<SaveData>().settings.crosshair, 1);
         world.resource_mut::<SaveData>().settings.crosshair = 3;
-        apply_menu_action(&mut world, UiAction::SettingCycle { key: "crosshair".to_string(), dir: 1 });
+        apply_menu_action(
+            &mut world,
+            UiAction::SettingCycle {
+                key: "crosshair".to_string(),
+                dir: 1,
+            },
+        );
         assert_eq!(world.resource::<SaveData>().settings.crosshair, 0);
         world.resource_mut::<SaveData>().settings.pixel_mode = 4;
-        apply_menu_action(&mut world, UiAction::SettingCycle { key: "pixel_mode".to_string(), dir: 1 });
+        apply_menu_action(
+            &mut world,
+            UiAction::SettingCycle {
+                key: "pixel_mode".to_string(),
+                dir: 1,
+            },
+        );
         assert_eq!(world.resource::<SaveData>().settings.pixel_mode, 1);
 
         // Toggles flip (incl. cprefs), unknown keys ignored.
@@ -1551,9 +1698,15 @@ mod tests {
         // Text inputs write through verbatim.
         apply_menu_action(
             &mut world,
-            UiAction::SettingInput { key: "profile_name".to_string(), value: "Vlambeer".to_string() },
+            UiAction::SettingInput {
+                key: "profile_name".to_string(),
+                value: "Vlambeer".to_string(),
+            },
         );
-        assert_eq!(world.resource::<SaveData>().settings.profile_name, "Vlambeer");
+        assert_eq!(
+            world.resource::<SaveData>().settings.profile_name,
+            "Vlambeer"
+        );
 
         // Languages cycle the bevy list; explicit sets write through.
         apply_menu_action(&mut world, UiAction::NextLanguage);
@@ -1579,7 +1732,10 @@ mod tests {
         world.resource_mut::<SaveData>().settings.master_volume = 0.1;
         apply_menu_action(&mut world, UiAction::SettingEraseProgress);
         assert_eq!(world.resource::<SaveData>().high_score, 0);
-        assert_eq!(world.resource::<SaveData>().unlocked_characters, vec!["Fish".to_string()]);
+        assert_eq!(
+            world.resource::<SaveData>().unlocked_characters,
+            vec!["Fish".to_string()]
+        );
         assert!(world.resource::<SaveData>().races.is_empty());
         // Erase keeps options (bevy law).
         assert_eq!(world.resource::<SaveData>().settings.master_volume, 0.1);
@@ -1661,15 +1817,24 @@ mod tests {
         assert!(world.resource::<MenuState>().loadout_open);
 
         // BigDog-likes force the loadout shut on select (bevy law).
-        assert!(try_unlock_race(world.resource_mut::<SaveData>().into_inner(), RaceId::Skeleton));
-        apply_menu_action(&mut world, UiAction::SelectCharacter(RaceId::Skeleton as usize));
+        assert!(try_unlock_race(
+            world.resource_mut::<SaveData>().into_inner(),
+            RaceId::Skeleton
+        ));
+        apply_menu_action(
+            &mut world,
+            UiAction::SelectCharacter(RaceId::Skeleton as usize),
+        );
         assert!(!world.resource::<MenuState>().loadout_open);
     }
 
     #[test]
     fn unlock_queue_push_dismiss_and_mirror_laws() {
         let mut world = menu_world(AppState::InGame);
-        push_unlock(world.resource_mut::<MenuState>().into_inner(), UnlockPopup::Race(RaceId::Crystal));
+        push_unlock(
+            world.resource_mut::<MenuState>().into_inner(),
+            UnlockPopup::Race(RaceId::Crystal),
+        );
         push_unlock(
             world.resource_mut::<MenuState>().into_inner(),
             UnlockPopup::Skin(RaceId::Fish, 1),
@@ -1680,7 +1845,9 @@ mod tests {
         assert_eq!(world.resource::<MenuState>().unlock_queue.len(), 1);
 
         // Ultra offers take precedence in the mirror; len change clears.
-        world.insert_resource(PendingMutation { choices: vec![MutationId::RabbitPaw] });
+        world.insert_resource(PendingMutation {
+            choices: vec![MutationId::RabbitPaw],
+        });
         world.insert_resource(PendingUltra {
             choices: vec![
                 crate::data::UltraMutationId::FishGunWarrant,
@@ -1704,7 +1871,10 @@ mod tests {
         world.resource_mut::<MenuState>().title_cursor = 0;
         world.resource_mut::<NtInput>().cycle_weapon(-1);
         tick_menus(&mut world);
-        assert_eq!(world.resource::<MenuState>().title_cursor, CHAR_SELECT_ORDER.len() - 1);
+        assert_eq!(
+            world.resource::<MenuState>().title_cursor,
+            CHAR_SELECT_ORDER.len() - 1
+        );
         world.resource_mut::<NtInput>().select_weapon(3);
         tick_menus(&mut world);
         // Slot 3 == Melting pod; Melting is locked so cursor moves, select denied.
@@ -1722,7 +1892,14 @@ mod tests {
         let lo = save.race_loadout(sel);
         assert_eq!(crate::savedata_part::character_def(sel).name, "Fish");
         assert_eq!(crown_short_name(lo.start_crown), "NONE");
-        assert_eq!(RaceState { race: sel, skin: SkinLetter::A }.race, RaceId::Fish);
+        assert_eq!(
+            RaceState {
+                race: sel,
+                skin: SkinLetter::A
+            }
+            .race,
+            RaceId::Fish
+        );
         let _ = Inventory {
             weapons: [WeaponId::REVOLVER, WeaponId::NONE, WeaponId::NONE],
             cursed: [false, false, false],

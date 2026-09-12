@@ -14,6 +14,10 @@
 //! - `LoadingState` loading law (`screens/mod.rs::tick_loading`: 1.2 s
 //!   minimum, then InGame via the existing `setup_run` entry).
 //!
+//! Splash auto-advance is opt-in ([`SplashAutoAdvance`]): bevy parity is
+//! press-only everywhere, and unattended boots (tests, kiosk) insert
+//! `SplashAutoAdvance(true)` to leave the logo ~1 s after the gun reel.
+//!
 //! Fidelity compromises (need shell/window services):
 //! - Animated `Transition<AppState>` (fade/circle wipe, `block_input`)
 //!   is deferred to the repose shell: `goto_state` transitions
@@ -22,10 +26,10 @@
 //! - Asset-gated loading progress (`AssetsLoading` + `AssetServer`) is
 //!   headless-complete (progress = 1.0); only the 1.2 s floor remains.
 //! - Splash logo gunfire SFX/shake/sprites are render; the headless
-//!   `SplashState` keeps mode + timer + gun count. Bevy mode 4 leaves
-//!   ONLY on press; headless additionally auto-advances ~1 s after the
-//!   gun sequence completes so unattended boots reach the menu (the
-//!   press path is preserved verbatim).
+//!   `SplashState` keeps mode + timer + gun count. The press path is
+//!   bevy-verbatim (mode 4 leaves only on press); the timed auto-advance
+//!   additionally requires [`SplashAutoAdvance`], so unattended boots
+//!   reach the menu without changing attended UX.
 //! - `QuitApp` has no window service headless: it sets `QuitRequested`,
 //!   which the shell polls.
 //! - Locale/i18n (`LocaleResources`) is shell-side; language gating uses
@@ -124,8 +128,16 @@ pub const SPLASH_GUN_STEPS: [f32; 7] = [
 ];
 
 /// Headless hold after the gun sequence before auto-advancing (bevy
-/// has none — it waits for a press; see module docs).
+/// has none — it waits for a press; applies only with
+/// [`SplashAutoAdvance`] set, see [`tick_splash`]).
 pub const SPLASH_LOGO_HOLD_SECS: f32 = 1.0;
+
+/// Opt-in unattended splash advance (tests, kiosk shells). Absent or
+/// `false` (the default): mode 4 is press-only, bevy parity. `true`:
+/// mode 4 also leaves ~[`SPLASH_LOGO_HOLD_SECS`] after the gun reel, so
+/// boots with no input source still reach the menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Resource)]
+pub struct SplashAutoAdvance(pub bool);
 
 /// Loading-screen state (bevy `LoadingTimer` half of
 /// `screens/mod.rs`; asset handles deferred, progress headless-1.0).
@@ -137,7 +149,10 @@ pub struct LoadingState {
 
 impl Default for LoadingState {
     fn default() -> Self {
-        Self { t: 0.0, progress: 1.0 }
+        Self {
+            t: 0.0,
+            progress: 1.0,
+        }
     }
 }
 
@@ -162,7 +177,10 @@ pub struct TransitionBlock(pub bool);
 /// cleared). Replaces bevy `NextState` + animated `Transition`
 /// (deferred to the shell — see module docs).
 pub fn goto_state(world: &mut World, next: AppState) {
-    let prev = world.get_resource::<AppState>().copied().unwrap_or_default();
+    let prev = world
+        .get_resource::<AppState>()
+        .copied()
+        .unwrap_or_default();
     if prev == next {
         return;
     }
@@ -231,20 +249,27 @@ pub fn reset_pause_state(world: &mut World) {
 }
 
 /// Splash tick (bevy `boot_intro` state half verbatim, plus the
-/// headless logo-hold auto-advance documented above). `pressed` = any
+/// opt-in logo-hold auto-advance for unattended boots). `pressed` = any
 /// key/mouse edge this tick (bevy: any just-pressed key or mouse
 /// button). Only runs in `Splash`; finishing enters `MainMenu`.
 pub fn tick_splash(world: &mut World, dt: f32, pressed: bool) {
-    if world.get_resource::<AppState>().copied().unwrap_or_default() != AppState::Splash {
+    if world
+        .get_resource::<AppState>()
+        .copied()
+        .unwrap_or_default()
+        != AppState::Splash
+    {
         return;
     }
     world.init_resource::<SplashState>();
+    let auto = world
+        .get_resource::<SplashAutoAdvance>()
+        .is_some_and(|a| a.0);
     let done = {
         let mut splash = world.resource_mut::<SplashState>();
         if splash.mode < 4 {
             splash.t += dt;
-            let advance =
-                pressed || splash.t >= SPLASH_MODE_SECS[splash.mode as usize];
+            let advance = pressed || splash.t >= SPLASH_MODE_SECS[splash.mode as usize];
             if advance {
                 splash.mode += 1;
                 splash.t = 0.0;
@@ -268,8 +293,8 @@ pub fn tick_splash(world: &mut World, dt: f32, pressed: bool) {
                 }
             } else if splash.guns as usize >= SPLASH_GUN_STEPS.len()
                 && splash.t >= SPLASH_GUN_STEPS[SPLASH_GUN_STEPS.len() - 1] + SPLASH_LOGO_HOLD_SECS
+                && auto
             {
-                // Headless-only auto-advance (bevy waits for a press).
                 true
             } else {
                 false
@@ -285,7 +310,12 @@ pub fn tick_splash(world: &mut World, dt: f32, pressed: bool) {
 /// out the 1.2 s floor, then InGame through the existing `setup_run`
 /// entry — never duplicated here). Only runs in `Loading`.
 pub fn tick_loading(world: &mut World, dt: f32) {
-    if world.get_resource::<AppState>().copied().unwrap_or_default() != AppState::Loading {
+    if world
+        .get_resource::<AppState>()
+        .copied()
+        .unwrap_or_default()
+        != AppState::Loading
+    {
         return;
     }
     world.init_resource::<LoadingState>();
@@ -333,10 +363,7 @@ pub fn tick_escape_pause(
                 return;
             }
             *overlay = OverlayMenu::None;
-            pending.0 = Some(GTimer::from_seconds(
-                UNPAUSE_DELAY_SECS,
-                TimerMode::Once,
-            ));
+            pending.0 = Some(GTimer::from_seconds(UNPAUSE_DELAY_SECS, TimerMode::Once));
         }
         OverlayMenu::Settings | OverlayMenu::Credits => {
             if !menu.settings_page_stack.is_empty() || menu.settings_page != 0 {
@@ -464,8 +491,9 @@ mod tests {
     }
 
     #[test]
-    fn splash_auto_advances_without_press() {
+    fn splash_auto_advances_without_press_when_opted_in() {
         let mut world = splash_world();
+        world.insert_resource(SplashAutoAdvance(true));
         for _ in 0..600 {
             tick_splash(&mut world, 1.0 / 30.0, false);
             if *world.resource::<AppState>() == AppState::MainMenu {
@@ -476,6 +504,18 @@ mod tests {
         // ~12 s modes + ~2 s gun reel + 1 s hold.
         let t = 600.0 / 30.0;
         assert!(t >= 12.0 + 2.0 + SPLASH_LOGO_HOLD_SECS);
+    }
+
+    #[test]
+    fn splash_logo_waits_for_input_by_default() {
+        let mut world = splash_world();
+        world.resource_mut::<SplashState>().mode = 4;
+        for _ in 0..600 {
+            tick_splash(&mut world, 1.0 / 30.0, false);
+        }
+        assert_eq!(*world.resource::<AppState>(), AppState::Splash);
+        tick_splash(&mut world, 1.0 / 30.0, true);
+        assert_eq!(*world.resource::<AppState>(), AppState::MainMenu);
     }
 
     #[test]
@@ -496,7 +536,13 @@ mod tests {
         }
         assert_eq!(*world.resource::<AppState>(), AppState::InGame);
         assert!(!world.resource::<Paused>().0);
-        assert!(world.query::<&crate::comps_a::Player>().iter(&world).count() > 0);
+        assert!(
+            world
+                .query::<&crate::comps_a::Player>()
+                .iter(&world)
+                .count()
+                > 0
+        );
         assert_eq!(world.resource::<crate::comps_a::Run>().floor, 1);
     }
 
@@ -506,11 +552,27 @@ mod tests {
         let mut overlay = OverlayMenu::None;
         let mut pending = PendingUnpause(None);
         let mut menu = MenuState::default();
-        tick_escape_pause(&mut paused, &mut overlay, &mut pending, &mut menu, false, false, true);
+        tick_escape_pause(
+            &mut paused,
+            &mut overlay,
+            &mut pending,
+            &mut menu,
+            false,
+            false,
+            true,
+        );
         assert!(paused.0);
         assert_eq!(overlay, OverlayMenu::Pause);
         assert!(pending.0.is_none());
-        tick_escape_pause(&mut paused, &mut overlay, &mut pending, &mut menu, false, false, true);
+        tick_escape_pause(
+            &mut paused,
+            &mut overlay,
+            &mut pending,
+            &mut menu,
+            false,
+            false,
+            true,
+        );
         assert!(paused.0, "still paused until the delay elapses");
         assert_eq!(overlay, OverlayMenu::None);
         assert!(pending.0.is_some());
@@ -523,17 +585,41 @@ mod tests {
         let mut pending = PendingUnpause(None);
         let mut menu = MenuState::default();
         menu.pause_confirm = Some(0);
-        tick_escape_pause(&mut paused, &mut overlay, &mut pending, &mut menu, false, false, true);
+        tick_escape_pause(
+            &mut paused,
+            &mut overlay,
+            &mut pending,
+            &mut menu,
+            false,
+            false,
+            true,
+        );
         assert_eq!(menu.pause_confirm, None);
         assert_eq!(overlay, OverlayMenu::Pause, "confirm dismissed, pause kept");
 
         overlay = OverlayMenu::Settings;
         menu.settings_page = 3;
         menu.settings_page_stack = vec![0];
-        tick_escape_pause(&mut paused, &mut overlay, &mut pending, &mut menu, false, false, true);
+        tick_escape_pause(
+            &mut paused,
+            &mut overlay,
+            &mut pending,
+            &mut menu,
+            false,
+            false,
+            true,
+        );
         assert_eq!(menu.settings_page, 0);
         assert!(menu.settings_page_stack.is_empty());
-        tick_escape_pause(&mut paused, &mut overlay, &mut pending, &mut menu, false, false, true);
+        tick_escape_pause(
+            &mut paused,
+            &mut overlay,
+            &mut pending,
+            &mut menu,
+            false,
+            false,
+            true,
+        );
         assert_eq!(overlay, OverlayMenu::Pause);
     }
 
@@ -543,9 +629,33 @@ mod tests {
         let mut overlay = OverlayMenu::None;
         let mut pending = PendingUnpause(None);
         let mut menu = MenuState::default();
-        tick_escape_pause(&mut paused, &mut overlay, &mut pending, &mut menu, true, false, true);
-        tick_escape_pause(&mut paused, &mut overlay, &mut pending, &mut menu, false, true, true);
-        tick_escape_pause(&mut paused, &mut overlay, &mut pending, &mut menu, false, false, false);
+        tick_escape_pause(
+            &mut paused,
+            &mut overlay,
+            &mut pending,
+            &mut menu,
+            true,
+            false,
+            true,
+        );
+        tick_escape_pause(
+            &mut paused,
+            &mut overlay,
+            &mut pending,
+            &mut menu,
+            false,
+            true,
+            true,
+        );
+        tick_escape_pause(
+            &mut paused,
+            &mut overlay,
+            &mut pending,
+            &mut menu,
+            false,
+            false,
+            false,
+        );
         assert!(!paused.0);
         assert_eq!(overlay, OverlayMenu::None);
     }
@@ -582,7 +692,10 @@ mod tests {
         });
         world.insert_resource(Paused(true));
         world.insert_resource(OverlayMenu::Pause);
-        world.insert_resource(PendingUnpause(Some(GTimer::from_seconds(9.0, TimerMode::Once))));
+        world.insert_resource(PendingUnpause(Some(GTimer::from_seconds(
+            9.0,
+            TimerMode::Once,
+        ))));
         let mut sched = Schedule::default();
         sched.add_systems(force_death_overlay_state);
         sched.run(&mut world);
@@ -596,8 +709,13 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<crate::savedata_part::SaveData>();
         world.init_resource::<crate::audio::AudioChannels>();
-        world.resource_mut::<crate::savedata_part::SaveData>().settings.master_volume = 0.25;
-        world.resource_mut::<crate::savedata_part::SaveData>().version = 0;
+        world
+            .resource_mut::<crate::savedata_part::SaveData>()
+            .settings
+            .master_volume = 0.25;
+        world
+            .resource_mut::<crate::savedata_part::SaveData>()
+            .version = 0;
         let mut sched = Schedule::default();
         sched.add_systems((sync_audio_channels, tick_sanitize_save));
         sched.run(&mut world);
