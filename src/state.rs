@@ -1,0 +1,629 @@
+//! App states and run flags. Mirrors the bevy `AppState` machine; the
+//! shell driver (not shown) transitions these, systems gate on them.
+//!
+//! State-layer port of `nt-recreated-bevy/src/app.rs` (transition laws
+//! only, no rendering) plus `src/screens/mod.rs` (loading law):
+//! - `AppState` boot order Splash -> MainMenu -> Loading -> Title ->
+//!   InGame (same as the bevy build).
+//! - `OverlayMenu` / `PendingUnpause` / `Paused` pause laws
+//!   (`handle_pause_input`, `tick_pending_unpause`, `reset_pause_on_exit`,
+//!   `force_death_overlay_state`).
+//! - `SplashState` boot-intro law (`game/ui_art.rs::boot_intro`:
+//!   modes 0-3 advance on press or `MODE_SECS` timeout, mode 4 plays the
+//!   logo gunfire and leaves on press).
+//! - `LoadingState` loading law (`screens/mod.rs::tick_loading`: 1.2 s
+//!   minimum, then InGame via the existing `setup_run` entry).
+//!
+//! Fidelity compromises (need shell/window services):
+//! - Animated `Transition<AppState>` (fade/circle wipe, `block_input`)
+//!   is deferred to the repose shell: `goto_state` transitions
+//!   instantly. `tick_escape_pause` still takes a `block_input` flag so
+//!   the shell can gate it once transitions exist.
+//! - Asset-gated loading progress (`AssetsLoading` + `AssetServer`) is
+//!   headless-complete (progress = 1.0); only the 1.2 s floor remains.
+//! - Splash logo gunfire SFX/shake/sprites are render; the headless
+//!   `SplashState` keeps mode + timer + gun count. Bevy mode 4 leaves
+//!   ONLY on press; headless additionally auto-advances ~1 s after the
+//!   gun sequence completes so unattended boots reach the menu (the
+//!   press path is preserved verbatim).
+//! - `QuitApp` has no window service headless: it sets `QuitRequested`,
+//!   which the shell polls.
+//! - Locale/i18n (`LocaleResources`) is shell-side; language gating uses
+//!   the `AVAILABLE_LANGUAGES` list in `menus` (same codes as bevy
+//!   `LOCALES`).
+
+use bevy_ecs::prelude::*;
+use repame_sim::SimTime;
+
+use crate::time::{GTimer, TimerMode};
+
+/// Menu state machines (character/loadout/mutation/pause/settings/
+/// unlock/game-over). Lives here as `state::menus` so `lib.rs` stays
+/// untouched.
+#[path = "menus.rs"]
+pub mod menus;
+
+/// Top-level app state. Boot order: Splash -> MainMenu -> Loading ->
+/// Title -> InGame (same as the bevy build).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Resource)]
+pub enum AppState {
+    #[default]
+    Splash,
+    MainMenu,
+    Loading,
+    Title,
+    InGame,
+}
+
+/// Pause flag. Sim systems early-out while set (except `Always` sets,
+/// which mirror the bevy build's unticked-by-pause selection).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Resource)]
+pub struct Paused(pub bool);
+
+/// Fixed-step frame counter (bevy `CurrentFrame` equivalent).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Resource)]
+pub struct CurrentFrame(pub u64);
+
+pub fn tick_current_frame(mut frame: ResMut<CurrentFrame>) {
+    frame.0 = frame.0.wrapping_add(1);
+}
+
+/// Pause overlay selector (bevy `OverlayMenu` verbatim, minus rendering).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Resource)]
+pub enum OverlayMenu {
+    #[default]
+    None,
+    Settings,
+    Credits,
+    Pause,
+}
+
+/// Delayed unpause (bevy `PendingUnpause` verbatim law: 0.2 s `Once`
+/// timer armed by Resume/CloseOverlay/Escape, on expiry clears itself
+/// and unpauses; `GTimer` replaces bevy `Timer`).
+#[derive(Debug, Clone, Default, Resource)]
+pub struct PendingUnpause(pub Option<GTimer>);
+
+/// Delay bevy arms before lifting pause (Resume, CloseOverlay on the
+/// pause overlay, Escape out of pause).
+pub const UNPAUSE_DELAY_SECS: f32 = 0.2;
+
+/// Boot-intro state (bevy `BootState` mode/timer half in
+/// `game/ui_art.rs`; entities/sprites/audio deferred to render).
+#[derive(Debug, Clone, Resource)]
+pub struct SplashState {
+    pub mode: u8,
+    pub t: f32,
+    pub guns: u8,
+}
+
+impl Default for SplashState {
+    fn default() -> Self {
+        Self {
+            mode: 0,
+            t: 0.0,
+            guns: 0,
+        }
+    }
+}
+
+/// Per-mode auto-advance timeouts (GML `Vlambeer/Create_0` + `Alarm_0`:
+/// mode 0 runs 120 steps, then 60 per mode with +60 on mode 2, at
+/// 30 steps/s => [4, 2, 4, 2] s; bevy `MODE_SECS` verbatim).
+pub const SPLASH_MODE_SECS: [f32; 4] = [4.0, 2.0, 4.0, 2.0];
+
+/// Logo gunfire step times (bevy `STEP_T` verbatim, mode 4).
+pub const SPLASH_GUN_STEPS: [f32; 7] = [
+    1.0,
+    1.0 + 2.0 / 30.0,
+    1.0 + 4.0 / 30.0,
+    1.0 + 6.0 / 30.0,
+    1.0 + 8.0 / 30.0,
+    1.0 + 10.0 / 30.0,
+    1.0 + 10.0 / 30.0 + 20.0 / 30.0,
+];
+
+/// Headless hold after the gun sequence before auto-advancing (bevy
+/// has none — it waits for a press; see module docs).
+pub const SPLASH_LOGO_HOLD_SECS: f32 = 1.0;
+
+/// Loading-screen state (bevy `LoadingTimer` half of
+/// `screens/mod.rs`; asset handles deferred, progress headless-1.0).
+#[derive(Debug, Clone, Resource)]
+pub struct LoadingState {
+    pub t: f32,
+    pub progress: f32,
+}
+
+impl Default for LoadingState {
+    fn default() -> Self {
+        Self { t: 0.0, progress: 1.0 }
+    }
+}
+
+/// Minimum loading-screen time (bevy `LoadingTimer(1.2 s)` verbatim).
+pub const LOADING_MIN_SECS: f32 = 1.2;
+
+/// Headless quit signal (bevy `AppExit::Success`; no window service
+/// headless, so the shell polls this).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Resource)]
+pub struct QuitRequested(pub bool);
+
+/// Scene-transition input block (bevy `Transition<AppState>.block_input`
+/// parity). The port flips states instantly (`goto_state`), so no system
+/// ever raises this — it exists so `gameplay_active` keeps the bevy
+/// gate shape instead of silently dropping a conjunct.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Resource)]
+pub struct TransitionBlock(pub bool);
+
+/// Instant state transition with bevy `reset_pause_on_exit` side
+/// effects (paused/overlay/pending cleared; `Run::game_over` cleared
+/// when leaving InGame or entering a menu state; menu transients
+/// cleared). Replaces bevy `NextState` + animated `Transition`
+/// (deferred to the shell — see module docs).
+pub fn goto_state(world: &mut World, next: AppState) {
+    let prev = world.get_resource::<AppState>().copied().unwrap_or_default();
+    if prev == next {
+        return;
+    }
+    world.insert_resource(next);
+    reset_pause_state(world);
+    if prev == AppState::InGame
+        || matches!(
+            next,
+            AppState::Splash | AppState::MainMenu | AppState::Title
+        )
+    {
+        if let Some(mut run) = world.get_resource_mut::<crate::comps_a::Run>() {
+            run.game_over = false;
+        }
+    }
+    match next {
+        AppState::Loading => {
+            world.insert_resource(LoadingState::default());
+        }
+        AppState::Title => {
+            // Bevy `sync_shared_ui` on Title enter: hide GO, close
+            // loadout, mirror the selected character.
+            let cursor = world
+                .get_resource::<crate::comps_a::SelectedCharacter>()
+                .map(|s| s.0 as usize)
+                .unwrap_or(crate::data::RaceId::Fish as usize);
+            world.init_resource::<menus::MenuState>();
+            if let Some(mut menu) = world.get_resource_mut::<menus::MenuState>() {
+                menu.title_go_visible = false;
+                menu.loadout_open = false;
+                menu.title_cursor = cursor;
+                menu.mutation_selected = None;
+            }
+        }
+        AppState::Splash => {
+            world.insert_resource(SplashState::default());
+        }
+        _ => {}
+    }
+}
+
+/// Bevy `reset_pause_on_exit` verbatim (pause/overlay/pending/menu
+/// transients cleared; caller owns the `Run::game_over` edge, see
+/// `goto_state`).
+pub fn reset_pause_state(world: &mut World) {
+    world.init_resource::<Paused>();
+    world.init_resource::<OverlayMenu>();
+    world.init_resource::<PendingUnpause>();
+    world.init_resource::<menus::MenuState>();
+    if let Some(mut paused) = world.get_resource_mut::<Paused>() {
+        paused.0 = false;
+    }
+    if let Some(mut overlay) = world.get_resource_mut::<OverlayMenu>() {
+        *overlay = OverlayMenu::None;
+    }
+    if let Some(mut pending) = world.get_resource_mut::<PendingUnpause>() {
+        pending.0 = None;
+    }
+    if let Some(mut menu) = world.get_resource_mut::<menus::MenuState>() {
+        menu.pause_confirm = None;
+        menu.settings_page = 0;
+        menu.settings_page_stack.clear();
+        menu.mutation_selected = None;
+        menu.game_over = None;
+    }
+}
+
+/// Splash tick (bevy `boot_intro` state half verbatim, plus the
+/// headless logo-hold auto-advance documented above). `pressed` = any
+/// key/mouse edge this tick (bevy: any just-pressed key or mouse
+/// button). Only runs in `Splash`; finishing enters `MainMenu`.
+pub fn tick_splash(world: &mut World, dt: f32, pressed: bool) {
+    if world.get_resource::<AppState>().copied().unwrap_or_default() != AppState::Splash {
+        return;
+    }
+    world.init_resource::<SplashState>();
+    let done = {
+        let mut splash = world.resource_mut::<SplashState>();
+        if splash.mode < 4 {
+            splash.t += dt;
+            let advance =
+                pressed || splash.t >= SPLASH_MODE_SECS[splash.mode as usize];
+            if advance {
+                splash.mode += 1;
+                splash.t = 0.0;
+                splash.guns = 0;
+            }
+            false
+        } else {
+            splash.t += dt;
+            while (splash.guns as usize) < SPLASH_GUN_STEPS.len()
+                && splash.t >= SPLASH_GUN_STEPS[splash.guns as usize]
+            {
+                splash.guns += 1;
+            }
+            if pressed {
+                if splash.guns == 0 {
+                    // Bevy fast-forward: jump near the sequence start.
+                    splash.t = splash.t.max(1.0 - 10.0 / 30.0);
+                    false
+                } else {
+                    true
+                }
+            } else if splash.guns as usize >= SPLASH_GUN_STEPS.len()
+                && splash.t >= SPLASH_GUN_STEPS[SPLASH_GUN_STEPS.len() - 1] + SPLASH_LOGO_HOLD_SECS
+            {
+                // Headless-only auto-advance (bevy waits for a press).
+                true
+            } else {
+                false
+            }
+        }
+    };
+    if done {
+        goto_state(world, AppState::MainMenu);
+    }
+}
+
+/// Loading tick (bevy `tick_loading` law: assets at headless-1.0, wait
+/// out the 1.2 s floor, then InGame through the existing `setup_run`
+/// entry — never duplicated here). Only runs in `Loading`.
+pub fn tick_loading(world: &mut World, dt: f32) {
+    if world.get_resource::<AppState>().copied().unwrap_or_default() != AppState::Loading {
+        return;
+    }
+    world.init_resource::<LoadingState>();
+    let ready = {
+        let mut loading = world.resource_mut::<LoadingState>();
+        loading.t += dt;
+        loading.progress = 1.0;
+        loading.t >= LOADING_MIN_SECS
+    };
+    if ready {
+        crate::setup::setup_run(world);
+        reset_pause_state(world);
+    }
+}
+
+/// Escape-pause tick (bevy `handle_pause_input` verbatim, minus engine
+/// key reads: the shell passes `escape_pressed`). Gated to InGame,
+/// `block_input` (transition animation, shell-owned), and live runs
+/// (game-over swallows Escape, bevy parity).
+pub fn tick_escape_pause(
+    paused: &mut Paused,
+    overlay: &mut OverlayMenu,
+    pending: &mut PendingUnpause,
+    menu: &mut menus::MenuState,
+    game_over: bool,
+    block_input: bool,
+    escape_pressed: bool,
+) {
+    if !escape_pressed || block_input || game_over {
+        return;
+    }
+    match *overlay {
+        OverlayMenu::None if !paused.0 => {
+            paused.0 = true;
+            *overlay = OverlayMenu::Pause;
+            pending.0 = None;
+            menu.pause_confirm = None;
+            menu.settings_page = 0;
+            menu.settings_page_stack.clear();
+        }
+        OverlayMenu::Pause => {
+            if menu.pause_confirm.is_some() {
+                // Bevy: Escape dismisses the quit/restart confirm first.
+                menu.pause_confirm = None;
+                return;
+            }
+            *overlay = OverlayMenu::None;
+            pending.0 = Some(GTimer::from_seconds(
+                UNPAUSE_DELAY_SECS,
+                TimerMode::Once,
+            ));
+        }
+        OverlayMenu::Settings | OverlayMenu::Credits => {
+            if !menu.settings_page_stack.is_empty() || menu.settings_page != 0 {
+                if let Some(prev) = menu.settings_page_stack.pop() {
+                    menu.settings_page = prev;
+                } else {
+                    menu.settings_page = 0;
+                }
+            } else if paused.0 {
+                *overlay = OverlayMenu::Pause;
+                menu.settings_page = 0;
+                menu.settings_page_stack.clear();
+            } else {
+                *overlay = OverlayMenu::None;
+            }
+        }
+        // `None` while already paused (Resume path owns that edge).
+        OverlayMenu::None => {}
+    }
+}
+
+/// Pending-unpause tick (bevy `tick_pending_unpause` verbatim over
+/// `SimTime`).
+pub fn tick_pending_unpause(
+    time: Res<SimTime>,
+    mut pending: ResMut<PendingUnpause>,
+    mut paused: ResMut<Paused>,
+) {
+    let Some(timer) = pending.0.as_mut() else {
+        return;
+    };
+    timer.tick(time.delta_secs);
+    if timer.just_finished() {
+        pending.0 = None;
+        paused.0 = false;
+    }
+}
+
+/// Death overlay guard (bevy `force_death_overlay_state` verbatim:
+/// game-over forces unpaused + no overlay + no pending while InGame).
+pub fn force_death_overlay_state(
+    state: Res<AppState>,
+    run: Option<Res<crate::comps_a::Run>>,
+    mut paused: ResMut<Paused>,
+    mut overlay: ResMut<OverlayMenu>,
+    mut pending: ResMut<PendingUnpause>,
+) {
+    if *state != AppState::InGame {
+        return;
+    }
+    let Some(run) = run else {
+        return;
+    };
+    if run.game_over {
+        paused.0 = false;
+        *overlay = OverlayMenu::None;
+        pending.0 = None;
+    }
+}
+
+/// Channel sync (bevy `sync_shared_ui` audio half verbatim:
+/// master/sfx/music follow settings every tick).
+pub fn sync_audio_channels(
+    save: Res<crate::savedata_part::SaveData>,
+    mut channels: ResMut<crate::audio::AudioChannels>,
+) {
+    channels.master = save.settings.master_volume;
+    channels.sfx = save.settings.sfx_volume;
+    channels.music = save.settings.music_volume;
+}
+
+/// Save sanitize (bevy `sanitize_save` headless law: version mismatch
+/// sanitizes loadouts and stamps; covers both the migrate and the
+/// added-save arms without engine change detection).
+pub fn tick_sanitize_save(mut save: ResMut<crate::savedata_part::SaveData>) {
+    if save.version != crate::savedata_part::SAVE_VERSION {
+        save.sanitize_loadouts();
+        save.version = crate::savedata_part::SAVE_VERSION;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::menus::MenuState;
+
+    fn splash_world() -> World {
+        let mut world = World::new();
+        world.insert_resource(AppState::Splash);
+        world.insert_resource(SplashState::default());
+        world.init_resource::<Paused>();
+        world.init_resource::<OverlayMenu>();
+        world.init_resource::<PendingUnpause>();
+        world.init_resource::<MenuState>();
+        world
+    }
+
+    #[test]
+    fn splash_advances_through_modes_on_timeouts() {
+        let mut world = splash_world();
+        // Modes 0-3 run 4+2+4+2 = 12 s; press fast-forwards each mode.
+        for mode in 0..4 {
+            assert_eq!(world.resource::<SplashState>().mode, mode);
+            tick_splash(&mut world, SPLASH_MODE_SECS[mode as usize], false);
+            assert_eq!(world.resource::<SplashState>().mode, mode + 1);
+        }
+        assert_eq!(*world.resource::<AppState>(), AppState::Splash);
+    }
+
+    #[test]
+    fn splash_press_skips_mode_and_finishes_logo() {
+        let mut world = splash_world();
+        tick_splash(&mut world, 0.5, true);
+        assert_eq!(world.resource::<SplashState>().mode, 1);
+        // Jump to the logo reel, run the gun sequence, press to finish.
+        world.resource_mut::<SplashState>().mode = 4;
+        world.resource_mut::<SplashState>().t = 0.0;
+        tick_splash(&mut world, 0.016, true);
+        // Guns == 0 on the first logo tick: fast-forward, not finish.
+        assert_eq!(*world.resource::<AppState>(), AppState::Splash);
+        assert!(world.resource::<SplashState>().t >= 1.0 - 10.0 / 30.0);
+        tick_splash(&mut world, 3.0, false);
+        tick_splash(&mut world, 0.016, true);
+        assert_eq!(*world.resource::<AppState>(), AppState::MainMenu);
+    }
+
+    #[test]
+    fn splash_auto_advances_without_press() {
+        let mut world = splash_world();
+        for _ in 0..600 {
+            tick_splash(&mut world, 1.0 / 30.0, false);
+            if *world.resource::<AppState>() == AppState::MainMenu {
+                break;
+            }
+        }
+        assert_eq!(*world.resource::<AppState>(), AppState::MainMenu);
+        // ~12 s modes + ~2 s gun reel + 1 s hold.
+        let t = 600.0 / 30.0;
+        assert!(t >= 12.0 + 2.0 + SPLASH_LOGO_HOLD_SECS);
+    }
+
+    #[test]
+    fn tick_splash_ignores_non_splash_states() {
+        let mut world = World::new();
+        world.insert_resource(AppState::Title);
+        world.insert_resource(SplashState::default());
+        tick_splash(&mut world, 99.0, true);
+        assert_eq!(*world.resource::<AppState>(), AppState::Title);
+    }
+
+    #[test]
+    fn loading_runs_setup_and_lands_ingame() {
+        let mut world = World::new();
+        world.insert_resource(AppState::Loading);
+        for _ in 0..40 {
+            tick_loading(&mut world, 1.0 / 30.0);
+        }
+        assert_eq!(*world.resource::<AppState>(), AppState::InGame);
+        assert!(!world.resource::<Paused>().0);
+        assert!(world.query::<&crate::comps_a::Player>().iter(&world).count() > 0);
+        assert_eq!(world.resource::<crate::comps_a::Run>().floor, 1);
+    }
+
+    #[test]
+    fn escape_pauses_and_unpauses_with_delay() {
+        let mut paused = Paused(false);
+        let mut overlay = OverlayMenu::None;
+        let mut pending = PendingUnpause(None);
+        let mut menu = MenuState::default();
+        tick_escape_pause(&mut paused, &mut overlay, &mut pending, &mut menu, false, false, true);
+        assert!(paused.0);
+        assert_eq!(overlay, OverlayMenu::Pause);
+        assert!(pending.0.is_none());
+        tick_escape_pause(&mut paused, &mut overlay, &mut pending, &mut menu, false, false, true);
+        assert!(paused.0, "still paused until the delay elapses");
+        assert_eq!(overlay, OverlayMenu::None);
+        assert!(pending.0.is_some());
+    }
+
+    #[test]
+    fn escape_dismisses_confirm_first_and_pops_settings_stack() {
+        let mut paused = Paused(true);
+        let mut overlay = OverlayMenu::Pause;
+        let mut pending = PendingUnpause(None);
+        let mut menu = MenuState::default();
+        menu.pause_confirm = Some(0);
+        tick_escape_pause(&mut paused, &mut overlay, &mut pending, &mut menu, false, false, true);
+        assert_eq!(menu.pause_confirm, None);
+        assert_eq!(overlay, OverlayMenu::Pause, "confirm dismissed, pause kept");
+
+        overlay = OverlayMenu::Settings;
+        menu.settings_page = 3;
+        menu.settings_page_stack = vec![0];
+        tick_escape_pause(&mut paused, &mut overlay, &mut pending, &mut menu, false, false, true);
+        assert_eq!(menu.settings_page, 0);
+        assert!(menu.settings_page_stack.is_empty());
+        tick_escape_pause(&mut paused, &mut overlay, &mut pending, &mut menu, false, false, true);
+        assert_eq!(overlay, OverlayMenu::Pause);
+    }
+
+    #[test]
+    fn escape_ignored_when_blocked_or_game_over() {
+        let mut paused = Paused(false);
+        let mut overlay = OverlayMenu::None;
+        let mut pending = PendingUnpause(None);
+        let mut menu = MenuState::default();
+        tick_escape_pause(&mut paused, &mut overlay, &mut pending, &mut menu, true, false, true);
+        tick_escape_pause(&mut paused, &mut overlay, &mut pending, &mut menu, false, true, true);
+        tick_escape_pause(&mut paused, &mut overlay, &mut pending, &mut menu, false, false, false);
+        assert!(!paused.0);
+        assert_eq!(overlay, OverlayMenu::None);
+    }
+
+    #[test]
+    fn pending_unpause_clears_after_delay() {
+        let mut world = World::new();
+        let mut time = SimTime::default();
+        time.delta_secs = 1.0 / 30.0;
+        world.insert_resource(time);
+        world.insert_resource(Paused(true));
+        world.insert_resource(PendingUnpause(Some(GTimer::from_seconds(
+            UNPAUSE_DELAY_SECS,
+            TimerMode::Once,
+        ))));
+        let mut sched = Schedule::default();
+        sched.add_systems(tick_pending_unpause);
+        for _ in 0..5 {
+            sched.run(&mut world);
+            assert!(world.resource::<Paused>().0, "0.2 s needs 6 ticks");
+        }
+        sched.run(&mut world);
+        assert!(!world.resource::<Paused>().0);
+        assert!(world.resource::<PendingUnpause>().0.is_none());
+    }
+
+    #[test]
+    fn death_guard_forces_unpaused_no_overlay() {
+        let mut world = World::new();
+        world.insert_resource(AppState::InGame);
+        world.insert_resource(crate::comps_a::Run {
+            game_over: true,
+            ..Default::default()
+        });
+        world.insert_resource(Paused(true));
+        world.insert_resource(OverlayMenu::Pause);
+        world.insert_resource(PendingUnpause(Some(GTimer::from_seconds(9.0, TimerMode::Once))));
+        let mut sched = Schedule::default();
+        sched.add_systems(force_death_overlay_state);
+        sched.run(&mut world);
+        assert!(!world.resource::<Paused>().0);
+        assert_eq!(*world.resource::<OverlayMenu>(), OverlayMenu::None);
+        assert!(world.resource::<PendingUnpause>().0.is_none());
+    }
+
+    #[test]
+    fn channels_follow_settings_and_sanitize_stamps() {
+        let mut world = World::new();
+        world.init_resource::<crate::savedata_part::SaveData>();
+        world.init_resource::<crate::audio::AudioChannels>();
+        world.resource_mut::<crate::savedata_part::SaveData>().settings.master_volume = 0.25;
+        world.resource_mut::<crate::savedata_part::SaveData>().version = 0;
+        let mut sched = Schedule::default();
+        sched.add_systems((sync_audio_channels, tick_sanitize_save));
+        sched.run(&mut world);
+        assert_eq!(world.resource::<crate::audio::AudioChannels>().master, 0.25);
+        assert_eq!(
+            world.resource::<crate::savedata_part::SaveData>().version,
+            crate::savedata_part::SAVE_VERSION
+        );
+    }
+
+    #[test]
+    fn goto_state_resets_pause_and_clears_game_over() {
+        let mut world = World::new();
+        world.insert_resource(AppState::InGame);
+        world.insert_resource(Paused(true));
+        world.insert_resource(OverlayMenu::Pause);
+        world.insert_resource(crate::comps_a::Run {
+            game_over: true,
+            ..Default::default()
+        });
+        world.init_resource::<MenuState>();
+        world.resource_mut::<MenuState>().pause_confirm = Some(1);
+        goto_state(&mut world, AppState::MainMenu);
+        assert!(!world.resource::<Paused>().0);
+        assert_eq!(*world.resource::<OverlayMenu>(), OverlayMenu::None);
+        assert!(!world.resource::<crate::comps_a::Run>().game_over);
+        assert_eq!(world.resource::<MenuState>().pause_confirm, None);
+    }
+}

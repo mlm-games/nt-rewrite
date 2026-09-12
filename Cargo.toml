@@ -1,0 +1,45 @@
+[package]
+name = "nt-rewrite"
+version = "0.1.0"
+edition = "2024"
+description = "Nuclear Throne recreation on repame + repose (no bevy)"
+
+[dependencies]
+# Engine (path deps while co-evolving; versions match repame workspace).
+repame-sim = { path = "../Repos/repame/crates/repame-sim", version = "0.2" }
+repame-shell = { path = "../Repos/repame/crates/repame-shell", version = "0.2" }
+repame-anim = { path = "../Repos/repame/crates/repame-anim", version = "0.2" }
+repame-sprite = { path = "../Repos/repame/crates/repame-sprite", version = "0.2" }
+repame-atlas = { path = "../Repos/repame/crates/repame-atlas", version = "0.2" }
+repame-fx = { path = "../Repos/repame/crates/repame-fx", version = "0.2" }
+# PNG decode for atlas uploads (repame ships no image dep; games decode
+# their own pixels per repame-atlas docs). Pinned to the cached 0.25 line.
+image = "0.25"
+# Direct dep: bevy derive macros expand to `bevy_ecs::` paths, so every
+# game crate names it explicitly. Must unify with repame-sim's 0.19.
+bevy_ecs = "0.19"
+# Same glam as repame: shared math types must unify to one version.
+glam = "0.33"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Seeded RNG for sim decisions (same crate+version as the bevy build).
+rand = "0.10"
+repose-core = "0.30"
+repose-ui = "0.30"
+repose-canvas = "0.30"
+repose-render-wgpu = "0.30"
+# Direct dep for the in-crate vortex background pass (`vortex_pass.rs`
+# implements `repose_render_wgpu::WgpuCallback`; must unify with its 30).
+wgpu = "30"
+# Pixel UI font registration (`register_font_data`; the family name the
+# `Text` views request must resolve here).
+repose-text = "0.30"
+anyhow = "1"
+log = "0.4"
+
+[dev-dependencies]
+# (empty: offscreen pixel proofs use the main `repose-render-wgpu` dep,
+# same pattern as repame-sprite's own batch tests).
+
+[profile.dev]
+opt-level = 1
