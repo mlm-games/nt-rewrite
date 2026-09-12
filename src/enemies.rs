@@ -506,6 +506,16 @@ pub fn enemy_ai(
                         TimerMode::Once,
                     );
                     brain.gunangle = ang;
+                } else {
+                    // GML `Bandit/Alarm_1` refires unconditionally
+                    // (`alarm[1] = 20 + random(10)` tops the event); without
+                    // this the finished timer never re-arms and the bandit
+                    // freezes at spawn whenever its first cycle has no
+                    // line of sight (75% of no-LOS cycles).
+                    brain.attack = GTimer::from_seconds(
+                        (20.0 + rng.random_range(0.0..10.0)) / 30.0,
+                        TimerMode::Once,
+                    );
                 }
             }
             {
