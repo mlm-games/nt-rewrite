@@ -739,16 +739,15 @@ impl App {
             .get_resource::<OverlayMenu>()
             .copied()
             .unwrap_or_default();
+        // Bevy gates every InGame menu path on `run.game_over` only
+        // (`handle_pause_input`, `handle_mutation_keys`,
+        // `handle_death_restart`); the `MenuState.game_over` snapshot is
+        // display data for the render layer, never an input gate.
         let game_over = self
             .sim
             .world
             .get_resource::<crate::comps_a::Run>()
-            .is_some_and(|r| r.game_over)
-            || self
-                .sim
-                .world
-                .get_resource::<MenuState>()
-                .is_some_and(|m| m.game_over.is_some());
+            .is_some_and(|r| r.game_over);
         // Read the pending offer directly, not the `MenuState` mirror
         // (the mirror updates inside the schedule, a frame after the
         // offer opens/closes — the stale frame fired the gun on level-up
@@ -1018,12 +1017,7 @@ impl App {
             // back (Settings pops a level, others close).
             if rmb_down && overlay == OverlayMenu::Settings {
                 apply_menu_action(&mut self.sim.world, UiAction::SettingsBack);
-            } else if rmb_down
-                && matches!(
-                    overlay,
-                    OverlayMenu::Credits | OverlayMenu::Stats
-                )
-            {
+            } else if rmb_down && matches!(overlay, OverlayMenu::Credits | OverlayMenu::Stats) {
                 apply_menu_action(&mut self.sim.world, UiAction::CloseOverlay);
             } else if let Some(click) = self.clicks.last().copied() {
                 let viewport_dp = self.view_viewport_dp;
@@ -1204,8 +1198,7 @@ impl App {
             .is_some_and(|r| r.game_over);
         let menu_kind = {
             let menu = self.sim.world.resource_mut::<MenuState>();
-            let game_over = run_game_over || menu.game_over.is_some();
-            menu_overlay_kind(state, overlay, &menu, game_over)
+            menu_overlay_kind(state, overlay, &menu, run_game_over)
         };
         let paused = self
             .sim
@@ -2163,7 +2156,7 @@ pub fn menu_overlay_kind(
             _ => Some(MenuOverlay::Title),
         },
         AppState::InGame => {
-            if game_over || menu.game_over.is_some() {
+            if game_over {
                 return Some(MenuOverlay::GameOver);
             }
             match overlay {

@@ -110,7 +110,10 @@ impl Default for HudState {
             max_rads: 60,
             weapons: vec!["Revolver".to_string(), "Shotgun".to_string()],
             current_weapon: 0,
-            weapon_ids: vec![crate::data::WeaponId::REVOLVER, crate::data::WeaponId::SHOTGUN],
+            weapon_ids: vec![
+                crate::data::WeaponId::REVOLVER,
+                crate::data::WeaponId::SHOTGUN,
+            ],
             weapon_cursed: vec![false, false],
             ammo: [0; 6],
             weapon_ammo: [0, 0],
@@ -161,20 +164,34 @@ pub fn reset_hud_state(hud: &mut HudState) {
     hud.loop_count = 0;
 }
 
-/// GML `timer_string` verbatim: `M:SS.CC` from `tottimer` steps at
-/// 30 steps/s (`round(timer / 30 * 100)` centiseconds).
+/// GML `timer_string` verbatim (`GameCont/Step_0`): `M:S.F` from the
+/// sub-second `timer` counter at 30 steps/s
+/// (`string_pad_zeroes(..., 1)` = at least 1 digit, i.e. no zero padding:
+/// `round(timer / 30 * 100)` prints 0-97 unpadded). `timer` resets every
+/// second, so it equals `tottimer % 30`.
 pub fn run_timer_string(tottimer: u32) -> String {
     let minutes = tottimer / 1800;
     let seconds = (tottimer / 30) % 60;
-    let centis = ((tottimer % 30) * 100 + 15) / 30;
-    format!("{minutes}:{seconds:02}.{centis:02}")
+    let frac = ((tottimer % 30) * 100 + 15) / 30;
+    format!("{minutes}:{seconds}.{frac}")
 }
 
 /// GML `scrAreaGetMapName` verbatim (unlocalized strings): HQ shows
 /// `HQ{sub}`, the crib shows `$$$`, secret areas `N-?`, the vault
-/// `???`, otherwise `A-S`; plus ` L#` on loops.
+/// `???`, otherwise `A-S`; a won run shows `END2` on the final HQ floor
+/// else `END1` (GML checks the `Cinematic` throne win first, then the
+/// HQ-final win — headless has no cinematic entity so any non-HQ win is
+/// `END1`); plus ` H#` in hardmode else ` L#` on loops.
 pub fn run_area_string(run: &Run) -> String {
     let area = crate::worldgen::gml_area_from_run(run);
+    if run.won {
+        // GML `GameCont.win` branch verbatim (modulo the headless
+        // Cinematic/HQ-final approximations documented above).
+        if area == 106 {
+            return "END2".to_string();
+        }
+        return "END1".to_string();
+    }
     let base = if area == 106 {
         format!("HQ{}", run.floor_in_area)
     } else if area == 107 {
@@ -187,7 +204,8 @@ pub fn run_area_string(run: &Run) -> String {
         format!("{area}-{}", run.floor_in_area)
     };
     if run.loop_count != 0 {
-        format!("{} L{}", base, run.loop_count)
+        let tag = if run.hardmode { 'H' } else { 'L' };
+        format!("{} {tag}{}", base, run.loop_count)
     } else {
         base
     }
@@ -248,15 +266,18 @@ pub fn sync_hud_state(world: &World) -> HudState {
     hud.boss_name.clear();
     let mut best: Option<(i32, u32, String)> = None;
     for entity_ref in world.iter_entities() {
-        let (Some(enemy), Some(health)) =
-            (entity_ref.get::<Enemy>(), entity_ref.get::<Health>())
+        let (Some(enemy), Some(health)) = (entity_ref.get::<Enemy>(), entity_ref.get::<Health>())
         else {
             continue;
         };
         if !entity_ref.contains::<BossBrain>() {
             continue;
         }
-        if best.as_ref().map(|(m, _, _)| health.max >= *m).unwrap_or(true) {
+        if best
+            .as_ref()
+            .map(|(m, _, _)| health.max >= *m)
+            .unwrap_or(true)
+        {
             best = Some((
                 health.max,
                 health.hp.max(0) as u32,
@@ -379,8 +400,11 @@ pub fn sync_hud_state(world: &World) -> HudState {
     if run.game_over {
         for entity_ref in world.iter_entities() {
             if let Some(player) = entity_ref.get::<Player>() {
-                hud.death_mutation_ids =
-                    player.mutations.iter().map(|m| mutation_skill_index(*m)).collect();
+                hud.death_mutation_ids = player
+                    .mutations
+                    .iter()
+                    .map(|m| mutation_skill_index(*m))
+                    .collect();
                 break;
             }
         }
@@ -507,4 +531,3 @@ pub fn ultra_skill_index(id: crate::data::UltraMutationId) -> u8 {
         CuzEmotional => 3,
     }
 }
-

@@ -300,6 +300,13 @@ pub fn tick_mutation_mirror(
     } else {
         (0, false)
     };
+    apply_mutation_mirror(menu, count, is_ultra);
+}
+
+/// Pure mirror law shared by [`tick_mutation_mirror`] and the InGame tick
+/// below (single source; the InGame call site can only take owned lens
+/// because of the `World` borrow checker).
+fn apply_mutation_mirror(menu: &mut MenuState, count: usize, is_ultra: bool) {
     if count != menu.mutation_count {
         menu.mutation_selected = None;
     }
@@ -815,46 +822,45 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
         }
         UiAction::SettingToggle(ref key) => {
             world.init_resource::<SaveData>();
-            let known = {
+            {
                 let mut save = world.resource_mut::<SaveData>();
-                apply_setting_toggle(&mut save, key)
-            };
-            if known {
-                mark_dirty(world);
-                emit_cue(world, &action);
+                // Bevy saves + clicks unconditionally (unknown keys only
+                // log a warning there).
+                let _ = apply_setting_toggle(&mut save, key);
             }
+            mark_dirty(world);
+            emit_cue(world, &action);
         }
         UiAction::SettingSlider { ref key, value } => {
             world.init_resource::<SaveData>();
-            let known = {
+            {
                 let mut save = world.resource_mut::<SaveData>();
-                apply_setting_slider(&mut save, key, value)
-            };
-            if known {
-                mark_dirty(world);
+                // Bevy saves + plays `sndSliderLetGo` unconditionally
+                // (unknown sliders only warn).
+                let _ = apply_setting_slider(&mut save, key, value);
             }
+            mark_dirty(world);
+            emit_cue(world, &action);
         }
         UiAction::SettingCycle { ref key, dir } => {
             world.init_resource::<SaveData>();
-            let known = {
+            {
                 let mut save = world.resource_mut::<SaveData>();
-                apply_setting_cycle(&mut save, key, dir)
-            };
-            if known {
-                mark_dirty(world);
-                emit_cue(world, &action);
+                // Bevy saves + clicks unconditionally (unknown keys warn).
+                let _ = apply_setting_cycle(&mut save, key, dir);
             }
+            mark_dirty(world);
+            emit_cue(world, &action);
         }
         UiAction::SettingInput { ref key, ref value } => {
             world.init_resource::<SaveData>();
-            let known = {
+            {
                 let mut save = world.resource_mut::<SaveData>();
-                apply_setting_input(&mut save, key, value)
-            };
-            if known {
-                mark_dirty(world);
-                emit_cue(world, &action);
+                // Bevy saves + clicks unconditionally (unknown keys warn).
+                let _ = apply_setting_input(&mut save, key, value);
             }
+            mark_dirty(world);
+            emit_cue(world, &action);
         }
         UiAction::SettingResetOptions => {
             // Bevy resets the whole save (progress included) — mirrored.
@@ -1264,8 +1270,9 @@ fn tick_settings_nav(world: &mut World, nav_v: i8, nav_h: i8, confirm: bool) {
 
 /// In-game menu routing (game-over > pause/overlay > mutation offer).
 fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
-    // Offer mirror (bevy hud sync ran before input handling; same law
-    // as `tick_mutation_mirror`, inlined for the borrow checker).
+    // Offer mirror (bevy `sync_hud` order: mirror before input handling;
+    // law shared with `tick_mutation_mirror` via `apply_mutation_mirror`
+    // — lens are copied out first for the `World` borrow checker).
     {
         let (count, is_ultra) = if let Some(ultra) = world.get_resource::<PendingUltra>() {
             (ultra.choices.len(), true)
@@ -1275,14 +1282,7 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
             (0, false)
         };
         if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
-            if count != menu.mutation_count {
-                menu.mutation_selected = None;
-            }
-            menu.mutation_count = count;
-            menu.mutation_is_ultra = is_ultra;
-            if menu.mutation_selected.is_some_and(|sel| sel >= count) {
-                menu.mutation_selected = None;
-            }
+            apply_mutation_mirror(&mut menu, count, is_ultra);
         }
     }
 
