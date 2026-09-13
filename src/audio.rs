@@ -1462,8 +1462,12 @@ pub fn ui_action_to_cue(action: &UiAction) -> Option<ReactiveCue> {
 
         UiAction::SelectCharacter(_)
         | UiAction::PickMutation(_)
-        | UiAction::SelectMutation(_)
         | UiAction::SelectCrown(_) => Some(ReactiveCue::UiConfirm),
+        // GML `SkillIcon` highlight law: landing on a card plays
+        // `sndHover`, not a confirm. `SelectMutation` is the highlight
+        // half of the two-step; only the commit (`PickMutation`) is a
+        // confirm.
+        UiAction::SelectMutation(_) => None,
 
         UiAction::SelectSkin(_)
         | UiAction::NextLanguage
@@ -1536,20 +1540,18 @@ pub fn ui_action_sfx(action: &UiAction) -> Vec<AudioCue> {
             push("sndClickBack", 0.6);
         }
         UiAction::AdvanceCredits => {
-            push("sndClick", 0.7);
+            // GML `Credits/Step_0` advances on click with no named sting
+            // (the section change itself is the feedback).
         }
         UiAction::QuitToTitle | UiAction::QuitApp => {
             push("sndClickBack", 0.6);
         }
-        UiAction::ShowPauseConfirm(_) => {
-            push("sndClick", 0.7);
-        }
-        UiAction::CancelPauseConfirm => {
-            push("sndClickBack", 0.6);
-        }
-        UiAction::ConfirmPause(_) => {
-            push("sndClick", 0.7);
-        }
+        // GML `PauseButton/Other_10` plays NO transition sound on
+        // MENU/RETRY/SETTINGS/CONTINUE/BACK/QUIT (hover `sndHover`
+        // only) — the confirm swap is silent.
+        UiAction::ShowPauseConfirm(_)
+        | UiAction::CancelPauseConfirm
+        | UiAction::ConfirmPause(_) => {}
         UiAction::SettingToggle(_)
         | UiAction::SettingCycle { .. }
         | UiAction::SettingInput { .. } => {

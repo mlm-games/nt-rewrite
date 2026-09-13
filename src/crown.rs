@@ -322,6 +322,29 @@ pub fn crown_floor_start_bonus(
     }
 }
 
+/// GML crown name + description verbatim
+/// (`scripts/scrCrowns/scrCrowns.gml`: `crown_name[]`/`crown_text[]`
+/// by GML crown index, unlocalized defaults, `@` tags included).
+/// Takes the GML crown index (see `crown_port_to_gml`).
+pub fn crown_name_text_gml(gml: u8) -> (&'static str, &'static str) {
+    match gml {
+        0 => ("RANDOM", "???"),
+        1 => ("NO CROWN", "A BARE HEAD#IS A FAIR HEAD"),
+        2 => ("CROWN OF DEATH", "BIGGER @wEXPLOSIONS#@s-1 @rMAX HP@s"),
+        3 => ("CROWN OF LIFE", "NO @rHP DROPS@s#@rBIG HP CHESTS@s MORE COMMON"),
+        4 => ("CROWN OF HASTE", "@wPICKUPS@s FADE FAST#ARE WORTH MORE"),
+        5 => ("CROWN OF GUNS", "NO @yAMMO DROPS@s#MORE @wWEAPON DROPS"),
+        6 => ("CROWN OF HATRED", "TAKE @wDAMAGE@s AND GAIN @gRADS@s#WHEN OPENING @wCHESTS@s"),
+        7 => ("CROWN OF BLOOD", "MORE @wENEMIES@s#FEWER @gRADS@s"),
+        8 => ("CROWN OF DESTINY", "FREE @gMUTATION@s#NARROW FUTURE"),
+        9 => ("CROWN OF LOVE", "@yAMMO@s CHESTS ONLY"),
+        10 => ("CROWN OF LUCK", "START @wAREAS@s AT 1 @rHP@s#CHANCE @wENEMIES@s HAVE 1 @rHP@s"),
+        11 => ("CROWN OF CURSES", "A LOT MORE @pCURSED CHESTS@s"),
+        12 => ("CROWN OF RISK", "MORE @wDROPS@s WHEN AT FULL @rHP@s#LESS @wDROPS@s WHEN NOT"),
+        _ => ("CROWN OF PROTECTINON", "@wWEAPONS@s CONTAIN @rHP@s#INSTEAD OF @yAMMO@s"),
+    }
+}
+
 /// Toast label for a crown (bevy `crown_name` parity).
 pub fn crown_name_for_toast(crown: CrownKind) -> &'static str {
     match crown {

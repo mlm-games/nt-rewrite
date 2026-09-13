@@ -784,27 +784,54 @@ pub struct CharacterDef {
     pub walk_sprite: &'static str,
 }
 
-/// Campfire passive blurb per race (bevy `content.rs::race_passive_text`
-/// verbatim — what the title screen prints under the big name).
+/// GML `scrRaceGetPassiveSkillDescription` verbatim
+/// (`scripts/scrRaces/scrRaces.gml:249`): unlocalized campfire passive
+/// line (first half of the two-line skills text). `@w/@s/@r/@g/@y/@b`
+/// color tags ride through to the `draw_text_nt` backend.
 pub fn race_passive_text(race: crate::data::RaceId) -> &'static str {
     match race {
-        crate::data::RaceId::Fish => "Kills drop extra ammo",
-        crate::data::RaceId::Crystal => "Gains a shield when hurt",
-        crate::data::RaceId::Eyes => "Sees far, eyes aim with you",
-        crate::data::RaceId::Melting => "Frail, but kills give max HP",
-        crate::data::RaceId::Plant => "Attacks snare nearby prey",
-        crate::data::RaceId::Venuz => "Ultra mutation is random",
-        crate::data::RaceId::Steroids => "Wields two weapons at once",
-        crate::data::RaceId::Robot => "Eats ammo to repair itself",
-        crate::data::RaceId::Chicken => "Cheats death once per floor",
-        crate::data::RaceId::Rebel => "Allies cost HP to call",
-        crate::data::RaceId::Horror => "Fires a piercing radiation beam",
-        crate::data::RaceId::Rogue => "Carries rogue ammo for strikes",
-        crate::data::RaceId::BigDog => "A very good dog",
-        crate::data::RaceId::Skeleton => "Bones rattle menacingly",
-        crate::data::RaceId::Frog => "Ribbit.",
-        crate::data::RaceId::Cuz => "Bumbles with random guns",
-        crate::data::RaceId::Random => "A surprise mutant",
+        crate::data::RaceId::Random => "???",
+        crate::data::RaceId::Fish => "GETS MORE @yAMMO@w",
+        crate::data::RaceId::Crystal => "MORE MAX @rHP@w",
+        crate::data::RaceId::Eyes => "SEES IN THE DARK",
+        crate::data::RaceId::Melting => "LESS MAX @rHP@w#MORE @gRADS@w",
+        crate::data::RaceId::Plant => "IS FASTER",
+        crate::data::RaceId::Venuz => "HIGHER @wRATE OF FIRE@s",
+        crate::data::RaceId::Steroids => "INACCURATE#AUTOMATIC WEAPONS",
+        crate::data::RaceId::Robot => "FINDS BETTER TECH",
+        crate::data::RaceId::Chicken => "HARD TO KILL",
+        crate::data::RaceId::Rebel => "PORTALS @rHEAL@w",
+        crate::data::RaceId::Horror => "EXTRA @gMUTATION@w CHOICE",
+        crate::data::RaceId::Rogue => "BLAST ARMOR, @bHEAT@w",
+        crate::data::RaceId::BigDog => "MORE @rHP@w#SPIN ATTACK",
+        crate::data::RaceId::Skeleton => "LESS HP, SPEED, AND ACCURACY",
+        crate::data::RaceId::Frog => "CAN'T STAND STILL#TOXIC IMMUNITY",
+        crate::data::RaceId::Cuz => "3 WEAPONS",
+    }
+}
+
+/// GML `scrRaceGetActiveSkillDescription` verbatim
+/// (`scripts/scrRaces/scrRaces.gml:275`): unlocalized campfire active
+/// line (second half of the two-line skills text).
+pub fn race_active_text(race: crate::data::RaceId) -> &'static str {
+    match race {
+        crate::data::RaceId::Random => "???",
+        crate::data::RaceId::Fish => "CAN @wROLL@s",
+        crate::data::RaceId::Crystal => "CAN @wSHIELD@s",
+        crate::data::RaceId::Eyes => "TELEKINESIS",
+        crate::data::RaceId::Melting => "EXPLODE @wCORPSES@s",
+        crate::data::RaceId::Plant => "@wSNARE@s ENEMIES",
+        crate::data::RaceId::Venuz => "@wPOP POP",
+        crate::data::RaceId::Steroids => "DUAL WIELDING",
+        crate::data::RaceId::Robot => "CAN EAT @wWEAPONS@s",
+        crate::data::RaceId::Chicken => "CAN THROW @wWEAPONS@s",
+        crate::data::RaceId::Rebel => "CAN SPAWN @wALLIES@s",
+        crate::data::RaceId::Horror => "@gRADIATION@w BEAM",
+        crate::data::RaceId::Rogue => "@bPORTAL STRIKE@s",
+        crate::data::RaceId::BigDog => "MISSILES",
+        crate::data::RaceId::Skeleton => "BLOOD GAMBLE",
+        crate::data::RaceId::Frog => "@gTOXIC@w CLOUD",
+        crate::data::RaceId::Cuz => "@bCRY",
     }
 }
 

@@ -94,38 +94,42 @@ pub const ALL_MUTATIONS: [MutationId; 29] = [
     MutationId::Patience,
 ];
 
-/// Mutation display name + description (bevy `mutation_def` parity).
+/// GML mutation display name + description verbatim
+/// (`scripts/scrSkills/scrSkills.gml`: `skill_name[]`/`skill_text[]`,
+/// ids 1-29): unlocalized defaults, `@`-color tags included — the
+/// `draw_text_nt` backend resolves them. `mutation_skill_index`
+/// (`hud.rs`) maps these ids to the same 1-29 frames GML uses.
 pub fn mutation_name(id: MutationId) -> (&'static str, &'static str) {
     match id {
-        MutationId::RhinoSkin => ("Rhino Skin", "+4 max HP"),
-        MutationId::PlutoniumHunger => ("Plutonium Hunger", "Much larger pickup range"),
-        MutationId::TriggerFingers => ("Trigger Fingers", "Kills lower reload time"),
-        MutationId::RabbitPaw => ("Rabbit Paw", "Better chance for drops"),
-        MutationId::SecondStomach => ("Second Stomach", "Medkits heal double"),
-        MutationId::ScarierFace => ("Scarier Face", "Enemies have less HP"),
-        MutationId::BoilingVeins => ("Boiling Veins", "Explosions can't drop you below 4 HP"),
-        MutationId::ImpactWrists => ("Impact Wrists", "Weapons knock back harder"),
-        MutationId::ExtraFeet => ("Extra Feet", "Move faster"),
-        MutationId::Bloodlust => ("Bloodlust", "Kills sometimes heal you"),
-        MutationId::LuckyShot => ("Lucky Shot", "Kills sometimes drop ammo"),
-        MutationId::GammaGuts => ("Gamma Guts", "Enemies that touch you take damage"),
-        MutationId::BackMuscle => ("Back Muscle", "Higher ammo capacity"),
-        MutationId::Euphoria => ("Euphoria", "Enemy bullets are slower"),
-        MutationId::LongArms => ("Long Arms", "Melee attacks reach further"),
-        MutationId::Stress => ("Stress", "Fire faster at low health"),
-        MutationId::EagleEyes => ("Eagle Eyes", "Better accuracy"),
-        MutationId::OpenMind => ("Open Mind", "More chests spawn"),
-        MutationId::HeavyHeart => ("Heavy Heart", "More weapon drops"),
-        MutationId::StrongSpirit => ("Strong Spirit", "Prevents death, once"),
-        MutationId::SharpTeeth => ("Sharp Teeth", "Damage taken also hurts nearby enemies"),
-        MutationId::LastWish => ("Last Wish", "Heal and refill ammo when low"),
-        MutationId::BoltMarrow => ("Bolt Marrow", "Bolts seek targets"),
-        MutationId::Hammerhead => ("Hammerhead", "Chew through destructible props"),
-        MutationId::LaserBrain => ("Laser Brain", "Energy weapons hit harder"),
-        MutationId::RecycleGland => ("Recycle Gland", "Bullet weapons sometimes refund ammo"),
-        MutationId::ShotgunShoulders => ("Shotgun Shoulders", "Shells bounce off walls"),
-        MutationId::ThroneButt => ("Throne Butt", "Active ability is upgraded"),
-        MutationId::Patience => ("Patience", "Skip now; get more choices next time"),
+        MutationId::RhinoSkin => ("RHINO SKIN", "+4 @rMAX HP"),
+        MutationId::ExtraFeet => ("EXTRA FEET", "MORE @wSPEED#@sWALK NORMALY ON ALL TERRAIN"),
+        MutationId::PlutoniumHunger => ("PLUTONIUM HUNGER", "ATTRACT @wDROPS@s AND @gRADS@s FROM FURTHER"),
+        MutationId::RabbitPaw => ("RABBIT PAW", "MORE @rHP@s AND @yAMMO@s DROPS"),
+        MutationId::ThroneButt => ("THRONE BUTT", "UPGRADES YOUR @wSPECIAL ABILITY"),
+        MutationId::LuckyShot => ("LUCKY SHOT", "SOME KILLS REGENERATE @yAMMO"),
+        MutationId::Bloodlust => ("BLOODLUST", "SOME KILLS REGENERATE @rHP"),
+        MutationId::GammaGuts => ("GAMMA GUTS", "@wENEMIES@s TOUCHING YOU TAKE DAMAGE"),
+        MutationId::SecondStomach => ("SECOND STOMACH", "MORE @rHP@s FROM MEDKITS"),
+        MutationId::BackMuscle => ("BACK MUSCLE", "HIGHER @yAMMO@s MAX"),
+        MutationId::ScarierFace => ("SCARIER FACE", "LESS @wENEMY @rHP"),
+        MutationId::Euphoria => ("EUPHORIA", "SLOWER @wENEMY@s BULLETS"),
+        MutationId::LongArms => ("LONG ARMS", "MORE @wMELEE@s RANGE"),
+        MutationId::BoilingVeins => ("BOILING VEINS", "@wNO DAMAGE@s FROM EXPLOSIONS AND FIRE#WHEN UNDER 4 @rHP"),
+        MutationId::ShotgunShoulders => ("SHOTGUN SHOULDERS", "@wSHELLS@s BOUNCE FURTHER"),
+        MutationId::RecycleGland => ("RECYCLE GLANDS", "MOST HIT @wBULLETS@s BECOME @yAMMO"),
+        MutationId::LaserBrain => ("LASER BRAIN", "@wENERGY@s WEAPONS DEAL MORE @wDAMAGE@s"),
+        MutationId::LastWish => ("LAST WISH", "GET FULL @rHEALTH @sAND SOME @yAMMO"),
+        MutationId::EagleEyes => ("EAGLE EYES", "BETTER ACCURACY"),
+        MutationId::ImpactWrists => ("IMPACT WRISTS", "CORPSES FLY & HIT HARDER"),
+        MutationId::BoltMarrow => ("BOLT MARROW", "HOMING @wBOLTS"),
+        MutationId::Stress => ("STRESS", "HIGHER RATE OF FIRE#AS @rHP@s GETS LOWER"),
+        MutationId::TriggerFingers => ("TRIGGER FINGERS", "KILLS LOWER YOUR RELOAD TIME"),
+        MutationId::SharpTeeth => ("SHARP TEETH", "DAMAGE TAKEN IS DEALT TO#ALL ENEMIES ON SCREEN"),
+        MutationId::Patience => ("PATIENCE", "@gMUTATE@s LATER"),
+        MutationId::Hammerhead => ("HAMMER HEAD", "BREAK TROUGH LIMITED AMOUNT OF WALLS"),
+        MutationId::StrongSpirit => ("STRONG SPIRIT", "PREVENT DEATH ONCE#RECHARGE AT FULL @rHP@s IN NEXT LEVEL"),
+        MutationId::OpenMind => ("OPEN MIND", "EXTRA @wCHESTS@s SPAWN"),
+        MutationId::HeavyHeart => ("HEAVY HEART", "MORE WEAPON DROPS"),
     }
 }
 
@@ -193,66 +197,104 @@ pub fn ultra_choices_for(race: RaceId) -> [UltraMutationId; 2] {
     }
 }
 
-/// Ultra display name + description (bevy `ultra_mutation_def` parity).
+/// GML ultra display name + description verbatim
+/// (`scripts/scrUltras/scrUltras.gml`: `ultr_name[race,tier]` /
+/// `ultr_text[race,tier]`, unlocalized defaults, `@` tags included).
+/// GML indexes by (race gml id, tier 1-2/3); the port's per-race pair
+/// maps onto tiers 1-2 (Horror's 3rd tier only exists via the Horror
+/// race gate in `LevCont`, not as an offer pair).
 pub fn ultra_mutation_name(id: UltraMutationId) -> (&'static str, &'static str) {
     match id {
         UltraMutationId::FishGunWarrant => {
-            ("Gun Warrant", "Faster gun handling and stronger rolls")
+            (
+                "GUN WARRANT",
+                "INFINITE AMMO THE FIRST 7 SECONDS#AFTER EXITING A @pPORTAL",
+            )
         }
-        UltraMutationId::FishConfiscate => ("Confiscate", "Weapon pickups grant extra ammo"),
-        UltraMutationId::CrystalFortress => ("Fortress", "Much more HP and longer shield"),
-        UltraMutationId::CrystalJuggernaut => ("Juggernaut", "Move faster while protected"),
+        UltraMutationId::FishConfiscate => ("CONFISCATE", "ENEMIES SOMETIMES DROP CHESTS"),
+        UltraMutationId::CrystalFortress => ("FORTRESS", "+6 MAX HP"),
+        UltraMutationId::CrystalJuggernaut => ("JUGGERNAUT", "MOVE WHEN SHIELDING"),
         UltraMutationId::EyesMonsterStyle => {
-            ("Monster Style", "Telekinesis and pickup pull are stronger")
+            (
+                "MONSTER STYLE",
+                "PUSH NEARBY ENEMIES AWAY#WHEN NOT USING TELEKINESIS",
+            )
         }
         UltraMutationId::EyesProjectileStyle => {
-            ("Projectile Style", "Enemy projectiles are slowed further")
+            ("PROJECTILE STYLE", "TELEKINESIS HOLDS YOUR PROJECTILES")
         }
-        UltraMutationId::MeltingBrainCapacity => {
-            ("Brain Capacity", "Detonate reaches farther and hurts more")
+        UltraMutationId::MeltingBrainCapacity => ("BRAIN CAPACITY", "BLOW UP LOW HP ENEMIES"),
+        UltraMutationId::MeltingDetachment => {
+            ("DETACHMENT", "3 MORE MUTATIONS#LOSE HALF OF YOUR HP")
         }
-        UltraMutationId::MeltingDetachment => ("Detachment", "Gain emergency survivability"),
-        UltraMutationId::PlantTrapper => ("Trapper", "Snare lasts longer and slows harder"),
-        UltraMutationId::PlantKiller => ("Killer", "Move and fire faster"),
-        UltraMutationId::VenuzBack2Bizniz => ("Back 2 Bizniz", "Pop Pop grants an extra charge"),
-        UltraMutationId::VenuzGunGod => ("Ima Gun God", "Major fire-rate and accuracy boost"),
+        UltraMutationId::PlantTrapper => ("TRAPPER", "BIG SNARE"),
+        UltraMutationId::PlantKiller => ("KILLER", "KILLING SNARED ENEMY SPAWN SAPLINGS"),
+        UltraMutationId::VenuzBack2Bizniz => ("BACK 2 BIZNIZ", "FREE POP POP UPGRADE"),
+        UltraMutationId::VenuzGunGod => ("IMA GUN GOD", "HIGHER RATE OF FIRE"),
         UltraMutationId::SteroidsAmbidextrous => {
-            ("Ambidextrous", "Faster fire and lower recoil feel")
+            ("AMBIDEXTROUS", "DOUBLE WEAPONS FROM CHESTS")
         }
-        UltraMutationId::SteroidsGetArmed => ("Get Armed", "Get Loaded refills more ammunition"),
+        UltraMutationId::SteroidsGetArmed => {
+            ("GET LOADED", "AMMO CHESTS CONTAIN ALL AMMO TYPES")
+        }
         UltraMutationId::RobotRefinedTaste => {
-            ("Refined Taste", "Ammo and weapon pickups heal more")
+            (
+                "REFINED TASTE",
+                "HIGH TIER WEAPONS ONLY#AUTO EAT WEAPONS LEFT BEHIND",
+            )
         }
-        UltraMutationId::RobotRegurgitate => ("Regurgitate", "Eating weapons gives better rewards"),
+        UltraMutationId::RobotRegurgitate => {
+            (
+                "REGURGITATE",
+                "EATING WEAPONS CAN DROP CHESTS#AUTO EAT WEAPONS LEFT BEHIND",
+            )
+        }
         UltraMutationId::ChickenHarderToKill => {
-            ("Harder To Kill", "Headless survival returns with more HP")
+            ("HARDER TO KILL", "KILLS EXTEND BLEED TIME")
         }
-        UltraMutationId::ChickenDetermination => ("Determination", "Thrown weapons hit harder"),
+        UltraMutationId::ChickenDetermination => {
+            (
+                "DETERMINATION",
+                "THROWN WEAPONS CAN TELEPORT BACK#TO YOUR SECONDARY SLOT",
+            )
+        }
         UltraMutationId::RebelPersonalGuard => {
-            ("Personal Guard", "Allies live longer and shoot faster")
+            (
+                "PERSONAL GUARD",
+                "START A LEVEL WITH 2 ALLIES#ALL ALLIES HAVE MORE HP",
+            )
         }
-        UltraMutationId::RebelRiot => ("Riot", "Spawn more allies"),
-        UltraMutationId::HorrorStalker => ("Stalker", "Beam and radiation effects are stronger"),
-        UltraMutationId::HorrorAnomaly => ("Anomaly", "Energy weapons and pickups improve"),
+        UltraMutationId::RebelRiot => ("RIOT", "DOUBLE ALLY SPAWNS"),
+        UltraMutationId::HorrorStalker => {
+            ("STALKER", "ENEMIES EXPLODE IN RADIATION ON DEATH")
+        }
+        UltraMutationId::HorrorAnomaly => ("ANOMALY", "@pPORTAL@s APPEAR EARLIER"),
         UltraMutationId::RogueSuperBlastArmor => {
-            ("Super Blast Armor", "Explosion damage is greatly reduced")
+            ("SUPER BLAST ARMOR", "SUPER BLAST ARMOR")
         }
         UltraMutationId::RoguePortalStrike => {
-            ("Ultra Portal Strike", "Portal strike is larger and faster")
+            (
+                "SUPER PORTAL STRIKE",
+                "DOUBLE PORTAL STRIKE PICKUPS#AND CAPACITY",
+            )
         }
         UltraMutationId::BigDogHeavyArtillery => {
-            ("Heavy Artillery", "Rocket barrage gains side rockets")
+            ("ULTRA MISSILES", "@wROCKETS SHOOT BULLETS")
         }
-        UltraMutationId::BigDogGuardian => ("Guardian", "Gain bulk and protection"),
-        UltraMutationId::SkeletonBloodArmor => ("Blood Armor", "More HP and blood-fueled kills"),
+        UltraMutationId::BigDogGuardian => ("ULTRA SPIN", "@wIMPROVED SPIN ATTACK"),
+        UltraMutationId::SkeletonBloodArmor => ("REDEMPTION", "BACK IN THE FLESH"),
         UltraMutationId::SkeletonNecromancy => {
-            ("Necromancy", "Kills sometimes heal and refund ammo")
+            ("DAMNATION", "FAST RECHARGE AFTER#USING BLOOD GAMBLE")
         }
-        UltraMutationId::FrogToxicLord => ("Toxic Lord", "Toxic clouds are larger and longer"),
-        UltraMutationId::FrogSwampBody => ("Swamp Body", "Gain bulk and blast resilience"),
-        UltraMutationId::CuzHoarder => ("Hoarder", "Carry a full third weapon slot"),
-        UltraMutationId::CuzQuickSwap => ("Quick Swap", "Swap ability is nearly instant"),
-        UltraMutationId::CuzEmotional => ("Emotional", "Cry more tears, carry more ammo"),
+        UltraMutationId::FrogToxicLord => {
+            ("INTIMACY", "CONTINUOUSLY SPREAD TOXIC GAS")
+        }
+        UltraMutationId::FrogSwampBody => {
+            ("DISTANCE", "@gRADIATION@s CREATES TOXIC GAS")
+        }
+        UltraMutationId::CuzHoarder => ("ARSENAL", "TWICE AS MANY GUNS"),
+        UltraMutationId::CuzQuickSwap => ("QUICK SWAP", "SWAP ABILITY IS NEARLY INSTANT"),
+        UltraMutationId::CuzEmotional => ("EMOTIONAL", "TWICE AS MANY @bTEARS@w"),
     }
 }
 
@@ -732,7 +774,13 @@ pub fn apply_mutation(
     };
 
     player.mutations.push(id);
-    let (name, desc) = mutation_name(id);
+    // GML `scrLevelUpScreenSubmit` verbatim: the pick spawns a
+    // `SkillText` with `txt = loc("Skills", skill, "Name", ...)` (the
+    // NAME only, not `Name: Desc`) drawn `@d`-dark at
+    // `(view_center, view_height - height - 76)` blinking on
+    // `disappear % 2`. The `Toast` resource is the headless `SkillText`.
+    let (name, _) = mutation_name(id);
+    toast.show(name);
 
     match id {
         MutationId::RhinoSkin => {
@@ -858,7 +906,6 @@ pub fn apply_mutation(
     chromatic_pulse(&mut fx.chroma, 0.25);
     slow_motion(&mut fx.slow_mo, 0.5, 0.35);
     audio.play_levelup(cues);
-    toast.show(&format!("{name}: {desc}"));
 }
 
 /// Throne Butt's immediate per-race bonus (bevy verbatim).
@@ -1130,13 +1177,14 @@ pub fn apply_ultra_mutation(
         }
     }
 
-    let (name, desc) = ultra_mutation_name(id);
-
     fx.trauma.add(0.55);
     chromatic_pulse(&mut fx.chroma, 0.4);
     slow_motion(&mut fx.slow_mo, 0.35, 0.5);
     audio.play_levelup(cues);
-    toast.show(&format!("ULTRA - {name}: {desc}"));
+    // GML `UltraIcon/Other_10` verbatim: the pick spawns a `SkillText`
+    // with the ultra NAME (not `Name: Desc`) at the same SkillText
+    // position. The `Toast` resource is the headless `SkillText`.
+    toast.show(ultra_mutation_name(id).0);
 
     debug_assert!(
         ultra_choices_for(race_state.race).contains(&id) || race_state.race == RaceId::Random,

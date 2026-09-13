@@ -82,7 +82,7 @@ use repose_core::{
     Color, Dp, FocusRequester, RenderContext, Scheduler, Sp, View, remember, request_frame,
 };
 use repose_render_wgpu::Callback;
-use repose_ui::{Box as UiBox, Column, Text, TextStyle, ViewExt, ZStack};
+use repose_ui::{AnnotatedText, Box as UiBox, Column, Text, TextStyle, ViewExt, ZStack};
 
 use crate::audio::UiAction;
 use crate::comps_a::CurrentFrame as CombatFrame;
@@ -1937,40 +1937,90 @@ pub fn placeholder_instances(world: &mut World) -> Vec<SpriteInstance> {
 /// full live width). `LOW HP` blinks on the shell beat (GML
 /// `sin(wave)` gate over the `drawlowhp` hurt window).
 pub fn hud_overlay_lines(world: &mut World, canvas_dp: [f32; 2]) -> Vec<crate::render::GuiRow> {
+    // GML `sin(wave) > 0` blink gate over the hurt/low-ammo windows
+    // (`wave` ticks per step; the shell approximates it at 12 Hz).
     let blink = world
         .get_resource::<crate::SimTime>()
         .map(|t| (t.elapsed_secs * 12.0).sin() > 0.0)
         .unwrap_or(true);
     hud_gui_texts_dp(world, canvas_dp)
         .into_iter()
-        .filter(|(t, _, _, _, _, _, _)| t != "LOW HP" || blink)
+        .filter(|(segs, _, _, _, _, _)| {
+            if segs.len() != 1 {
+                return true;
+            }
+            let t = segs[0].0.as_str();
+            // `LOW HP` + the whole low-ammo block share the GML
+            // `sin(wave) > 0` blink gate. `SkillText` toasts blink on
+            // `disappear % 2` — same shell beat. (Toast text arrives
+            // `@d`-tagged; strip the tag for the match.)
+            let plain = t.strip_prefix("@d").unwrap_or(t);
+            if plain == "LOW HP"
+                || plain == "EMPTY"
+                || plain == "NOT ENOUGH RADS"
+                || plain.starts_with("LOW ")
+                || plain.starts_with("NOT ENOUGH ")
+                || t.starts_with("@d")
+            {
+                return blink;
+            }
+            true
+        })
         .collect()
 }
 
-/// Positioned overlay text layer (bevy `nt_text_at` placement
-/// verbatim): a full-size padded column holding the fixed-width box
-/// the Silkscreen line sits in. Right-aligned rows (misc-HUD clock/
-/// area) right-align inside their box.
+/// Positioned overlay text layer: a full-size padded column holding the
+/// fixed-width box the Silkscreen line sits in. Right-aligned rows
+/// (misc-HUD clock/area) right-align inside their box. GML
+/// `draw_text_nt` `@`-tags arrive pre-split as color runs
+/// ([`GuiRow`](crate::render::GuiRow)); multi-run rows render as
+/// `AnnotatedText` so `@w/@s/@r/@g/@y/@b/@p` colors show verbatim
+/// (single-run rows keep the plain `Text` path).
 fn gui_text_layer(row: &crate::render::GuiRow) -> View {
-    let align = if row.4 {
+    let align = if row.3 {
         AlignItems::CENTER
-    } else if row.6 {
+    } else if row.5 {
         AlignItems::FLEX_END
     } else {
         AlignItems::FLEX_START
     };
-    let c = Color::from_rgba(
-        (row.2[0] * 255.0) as u8,
-        (row.2[1] * 255.0) as u8,
-        (row.2[2] * 255.0) as u8,
-        (row.2[3] * 255.0) as u8,
-    );
-    let mut text = Text(row.0.clone())
-        .size(Sp(row.3))
-        .font_family(NT_UI_FONT_FAMILY)
-        .color(c)
-        .single_line();
-    if row.6 {
+    let color_of = |c: [f32; 4]| {
+        Color::from_rgba(
+            (c[0] * 255.0) as u8,
+            (c[1] * 255.0) as u8,
+            (c[2] * 255.0) as u8,
+            (c[3] * 255.0) as u8,
+        )
+    };
+    let mut text = if row.0.len() == 1 {
+        Text(row.0[0].0.clone())
+            .size(Sp(row.2))
+            .font_family(NT_UI_FONT_FAMILY)
+            .color(color_of(row.0[0].1))
+            .single_line()
+    } else {
+        let mut plain = String::new();
+        let mut spans = Vec::new();
+        for (seg, c) in &row.0 {
+            let start = plain.len();
+            plain.push_str(seg);
+            let end = plain.len();
+            spans.push(repose_core::text::TextSpan {
+                start,
+                end,
+                style: repose_core::text::SpanStyle {
+                    color: Some(color_of(*c)),
+                    ..Default::default()
+                },
+                url: None,
+            });
+        }
+        AnnotatedText(repose_core::text::AnnotatedString::new(plain, spans))
+            .size(Sp(row.2))
+            .font_family(NT_UI_FONT_FAMILY)
+            .single_line()
+    };
+    if row.5 {
         text = text.text_align(repose_core::text::TextAlign::Right);
     }
     Column(
@@ -1988,7 +2038,7 @@ fn gui_text_layer(row: &crate::render::GuiRow) -> View {
     .child(
         Column(
             Modifier::new()
-                .width(Dp(row.5))
+                .width(Dp(row.4))
                 .align_items(align)
                 .hit_passthrough(),
         )

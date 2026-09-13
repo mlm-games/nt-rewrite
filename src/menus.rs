@@ -128,12 +128,27 @@ pub fn roster_position(save: Option<&SaveData>, gml: usize) -> Option<usize> {
     visible_roster(save).iter().position(|r| *r as usize == gml)
 }
 
-/// GML `scrRaceGetUnlockDescription` headless stand-in: locked-pod hint
-/// text for `Menu.unlock_hint` (touch path in `CharSelect/Mouse_4`).
-/// Full loc strings live shell-side; the state keeps the race key so the
-/// render layer can resolve it.
+/// GML `scrRaceGetUnlockDescription` verbatim
+/// (`scripts/scrRaces/scrRaces.gml`): locked-pod hint text for
+/// `Menu.unlock_hint` (touch path in `CharSelect/Mouse_4`). Unlocalized
+/// English defaults; loc lives shell-side.
 pub fn unlock_hint_for_race(race: RaceId) -> String {
-    format!("UNLOCK {:?}", race)
+    match race {
+        RaceId::Fish | RaceId::Crystal => "UNLOCKED FROM THE START".to_string(),
+        RaceId::Eyes => "REACH THE SEWERS".to_string(),
+        RaceId::Melting => "DIE".to_string(),
+        RaceId::Plant => "REACH THE SCRAPYARD".to_string(),
+        RaceId::Venuz => "REACH 3-?".to_string(),
+        RaceId::Steroids => "REACH THE LABS".to_string(),
+        RaceId::Robot => "REACH THE FROZEN CITY".to_string(),
+        RaceId::Chicken => "REACH 5-?".to_string(),
+        RaceId::Rebel => "??? THE GAME".to_string(),
+        RaceId::Horror => "DEFEAT WILD HORROR".to_string(),
+        RaceId::Rogue => "DEFEAT THE NUCLEAR THRONE".to_string(),
+        RaceId::BigDog => "BEAT THE BIG DOG".to_string(),
+        RaceId::Skeleton | RaceId::Frog => "SECRET CHARACTER".to_string(),
+        RaceId::Cuz | RaceId::Random => "???".to_string(),
+    }
 }
 
 /// Crown port id (`CrownKind` discriminant).
@@ -329,10 +344,13 @@ pub struct MenuState {
     /// reveal prefix, +1/draw capped at `waypoints`), `offsety` (128 ->
     /// 0 at 32/draw), `splatimg` (0 -> 2 at 0.7/draw once the
     /// letterbox is open; the port has no letterbox gate so it always
-    /// animates). Reset on capture, ticked in `tick_ingame_menu`.
+    /// animates), and the two `PauseButton` `appear = 3 + image`
+    /// stagger (3 MENU, 4 RETRY, -1/tick; buttons clickable at 0).
+    /// Reset on capture, ticked in `tick_ingame_menu`.
     pub go_death_pos: f32,
     pub go_offsety: f32,
     pub go_splat: f32,
+    pub go_appear: f32,
     /// GML `Menu` campfire anim state verbatim (`Create_0:63-65`,
     /// `Other_11:17-37`): per-player portrait slide offsets (180 on
     /// select, then 180→90→-2→0), text typewriter stages (2 hidden on
@@ -379,6 +397,7 @@ impl Default for MenuState {
             go_death_pos: 0.0,
             go_offsety: 128.0,
             go_splat: 0.0,
+            go_appear: 4.0,
             portrait_offsets: [0.0; 4],
             textappear: [2.0; 4],
             splatindex: 0.0,
@@ -1354,6 +1373,12 @@ pub fn tick_menus(world: &mut World) {
         }
     }
 
+    // GML `Credits/Create_0/Step_0/Other_11` cycler verbatim over sim
+    // seconds: `timer` opens at 60 steps (2 s), then 180 steps (6 s) per
+    // section; tall sections (`height > gui_h - 36`) set `largetext`,
+    // grow `height += gui_h` and pan `scroll = height` down (`scroll`
+    // ticks in `MenuState::credits_scroll`). Clicks (non-scroll touch)
+    // force-advance. `AdvanceCredits` = the click arm.
     if world
         .get_resource::<OverlayMenu>()
         .is_some_and(|o| *o == OverlayMenu::Credits)
@@ -1362,9 +1387,22 @@ pub fn tick_menus(world: &mut World) {
         menu.credits_t += dt;
         let n = crate::render::credit_section_count();
         let rows = crate::render::CREDIT_SECTIONS[menu.credits_section % n].len() as f32;
-        let scroll_max = (rows * 12.0 - 124.0).max(0.0);
-        menu.credits_scroll = ((menu.credits_t - 1.0) * 30.0).clamp(0.0, scroll_max);
-        if menu.credits_t >= 6.0 + scroll_max / 30.0 {
+        // Section text height in GUI px (one 12px line per row); the
+        // first section opens after the 60-step intro, the rest after
+        // 180 steps each.
+        let tall = rows * 12.0 > 240.0 - 36.0;
+        let limit = if menu.credits_section == 0 && menu.credits_t < 60.0 {
+            60.0
+        } else {
+            180.0
+        };
+        if tall {
+            let height = rows * 12.0 + 240.0;
+            menu.credits_scroll = height - (menu.credits_t * 30.0).clamp(0.0, height);
+        } else {
+            menu.credits_scroll = 0.0;
+        }
+        if menu.credits_t >= limit / 30.0 {
             menu.credits_section = (menu.credits_section + 1) % n;
             menu.credits_t = 0.0;
             menu.credits_scroll = 0.0;
@@ -1568,9 +1606,11 @@ fn tick_title_input(world: &mut World, edge: MenuEdge) {
             input.take_fire_pressed(),
         )
     };
-    // Space (fire) toggles the loadout panel: `spec` (Shift/right-click)
-    // has no shell key mapping, so without this the loadout/hardmode
-    // switch is unreachable from the keyboard.
+    // GML `scrMenuDrawLoadout` toggle law: Space (or the splat click)
+    // flips `loadout_open` — but ONLY for races with a panel and outside
+    // event runs (`scr_loadout_is_available_for_race`, `scrGameIsEventRun`
+    // gate; the port has no event runs so that half is vacuous). Space
+    // does NOT start the run; `SelectCharacter` (pod re-click) does.
     if fire {
         apply_menu_action(world, UiAction::ToggleLoadout);
     }
@@ -1605,6 +1645,12 @@ fn tick_title_input(world: &mut World, edge: MenuEdge) {
         }
     }
     if confirm {
+        // GML `CharSelect/Mouse_4` verbatim: confirming the ALREADY
+        // selected race starts the run immediately (`scrRunStart` via
+        // `StartGame`); confirming another pod only re-selects (reveal
+        // GO via `SelectCharacter`). The headless confirm (E/Enter) and
+        // the pod click share this law: `SelectCharacter` starts when
+        // `_pinst.race == _race`, so issuing it unconditionally is GML.
         let roster = visible_roster(world.get_resource::<SaveData>());
         let cursor = world
             .get_resource::<MenuState>()
@@ -1782,7 +1828,8 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
     }
 
     // Snapshot the game-over screen once per death (GML `GameOver/Create_0`
-    // verbatim: `death_pos = 0`, `offsety = 128`, `splatimg = 0`).
+    // verbatim: `death_pos = 0`, `offsety = 128`, `splatimg = 0`, the two
+    // `PauseButton`s at `appear = 3 + image`).
     let needs_capture = game_over
         && world
             .get_resource::<MenuState>()
@@ -1794,6 +1841,7 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
             menu.go_death_pos = 0.0;
             menu.go_offsety = 128.0;
             menu.go_splat = 0.0;
+            menu.go_appear = 4.0;
         }
     }
 
@@ -1809,6 +1857,7 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
             menu.go_death_pos = 0.0;
             menu.go_offsety = 128.0;
             menu.go_splat = 0.0;
+            menu.go_appear = 4.0;
         }
     }
 
@@ -1817,7 +1866,7 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
     // per tick capped at the log length; `offsety` slides 128 -> 0 at
     // 32/tick; `splatimg` eases 0 -> 2 at 0.7/tick (the GML
     // `letterbox_frame >= 2` gate has no port counterpart, so it always
-    // animates once dead).
+    // animates once dead); `appear` ticks -1/step on the buttons.
     if game_over {
         let dt = world
             .get_resource::<repame_sim::SimTime>()
@@ -1836,6 +1885,9 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
                 menu.go_offsety = approach(menu.go_offsety, 0.0, 32.0 * steps);
             }
             menu.go_splat = approach(menu.go_splat, 2.0, 0.7 * steps);
+            if menu.go_appear > 0.0 {
+                menu.go_appear = (menu.go_appear - steps).max(0.0);
+            }
         }
     }
 

@@ -57,8 +57,8 @@ use crate::data::{
     AreaId, CrownKind, EnemyKind, HazardKind, MutationId, RaceId, UltraMutationId, WeaponId,
 };
 use crate::environment::{EnvironmentHazard, PulseSprite, SurfacePulse};
-use crate::hud::{HudState, ability_name, run_area_string, run_timer_string, sync_hud_state};
-use crate::savedata_part::{character_def, race_passive_text};
+use crate::hud::{HudState, run_area_string, run_timer_string, sync_hud_state};
+use crate::savedata_part::{character_def, race_active_text, race_passive_text};
 use crate::spatial::Pos;
 use crate::state::menus::{CHAR_SELECT_ORDER, MenuState};
 use crate::state::{SPLASH_GUN_STEPS, SplashState};
@@ -2870,11 +2870,14 @@ pub fn hud_gui_texts(world: &mut World) -> Vec<HudGuiText> {
         // GML `_is_active_ammo`: draw position 0 (or Steroids dual)
         // or the type matches the primary weapon's type.
         let active = pos == 0 || steroids || kind as usize == t1 as usize;
+        // GML `scrDrawPlayerHUD:152-157` verbatim: active white else
+        // silver; dry `c_uidark`; at/below one pickup red (active) or
+        // gray (inactive).
         let color = if amount <= 0 {
             [51, 51, 51, 255]
         } else if amount <= ammo_pickup_amount(kind).max(0) {
             if active {
-                [255, 0, 0, 255]
+                [252, 56, 0, 255]
             } else {
                 [128, 128, 128, 255]
             }
@@ -2898,6 +2901,7 @@ pub fn hud_gui_texts(world: &mut World) -> Vec<HudGuiText> {
         .next()
         .is_some();
     if hud.hp <= 4 && hud.hp != hud.max_hp && recently_hurt {
+        // GML `LOW HP`: `draw_set_color(c_red)` = (255,0,0).
         out.push(hud_gui_left(
             "LOW HP".to_string(),
             110.0,
@@ -2906,6 +2910,57 @@ pub fn hud_gui_texts(world: &mut World) -> Vec<HudGuiText> {
             false,
             false,
         ));
+    }
+    // GML `scrDrawPlayerHUD:253-284` low-ammo block verbatim: the held
+    // weapon (plus the second on Steroids when its type differs) shows
+    // `LOW <type>` / `NOT ENOUGH <type>` / `EMPTY` / `NOT ENOUGH RADS`
+    // red-left at `(55 + icons*12, 35)` while `drawempty > 0` and the
+    // shell blinks (`sin(wave) > 0` gate lives in `hud_overlay_lines`).
+    // `drawempty` = the dry-fire toast window: the port raises it when
+    // the EMPTY / NOT ENOUGH RADS toast is live.
+    {
+        let dry = world
+            .get_resource::<crate::comps_a::Toast>()
+            .is_some_and(|t| t.text == "EMPTY" || t.text == "NOT ENOUGH RADS");
+        if dry {
+            let primary = hud.weapon_ids.first().copied().unwrap_or(WeaponId::NONE);
+            let pmeta = weapon_meta(primary);
+            let ptype = pmeta.wep_type as usize;
+            let cost = pmeta.wep_cost as i32;
+            let ammo = hud.ammo.get(ptype.min(5)).copied().unwrap_or(0);
+            let rads = hud.rads;
+            let rad_cost = u32::from(pmeta.wep_rads);
+            let kind_name = match ptype {
+                1 => "BULLETS",
+                2 => "SHELLS",
+                3 => "BOLTS",
+                4 => "EXPLOSIVES",
+                5 => "ENERGY",
+                _ => "NONE",
+            };
+            let txt = if ptype != 0 && ammo <= 0 {
+                Some("EMPTY".to_string())
+            } else if ptype != 0 && ammo < cost {
+                Some(format!("NOT ENOUGH {kind_name}"))
+            } else if rads < rad_cost {
+                Some("NOT ENOUGH RADS".to_string())
+            } else if ptype != 0 {
+                Some(format!("LOW {kind_name}"))
+            } else {
+                None
+            };
+            if let Some(txt) = txt {
+                out.push(HudGuiText {
+                    text: txt,
+                    gx: 55.0,
+                    gy: 35.0,
+                    color: [255, 0, 0, 255],
+                    centered: false,
+                    middle_y: false,
+                    right: false,
+                });
+            }
+        }
     }
     // Misc-HUD clock + map name (`scrDrawMiscHUD`: right-aligned rows
     // stacking up from `view_height - (font + 10)`; row height 9 px).
@@ -2977,9 +3032,92 @@ pub struct MenuGuiText {
     pub right: bool,
 }
 
-/// Overlay row: (text, dp top-left, sRGB color 0..1, font px,
-/// centered, box width, right-aligned).
-pub type GuiRow = (String, [f32; 2], [f32; 4], f32, bool, f32, bool);
+/// Overlay row: (segments, dp top-left, font px, centered, box width,
+/// right-aligned). `segments` are `(text, sRGB color 0..1)` runs from the
+/// GML `draw_text_nt` `@`-tag parser ([`nt_text_segments`]); the shell
+/// draws each run in its color with the standard 1px black shadow.
+pub type GuiRow = (Vec<(String, [f32; 4])>, [f32; 2], f32, bool, f32, bool);
+
+/// GML `draw_text_nt` `@`-tag colors verbatim
+/// (`scripts/draw_text_nt/draw_text_nt.gml:215-222`): `@s` silver
+/// (125,131,141), `@b` blue (22,97,223), `@r` red (252,56,0), `@y`
+/// yellow (250,171,0), `@d` dark gray (59,62,67), `@g` green
+/// (68,198,22), `@p` purple (86,34,110), `@w` white. Unknown tags
+/// (incl. `@q` shake, `@(`/sprite, `@[`/`@]` bold, `@.` reset) carry no
+/// color and render in the row's base color.
+pub fn nt_tag_color(tag: char) -> Option<[u8; 4]> {
+    match tag {
+        's' => Some([125, 131, 141, 255]),
+        'b' => Some([22, 97, 223, 255]),
+        'r' => Some([252, 56, 0, 255]),
+        'y' => Some([250, 171, 0, 255]),
+        'd' => Some([59, 62, 67, 255]),
+        'g' => Some([68, 198, 22, 255]),
+        'p' => Some([86, 34, 110, 255]),
+        'w' => Some([255, 255, 255, 255]),
+        _ => None,
+    }
+}
+
+/// Split GML `draw_text_nt` text into color runs: `@x` opens the tagged
+/// color, `#`/`\n` stay inside the run as literal line breaks (the shell
+/// wraps on them; GML `#` writes a newline via `string_hash_to_newline`
+/// before parsing), `\@` escapes a literal `@`. Every other `@?`
+/// sequence keeps its chars in the base color.
+pub fn nt_text_segments(text: &str, base: [u8; 4]) -> Vec<(String, [u8; 4])> {
+    fn push(seg: &mut Vec<(String, [u8; 4])>, buf: &mut String, color: [u8; 4]) {
+        if buf.is_empty() {
+            return;
+        }
+        seg.push((std::mem::take(buf), color));
+    }
+    let mut segs: Vec<(String, [u8; 4])> = Vec::new();
+    let mut buf = String::new();
+    let mut color = base;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(&next) = chars.peek() {
+                if next == '@' {
+                    buf.push(chars.next().unwrap_or('@'));
+                    continue;
+                }
+            }
+            buf.push(c);
+            continue;
+        }
+        if c == '@' {
+            match chars.peek() {
+                Some(&t) if t.is_ascii_alphabetic() => {
+                    let t = chars.next().unwrap_or('w');
+                    let tag = t.to_ascii_lowercase();
+                    push(&mut segs, &mut buf, color);
+                    if let Some(tagged) = nt_tag_color(tag) {
+                        color = tagged;
+                    }
+                }
+                Some(&'(') => {
+                    // `@(sprite,...)` inline icon: skip to `)`, keep base.
+                    push(&mut segs, &mut buf, color);
+                    chars.next();
+                    for sc in chars.by_ref() {
+                        if sc == ')' {
+                            break;
+                        }
+                    }
+                }
+                _ => buf.push('@'),
+            }
+            continue;
+        }
+        buf.push(c);
+    }
+    push(&mut segs, &mut buf, color);
+    if segs.is_empty() {
+        segs.push((String::new(), base));
+    }
+    segs
+}
 
 /// Generic GUI text → dp mapper (GML law: the GUI is the live view,
 /// `scrSetViewSize` + `display_set_gui_size`; `vw` is the live GUI
@@ -3016,16 +3154,23 @@ pub fn gui_texts_dp(canvas_dp: [f32; 2], items: Vec<MenuGuiText>) -> Vec<GuiRow>
             } else {
                 t.gy * k
             };
-            let c = [
-                t.color[0] as f32 / 255.0,
-                t.color[1] as f32 / 255.0,
-                t.color[2] as f32 / 255.0,
-                t.color[3] as f32 / 255.0,
-            ];
+            let segs = nt_text_segments(&t.text, t.color)
+                .into_iter()
+                .map(|(s, c)| {
+                    (
+                        s,
+                        [
+                            c[0] as f32 / 255.0,
+                            c[1] as f32 / 255.0,
+                            c[2] as f32 / 255.0,
+                            c[3] as f32 / 255.0,
+                        ],
+                    )
+                })
+                .collect();
             (
-                t.text,
+                segs,
                 [left.max(0.0), top.max(0.0)],
-                c,
                 font_px,
                 centered,
                 box_w,
@@ -3061,15 +3206,19 @@ pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
         })
         .collect();
     let hud: HudState = sync_hud_state(world);
+    // GML `SkillText` verbatim (`scrLevelUpScreenSubmit` +
+    // `TopCont/Draw_75` + `LevCont/Draw_64`): `"@d" + loc(txt)` at the
+    // SkillText pos, centered-middle, blinking while `disappear % 2`
+    // (the blink gate lives in `hud_overlay_lines`, like LOW HP).
     if !hud.toast.is_empty() {
         items.push(MenuGuiText {
-            text: hud.toast.clone(),
+            text: format!("@d{}", hud.toast),
             gx: cx,
             gy: 200.0,
             color: [255, 255, 255, 255],
             px: 7.0,
             centered: true,
-            middle_y: false,
+            middle_y: true,
             right: false,
         });
     }
@@ -3113,7 +3262,11 @@ const GUI_UIDARK: [u8; 4] = [51, 51, 51, 255];
 const GUI_WHITE: [u8; 4] = [255, 255, 255, 255];
 const GUI_RED2: [u8; 4] = [221, 56, 45, 255];
 const GUI_GREEN: [u8; 4] = [98, 220, 88, 255];
-const GUI_GOLD: [u8; 4] = [255, 221, 0, 255];
+/// GML yellow `(250, 171, 0)` (`draw_text_nt` `@y` tag,
+/// `scripts/draw_text_nt/draw_text_nt.gml:218`).
+const GUI_GOLD: [u8; 4] = [250, 171, 0, 255];
+/// GML `c_ultra` (#3dc616): LEVEL ULTRA rest tint.
+const GUI_ULTRA: [u8; 4] = [61, 198, 22, 255];
 
 fn gui_body(text: impl Into<String>, gx: f32, gy: f32, color: [u8; 4]) -> MenuGuiText {
     MenuGuiText {
@@ -3155,216 +3308,192 @@ fn gui_button(text: impl Into<String>, gx: f32, gy: f32, color: [u8; 4]) -> Menu
 }
 
 /// Bevy `mutation_choice_parts` verbatim: ULTRA prefix + name/desc
-/// split on em-dash or hyphen.
-fn mutation_choice_parts(choice: &str) -> (bool, String, String) {
+/// split on em-dash or hyphen. Returns the GML skill id too (the
+/// `mutation_choice_ids` parallel row), so the Throne Butt special can
+/// key off the picked skill, not the parsed name.
+fn mutation_choice_parts(choice: &str) -> (Option<u8>, String, String) {
+    // `sync_hud_state` writes `mutation_choices` and
+    // `mutation_choice_ids` in the same order; resolve the id by index.
+    // (The id row is passed separately at the call site; this helper
+    // keeps the parse half pure.)
     let trimmed = choice.trim();
     let (is_ultra, trimmed) = if let Some(rest) = trimmed.strip_prefix("ULTRA:") {
         (true, rest.trim())
     } else {
         (false, trimmed)
     };
+    let _ = is_ultra;
     if let Some((name, desc)) = trimmed.split_once(" \u{2014} ") {
-        (is_ultra, name.trim().to_string(), desc.trim().to_string())
+        (None, name.trim().to_string(), desc.trim().to_string())
     } else if let Some((name, desc)) = trimmed.split_once(" - ") {
-        (is_ultra, name.trim().to_string(), desc.trim().to_string())
+        (None, name.trim().to_string(), desc.trim().to_string())
     } else {
-        (is_ultra, trimmed.to_string(), String::new())
+        (None, trimmed.to_string(), String::new())
     }
 }
 /// GML `Credits/Other_11` `credittext` verbatim (unlocalized
-/// defaults): 14 titled sections. `@w`/`@y` role lines are headers,
-/// `@s` name lines body; `#` walls are pre-split into one row per
-/// name (GML joins them with newlines the same way). Localizer-only
-/// tokens resolve to the shipped English defaults.
-pub const CREDIT_SECTIONS: &[&[(&str, bool)]] = &[
-    &[("VLAMBEER PRESENTS", true)],
-    &[("A GAME BY", true)],
+/// defaults): 14 titled sections. Rows carry their GML `@w`/`@s`/`@y`
+/// color tags and `#` line breaks; the tag backend (`nt_text_segments`
+/// + `AnnotatedText`) renders them. GML joins each section's array with
+/// `"\n@s"` and draws ONE centered-middle `draw_text_nt` at
+/// `(gui_w/2, gui_h/2)` — tall sections (`height > gui_h - 36`) pan via
+/// `scroll` (`MenuState::credits_scroll`).
+pub const CREDIT_SECTIONS: &[&[&str]] = &[
+    &["@yVLAMBEER @wPRESENTS"],
+    &["@wA GAME BY"],
     &[
-        ("Project Lead, Design & Development", true),
-        ("Jan Willem Nijman", false),
-        ("Production & Additional Development", true),
-        ("Rami Ismail", false),
-        ("Art Direction, Lead Artist & Animation", true),
-        ("Paul Veer", false),
-        ("Original Soundtrack", true),
-        ("Jukio Kallio", false),
-        ("Sound Design", true),
-        ("Joonas Turner", false),
-        ("Additional Artwork", true),
-        ("Justin Chan", false),
+        "@wProject Lead, Design & Development",
+        "@sJan Willem Nijman",
+        "@wProduction & Additional Development",
+        "@sRami Ismail",
+        "@wArt Direction, Lead Artist & Animation",
+        "@sPaul Veer",
+        "@wOriginal Soundtrack",
+        "@sJukio Kallio",
+        "@wSound Design",
+        "@sJoonas Turner",
+        "@wAdditional Artwork",
+        "@sJustin Chan",
     ],
     &[
-        ("Additional Music Credits", true),
-        ("Oasis", true),
-        ("JUKIO KALLIO", false),
-        ("Danny Baranowski", false),
-        ("Pizza Sewers", true),
-        ("JUKIO KALLIO", false),
-        ("Eirik Suhrke", false),
-        ("Venus", true),
-        ("JUKIO KALLIO", false),
-        ("Adam 'Doseone' Drucker", false),
-        ("Cursed Caves", true),
-        ("JUKIO KALLIO", false),
-        ("Richard 'Disasterpeace' Vreeland", false),
-        ("Jungle", true),
-        ("JUKIO KALLIO", false),
-        ("Daniel Hagstrom", false),
-        ("Mansion & Hyper Crystal", true),
-        ("JUKIO KALLIO", false),
-        ("Joonas Turner", false),
-        ("Tea Break", true),
-        ("Original Composition by Eirik Suhrke", false),
-        ("Additional Music Consultation", true),
-        ("Joonas Turner", false),
+        "@wAdditional Music Credits",
+        "",
+        "@wOasis",
+        "@sJUKIO KALLIO#Danny Baranowski",
+        "",
+        "@wPizza Sewers",
+        "@sJUKIO KALLIO#Eirik Suhrke",
+        "",
+        "@wVenus",
+        "@sJUKIO KALLIO#Adam 'Doseone' Drucker",
+        "",
+        "@wCursed Caves",
+        "@sJUKIO KALLIO#Richard 'Disasterpeace' Vreeland",
+        "",
+        "@wJungle",
+        "@sJUKIO KALLIO#Daniel Hagstrom",
+        "",
+        "@wMansion & Hyper Crystal",
+        "@sJUKIO KALLIO#Joonas Turner",
+        "",
+        "@wTea Break",
+        "Original Composition by Eirik Suhrke@w",
+        "",
+        "@wAdditional Music Consultation",
+        "@sJoonas Turner@w",
     ],
     &[
-        ("The voice of Fish, Crystal, Eyes,", true),
-        ("Melting, Plant, Steroids,", true),
-        ("Robot, Chicken, Horror, Yung Cuz, Enemies & Bosses", true),
-        ("Joonas Turner", false),
-        ("Rebel & Additional IDPD", true),
-        ("Isa And", false),
-        ("Y.V. & Venus Enemies", true),
-        ("Adam Drucker", false),
-        ("Frog", true),
-        ("Jukio Kallio", false),
-        ("Captain", true),
-        ("Myy Lohi", false),
-        ("Rogue", true),
-        ("Danielle McRae", false),
-        ("Additional IDPD", true),
-        ("Niilo Takalainen", false),
+        "@wThe voice of Fish, Crystal, Eyes,#Melting, Plant, Steroids,#Robot, Chicken,Horror,#Yung Cuz, Enemies & Bosses",
+        "@sJoonas Turner@w",
+        "",
+        "@wRebel & Additional IDPD",
+        "@sIsa And",
+        "",
+        "@wY.V. & Venus Enemies",
+        "@sAdam Drucker",
+        "",
+        "@wFrog",
+        "@sJukio Kallio",
+        "",
+        "@wCaptain",
+        "@sMyy Lohi",
+        "",
+        "@wRogue",
+        "@sDanielle McRae",
+        "",
+        "@wAdditional IDPD",
+        "@sNiilo Takalainen",
     ],
     &[
-        ("Promotional Artwork", true),
-        ("Justin Chan", false),
-        ("Language Design", true),
-        ("Joonas Turner", false),
-        (
-            "Backend Programming Community Management Release Management",
-            true,
-        ),
-        ("Rami Ismail", false),
-        ("Additional Programming Porting", true),
-        ("VADYM 'YELLOWAFTERLIFE' DIACHENKO", false),
-        ("Addional Engineering", true),
-        ("Juju Adams", false),
+        "@wPromotional Artwork",
+        "@sJustin Chan",
+        "",
+        "@wLanguage Design",
+        "@sJoonas Turner",
+        "",
+        "@wBackend Programming#Community Management#Release Management",
+        "@sRami Ismail",
+        "",
+        "@wAdditional Programming#Porting",
+        "VADYM 'YELLOWAFTERLIFE' DIACHENKO",
+        "",
+        "@wAddional Engineering",
+        "@sJuju Adams",
     ],
     &[
-        ("Trailers", true),
-        (
-            "Bram Ruiter Daniel Carneiro Kert Gartner Marlon Wiebe",
-            false,
-        ),
-        ("Event Logistics", true),
-        (
-            "Adriel Wallick Fred Wood Jon Kay Maya Kramer Rami Ismail",
-            false,
-        ),
+        "@wTrailers",
+        "@sBram Ruiter#Daniel Carneiro#Kert Gartner#Marlon Wiebe#",
+        "",
+        "@wEvent Logistics",
+        "@sAdriel Wallick#Fred Wood#Jon Kay#Maya Kramer#Rami Ismail",
     ],
     &[
-        ("Marketing", true),
-        ("Rami Ismail", false),
-        ("Additional Marketing", true),
-        (
-            "Jan Willem Nijman Joonas Turner Jukio Kallio Justin Chan Paul Veer",
-            false,
-        ),
+        "@wMarketing",
+        "@sRami Ismail",
+        "",
+        "@wAdditional Marketing",
+        "@sJan Willem Nijman#Joonas Turner#Jukio Kallio#Justin Chan#Paul Veer",
     ],
     &[
-        ("NUCLEAR THRONE MOBILE", true),
-        ("PROJECT CREATOR & MAINTAINER", true),
-        ("TONCHO_", false),
-        ("TESTERS", true),
-        (
-            "EVILCAT   CZIMBALA   SKUHNUH   WINT VOROB   DRAKIN   TIREDMETAL LOMEGAI   PLOWECH   SENJEY",
-            false,
-        ),
-        ("LOCALIZATION CONTRIBUTORS", true),
-        ("LEGACY LOCALIZERS", true),
-        ("BRAZILIAN PORTUGUESE", false),
-        ("MIGUEL TITIO CARTOLA GUIZARD POTATO SALAD", false),
-        ("SPANISH", false),
-        ("FRI BAYRON WALTERLZ", false),
-        ("POLISH", false),
-        ("LOSSTAROTT", false),
-        ("UKRAINIAN", false),
-        ("PRAWO REPKON", false),
-        ("PERSIAN", false),
-        ("PLOOB", false),
+        "@wNUCLEAR THRONE MOBILE",
+        "",
+        "@wPROJECT CREATOR & MAINTAINER",
+        "TONCHO_",
+        "",
+        "@wTESTERS",
+        "@sEVILCAT   CZIMBALA   SKUHNUH   WINT#VOROB   DRAKIN   TIREDMETAL   #LOMEGAI   PLOWECH   SENJEY",
+        "",
+        "#@wLOCALIZATION CONTRIBUTORS",
+        "@wLEGACY LOCALIZERS",
+        "",
+        "@wBRAZILIAN PORTUGUESE#@sMIGUEL#TITIO CARTOLA#GUIZARD#POTATO SALAD#",
+        "@wSPANISH#@sFRI#BAYRON#WALTERLZ#",
+        "@wPOLISH#@sLOSSTAROTT#",
+        "@wUKRAINIAN#@sPRAWO#REPKON#",
+        "@wPERSIAN#@sPLOOB",
     ],
     &[
-        ("Valve", true),
-        (
-            "Anna Sweet Augusta Butlin John Bartkiw Matt Nickerson",
-            false,
-        ),
-        ("Humble", true),
-        ("Alex Ting Will Turnbull", false),
-        ("Twitch", true),
-        ("Ernest Le Jon 'Carnage' Joyce", false),
-        ("Devstream Support", true),
-        (
-            "Benn Powell Dominik Johann Gieron Lisa 'Wertle' Brown Seef 'IgnoTV' Ismail Sleepcycles Vlambot XSplit",
-            false,
-        ),
-        ("YoYo Games", true),
-        (
-            "Mike Dailly Russell Kay Peter Hall Sandy Duncan Stuart Poole",
-            false,
-        ),
-        ("SONY Computer Entertainment", true),
-        (
-            "Adam Boyes Andrew Wong Ben Andac Blanca Nunez Ibanez Bob Jordan Brian Silva Dan 'Shoe' Hsu Gio Corsi Jericho Guerrero John Drake John Kopp Julio Perez Justin Massongill Laura Casey Lorenzo Grimaldi Nathalie Closs Nick Suttner Richard Lee Ryan Clements Shahid Kamal Ahmad Shane Bettenhausen Shuhei Yoshida Sid Shuman",
-            false,
-        ),
-        ("Merchandise", true),
-        (
-            "Fangamer Fred Wood Gijs van Kooten Jon 'Jonty' Hicks Jon Kay Level Up Studios Shawn Handyside",
-            false,
-        ),
-        ("Wiki Master", true),
-        ("Gieron", false),
-        ("Thronebutt", true),
-        ("Ivan Ostric", false),
-        ("Chitinlink", false),
-        ("Update Videos", true),
-        ("Tengu Drop", false),
-        ("Bobbing & Weaving", true),
-        ("SleepCycles", false),
-        ("Community Challenges", true),
-        ("Solid", false),
-        ("World Tournament", true),
-        ("Smite", false),
-        ("Special Thanks", true),
-        (
-            "17-Bit Adriel Wallick Alexa Allan Keith Anthony Carboni Bart Jan Bultman Beau Blyth Ben Vance Bisnap Brandon Boyer Brian van Bruggen Bronson Zgeb Burgeroise Chris Charla CodeMan38 Crystal Chan Daniel 'Manna' Hagstrom DED DevilAzite Derek Yu Dutch Game Garden Evan Balster Glitch City Greg Wohlwend Hademar Jack Oatley James Eagler Janette Silvasti Jerry Holkins Jerry van Kooten Jord Coerse JMickle Kakujo Kitty Calis Kosti Kallio Kristy Norindr Mark Essen Martin Kvale Martin van der Wolf Mike Feith Mirva Kontio Neri & Bali Nigel Lowrie Phil Tibitoski Pissasedat Poppenkast Ross Turner Roy Nathan de Groot Richard Boeser Seef Ismail Sidonie Tise Sirpa Kallio Sirpa Niskala Slackbot Ster Sven Ruthner Ted Martens Teddy Diefenbach Tingle Tuuka Vincent Nijman Wiley 'Willy Woggins' Wiggins Zach Gage",
-            false,
-        ),
-        (
-            "Nuclear Throne would not exist without Humble, MOJANG and the organizers of MOJAM 2013",
-            true,
-        ),
-        (
-            "Nuclear Throne was created using YoYoGames' GameMaker",
-            true,
-        ),
-        (
-            "Nuclear Throne extends its thanks to COOL BIG MONY BIZNIZ INC. for providing the image of Yung Venuz.",
-            true,
-        ),
+        "@wValve#@sAnna Sweet#Augusta Butlin#John Bartkiw#Matt Nickerson##@wHumble#@sAlex Ting#Will Turnbull##@wTwitch#@sErnest Le#Jon 'Carnage' Joyce##@wDevstream Support#@sBenn Powell#Dominik Johann#Gieron#Lisa 'Wertle' Brown#Seef 'IgnoTV' Ismail#Sleepcycles#Vlambot#XSplit##@wYoYo Games#@sMike Dailly#Russell Kay#Peter Hall#Sandy Duncan#Stuart Poole##@wSONY Computer Entertainment#@sAdam Boyes#Andrew Wong#Ben Andac#Blanca Nunez Ibanez#Bob Jordan#Brian Silva#Dan 'Shoe' Hsu#Gio Corsi#Jericho Guerrero#John Drake#John Kopp#Julio Perez#Justin Massongill#Laura Casey#Lorenzo Grimaldi#Nathalie Closs#Nick Suttner#Richard Lee#Ryan Clements#Shahid Kamal Ahmad#Shane Bettenhausen#Shuhei Yoshida#Sid Shuman",
+        "",
+        "@wMerchandise",
+        "Fangamer#Fred Wood#Gijs van Kooten#Jon 'Jonty' Hicks#Jon Kay#Level Up Studios#Shawn Handyside#",
+        "",
+        "@wWiki Master",
+        "Gieron",
+        "",
+        "@wThronebutt",
+        "Ivan Ostric",
+        "Chitinlink",
+        "",
+        "Update Videos",
+        "Tengu Drop",
+        "",
+        "@wBobbing & Weaving",
+        "SleepCycles",
+        "",
+        "@wCommunity Challenges",
+        "Solid",
+        "",
+        "@wWorld Tournament",
+        "Smite",
+        "",
+        "@wSpecial Thanks",
+        "17-Bit#Adriel Wallick#Alexa#Allan Keith#Anthony Carboni#Bart Jan Bultman#Beau Blyth#Ben Vance#Bisnap#Brandon Boyer#Brian van Bruggen#Bronson Zgeb#Burgeroise#Chris Charla#CodeMan38#Crystal Chan#Daniel 'Manna' Hagstrom#DED#DevilAzite#Derek Yu#Dutch Game Garden#Evan Balster#Glitch City#Greg Wohlwend#Hademar#Jack Oatley#James Eagler#Janette Silvasti#Jerry Holkins#Jerry van Kooten#Jord Coerse#JMickle#Kakujo#Kitty Calis#Kosti Kallio#Kristy Norindr#Mark Essen#Martin Kvale#Martin van der Wolf#Mike Feith#Mirva Kontio#Neri & Bali#Nigel Lowrie#Phil Tibitoski#Pissasedat#Poppenkast#Ross Turner#Roy Nathan de Groot#Richard Boeser#Seef Ismail#Sidonie Tise#Sirpa Kallio#Sirpa Niskala#Slackbot#Ster#Sven Ruthner#Ted Martens#Teddy Diefenbach#Tingle#Tuuka#Vincent Nijman#Wiley 'Willy Woggins' Wiggins#Zach Gage",
+        "",
+        "@wNuclear Throne would not exist without#Humble, MOJANG and the organizers#of MOJAM 2013",
+        "",
+        "@wNuclear Throne was created using#YoYoGames' GameMaker",
+        "",
+        "@wNuclear Throne extends its thanks to#COOL BIG MONY BIZNIZ INC.#for providing the image of Yung Venuz.",
     ],
-    &[(
-        "Nuclear Throne could not exist without the Vlambeer community. This game could have gone off-track in so many ways, but your patience, support, enthusiasm, feedback and hard work kept us sharp, motivated and eager to find fun and new ways to end your runs.",
-        true,
-    )],
-    &[(
-        "Thanks to our family, our friends and our partners for their unyielding support, love, care and patience. <3",
-        true,
-    )],
-    &[("Thank you for playing!", true)],
-    &[("NUCLEAR THRONE", true)],
+    &[
+        "@wNuclear Throne could not exist#without the Vlambeer community.#This game could have gone off-track#in so many ways,#but your patience, support, enthusiasm,#feedback and hard work kept us sharp,#motivated and eager to find#fun and new ways to end your runs.",
+    ],
+    &[
+        "@wThanks to our family, our friends#and our partners#for their unyielding support,#love, care and patience.#@w<3",
+    ],
+    &["@wThank you for playing!"],
+    &["@wNUCLEAR THRONE"],
 ];
 
 /// Section count for the credits cycler ([`MenuState::credits_section`]).
@@ -3566,6 +3695,8 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         MenuGuiText {
                             text: play_row_name(*row).to_string(),
                             gx: cx,
+                            // GML `MainMenuButton/Other_10`: PLAY rows at
+                            // `view_center - count*12`, step 24.
                             gy: 120.0 - n as f32 * 12.0 + i as f32 * 24.0,
                             color,
                             px: 16.0,
@@ -3591,10 +3722,12 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             LABELS
                 .iter()
                 .map(|(label, index)| {
-                    // GML `MainMenuButton` Draw: white on hover, uigray
-                    // when available, uidark when not. Only CO-OP is
-                    // gated (`MultiplayerConfig false`); STATS opens the
-                    // stats panel like GML `DrawStats`.
+                    // GML `Logo/Alarm_1`: 5 buttons at `x = view_center`,
+                    // `y = view_center - 48`, step 24 (72..168 at
+                    // 240 high). White on cursor, uigray when available,
+                    // uidark when not. Only CO-OP is gated
+                    // (`MultiplayerConfig false`); STATS opens the stats
+                    // panel like GML `DrawStats`.
                     let available = matches!(index, 0 | 2 | 3 | 4);
                     let color = if !available {
                         GUI_UIDARK
@@ -3606,7 +3739,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     MenuGuiText {
                         text: label.to_string(),
                         gx: cx,
-                        gy: 72.0 + *index as f32 * 24.0,
+                        gy: 120.0 - 48.0 + *index as f32 * 24.0,
                         color,
                         px: 16.0,
                         centered: true,
@@ -3629,42 +3762,59 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     .map(|r| character_def(r).name.to_ascii_uppercase())
                     .unwrap_or_else(|| "?".to_string())
             };
-            let stat_name = |out: &mut Vec<MenuGuiText>, col: f32, line: &mut i32, name: &str| {
+            // GML `DrawStats/Draw_0` + `scrDrawStats` verbatim: title via
+            // `draw_text_bigname` at `(view_center, view_top + 24)` in
+            // `c_uigray`; left column `statx = view_left + 110`,
+            // `staty = view_top + 36 + 4`; right column
+            // `statx = view_left + view_width - 70`. Names right-aligned
+            // uigray at `statx - 1`, values left white at `statx + 1`,
+            // headers centered; blank headers advance the (fractional)
+            // line.
+            let stat_name = |out: &mut Vec<MenuGuiText>, col: f32, line: &mut f32, name: &str| {
                 out.push(MenuGuiText {
                     text: name.to_string(),
-                    gx: col - 2.0,
-                    gy: 40.0 + *line as f32 * 8.0,
-                    color: GUI_GRAY,
+                    gx: col - 1.0,
+                    gy: 40.0 + *line * 8.0,
+                    color: GUI_MID,
                     px: 7.0,
                     centered: false,
                     middle_y: true,
                     right: true,
                 });
             };
-            let stat_val = |out: &mut Vec<MenuGuiText>, col: f32, line: &mut i32, val: String| {
+            let stat_val = |out: &mut Vec<MenuGuiText>, col: f32, line: &mut f32, val: String| {
                 out.push(MenuGuiText {
                     text: val,
-                    gx: col + 2.0,
-                    gy: 40.0 + *line as f32 * 8.0,
+                    gx: col + 1.0,
+                    gy: 40.0 + *line * 8.0,
                     color: GUI_WHITE,
                     px: 7.0,
                     centered: false,
                     middle_y: true,
                     right: false,
                 });
-                *line += 1;
+                *line += 1.0;
             };
-            let header = |out: &mut Vec<MenuGuiText>, col: f32, line: &mut i32, name: &str| {
+            let header = |out: &mut Vec<MenuGuiText>, col: f32, line: &mut f32, name: &str| {
                 if name.is_empty() {
-                    *line += 1;
+                    *line += 1.0;
                     return;
                 }
-                out.push(gui_center(name, col, 40.0 + *line as f32 * 8.0, GUI_WHITE));
-                *line += 1;
+                out.push(gui_center(name, col, 40.0 + *line * 8.0, GUI_WHITE));
+                *line += 1.0;
             };
-            let mut out = vec![gui_center("STATS", cx, 24.0, GUI_CREAM)];
-            let (lx, rx) = (cx - 50.0, cx + 90.0);
-            let mut l = 0;
+            let mut out = vec![MenuGuiText {
+                text: "STATS".to_string(),
+                gx: cx,
+                gy: 24.0,
+                color: GUI_MID,
+                px: 10.0,
+                centered: true,
+                middle_y: true,
+                right: false,
+            }];
+            let (lx, rx) = (110.0, vw - 70.0);
+            let mut l = 0.0;
             header(&mut out, lx, &mut l, "TOTAL");
             let (un, unmax) = unlock_progress(&save);
             // GML `scrDrawStats:82` verbatim: `string_pad_zeroes(round(
@@ -3706,7 +3856,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 stat_val(&mut out, lx, &mut l, save.best_run_kills.to_string());
                 header(&mut out, lx, &mut l, "");
             }
-            let mut r = 0;
+            let mut r = 0.0;
             if save.total_runs > 0 && save.total_wins > 0 {
                 header(&mut out, rx, &mut r, "BEST STREAK");
                 stat_name(&mut out, rx, &mut r, &race_name(save.best_streak_race));
@@ -3768,46 +3918,119 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 return Vec::new();
             };
             let def = character_def(race);
-            // GML `scrCampfireMenuDrawCharText`: bigname at GUI y=172
-            // with the raw passive/active descriptions beneath (no
-            // prefixes), x=8.
-            vec![
-                MenuGuiText {
-                    text: def.name.to_ascii_uppercase().to_string(),
-                    gx: 2.0,
-                    gy: 172.0,
-                    color: GUI_WHITE,
-                    px: 14.0,
-                    centered: false,
-                    middle_y: false,
-                    right: false,
-                },
-                MenuGuiText {
-                    text: race_passive_text(race).to_string(),
+            // GML `scrCampfireMenuDrawCharText` verbatim (single-player,
+            // bottom-left): name at `(0, H-36)` via `draw_text_bigname`,
+            // skills `Passive\nActive` two lines below (top-left, x=8);
+            // hidden while `textappear == 2` (fresh select). H is 240,
+            // so the name sits at GUI y=204.
+            let textappear = world
+                .get_resource::<MenuState>()
+                .map(|m| m.textappear[0])
+                .unwrap_or(0.0);
+            let mut rows = vec![MenuGuiText {
+                text: def.name.to_ascii_uppercase().to_string(),
+                gx: 0.0,
+                gy: 204.0,
+                color: GUI_WHITE,
+                px: 14.0,
+                centered: false,
+                middle_y: false,
+                right: false,
+            }];
+            if textappear != 2.0 {
+                rows.push(MenuGuiText {
+                    text: format!(
+                        "{}\n{}",
+                        race_passive_text(race),
+                        race_active_text(race)
+                    ),
                     gx: 8.0,
-                    gy: 180.0,
+                    gy: 212.0,
                     color: GUI_WHITE,
                     px: 7.0,
                     centered: false,
                     middle_y: false,
                     right: false,
-                },
-                MenuGuiText {
-                    text: ability_name(def.ability).to_string(),
-                    gx: 8.0,
-                    gy: 189.0,
-                    color: GUI_WHITE,
-                    px: 7.0,
-                    centered: false,
-                    middle_y: false,
-                    right: false,
-                },
-            ]
+                });
+            }
+            // GML pod tooltips (`Menu/Draw_74` over each CharSelect):
+            // unlocked pods show `Races:<id>:Name`, locked pods the
+            // unlock description. The port draws them over the cursor
+            // pod (keyboard parity for GML's mouse/gamepad `tooltip`).
+            {
+                let menu = world.get_resource::<MenuState>().cloned();
+                let save = world
+                    .get_resource::<crate::savedata_part::SaveData>()
+                    .cloned();
+                let roster =
+                    crate::state::menus::visible_roster(save.as_ref());
+                let cursor = menu.as_ref().map(|m| m.title_cursor).unwrap_or(0);
+                let slot_h = 20.0;
+                if let Some(pod_race) = roster.get(cursor) {
+                    let weekly = menu.as_ref().is_some_and(|m| m.weekly_run_menu);
+                    let can = save
+                        .as_ref()
+                        .is_some_and(|s| s.race_unlocked(*pod_race))
+                        || weekly;
+                    let tip = if can {
+                        character_def(*pod_race)
+                            .name
+                            .to_ascii_uppercase()
+                            .to_string()
+                    } else {
+                        crate::state::menus::unlock_hint_for_race(*pod_race)
+                    };
+                    if let Some(pos) =
+                        char_pod_layout([vw, 240.0], roster.len(), slot_h).get(cursor)
+                    {
+                        rows.push(MenuGuiText {
+                            text: tip,
+                            gx: pos[0] + TITLE_POD_W * 0.5,
+                            gy: pos[1] - 12.0,
+                            color: GUI_WHITE,
+                            px: 7.0,
+                            centered: true,
+                            middle_y: true,
+                            right: false,
+                        });
+                    }
+                }
+                // GML `Menu.unlock_hint` box verbatim (touch locked-pod
+                // hint): white `draw_text_nt` at `(gui_w/2, gui_h-30)`
+                // over the `c_tooltip` roundrect for 90 steps
+                // (`alarm[11]`), `pop` easing to 0. The sprite layer
+                // cannot draw rects, so the text row carries the
+                // position; the shell draws the box behind it.
+                if let Some(menu) = menu.as_ref() {
+                    if !menu.unlock_hint.is_empty() {
+                        rows.push(MenuGuiText {
+                            text: menu.unlock_hint.to_ascii_uppercase(),
+                            gx: vw * 0.5,
+                            gy: 240.0 - 30.0 + menu.unlock_hint_pop,
+                            color: GUI_WHITE,
+                            px: 7.0,
+                            centered: true,
+                            middle_y: true,
+                            right: false,
+                        });
+                    }
+                }
+            }
+            rows
         }
         crate::MenuOverlay::Mutation => {
             let hud = sync_hud_state(world);
-            // Offer kind + pick count straight from the pending
-            // resources (GML `GameCont.skillpoints/ultrapoints`).
+            // GML `LevCont/Draw_0` law verbatim: the offer CENTER column
+            // shows `sprLevelUpText` / `sprLevelUltraText` at
+            // `(cx + appear, 48)` with subimage `appear > H*0.7 ? 0 : 2`
+            // (white bigname while sliding in, `c_ultra` green rest) and
+            // the `@s`-gray subtitle at `(cx + 1, 75 - appear)`. The port
+            // has no `appear` anim resource, so the steady state
+            // (`appear = 0`: art subimage 2, rest tint) is drawn.
+            // Subtitles: ultra offers `INSTALL ULTRA UPDATE` (Robot) /
+            // `PICK YOUR ULTRA MUTATION`; skill offers Robot
+            // `INSTALL n UPDATES # DO NOT TURN OFF ROBOT`, else
+            // `SELECT n MUTATIONS`. `n` counts the pending offer.
             let pending_n = world
                 .get_resource::<PendingMutation>()
                 .map(|p| p.choices.len());
@@ -3821,24 +4044,24 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 .is_some_and(|s| s.0 == crate::data::RaceId::Robot);
             let (title, subtitle, extra) = if is_ultra {
                 if is_robot {
-                    ("ULTRA MUTATION", "INSTALL ULTRA UPDATE".to_string(), None)
+                    ("LEVEL ULTRA", "@sINSTALL @gULTRA@s UPDATE".to_string(), None)
                 } else {
                     (
-                        "ULTRA MUTATION",
-                        "PICK YOUR ULTRA MUTATION".to_string(),
+                        "LEVEL ULTRA",
+                        "@sPICK YOUR @gULTRA@s MUTATION".to_string(),
                         None,
                     )
                 }
             } else if is_robot {
                 (
                     "LEVEL UP",
-                    format!("INSTALL {n} UPDATES"),
-                    Some("DO NOT TURN OFF ROBOT"),
+                    format!("@sINSTALL {n} UPDATES@s"),
+                    Some("@sDO NOT TURN OFF ROBOT".to_string()),
                 )
             } else {
-                ("LEVEL UP", format!("SELECT {n} MUTATIONS"), None)
+                ("LEVEL UP", format!("@sSELECT {n} MUTATIONS"), None)
             };
-            let accent = if is_ultra { GUI_GOLD } else { GUI_GREEN };
+            let accent = if is_ultra { GUI_ULTRA } else { GUI_GREEN };
             let mut out = vec![
                 gui_center(title, cx, 48.0, accent),
                 gui_center(subtitle, cx, 75.0, GUI_CREAM),
@@ -3846,16 +4069,101 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             if let Some(extra) = extra {
                 out.push(gui_center(extra, cx, 87.0, GUI_CREAM));
             }
+            // GML `SkillIcon/Draw_0` law: the SELECTED card's box is ONE
+            // centered-middle text at `(w/2, H-61-selected)` = (cx, 179):
+            // `"@wName#@sDesc@s"`, with the Throne Butt special (per-race
+            // `Races:<race>:TB` text, or `Name - TB` lines per race when
+            // players hold mixed races). `mutation_choices` already
+            // carries `Name - Desc`; only the first ` - ` splits (descs
+            // contain `#` line breaks which the backend renders).
             let selected = world
                 .get_resource::<MenuState>()
-                .and_then(|m| m.mutation_selected)
-                .and_then(|i| hud.mutation_choices.get(i));
-            if let Some(sel) = selected {
+                .and_then(|m| m.mutation_selected);
+            let sel_id = selected.and_then(|i| hud.mutation_choice_ids.get(i).copied());
+            let sel_text = selected.and_then(|i| hud.mutation_choices.get(i));
+            if let Some(sel) = sel_text {
                 let (_, name, desc) = mutation_choice_parts(sel);
-                out.push(gui_center(name.to_ascii_uppercase(), cx, 173.0, GUI_WHITE));
-                if !desc.is_empty() {
-                    out.push(gui_center(desc, cx, 185.0, GUI_CREAM));
-                }
+                let race_tb = |race: crate::data::RaceId| -> &'static str {
+                    match race {
+                        crate::data::RaceId::Fish => "WATER BOOST",
+                        crate::data::RaceId::Crystal => "TELEPORTATION",
+                        crate::data::RaceId::Eyes => "STRONGER TELEKINESIS",
+                        crate::data::RaceId::Melting => "BIGGER CORPSE EXPLOSIONS",
+                        crate::data::RaceId::Plant => {
+                            "SNARE FINISHES ENEMIES#IN UNDER 33% @rHP"
+                        }
+                        crate::data::RaceId::Venuz => "BRRRAP",
+                        crate::data::RaceId::Steroids => {
+                            "DUAL FIRING MAY GIVE AMMO SOMETIMES"
+                        }
+                        crate::data::RaceId::Robot => "BETTER GUN NUTRITION",
+                        crate::data::RaceId::Chicken => {
+                            "THROWN WEAPONS CAN PIERCE ENEMIES"
+                        }
+                        crate::data::RaceId::Rebel => "HIGHER ALLY RATE OF FIRE",
+                        crate::data::RaceId::Horror => {
+                            "GAIN @rHP@s WHEN USING#@gBEAM@s FOR A LONG TIME"
+                        }
+                        crate::data::RaceId::Rogue => "BIGGER PORTAL STRIKES",
+                        crate::data::RaceId::BigDog => "FASTER ROCKETS",
+                        crate::data::RaceId::Skeleton => "BETTER ODDS",
+                        crate::data::RaceId::Frog => "TOXIC SPREADS FASTER",
+                        crate::data::RaceId::Cuz => "CRY REFILLS FULLY WHEN HIT",
+                        crate::data::RaceId::Random => "???",
+                    }
+                };
+                let box_text = if sel_id
+                    == Some(crate::hud::mutation_skill_index(
+                        crate::data::MutationId::ThroneButt,
+                    ))
+                {
+                    // GML multirace check over live players.
+                    let mut races: Vec<crate::data::RaceId> = world
+                        .query::<&RaceState>()
+                        .iter(world)
+                        .map(|rs| rs.race)
+                        .collect();
+                    races.sort_by_key(|r| *r as u8);
+                    races.dedup();
+                    if races.len() > 1 {
+                        let lines: Vec<String> = races
+                            .iter()
+                            .map(|r| {
+                                format!(
+                                    "{} - {}",
+                                    character_def(*r).name.to_ascii_uppercase(),
+                                    race_tb(*r)
+                                )
+                            })
+                            .collect();
+                        format!("@w{}@s", lines.join("\n"))
+                    } else {
+                        let tb = races
+                            .first()
+                            .map(|r| race_tb(*r))
+                            .unwrap_or(race_tb(
+                                world
+                                    .get_resource::<SelectedCharacter>()
+                                    .map(|s| s.0)
+                                    .unwrap_or(crate::data::RaceId::Fish),
+                            ));
+                        format!("@w{}@s", tb)
+                    }
+                } else if desc.is_empty() {
+                    format!("@w{}", name.to_ascii_uppercase())
+                } else {
+                    format!("@w{}#@s{}@s", name.to_ascii_uppercase(), desc)
+                };
+                out.push(MenuGuiText {
+                    text: box_text,
+                    gx: cx,
+                    gy: 179.0,
+                    color: GUI_WHITE,
+                    px: 7.0,
+                    centered: true,
+                    middle_y: true,
+                    right: false,
+                });
             }
             out
         }
@@ -3965,22 +4273,49 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             } else {
                 out.push(gui_center("GAME OVER", cx, 100.0, GUI_WHITE));
             }
-            // GML `PauseButton`s ride `ystart + offsety`. Deferred:
-            // the `appear = 3 + image` stagger and the event-run
-            // `sprGameOverResult` swap (`scrGameIsEventRun`; weekly
-            // keeps button 0 as image 1, else button 0 is destroyed) —
-            // the port has no event runs, so both buttons draw at once.
-            out.push(gui_button("MENU", cx, 120.0 + 58.0 + offsety, GUI_MID));
-            out.push(gui_button("RETRY", cx, 120.0 + 90.0 + offsety, GUI_MID));
+            // GML `PauseButton`s ride `ystart + offsety` at
+            // `(center, center+58)` and `(center, center+90)` with
+            // `appear = 3 + image` (image 0 MENU appear 3, image 1 RETRY
+            // appear 4). Event-run swaps (`sprGameOverResult`, weekly
+            // keeps button 0 as RETRY else destroys it) need the event
+            // systems the port lacks — both buttons draw at once.
+            // `appear` stagger is headless-owned (`go_appear`) so clicks
+            // land only once the buttons finish sliding in, like GML.
+            let appear = world
+                .get_resource::<MenuState>()
+                .map(|m| m.go_appear)
+                .unwrap_or(0.0);
+            let by = if appear > 0.0 { 240.0 } else { 0.0 };
+            out.push(gui_button("MENU", cx, 120.0 + 58.0 + offsety + by, GUI_MID));
+            out.push(gui_button("RETRY", cx, 120.0 + 90.0 + offsety + by, GUI_MID));
             out
         }
         crate::MenuOverlay::Pause => {
-            // GML pause layer (`UberCont/Draw_0` + `scrMakePauseButtons`
-            // + `PauseButton/Other_10`): bigname PAUSED centered-middle
-            // at (vw/2,52) over the scrim, buttons at MENU (45,176),
-            // RETRY (60,208), SETTINGS (vw-68,176), CONTINUE (vw-78,208);
-            // confirm swaps in ARE YOU SURE? (vw/2,120) + BACK (52,192)
-            // + QUIT/RETRY (vw-52,192).
+            // GML pause layer verbatim (`UberCont/Draw_0` paused branch
+            // + `scrMakePauseButtons` + `PauseButton/Draw_0/Other_10`):
+            // frozen `pausespr` screenshot (shell-owned, not drawn here)
+            // + 0.7 black scrim (shell-owned) + bigname `PAUSED`
+            // centered-middle at `(view_center + 1, 52 + 1 - yoff)`
+            // (`yoff = 4` on event/hardmode runs) + corner `sprCharSplat`
+            // pair (sprite layer) + full roadmap (sprite layer) +
+            // `PauseButton`s at MENU `(left+45, bottom-64, appear 1)`,
+            // RETRY `(left+60, bottom-32, appear 2)`, SETTINGS
+            // `(right-68, top, appear 3)`, CONTINUE `(right-78, bottom,
+            // appear 3)`. Buttons draw the bigname label at scale 0.65
+            // at `y + appear` while `appear < 2`, else the
+            // `sprPauseButton` art (`appear` ticks -1/step, `wait` 3
+            // steps gates clicks). The port draws the steady state
+            // (`appear = 0`); the appear lift is documented here so the
+            // shell can animate it. RETRY is suppressed on daily runs
+            // (`scrGameIsDailyRun`) — the port has no daily runs, so it
+            // always draws. Confirm swaps in BACK `(left+52, bottom-48)`
+            // + QUIT/RETRY `(right-52, bottom-48)` (image 5/6 bignames).
+            // `ARE YOU SURE?` is the port's confirm caption (GML shows
+            // no caption; the swapped buttons ARE the confirm).
+            let hardmode = world
+                .get_resource::<crate::comps_a::Run>()
+                .is_some_and(|r| r.hardmode);
+            let yoff = if hardmode { 4.0 } else { 0.0 };
             let confirm = world
                 .get_resource::<MenuState>()
                 .and_then(|m| m.pause_confirm);
@@ -3996,8 +4331,8 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 vec![
                     MenuGuiText {
                         text: "PAUSED".to_string(),
-                        gx: cx,
-                        gy: 52.0,
+                        gx: cx + 1.0,
+                        gy: 52.0 + 1.0 - yoff,
                         color: GUI_WHITE,
                         px: 10.0,
                         centered: true,
@@ -4013,18 +4348,38 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
         }
         crate::MenuOverlay::Settings => settings_gui_texts(world, vw),
         crate::MenuOverlay::Credits => {
-            vec![
-                gui_center("CREDITS", cx, 40.0, GUI_CREAM),
-                gui_center(
-                    "A fan recreation of Nuclear Throne (Vlambeer)",
-                    cx,
-                    80.0,
-                    GUI_CREAM,
-                ),
-                gui_center("Built with Repame + Repose", cx, 96.0, GUI_GRAY),
-                gui_center("No original game assets included", cx, 112.0, GUI_GRAY),
-                gui_button("BACK", cx, 180.0, GUI_GRAY),
-            ]
+            // GML `Credits/Draw_64` verbatim: the current section body
+            // is ONE centered-middle `draw_text_nt` at `(gui_w/2,
+            // gui_h/2)` — GML joins the section with `"\n@s"`; the tag
+            // backend splits `#` the same way. Tall sections pan via
+            // `MenuState::credits_scroll` (`_py += scroll - height +
+            // gui_h * 0.6`, top-anchored). When a `Logo` instance owns
+            // the credits (end-of-credits handoff) nothing draws.
+            let section = world
+                .get_resource::<MenuState>()
+                .map(|m| m.credits_section)
+                .unwrap_or(0);
+            let scroll = world
+                .get_resource::<MenuState>()
+                .map(|m| m.credits_scroll)
+                .unwrap_or(0.0);
+            let n = credit_section_count();
+            let body = CREDIT_SECTIONS[section % n].join("\n@s");
+            // GML scroll law (`Credits/Step_0`): only tall sections
+            // (`height > gui_h - 36`) set `largetext` and pan.
+            let rows = CREDIT_SECTIONS[section % n].len() as f32;
+            let tall = rows * 12.0 > 240.0 - 36.0;
+            let gy = if tall { 120.0 + scroll - rows * 12.0 + 240.0 * 0.6 } else { 120.0 };
+            vec![MenuGuiText {
+                text: format!("@s{body}"),
+                gx: cx,
+                gy,
+                color: GUI_WHITE,
+                px: 7.0,
+                centered: true,
+                middle_y: !tall,
+                right: false,
+            }]
         }
     }
 }
@@ -5107,12 +5462,14 @@ pub fn hud_sprites(
         }
     }
 
-    // Weapon strip (GML draw order verbatim: active weapon left at
-    // GUI x=24, then 68, then 88 for extras, y=16; outline white at
-    // draw position 0 — or both on Steroids — else #404040). Art stays
-    // per-weapon `wep_sprt` and the cursed-slot purple fog is kept
-    // (documented extras: GML parts out the weapon sprite with fog
-    // tints).
+    // Weapon strip (GML `scrDrawPlayerHUD:99-146` verbatim): active
+    // weapon left at GUI x=24, then 68, then +20 for extras, y=16;
+    // 4-way outline (white when active, `#404040` else) drawn only for
+    // the active gun / broke batch / darkness / letterbox; body in
+    // `c_black`; `gpu_fog` tints for curse (`c_curse`) / ultra rad guns
+    // (`c_ultra`) / golden (`c_gold`); melee parts 32 px wide, else 16.
+    // (`swapanim` y-offset + the white 0.2 reload wipe are sim-state the
+    // port never tracks, so the steady frame draws.)
     for (pos, slot) in order.into_iter().enumerate() {
         let Some(id) = hud.weapon_ids.get(slot).copied() else {
             continue;
@@ -5125,15 +5482,34 @@ pub fn hud_sprites(
         };
         let active = pos == 0 || steroids_race;
         let cursed = hud.weapon_cursed.get(slot).copied().unwrap_or(false);
-        let tint = if cursed {
-            [0.7, 0.4, 1.0, 1.0]
-        } else if active {
-            [1.0; 4]
+        let ultra_gun = meta.wep_rads != 0;
+        let golden = meta.wep_gold;
+        // GML fog tints over the body draw.
+        let fog: Option<[f32; 4]> = if cursed {
+            Some([139.0 / 255.0, 68.0 / 255.0, 140.0 / 255.0, 1.0])
+        } else if ultra_gun {
+            Some([61.0 / 255.0, 198.0 / 255.0, 22.0 / 255.0, 1.0])
+        } else if golden {
+            Some([218.0 / 255.0, 208.0 / 255.0, 144.0 / 255.0, 1.0])
         } else {
-            [0.25, 0.25, 0.25, 1.0]
+            None
         };
         let dx = hud_weapon_dx(pos);
-        if let Some(s) = hud_gui_place(assets, &path, 0, dx, 16.0, 1.0, tint, gm, view) {
+        let outline: [f32; 4] = if active {
+            [1.0; 4]
+        } else {
+            [0x40 as f32 / 255.0, 0x40 as f32 / 255.0, 0x40 as f32 / 255.0, 1.0]
+        };
+        // 4-way outline quads (1 px GUI offsets around the body).
+        for (ox, oy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+            if let Some(s) =
+                hud_gui_place(assets, &path, 1, dx + ox, 16.0 + oy, 1.0, outline, gm, view)
+            {
+                out.push(s);
+            }
+        }
+        let body_tint = fog.unwrap_or([0.0, 0.0, 0.0, 1.0]);
+        if let Some(s) = hud_gui_place(assets, &path, 1, dx, 16.0, 1.0, body_tint, gm, view) {
             out.push(s);
         }
     }
@@ -6780,10 +7156,22 @@ pub fn menu_sprites(
                 .enumerate()
             {
                 let race = roster[i];
-                let locked = save.as_ref().is_none_or(|s| !s.race_unlocked(race));
-                let (path, tint): (&str, [f32; 4]) = if locked {
+                // GML `CharSelect/Draw_0` verbatim: `can =
+                // scr_race_is_unlocked(race) || UberCont.weekly_run`,
+                // strip `can ? sprCharSelect : sprCharSelectLocked`,
+                // tint white iff `can && selected`, else gray. `selected`
+                // tracks the picked race (cursor pod or
+                // `my_player.race`); the port's `title_cursor` pod is the
+                // same slot single-player.
+                let weekly = menu.as_ref().is_some_and(|m| m.weekly_run_menu);
+                let can =
+                    save.as_ref().is_some_and(|s| s.race_unlocked(race)) || weekly;
+                let selected_race = CHAR_SELECT_ORDER
+                    [selected.min(CHAR_SELECT_ORDER.len() - 1)];
+                let is_selected = i == cursor || race == selected_race;
+                let (path, tint): (&str, [f32; 4]) = if !can {
                     ("images/sprCharSelectLocked.png", [0.5, 0.5, 0.5, 1.0])
-                } else if i == cursor {
+                } else if is_selected {
                     ("images/sprCharSelect.png", [1.0; 4])
                 } else {
                     ("images/sprCharSelect.png", [0.5, 0.5, 0.5, 1.0])
@@ -6797,6 +7185,24 @@ pub fn menu_sprites(
                     tint,
                 ) {
                     out.push(s);
+                }
+                // GML `Menu/Draw_74` verbatim: unlocked non-Random pods
+                // with no recorded death (`!UberCont.ctot_dead[race]`)
+                // draw `sprNew` at the pod's right edge. The port tracks
+                // deaths via `total_deaths > 0`; fresh saves (no deaths)
+                // show the badge, exactly like a new GML profile.
+                let fresh = save.as_ref().is_none_or(|s| s.total_deaths == 0);
+                if can && race != crate::data::RaceId::Random && fresh {
+                    if let Some(s) = assets.sprite_for(
+                        "images/sprNew.png",
+                        -1,
+                        gui_to_world(pos[0] + TITLE_POD_W, pos[1]),
+                        false,
+                        0.0,
+                        [1.0; 4],
+                    ) {
+                        out.push(s);
+                    }
                 }
             }
             // Selected-race portrait + splat + name plate (GML
@@ -7293,16 +7699,18 @@ pub fn hud_texts(world: &mut World) -> Vec<(String, [f32; 2])> {
             [0.0, 0.0],
         ));
     }
-    // Weapon label (bevy `sync_weapon_label` text half): gun name at
-    // the pickup +(0,31), `E` prompt on the gun (ammo gauge sprites
-    // ride the deferred sprite-HUD pass).
+    // GML `scrDrawInteractionHUD` verbatim (nearest-pickup half):
+    // the nearest weapon pickup's name at the pickup `+(0,-31)` in
+    // room px (world-anchored here; the view subtracts the camera).
+    // GML draws at `(floor(x - view_xview), floor(y - view_yview) - 31)`
+    // = room pos - 31 px, i.e. world `[gun.x, gun.y - 31]`. (The ammo
+    // gauge + touch `ButtonAct` ring ride the deferred sprite pass.)
     if let Some(label) = world.get_resource::<crate::pickups::WeaponLabel>() {
         if let Some(target) = label.target {
             if let Some(gun) = world.get::<Pos>(target) {
                 if !label.text.is_empty() {
-                    out.push((label.text.clone(), [gun.0.x, gun.0.y + 31.0]));
+                    out.push((label.text.clone(), [gun.0.x, gun.0.y - 31.0]));
                 }
-                out.push(("E".to_string(), [gun.0.x, gun.0.y]));
             }
         }
     }
