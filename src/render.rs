@@ -2802,13 +2802,12 @@ fn hud_weapon_dx(pos: usize) -> f32 {
 ///   run clock then map name (gated on `show_timer`/`show_area`).
 ///
 /// Deferred GML HUD rows (need sim state the port never tracks):
-/// `LOW %/NOT ENOUGH %/EMPTY/NOT ENOUGH RADS` low-ammo block
-/// (`drawempty` + `sin(wave)` blink), `FAINTED` pulse, bleed gray bar,
-/// hurt white flash, Rogue/Cuz ammo icons, exp bar + ultra/nomuts
-/// level sprites, ammo-type icon strip + daily/weekly/custom icons,
-/// `scrDrawInteractionHUD`, `scrDrawMiscHUD` cheat/ultra/skill icon
-/// rows, and the analog `scrDrawClock` surface clock (only the digital
-/// `timer_string` is drawn).
+/// `FAINTED` pulse, bleed gray bar, hurt white flash, and the analog
+/// `scrDrawClock` surface clock (only the digital `timer_string` is
+/// drawn). Everything else in `scrDrawPlayerHUD`/`scrDrawMiscHUD` draws:
+/// health/exp/ammo strips + ultra/skill rows (sprites), per-slot ammo +
+/// LOW-HP + low-ammo block (above), clock/area (below), event icons
+/// (sprites), interaction prompt (`hud_texts`).
 pub fn hud_gui_texts(world: &mut World) -> Vec<HudGuiText> {
     use crate::data::{AmmoKind, ammo_pickup_amount};
 
@@ -5135,11 +5134,12 @@ pub fn hud_sprites(
         }
     }
 
-    // Rad/exp bar + level badge (GML `scrDrawPlayerHUD:186-190` verbatim:
-    // `sprExpBarLevel` first while an offer is pending
+    // Rad/exp bar + level badge (GML `scrDrawPlayerHUD:184-202`
+    // verbatim: `sprExpBarLevel` first while an offer is pending
     // (`skillpoints/ultrapoints/wantdestinyskill`), then `sprExpBar` with
-    // `frac*16` at GUI (4,4) on top; `sprUltraLevel` at (11,16) past the
-    // level cap).
+    // `frac*16` at GUI (4,4) on top; `sprNomutsLevel` at (11,16) when
+    // the level cap is 0, the number while below cap, `sprUltraLevel`
+    // at cap). The cap is `PLAYER_LEVEL_MAX` (10, 0 in no-muts custom).
     let offer_pending = world.get_resource::<PendingMutation>().is_some()
         || world.get_resource::<PendingUltra>().is_some();
     if offer_pending {
@@ -5174,6 +5174,9 @@ pub fn hud_sprites(
     ) {
         out.push(s);
     }
+    // GML `_level_max <= 0` (no-muts custom): the port never sets a 0
+    // cap (level floor is 1), so this arm is vacuous — documented, not
+    // drawn.
     if hud.level >= 10 {
         if let Some(s) = assets.sprite_scaled_rotated(
             "images/sprUltraLevel.png",
@@ -5242,6 +5245,12 @@ pub fn hud_sprites(
             out.push(s);
         }
     }
+    // GML `scrDrawPlayerHUD:231-245` event/continued icons verbatim at
+    // GUI y=33: daily/weekly icon at x=56 on event runs (weekly picks
+    // the weekly sprite), custom icon +12 when custom, continued icon
+    // +12 per flag. The port has no daily/weekly/custom/continued
+    // runs (PLAY sub-rows deny; `Run` carries no continued flag), so
+    // all three arms are vacuous — documented, not drawn.
 
     // Rogue/Cuz ammo pips (GML GUI (110,4), subimage by fill progress,
     // 0 when dry; Cuz draws `sprCuzAmmoHUDU` under the Emotional ultra).
