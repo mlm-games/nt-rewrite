@@ -2078,6 +2078,11 @@ pub fn tick_floor_transition(
             let Ok((mut pos, mut health, mut player, race)) = player_q.single_mut() else {
                 return;
             };
+            // The tutorial arena never recurs past the first floor, and the
+            // Blood-crown enemy pass follows the live crown (GML
+            // `scrCrownCheck` at populate time).
+            run.tutorial = false;
+            run.blood_crown = player.crown == crate::data::CrownKind::Blood;
             let mut plan = crate::worldgen::generate_level(&run);
             // Player landing first (plan-space; `spawn_level` builds the
             // same mask from these cells, so placement below agrees).

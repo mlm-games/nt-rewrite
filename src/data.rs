@@ -206,6 +206,26 @@ impl Default for WeaponId {
 
 pub const WEAPON_NONE: WeaponId = WeaponId(0);
 pub const WEAPON_REVOLVER: WeaponId = WeaponId(1);
+/// GML `scrRaceGetStarterWeapon` ids verbatim (table index = weapon id).
+pub const WEAPON_GOLDEN_REVOLVER: WeaponId = WeaponId(39);
+pub const WEAPON_CHICKEN_SWORD: WeaponId = WeaponId(46);
+pub const WEAPON_RUSTY_REVOLVER: WeaponId = WeaponId(56);
+pub const WEAPON_ROGUE_RIFLE: WeaponId = WeaponId(81);
+pub const WEAPON_DOG_SPIN_ATTACK: WeaponId = WeaponId(108);
+pub const WEAPON_GOLDEN_FROG_PISTOL: WeaponId = WeaponId(127);
+
+/// GML `scrRaceGetStarterWeapon` verbatim.
+pub fn race_starter_weapon(race: RaceId) -> WeaponId {
+    match race {
+        RaceId::Venuz | RaceId::Cuz => WEAPON_GOLDEN_REVOLVER,
+        RaceId::Chicken => WEAPON_CHICKEN_SWORD,
+        RaceId::Rogue => WEAPON_ROGUE_RIFLE,
+        RaceId::BigDog => WEAPON_DOG_SPIN_ATTACK,
+        RaceId::Skeleton => WEAPON_RUSTY_REVOLVER,
+        RaceId::Frog => WEAPON_GOLDEN_FROG_PISTOL,
+        _ => WEAPON_REVOLVER,
+    }
+}
 
 pub fn resolve_start_weapon(raw: WeaponId) -> WeaponId {
     if raw == WEAPON_NONE {

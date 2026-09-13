@@ -169,6 +169,11 @@ pub fn generation_goal(floor: u32) -> usize {
 }
 
 fn generation_goal_for_run(run: &Run) -> usize {
+    // GML `GenCont/Create_0`: a fresh tutorial run builds the 5-floor
+    // `TutCont` arena instead of the area goal.
+    if run.tutorial {
+        return 5;
+    }
     if is_secret_area(run.area) {
         return match run.area {
             AreaId::CrownVault | AreaId::Vault => 40,
@@ -288,6 +293,66 @@ fn turn_table(rng: &mut StdRng, area: i32) -> i32 {
 // TODO(port): calls `cell_center_px`, `build_walls` and `populate`, whose
 // bodies live in world.rs:818/837/874 and are outside this port's scope.
 // Call sites below are preserved byte-identical (same RNG call order).
+/// GML `GenCont/Step_0` safespawn shift: once the makers finish, a level
+/// whose spawn neighbourhood is too thin drifts every floor (plus the
+/// turn/death chests already stamped) one `safedir` step and grows a
+/// fresh centre floor, until the ring fills. The port settles the same
+/// loop inline before walls go up (bounded; GML runs it once per step).
+/// Skipped exactly where `scrAreaHasSafespawn` is false (campfire, vault,
+/// palace/HQ finales; GML also excludes the crib, which the port does
+/// not model as an area).
+fn apply_safespawn_shift(plan: &mut LevelPlan, rng: &mut StdRng, run: &Run) {
+    let no_safe = matches!(
+        run.area,
+        AreaId::Campfire | AreaId::Vault | AreaId::CrownVault
+    ) || (run.area == AreaId::Palace && ((run.floor.max(1) - 1) % 15) + 1 == 15)
+        || (run.area == AreaId::HQ && run.floor_in_area >= 3);
+    if no_safe {
+        return;
+    }
+    let safedis: f32 = if run.loop_count > 0 { 96.0 } else { 64.0 };
+    let maxfloors = ((safedis / 32.0) * 2.5).ceil() as usize;
+    let (dx, dy) = match rng.random_range(0..4) {
+        0 => (1, 0),
+        1 => (0, 1),
+        2 => (-1, 0),
+        _ => (0, -1),
+    };
+    let delta_px = Vec2::new(dx as f32 * TILE, dy as f32 * TILE);
+    // GML counts live `Floor` instances (duplicates stack); the port's
+    // deduped cells track the surplus in `stacked`.
+    let mut stacked = 0usize;
+    for _ in 0..16 {
+        let near = plan
+            .floor_cells
+            .iter()
+            .filter(|(cx, cy)| {
+                let (px, py) = cell_center_i(*cx, *cy);
+                px * px + py * py <= safedis * safedis
+            })
+            .count()
+            + stacked;
+        if near >= maxfloors {
+            break;
+        }
+        for (cx, cy) in plan.floor_cells.iter_mut() {
+            *cx += dx;
+            *cy += dy;
+        }
+        for chest in plan.chests.iter_mut() {
+            let p = match chest {
+                ChestSpawn::Weapon(p) | ChestSpawn::Ammo(p) | ChestSpawn::Rad(p) => p,
+                ChestSpawn::Custom(_, p) => p,
+            };
+            *p += delta_px;
+        }
+        if plan.floor_cells.contains(&(0, 0)) {
+            stacked += 1;
+        } else {
+            plan.floor_cells.push((0, 0));
+        }
+    }
+}
 pub fn generate_level(run: &Run) -> LevelPlan {
     let area = gml_area_from_run(run);
 
@@ -724,6 +789,8 @@ pub fn generate_level(run: &Run) -> LevelPlan {
         makers = next_makers;
         makers.extend(new_branches);
     }
+
+    apply_safespawn_shift(&mut plan, &mut rng, run);
 
     if let Some(&(fx, fy)) = plan
         .floor_cells
@@ -1181,7 +1248,7 @@ pub fn wall_top_left(wx: i32, wy: i32) -> Vec2 {
     Vec2::new(wx as f32 * WALL_PX, (wy as f32 + 1.0) * WALL_PX)
 }
 
-fn build_walls(_run: &Run, floors: &[(i32, i32)], plan: &mut LevelPlan) {
+pub(crate) fn build_walls(_run: &Run, floors: &[(i32, i32)], plan: &mut LevelPlan) {
     let floor_set: std::collections::HashSet<(i32, i32)> = floors.iter().copied().collect();
 
     for &(cx, cy) in floors {
@@ -1584,11 +1651,10 @@ fn populate(
     let rf_route = ((run.floor.max(1) - 1) % 15) + 1;
     let skip_enemies = boss_sub && rf_route == 15;
 
-    let spawn_dist = if area == 5 && run.floor_in_area >= 3 {
-        150.0
-    } else {
-        120.0
-    };
+    // GML `scrPopulate` asks for 120 px (150 on the city boss floor) but
+    // `scrPopEnemies` itself refuses anything under 160 px, so the
+    // effective clear ring is 160 everywhere.
+    let spawn_dist = 160.0;
     let mut enemy_tiles: Vec<(EnemyKind, Vec2)> = Vec::new();
     for &(cx, cy) in floors {
         if skip_enemies {
@@ -1609,16 +1675,26 @@ fn populate(
         }
 
         let chance = hard / (10.0 + hard);
-        if rng.random::<f32>() >= chance && enemy_tiles.len() >= enemy_min {
-            continue;
-        }
+        // GML `scrPopulate` fires `scrPopEnemies` twice per floor: the
+        // open roll above plus the Blood-crown bonus roll below, which
+        // ignores the enemy cap (`random(8 + hard) < hard`).
+        let normal = rng.random::<f32>() < chance || enemy_tiles.len() < enemy_min;
+        let extra = run.blood_crown && rng.random::<f32>() < hard / (8.0 + hard);
 
         let center = Vec2::new(px, py);
         let pick_kind = |rng: &mut StdRng, w: &[EnemyKind]| w[rng.random_range(0..w.len())];
         let loop_extras = loop_elite_candidates(area, run.loop_count);
 
-        {
-            let mut secret_kinds: Vec<EnemyKind> = match run.area {
+        for pass in 0..2 {
+            // Pass 0 rolls the open table; pass 1 re-rolls it for the
+            // Blood crown. (`continue` below skips the pass, matching
+            // GML's per-`scrPopEnemies`-call return.)
+            if (pass == 0 && !normal) || (pass == 1 && !extra) {
+                continue;
+            }
+
+            {
+                let mut secret_kinds: Vec<EnemyKind> = match run.area {
                 AreaId::Oasis => {
                     if rng.random::<f32>() * 4.0 < 1.0 {
                         vec![EnemyKind::Crab]
@@ -1765,7 +1841,43 @@ fn populate(
 
         match area {
             1 => {
-                if rng.random::<f32>() * 7.0 < 1.0 {
+                // GML `scrPopEnemies` desert arm verbatim: loop invaders,
+                // then the styleb big-maggot nest, then maggot/scorpion,
+                // then the barrel ambush, then the bandit default.
+                // (`_loop_rand = random(loops)`; 0 loops never fires.)
+                let loop_rand = if run.loop_count == 0 {
+                    0.0
+                } else {
+                    rng.random_range(0.0..run.loop_count as f32)
+                };
+                if rng.random_range(0.0..2.0) < loop_rand {
+                    let k = pick_kind(
+                        &mut rng,
+                        &[
+                            EnemyKind::Scorpion,
+                            EnemyKind::Scorpion,
+                            EnemyKind::Bandit,
+                            EnemyKind::Bandit,
+                            EnemyKind::Maggot,
+                            EnemyKind::JungleFly,
+                            EnemyKind::JungleFly,
+                            EnemyKind::MeleeBandit,
+                            EnemyKind::Sniper,
+                        ],
+                    );
+                    enemy_tiles.push((k, center));
+                } else if plan.styleb {
+                    let k = pick_kind(
+                        &mut rng,
+                        &[
+                            EnemyKind::MaggotSpawn,
+                            EnemyKind::BigMaggot,
+                            EnemyKind::BigMaggot,
+                            EnemyKind::Maggot,
+                        ],
+                    );
+                    enemy_tiles.push((k, center));
+                } else if rng.random::<f32>() * 7.0 < 1.0 {
                     let k = pick_kind(&mut rng, &[EnemyKind::MaggotSpawn, EnemyKind::Scorpion]);
                     enemy_tiles.push((k, center));
                 } else if rng.random::<f32>() * 30.0 < 1.0 {
@@ -1974,7 +2086,8 @@ fn populate(
                 let k = pick_kind(&mut rng, &palace);
                 enemy_tiles.push((k, center));
             }
-            _ => {}
+                _ => {}
+            }
         }
     }
 
@@ -1985,7 +2098,7 @@ fn populate(
             .filter(|(cx, cy)| {
                 let (px, py) = cell_center_i(*cx, *cy);
                 let d = px * px + py * py;
-                d >= 120.0 * 120.0 && !prop_tiles.contains(&(*cx, *cy))
+                d >= 160.0 * 160.0 && !prop_tiles.contains(&(*cx, *cy))
             })
             .collect::<Vec<_>>();
         extras.sort_by_key(|&(cx, cy)| {
@@ -2067,6 +2180,16 @@ fn populate(
     }
 
     trim_chests(&mut plan.chests);
+
+    // GML `GenCont/Alarm_0` tutorial arm verbatim: the `TutCont` level
+    // holds no roaming enemies, no chests and no boss wants (its weapon
+    // chest and portal are scripted later by `TutCont` itself, which the
+    // port does not model yet).
+    if run.tutorial {
+        plan.enemies.clear();
+        plan.chests.clear();
+        plan.boss = None;
+    }
 }
 
 pub fn boss_for_floor_and_loop(floor: u32, loop_count: u32) -> EnemyKind {

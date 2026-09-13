@@ -24,7 +24,8 @@
 //!   from birth, silent until re-armed).
 
 use bevy_ecs::prelude::*;
-use rand::RngExt;
+use rand::rngs::StdRng;
+use rand::{RngExt, SeedableRng};
 use repame_anim::AnimCatalog;
 use repame_fx::{DamageNumber, Particle};
 
@@ -45,7 +46,7 @@ use crate::comps_b::{
 use crate::crown::{apply_crown_to_spawn, crown_name_for_toast};
 use crate::data::{
     AmmoKind, AreaId, CrownKind, EnemyKind, RaceId, SecretTarget, SkinLetter, WEAPON_REVOLVER,
-    WeaponId, area_for_floor, resolve_start_weapon,
+    WeaponId, ammo_max, area_for_floor, race_starter_weapon, resolve_start_weapon,
 };
 use crate::enemies::{difficulty_multiplier, spawn_enemy_at};
 use crate::enemy_data::enemy_def;
@@ -150,10 +151,11 @@ pub fn derive_hurt_path(idle: &'static str) -> &'static str {
     }
 }
 
-/// Start ammo is pickup amount x3 (bevy `progression.rs`
-/// `starting_ammo_for` verbatim, over the full `WEAPONS` table via
-/// `weapon_ammo`: Fish bonus and Haste +1 apply per kind, then x3; the
-/// max across held weapons wins per slot; melee/empty grant nothing).
+/// Start ammo is pickup amount x3 per held weapon (GML `scrCreatePlayers`
+/// calls `scrPlayerGiveAmmo(type, pickup * 3)` separately for `wep` and
+/// `bwep`, each capped at the type max): dual-wielded Steroids stack to
+/// 6x, capped. Fish bonus and Haste +1 apply per kind, then x3. Melee
+/// (Chicken sword) and empty grant nothing.
 pub fn starting_ammo_for(
     weapons: &[WeaponId; MAX_WEAPON_SLOTS],
     race: RaceId,
@@ -199,9 +201,8 @@ pub fn starting_ammo_for(
             AmmoKind::Energy => 5,
         };
 
-        let amount = typ_ammo(kind) * 3;
-
-        ammo[index] = ammo[index].max(amount);
+        // GML `scrPlayerGiveAmmo` caps every grant at the type max.
+        ammo[index] = (ammo[index] + typ_ammo(kind) * 3).min(ammo_max(kind));
     }
 
     ammo
@@ -218,8 +219,26 @@ pub struct RunLoadout {
 }
 
 /// Resolve a run loadout from the save (bevy `setup_run` lines
-/// 99-128 verbatim, minus engine types).
+/// 99-128, plus the GML `scrCreatePlayers` race rules bevy skips:
+/// a golden-frog-pistol start forces Frog, a locked Skeleton falls back
+/// to Melting, and an empty start falls back to the race starter from
+/// `scrRaceGetStarterWeapon` — not bare revolver).
 pub fn resolve_run_loadout(save: &SaveData, race: RaceId) -> RunLoadout {
+    // GML `scrCreatePlayers`: `cwep == wep_golden_frog_pistol` forces Frog
+    // (skin/crown then come from the Frog loadout below).
+    let mut race = race;
+    if race != RaceId::Frog
+        && sanitize_weapon_id(save.race_loadout(race).start_weapon)
+            == crate::data::WEAPON_GOLDEN_FROG_PISTOL
+    {
+        race = RaceId::Frog;
+    }
+    // GML `scrCreatePlayers` (single-player, non-event): a still-locked
+    // Skeleton plays Melting instead.
+    if race == RaceId::Skeleton && !save.race_unlocked(RaceId::Skeleton) {
+        race = RaceId::Melting;
+    }
+
     let loadout = save.race_loadout(race);
     let crown = CrownKind::from_u8(loadout.start_crown);
 
@@ -229,9 +248,17 @@ pub fn resolve_run_loadout(save: &SaveData, race: RaceId) -> RunLoadout {
         0
     };
 
-    let primary = resolve_start_weapon(sanitize_weapon_id(loadout.start_weapon));
+    let raw_start = sanitize_weapon_id(loadout.start_weapon);
+    let explicit_start = raw_start != WeaponId::NONE;
 
-    let explicit_start = sanitize_weapon_id(loadout.start_weapon) != WeaponId::NONE;
+    // GML `scr_loadout_race_get_start_weapon`: the default start is the
+    // race starter (Venuz/Cuz gold revolver, Chicken sword, Rogue rifle,
+    // BigDog spin, Skeleton rusty, Frog gold frog).
+    let primary = if explicit_start {
+        resolve_start_weapon(raw_start)
+    } else {
+        race_starter_weapon(race)
+    };
 
     let mut secondary = {
         let saved = sanitize_weapon_id(loadout.stored_weapon);
@@ -253,6 +280,29 @@ pub fn resolve_run_loadout(save: &SaveData, race: RaceId) -> RunLoadout {
         equipped: [primary, secondary, WeaponId::NONE],
         weapon_slots: if race == RaceId::Cuz { 3 } else { 2 },
     }
+}
+
+/// Roll a Random pick into an unlocked race (GML `scrCreatePlayers`
+/// verbatim: `irandom_range(Fish, Cuz)` rejecting locked races and
+/// BigDog; Fish is always unlocked so the loop terminates). The RNG is
+/// the caller's split stream so the level-generation stream never shifts.
+pub fn roll_random_race(save: &SaveData, race: RaceId, rng: &mut StdRng) -> RaceId {
+    if race != RaceId::Random {
+        return race;
+    }
+    for _ in 0..500 {
+        let gml = rng.random_range(1..=16);
+        if gml == RaceId::BigDog as usize {
+            continue;
+        }
+        let Some(candidate) = crate::state::menus::race_from_gml_id(gml) else {
+            continue;
+        };
+        if save.race_unlocked(candidate) {
+            return candidate;
+        }
+    }
+    RaceId::Fish
 }
 
 /// Player components for a race + loadout (bevy `setup_run` lines
@@ -283,7 +333,15 @@ pub fn build_player_bundle(race: RaceId, loadout: &RunLoadout) -> PlayerBundle {
         pickup_range: def.pickup_range,
         fire_rate_mult,
 
-        spread_mult: if race == RaceId::Steroids { 1.8 } else { 1.0 },
+        // GML `scrPlayerRaceChange`: Steroids `accuracy = 1.8`, Skeleton
+        // `accuracy = 1.5` (spread_mult is the port's accuracy axis).
+        spread_mult: if race == RaceId::Steroids {
+            1.8
+        } else if race == RaceId::Skeleton {
+            1.5
+        } else {
+            1.0
+        },
         chain_explosions: def.passive == PassiveKind::ChainExplosions,
         shield_on_hit: def.passive == PassiveKind::ShieldOnHit,
         ability: def.ability,
@@ -454,6 +512,13 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
         if let Some(mut menu) = world.get_resource_mut::<crate::state::menus::MenuState>() {
             menu.hardmode_selected = false;
         }
+        // GML `GenCont/Create_0`: the `game.tutorial` save flag forces the
+        // 5-floor `TutCont` level. The port has no tutorial steps and no
+        // completion event, so the layout applies to first-ever runs only
+        // (`total_runs == 0`); afterwards the flag reads as completed.
+        let tutorial = world.get_resource::<SaveData>().is_some_and(|s| {
+            s.settings.show_tutorial && s.total_runs == 0
+        });
         let mut run = world.resource_mut::<Run>();
         run.floor = 1;
         run.world = 1;
@@ -475,6 +540,8 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
         run.shots_fired = 0;
         run.weapons_picked = 0;
         run.won = false;
+        run.tutorial = tutorial;
+        run.blood_crown = false;
         run.waypoints.clear();
         run.push_waypoint();
         world.resource_mut::<crate::state::Paused>().0 = false;
@@ -516,9 +583,15 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
         ));
     }
 
-    let race = world.resource::<SelectedCharacter>().0;
+    let picked = world.resource::<SelectedCharacter>().0;
     let save = world.resource::<SaveData>().clone();
+    // GML `scrCreatePlayers` Random roll on its own split stream (level
+    // generation keeps its own `gen_seed` stream either way).
+    let mut roll_rng = StdRng::seed_from_u64(seed ^ 0x9E37_79B9_7F4A_7C15);
+    let race = roll_random_race(&save, picked, &mut roll_rng);
     let loadout = resolve_run_loadout(&save, race);
+    // GML `scrPopulate` Blood-crown extra pass reads the run-start crown.
+    world.resource_mut::<Run>().blood_crown = loadout.crown == CrownKind::Blood;
     let bundle = build_player_bundle(race, &loadout);
 
     spawn_player_loaded(
@@ -1240,6 +1313,39 @@ pub fn spawn_secret_entrances(
     }
 }
 
+/// Wall bodies for a wall-cell set (shared by [`spawn_level`] and the
+/// title campfire below): indestructible `WallTile` bodies plus the
+/// screen-end mark. `floor_set` drives `is_screen_end_wall`.
+fn spawn_wall_tiles(
+    commands: &mut Commands,
+    wall_cells: Vec<(i32, i32)>,
+    floor_set: &std::collections::HashSet<(i32, i32)>,
+) {
+    let mut all_walls = wall_cells;
+    all_walls.sort_unstable();
+    for (wx, wy) in all_walls {
+        let c = crate::worldgen::wall_center(wx, wy);
+        let wall_e = commands
+            .spawn((
+                GameCleanup,
+                LevelCleanup,
+                WallTile,
+                WallCell(wx, wy),
+                Prop {
+                    size: glam::Vec2::splat(crate::worldgen::WALL_PX),
+                    hp: 9999,
+                    destructible: false,
+                    explosive: false,
+                },
+                Pos(c),
+            ))
+            .id();
+        if is_screen_end_wall(wx, wy, floor_set) {
+            commands.entity(wall_e).insert(crate::comps_b::ScreenEnd);
+        }
+    }
+}
+
 /// Floor entity spawn from a generated plan (bevy `world::spawn_level`
 /// sim half: mask rebuild (via [`build_floor_mask`]), wall bodies,
 /// props, secret entrances, chests, enemies, boss extras, throne carpet,
@@ -1261,29 +1367,11 @@ pub fn spawn_level(
     for &(wx, wy) in &plan.small_walls {
         wall_set.insert((wx as i32, wy as i32));
     }
-    let mut all_walls: Vec<(i32, i32)> = wall_set.into_iter().collect();
-    all_walls.sort_unstable();
-    for (wx, wy) in all_walls {
-        let c = crate::worldgen::wall_center(wx, wy);
-        let wall_e = commands
-            .spawn((
-                GameCleanup,
-                LevelCleanup,
-                WallTile,
-                WallCell(wx, wy),
-                Prop {
-                    size: glam::Vec2::splat(crate::worldgen::WALL_PX),
-                    hp: 9999,
-                    destructible: false,
-                    explosive: false,
-                },
-                Pos(c),
-            ))
-            .id();
-        if is_screen_end_wall(wx, wy, &floor_set) {
-            commands.entity(wall_e).insert(crate::comps_b::ScreenEnd);
-        }
-    }
+    spawn_wall_tiles(
+        &mut *commands,
+        wall_set.into_iter().collect(),
+        &floor_set,
+    );
 
     for (kind, pos) in &plan.props {
         spawn_prop_sim(commands, catalog, run, *kind, *pos);
@@ -1291,6 +1379,10 @@ pub fn spawn_level(
 
     spawn_secret_entrances(commands, catalog, run);
 
+    // Bandit-camp spots (GML `scrPopulate`: every free weapon/ammo/rad
+    // chest camps a Bandit; `BigWeaponChest` and `RadMaggotChest` are
+    // excluded, everything else qualifies).
+    let mut bandit_spots: Vec<glam::Vec2> = Vec::new();
     for chest in &plan.chests {
         match *chest {
             // GML `scrPopChests` cursed-caves arm: every WeaponChest
@@ -1308,12 +1400,28 @@ pub fn spawn_level(
                     },
                     crate::spatial::Pos(p),
                 ));
+                bandit_spots.push(p);
             }
-            ChestSpawn::Weapon(p) => spawn_chest(commands, catalog, ChestKind::Weapon, p),
-            ChestSpawn::Ammo(p) => spawn_chest(commands, catalog, ChestKind::Ammo, p),
-            ChestSpawn::Custom(kind, p) => spawn_chest(commands, catalog, kind, p),
+            ChestSpawn::Weapon(p) => {
+                spawn_chest(commands, catalog, ChestKind::Weapon, p);
+                bandit_spots.push(p);
+            }
+            ChestSpawn::Ammo(p) => {
+                spawn_chest(commands, catalog, ChestKind::Ammo, p);
+                bandit_spots.push(p);
+            }
+            ChestSpawn::Custom(kind, p) => {
+                spawn_chest(commands, catalog, kind, p);
+                // GML excludes only the mimic-rolled `BigWeaponChest` (a
+                // `WeaponChest` child with a foreign object id) and the
+                // `RadMaggotChest` (`with RadChest` skips it).
+                if !matches!(kind, ChestKind::BigWeapon | ChestKind::RadMaggot) {
+                    bandit_spots.push(p);
+                }
+            }
             ChestSpawn::Rad(p) => {
                 spawn_rad_container(commands, catalog, run.gen_seed, p);
+                bandit_spots.push(p);
             }
         }
     }
@@ -1330,6 +1438,31 @@ pub fn spawn_level(
             false,
             run.loop_count,
         );
+    }
+
+    // GML `scrPopulate` bandit camps: a Bandit on every free chest spot,
+    // except Crown-Vault-style finale floors (which hold no chests anyway)
+    // and the Mansion/HQ secret slots. GML area ints: city 5, vault 100,
+    // mansion 103, hq 106.
+    {
+        let g = crate::worldgen::gml_area_from_run(run);
+        if (g < 5 || g > 100) && g != 103 && g != 106 {
+            for spot in bandit_spots {
+                if !mask.is_walkable(spot) {
+                    continue;
+                }
+                spawn_enemy_at(
+                    commands,
+                    catalog,
+                    EnemyKind::Bandit,
+                    spot,
+                    difficulty,
+                    false,
+                    false,
+                    run.loop_count,
+                );
+            }
+        }
     }
     if let Some(kind) = plan.boss {
         match kind {
@@ -1416,5 +1549,286 @@ pub fn spawn_level(
             CrownPedestal { kind },
             Pos(glam::Vec2::new(0.0, 40.0)),
         ));
+    }
+}
+
+/// Title campfire backdrop (GML `MenuGen/Create_0` + `Alarm_1` sim half:
+/// block-grid floors with jitter, cardinal-neighbour fill, ring walls,
+/// and the 1-in-6 `NightCactus` dressing; no enemies, chests, makers or
+/// run state — the campfire title owns no `GameCont`). `CampChar`
+/// actors, the fire itself, `LogMenu`, the chicken `TV` and the sleeping
+/// BigDog stay render-owned (no port components exist for them yet) and
+/// are not spawned here. Entities carry `GameCleanup`/`LevelCleanup` so
+/// run setup clears them; the `FloorMask` lets title-time systems
+/// collide against the same walls the menu draws.
+pub fn setup_title_campfire(world: &mut World) {
+    {
+        let stale: Vec<Entity> = world
+            .query_filtered::<Entity, Or<(With<GameCleanup>, With<LevelCleanup>)>>()
+            .iter(world)
+            .collect();
+        for e in stale {
+            world.despawn(e);
+        }
+    }
+    world.init_resource::<FloorMask>();
+    if world.get_resource::<AnimCatalog>().is_none() {
+        world.insert_resource(empty_anim_catalog());
+    }
+
+    // Deterministic stand-in for MenuGen's unseeded `choose`/`random`
+    // block jitter (same layout every visit, like a fixed campfire).
+    let mut rng = StdRng::seed_from_u64(0xC0FFEE);
+    let mut seen = std::collections::HashSet::new();
+    let mut floors: Vec<(i32, i32)> = Vec::new();
+    for bx in 0..4 {
+        for by in 0..3 {
+            let jx = rng.random_range(-1..=1);
+            let jy = rng.random_range(-1..=1);
+            for ox in -1..=1 {
+                for oy in -1..=1 {
+                    let c = (bx * 4 + ox + jx, by * 4 + oy + jy);
+                    if seen.insert(c) {
+                        floors.push(c);
+                    }
+                }
+            }
+        }
+    }
+    // `MenuGen/Alarm_1` cardinal fill verbatim (neighbour floors pop in).
+    let snapshot = floors.clone();
+    for (cx, cy) in snapshot {
+        for c in [(cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)] {
+            if seen.insert(c) {
+                floors.push(c);
+            }
+        }
+    }
+
+    // `MenuGen/Alarm_1` dressing verbatim (1-in-6 floors; the port models
+    // the cactus half — `TopDecalNightDesert` is render-owned).
+    let mut cacti: Vec<glam::Vec2> = Vec::new();
+    for (cx, cy) in &floors {
+        if rng.random_range(0.0..6.0) < 1.0 && rng.random_range(0..22) != 0 {
+            cacti.push(glam::Vec2::new(
+                *cx as f32 * crate::comps_a::TILE + crate::comps_a::TILE * 0.5,
+                *cy as f32 * crate::comps_a::TILE + crate::comps_a::TILE * 0.5,
+            ));
+        }
+    }
+
+    let camp_run = Run {
+        area: AreaId::Campfire,
+        ..Default::default()
+    };
+    let mut plan = LevelPlan {
+        floor_cells: floors.clone(),
+        wall_cells: std::collections::HashSet::new(),
+        small_walls: Vec::new(),
+        bones: Vec::new(),
+        bone_sprite: "images/sprNightBones.png",
+        details: Vec::new(),
+        props: Vec::new(),
+        chests: Vec::new(),
+        enemies: Vec::new(),
+        boss: None,
+        boss_count: 1,
+        styleb: false,
+    };
+    worldgen::build_walls(&camp_run, &floors, &mut plan);
+    let floor_set: std::collections::HashSet<(i32, i32)> =
+        plan.floor_cells.iter().copied().collect();
+    world.resource_scope(|world, mut mask: Mut<FloorMask>| {
+        world.resource_scope(|world, catalog: Mut<AnimCatalog>| {
+            let mut commands = world.commands();
+            *mask = build_floor_mask(&plan);
+            spawn_wall_tiles(
+                &mut commands,
+                plan.wall_cells.into_iter().collect(),
+                &floor_set,
+            );
+            let mut commands = world.commands();
+            for at in cacti {
+                spawn_prop_sim(
+                    &mut commands,
+                    &catalog,
+                    &camp_run,
+                    crate::worldgen::PropKind::NightCactus,
+                    at,
+                );
+            }
+        })
+    });
+    world.flush();
+}
+
+#[cfg(test)]
+mod verbatim_title_to_first_level {
+    use super::*;
+    use crate::comps_b::Enemy;
+    use crate::data::RaceId;
+
+    #[test]
+    fn fresh_save_holds_fish_and_crystal() {
+        let save = SaveData::default();
+        assert!(save.race_unlocked(RaceId::Fish));
+        assert!(save.race_unlocked(RaceId::Crystal));
+        assert!(save.race_unlocked(RaceId::Random));
+        assert!(!save.race_unlocked(RaceId::Plant));
+    }
+
+    #[test]
+    fn title_cursor_defaults_to_random_head() {
+        assert_eq!(crate::state::menus::MenuState::default().title_cursor, 0);
+        let save = SaveData::default();
+        let roster = crate::state::menus::visible_roster(Some(&save));
+        assert_eq!(roster.len(), 14);
+        assert!(roster.contains(&RaceId::Crystal));
+    }
+
+    #[test]
+    fn race_starters_match_gml_table() {
+        use crate::data::{
+            WEAPON_CHICKEN_SWORD, WEAPON_DOG_SPIN_ATTACK, WEAPON_GOLDEN_FROG_PISTOL,
+            WEAPON_GOLDEN_REVOLVER, WEAPON_REVOLVER, WEAPON_ROGUE_RIFLE, WEAPON_RUSTY_REVOLVER,
+            race_starter_weapon,
+        };
+        assert_eq!(race_starter_weapon(RaceId::Fish), WEAPON_REVOLVER);
+        assert_eq!(race_starter_weapon(RaceId::Venuz), WEAPON_GOLDEN_REVOLVER);
+        assert_eq!(race_starter_weapon(RaceId::Cuz), WEAPON_GOLDEN_REVOLVER);
+        assert_eq!(race_starter_weapon(RaceId::Chicken), WEAPON_CHICKEN_SWORD);
+        assert_eq!(race_starter_weapon(RaceId::Rogue), WEAPON_ROGUE_RIFLE);
+        assert_eq!(
+            race_starter_weapon(RaceId::BigDog),
+            WEAPON_DOG_SPIN_ATTACK
+        );
+        assert_eq!(race_starter_weapon(RaceId::Skeleton), WEAPON_RUSTY_REVOLVER);
+        assert_eq!(
+            race_starter_weapon(RaceId::Frog),
+            WEAPON_GOLDEN_FROG_PISTOL
+        );
+    }
+
+    #[test]
+    fn fresh_loadouts_deal_race_starters() {
+        let save = SaveData::default();
+        assert_eq!(
+            resolve_run_loadout(&save, RaceId::Chicken).equipped[0],
+            crate::data::WEAPON_CHICKEN_SWORD
+        );
+        assert_eq!(
+            resolve_run_loadout(&save, RaceId::Rogue).equipped[0],
+            crate::data::WEAPON_ROGUE_RIFLE
+        );
+        assert_eq!(
+            resolve_run_loadout(&save, RaceId::Frog).equipped[0],
+            crate::data::WEAPON_GOLDEN_FROG_PISTOL
+        );
+        // Locked Skeleton falls back to Melting (starter revolver either way).
+        assert_eq!(
+            resolve_run_loadout(&save, RaceId::Skeleton).equipped[0],
+            crate::data::WEAPON_REVOLVER
+        );
+    }
+
+    #[test]
+    fn start_ammo_sums_dual_wield_and_caps() {
+        // Steroids dual revolvers stack 32*3 per gun (GML gives each gun).
+        let ammo = starting_ammo_for(
+            &[WeaponId::REVOLVER, WeaponId::REVOLVER, WeaponId::NONE],
+            RaceId::Steroids,
+            CrownKind::None,
+        );
+        assert_eq!(ammo[AmmoKind::Bullets as usize], 192);
+        // Melee start grants nothing.
+        let ammo = starting_ammo_for(
+            &[
+                crate::data::WEAPON_CHICKEN_SWORD,
+                WeaponId::NONE,
+                WeaponId::NONE,
+            ],
+            RaceId::Chicken,
+            CrownKind::None,
+        );
+        assert_eq!(ammo, [0; MAX_AMMO_TYPES]);
+    }
+
+    #[test]
+    fn random_roll_skips_bigdog_and_locked() {
+        let save = SaveData::default();
+        for seed in 0..50u64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let race = roll_random_race(&save, RaceId::Random, &mut rng);
+            assert_ne!(race, RaceId::Random);
+            assert_ne!(race, RaceId::BigDog);
+            assert!(save.race_unlocked(race));
+        }
+        // Non-random passes through untouched.
+        let mut rng = StdRng::seed_from_u64(7);
+        assert_eq!(
+            roll_random_race(&save, RaceId::Plant, &mut rng),
+            RaceId::Plant
+        );
+    }
+
+    #[test]
+    fn skeleton_spread_matches_gml_accuracy() {
+        let save = SaveData::default();
+        let mut save = save;
+        save.race_loadout_mut(RaceId::Skeleton).unlocked = true;
+        let loadout = resolve_run_loadout(&save, RaceId::Skeleton);
+        let bundle = build_player_bundle(RaceId::Skeleton, &loadout);
+        assert_eq!(bundle.player.spread_mult, 1.5);
+        let loadout = resolve_run_loadout(&save, RaceId::Steroids);
+        let bundle = build_player_bundle(RaceId::Steroids, &loadout);
+        assert_eq!(bundle.player.spread_mult, 1.8);
+    }
+
+    #[test]
+    fn tutorial_first_level_is_small_and_empty() {
+        let mut world = World::new();
+        world.insert_resource(SaveData::default());
+        world.insert_resource(SelectedCharacter(RaceId::Fish));
+        setup_run_with_seed(&mut world, 1234);
+        let run = world.resource::<Run>();
+        assert!(run.tutorial);
+        assert!(world.query::<&Enemy>().iter(&world).next().is_none());
+        let mask = world.resource::<FloorMask>();
+        assert!(!mask.cells.is_empty() && mask.cells.len() < 40);
+    }
+
+    #[test]
+    fn chicken_first_level_starts_with_sword_and_bandits() {
+        let mut world = World::new();
+        let save = SaveData {
+            total_runs: 1,
+            ..SaveData::default()
+        };
+        world.insert_resource(save);
+        world.insert_resource(SelectedCharacter(RaceId::Chicken));
+        setup_run_with_seed(&mut world, 4242);
+        let run = world.resource::<Run>();
+        assert!(!run.tutorial);
+        let mut invs: Vec<_> = world
+            .query::<&Inventory>()
+            .iter(&world)
+            .map(|i| i.weapons[0])
+            .collect();
+        assert_eq!(invs.pop(), Some(crate::data::WEAPON_CHICKEN_SWORD));
+        assert!(world.query::<&Enemy>().iter(&world).count() > 0);
+    }
+
+    #[test]
+    fn title_builds_campfire_backdrop() {
+        let mut world = World::new();
+        setup_title_campfire(&mut world);
+        assert!(world.resource::<FloorMask>().cells.len() > 40);
+        assert!(
+            world
+                .query_filtered::<Entity, With<WallTile>>()
+                .iter(&world)
+                .count()
+                > 0
+        );
     }
 }

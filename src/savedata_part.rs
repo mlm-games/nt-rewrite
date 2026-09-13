@@ -552,7 +552,12 @@ impl Default for SaveData {
             races.insert(
                 r,
                 RaceLoadout {
-                    unlocked: r == crate::data::RaceId::Fish,
+                    // GML `scrInit.gml:162-163` verbatim: fresh saves hold
+                    // Random, Fish and Crystal (`cgot` for all three).
+                    unlocked: matches!(
+                        r,
+                        crate::data::RaceId::Fish | crate::data::RaceId::Crystal
+                    ),
                     unlocked_skins: [true, false, false, false],
                     preferred_skin: 0,
                     stored_weapon: crate::data::WeaponId(0),
@@ -587,7 +592,7 @@ impl Default for SaveData {
             hard_best_area: 0,
             hard_best_sub: 0,
             hard_best_loop: 0,
-            unlocked_characters: vec!["Fish".to_string()],
+            unlocked_characters: vec!["Fish".to_string(), "Crystal".to_string()],
             races,
             crown_got: BTreeMap::new(),
             race_looped: BTreeMap::new(),

@@ -330,7 +330,9 @@ pub struct MenuState {
 impl Default for MenuState {
     fn default() -> Self {
         Self {
-            title_cursor: RaceId::Fish as usize,
+            // GML `Menu/Create_0` starts on Random (`race = Race.Random`,
+            // head of `_char_list`): roster index 0, not a gml id.
+            title_cursor: 0,
             title_go_visible: false,
             loadout_open: false,
             mutation_selected: None,
@@ -845,7 +847,11 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 if let Some(pos) = pos {
                     menu.title_cursor = pos;
                 }
-                menu.title_go_visible = true;
+                // GML `CharSelect/Mouse_4`: `with GoButton if (!visible)` —
+                // the GO reveal fires only on the first pick.
+                if !menu.title_go_visible {
+                    menu.title_go_visible = true;
+                }
 
                 // layer hides the panel for `selected == 0`).
                 if matches!(race, RaceId::BigDog | RaceId::Skeleton | RaceId::Frog) {

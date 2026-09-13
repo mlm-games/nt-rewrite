@@ -232,6 +232,8 @@ pub fn goto_state(world: &mut World, next: AppState) {
                 menu.title_cursor = cursor;
                 menu.mutation_selected = None;
             }
+            // GML `MenuGen`: the title screen is a real campfire floor.
+            crate::setup::setup_title_campfire(world);
         }
         AppState::Splash => {
             world.insert_resource(SplashState::default());

@@ -247,6 +247,15 @@ pub struct Run {
     pub won: bool,
     /// GML `UberCont.hardmode`: +13 hard and +1 loop from the start.
     pub hardmode: bool,
+    /// Tutorial level flag (GML `GenCont/Create_0`: `save game.tutorial`
+    /// forces `goal = 5` + `TutCont` + safespawn; the port sets it at run
+    /// setup for first-ever runs and clears it on floor advance — the
+    /// tutorial never recurs mid-run). Read by worldgen only.
+    pub tutorial: bool,
+    /// Live Blood-crown flag for worldgen (GML `scrPopulate` `_coblood =
+    /// scrCrownCheck(crwn_blood)` extra enemy pass). Refreshed from the
+    /// player crown at every generation point.
+    pub blood_crown: bool,
     /// GML `GameCont.waypnt/waysub/waylps/waypoints`: one entry per
     /// entered floor (run start + every advance), driving the game-over
     /// roadmap. Capped so co-op marathons can't grow it unbounded.
@@ -276,6 +285,8 @@ impl Default for Run {
             weapons_picked: 0,
             won: false,
             hardmode: false,
+            tutorial: false,
+            blood_crown: false,
             waypoints: Vec::new(),
         }
     }
