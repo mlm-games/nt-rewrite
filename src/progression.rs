@@ -2095,7 +2095,9 @@ pub fn tick_floor_transition(
                 .map(|(cx, cy)| glam::Vec2::new(*cx as f32 * 32.0 + 16.0, *cy as f32 * 32.0 + 16.0))
                 .unwrap_or(glam::Vec2::ZERO);
             // GML `scrPopChests` (replaces the old Open-Mind top-up: the
-            // bonus only widens the trim, exactly like GML).
+            // bonus only widens the trim, exactly like GML). Seeded off
+            // the run's Generation stream so portal floors permute
+            // deterministically.
             let perm = crate::worldgen::apply_chest_permutations(
                 &mut plan,
                 crate::worldgen::ChestPermuteCtx {
@@ -2113,6 +2115,7 @@ pub fn tick_floor_transition(
                     horror_done: run.horror,
                     hardmode: run.hardmode,
                     player_pos: landing,
+                    seed: run.gen_seed ^ 0xC0E5_75EED,
                 },
             );
             if perm.horror {

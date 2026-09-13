@@ -1251,15 +1251,35 @@ pub fn gml_view_scale(viewport_dp: [f32; 2]) -> f32 {
 /// no vortex layer is mounted (pre-run menus, missing art); live frames
 /// drive `crate::vortex_pass::VortexPass` on top of this.
 pub fn background_color(area: AreaId) -> [f32; 4] {
+    // GML `scrAreaGetBackroundColor` verbatim (GameMaker `#rrggbb` -> sRGB
+    // 0..1; custom area colors are shell-side and fall through here).
+    fn hex(hex: u32) -> [f32; 4] {
+        [
+            ((hex >> 16) & 0xFF) as f32 / 255.0,
+            ((hex >> 8) & 0xFF) as f32 / 255.0,
+            (hex & 0xFF) as f32 / 255.0,
+            1.0,
+        ]
+    }
     match area {
-        AreaId::Desert => [0.055, 0.045, 0.060, 1.0],
-        AreaId::Sewers => [0.030, 0.055, 0.050, 1.0],
-        AreaId::Scrapyards => [0.060, 0.055, 0.045, 1.0],
-        AreaId::CrystalCaves => [0.045, 0.035, 0.075, 1.0],
-        AreaId::FrozenCity => [0.050, 0.060, 0.075, 1.0],
-        AreaId::Labs => [0.040, 0.050, 0.060, 1.0],
-        AreaId::Palace => [0.065, 0.045, 0.055, 1.0],
-        _ => [0.045, 0.045, 0.060, 1.0],
+        AreaId::Campfire => hex(0x6a7aaf),
+        AreaId::Desert => hex(0xaf8f6a),
+        AreaId::Sewers => hex(0x4c5946),
+        AreaId::Scrapyards => hex(0x8a969e),
+        AreaId::CrystalCaves => hex(0x8152bc),
+        AreaId::FrozenCity => hex(0xb4bdc5),
+        AreaId::Labs => hex(0x091c20),
+        AreaId::Palace => hex(0x611d24),
+        AreaId::Vault | AreaId::CrownVault => hex(0x433523),
+        AreaId::Oasis => hex(0x51d1c8),
+        AreaId::PizzaSewers => hex(0xa04b63),
+        AreaId::CursedCaves => hex(0xff9c23),
+        AreaId::Jungle => hex(0x2a900c),
+        AreaId::HQ => hex(0xf5fafb),
+        // GML mansion/crib (#eef0f2) have no port area; City reuses the
+        // city fill (GML has no city-secret fill; mansion white is closest).
+        AreaId::City => hex(0xeef0f2),
+        AreaId::Loop => hex(0x6a7aaf),
     }
 }
 
@@ -6800,7 +6820,9 @@ pub fn menu_sprites(
             // GML front-layer portrait origin: `_portrait_x = -2 + 18`,
             // drawn at `_x + 16 - 18` = view-relative -2
             // (`scrCampfireMenuCreate.gml:339,392`); y = H - 36 - 8 + 44.
-            let portrait_dp = [-2.0, 240.0 - 36.0 - 8.0 + 44.0];
+            // GML slides it by `Menu.portrait_offsets[0]` on select.
+            let slide = menu.as_ref().map(|m| m.portrait_offsets[0]).unwrap_or(0.0);
+            let portrait_dp = [-2.0 - slide, 240.0 - 36.0 - 8.0 + 44.0];
             if let Some((path, frame)) = big_portrait_for(race, skin, hp, area) {
                 if let Some(s) = assets.sprite_for(
                     path,
@@ -6813,10 +6835,22 @@ pub fn menu_sprites(
                     out.push(s);
                 }
             }
+            // GML `Menu.splatindex` verbatim (0→3 at 0.4/step, ticked in
+            // `tick_title_anim`); falls back to the deterministic per-race
+            // pin headless (no MenuState yet).
             let splat_frames = strip_frames(assets, "images/sprCharSplat.png");
+            let splat_frame = menu
+                .as_ref()
+                .map(|m| m.splatindex.floor().clamp(0.0, 3.0) as i32)
+                .unwrap_or_else(|| char_splat_frame(race, splat_frames));
+            let splat_frame = if splat_frames == 0 {
+                splat_frame
+            } else {
+                splat_frame.clamp(0, splat_frames as i32 - 1)
+            };
             if let Some(s) = assets.sprite_for(
                 "images/sprCharSplat.png",
-                char_splat_frame(race, splat_frames),
+                splat_frame,
                 gui_to_world(0.0, 240.0 - 36.0 + 1.0),
                 false,
                 0.0,

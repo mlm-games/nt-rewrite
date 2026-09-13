@@ -1021,6 +1021,30 @@ pub struct PlayerDying {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct ScreenEnd;
 
+#[derive(Component, Clone, Copy, Debug)]
+/// GML `Campfire` title actor verbatim (`objects/Campfire/Create_0`:
+/// 1M hp, size 1, campfire idle/hurt/dead strips). Sim keeps the marker
+/// + position; art/health-detail stays renderer-owned.
+pub struct TitleCampfire;
+
+#[derive(Component, Clone, Copy, Debug)]
+/// GML `LogMenu` seat marker (spawned at campfire `y-32`).
+pub struct TitleLogMenu;
+
+#[derive(Component, Clone, Copy, Debug)]
+/// GML `CampChar` title actor verbatim: wandering mutant around the
+/// campfire. `race_gml` is the GML race id (0..16), `fixed` marks the
+/// four hand-placed starters (Fish/Crystal/Eyes/Melting) that skip the
+/// scatter pass.
+pub struct TitleCampChar {
+    pub race_gml: usize,
+    pub fixed: bool,
+}
+
+#[derive(Component, Clone, Copy, Debug)]
+/// GML `TV` beside Chicken (`scrCampfireMenuCreate` chicken arm).
+pub struct TitleTv;
+
 #[derive(Resource, Debug, Clone)]
 pub struct FloorTransition {
     pub active: bool,

@@ -293,14 +293,15 @@ fn turn_table(rng: &mut StdRng, area: i32) -> i32 {
 // TODO(port): calls `cell_center_px`, `build_walls` and `populate`, whose
 // bodies live in world.rs:818/837/874 and are outside this port's scope.
 // Call sites below are preserved byte-identical (same RNG call order).
-/// GML `GenCont/Step_0` safespawn shift: once the makers finish, a level
-/// whose spawn neighbourhood is too thin drifts every floor (plus the
-/// turn/death chests already stamped) one `safedir` step and grows a
-/// fresh centre floor, until the ring fills. The port settles the same
-/// loop inline before walls go up (bounded; GML runs it once per step).
-/// Skipped exactly where `scrAreaHasSafespawn` is false (campfire, vault,
-/// palace/HQ finales; GML also excludes the crib, which the port does
-/// not model as an area).
+/// GML `GenCont/Step_0` safespawn shift verbatim: once the makers finish,
+/// if the spawn ring is already full (`_numfloors >= _maxfloors`) the
+/// whole level drifts one `safedir` step and grows a fresh centre floor.
+/// GML runs this once per step (repeated over frames); the port settles
+/// the same loop inline before walls go up (bounded 16; GML is unbounded
+/// per-frame but converges the same way).
+/// Skipped exactly where `scrAreaHasSafespawn` is false (campfire, crib,
+/// vault, palace/HQ finales; the port has no Crib area so that arm is
+/// vacuous).
 fn apply_safespawn_shift(plan: &mut LevelPlan, rng: &mut StdRng, run: &Run) {
     let no_safe = matches!(
         run.area,
@@ -320,7 +321,9 @@ fn apply_safespawn_shift(plan: &mut LevelPlan, rng: &mut StdRng, run: &Run) {
     };
     let delta_px = Vec2::new(dx as f32 * TILE, dy as f32 * TILE);
     // GML counts live `Floor` instances (duplicates stack); the port's
-    // deduped cells track the surplus in `stacked`.
+    // deduped cells track the surplus in `stacked`. Verbatim exit law:
+    // `if (_numfloors < _maxfloors) exit` — thin rings do nothing, full
+    // rings shift.
     let mut stacked = 0usize;
     for _ in 0..16 {
         let near = plan
@@ -332,7 +335,7 @@ fn apply_safespawn_shift(plan: &mut LevelPlan, rng: &mut StdRng, run: &Run) {
             })
             .count()
             + stacked;
-        if near >= maxfloors {
+        if near < maxfloors {
             break;
         }
         for (cx, cy) in plan.floor_cells.iter_mut() {
@@ -952,8 +955,14 @@ fn generate_hq_last(run: &Run) -> LevelPlan {
 }
 
 // world.rs:1904-1927, verbatim (Open Mind mutation: two bonus chests,
-// skipped for chest-less areas).
-pub fn apply_open_mind_bonus(plan: &mut LevelPlan, area: AreaId, floor_in_area: u32) {
+// skipped for chest-less areas). Seeded: GML draws from the Generation
+// stream, so callers pass the run seed.
+pub fn apply_open_mind_bonus(
+    plan: &mut LevelPlan,
+    area: AreaId,
+    floor_in_area: u32,
+    seed: u64,
+) {
     let no_chests = matches!(
         area,
         AreaId::Campfire | AreaId::Vault | AreaId::CrownVault
@@ -961,7 +970,9 @@ pub fn apply_open_mind_bonus(plan: &mut LevelPlan, area: AreaId, floor_in_area: 
     if no_chests || plan.floor_cells.is_empty() {
         return;
     }
-    let mut rng = rand::rng();
+    use rand::{RngExt, SeedableRng};
+    use rand::rngs::StdRng;
+    let mut rng = StdRng::seed_from_u64(seed ^ 0x0BAD_C0DE);
     for _ in 0..2 {
         let idx = rng.random_range(0..plan.floor_cells.len());
         let (cx, cy) = plan.floor_cells[idx];
@@ -976,6 +987,12 @@ pub fn apply_open_mind_bonus(plan: &mut LevelPlan, area: AreaId, floor_in_area: 
 }
 
 /// GML `scrPopChests` input: everything the permutation pass reads.
+/// `seed` threads the Generation RNG stream (GML `random`/`irandom`
+/// inside `scrPopChests` draw from the level-generation stream, so equal
+/// `gen_seed`s permute identically). Callers pass the run's `gen_seed`
+/// mixed with a fixed salt (floor number lives in the plan already via
+/// `area`/`subarea`; the salt keeps first-floor and portal permutations
+/// on disjoint substreams).
 pub struct ChestPermuteCtx {
     pub area: AreaId,
     pub loops: u32,
@@ -991,6 +1008,7 @@ pub struct ChestPermuteCtx {
     pub horror_done: bool,
     pub hardmode: bool,
     pub player_pos: Vec2,
+    pub seed: u64,
 }
 
 /// GML `scrPopChests` output: whether a `HostileHorror` hatched (the
@@ -1002,17 +1020,18 @@ pub struct ChestPermuteOut {
 
 /// Verbatim `scripts/scrPopChests/scrPopChests.gml`: vault proto-chest +
 /// chestless areas, Open-Mind bonus counts, trim to 1 + bonus per base
-/// kind, rad permutations (Rogue / noradch horror-or-big / half-health /
-/// desert styleb maggot), crown Life/Love conversions, and the mimic
-/// rolls. (The hardmode desert 1-1 `BigWeaponChest` arm is out: the port
-/// models no hardmode flag. `scrReplacePropWithChest` top-ups are out:
-/// the generator always emits all three base kinds.)
+/// kind (GML destroys nearest-to-`10016+orandom(250)`; the port shuffles
+/// with the seeded stream then truncates — same count law, stable order),
+/// rad permutations (Rogue / noradch horror-or-big / half-health /
+/// desert styleb maggot), crown Life/Love conversions, mimic rolls, and
+/// the hardmode desert 1-1 `BigWeaponChest` arm.
 pub fn apply_chest_permutations(
     plan: &mut LevelPlan,
     ctx: ChestPermuteCtx,
 ) -> ChestPermuteOut {
-    use rand::RngExt;
-    let mut rng = rand::rng();
+    use rand::{RngExt, SeedableRng};
+    use rand::rngs::StdRng;
+    let mut rng = StdRng::seed_from_u64(ctx.seed);
     let mut out = ChestPermuteOut { horror: false };
 
     // Snapshot base-kind positions (customs from earlier passes ride

@@ -1564,15 +1564,14 @@ impl App {
         }
         self.was_state = state;
         // No bars over the pre-run rooms (boot reel, logo menu and
-        // campfire run on a bare view; GML only letterboxes gameplay
-        // menus, transitions and intros).
+        // campfire run on a bare view — GML `Menu` calls
+        // `scrLetterbox(false,0)`). Loading IS letterboxed: GML
+        // `GenCont/Create_0` ends with `scrLetterbox(true)`, so the
+        // GENERATING screen sits between the bars.
         let bare_room = matches!(
             menu_kind,
             Some(
-                MenuOverlay::Splash
-                    | MenuOverlay::MainMenu
-                    | MenuOverlay::Title
-                    | MenuOverlay::Loading
+                MenuOverlay::Splash | MenuOverlay::MainMenu | MenuOverlay::Title
             )
         );
         let letterboxed = (!live_now && !bare_room) || boss_intro || transitioning;
@@ -1695,6 +1694,10 @@ fn init_schedule_resources(world: &mut World) {
     world.init_resource::<NtInput>();
     world.init_resource::<crate::state::Paused>();
     world.init_resource::<AppState>();
+    // GML `MakeGame` boot law (disclaimer/save-continue/recontinue cap):
+    // headless defaults boot straight to the menu; disk shells set the
+    // fields before the first tick.
+    world.init_resource::<crate::state::BootFlags>();
     // Area-fog scroll (GML TopCont `fogscroll`, persistent like the
     // controller itself: kept across floors, reset only on reboot).
     world.init_resource::<crate::environment::FogState>();

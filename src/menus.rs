@@ -128,6 +128,14 @@ pub fn roster_position(save: Option<&SaveData>, gml: usize) -> Option<usize> {
     visible_roster(save).iter().position(|r| *r as usize == gml)
 }
 
+/// GML `scrRaceGetUnlockDescription` headless stand-in: locked-pod hint
+/// text for `Menu.unlock_hint` (touch path in `CharSelect/Mouse_4`).
+/// Full loc strings live shell-side; the state keeps the race key so the
+/// render layer can resolve it.
+pub fn unlock_hint_for_race(race: RaceId) -> String {
+    format!("UNLOCK {:?}", race)
+}
+
 /// Crown port id (`CrownKind` discriminant).
 pub fn crown_to_u8(crown: CrownKind) -> u8 {
     crown as u8
@@ -325,6 +333,23 @@ pub struct MenuState {
     pub go_death_pos: f32,
     pub go_offsety: f32,
     pub go_splat: f32,
+    /// GML `Menu` campfire anim state verbatim (`Create_0:63-65`,
+    /// `Other_11:17-37`): per-player portrait slide offsets (180 on
+    /// select, then 180→90→-2→0), text typewriter stages (2 hidden on
+    /// select, approaching 0), `splatindex` 0→3 at 0.4/step, and the
+    /// loadout open frame. Ticked in `tick_title_input`.
+    pub portrait_offsets: [f32; 4],
+    pub textappear: [f32; 4],
+    pub splatindex: f32,
+    pub loadout_frame: f32,
+    /// GML `Menu.unlock_hint/unlock_hint_pop/alarm[11]` verbatim: touch
+    /// locked picks show the unlock description for 90 steps.
+    pub unlock_hint: String,
+    pub unlock_hint_pop: f32,
+    pub unlock_hint_t: f32,
+    /// GML `Menu.weekly` verbatim: weekly runs bypass race locks and hide
+    /// the pod roster treatment (`can = unlocked || weekly_run`).
+    pub weekly_run_menu: bool,
 }
 
 impl Default for MenuState {
@@ -354,6 +379,14 @@ impl Default for MenuState {
             go_death_pos: 0.0,
             go_offsety: 128.0,
             go_splat: 0.0,
+            portrait_offsets: [0.0; 4],
+            textappear: [2.0; 4],
+            splatindex: 0.0,
+            loadout_frame: 0.0,
+            unlock_hint: String::new(),
+            unlock_hint_pop: 0.0,
+            unlock_hint_t: 0.0,
+            weekly_run_menu: false,
         }
     }
 }
@@ -824,7 +857,21 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 return;
             };
             world.init_resource::<SaveData>();
-            if !world.resource::<SaveData>().race_unlocked(race) {
+            // GML `CharSelect/Draw_0:8` verbatim: `can = unlocked ||
+            // weekly_run`. Weekly runs bypass the lock (the pod draws
+            // unlocked); the click then proceeds to select/start.
+            let weekly = world
+                .get_resource::<MenuState>()
+                .is_some_and(|m| m.weekly_run_menu);
+            if !world.resource::<SaveData>().race_unlocked(race) && !weekly {
+                // GML `Mouse_4:6-15` verbatim: locked picks sting
+                // `sndNoSelect`; touch also raises the race unlock hint
+                // on `Menu` for 90 steps (`alarm[11]`).
+                if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+                    menu.unlock_hint = unlock_hint_for_race(race);
+                    menu.unlock_hint_pop = 2.0;
+                    menu.unlock_hint_t = 90.0 / 30.0;
+                }
                 emit_denied(world);
                 return;
             }
@@ -853,8 +900,16 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                     menu.title_go_visible = true;
                 }
 
-                // layer hides the panel for `selected == 0`).
-                if matches!(race, RaceId::BigDog | RaceId::Skeleton | RaceId::Frog) {
+                // GML `scrCampfireMenuSelectionChange` verbatim anim half:
+                // the picking player's portrait slides (180) and the name
+                // text hides (2) before typing back in (ticked in
+                // `tick_title_input`). Crown/skin/weapon sync lives in the
+                // save stamps the run setup already reads, so only the
+                // anim + panel gate apply here.
+                menu.portrait_offsets[0] = 180.0;
+                menu.textappear[0] = 2.0;
+                // GML `if !scr_loadout_is_available_for_race loadout_open=false`.
+                if !crate::render::loadout_available_for_race(race) {
                     menu.loadout_open = false;
                 }
             }
@@ -882,6 +937,10 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                     .race_loadout_mut(race)
                     .preferred_skin = s;
                 mark_dirty(world);
+                // GML skin pick verbatim: the portrait slides again.
+                if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+                    menu.portrait_offsets[0] = 180.0;
+                }
                 emit_sfx(world, skin_select_sfx(s));
                 emit_cue(world, &UiAction::SelectSkin(s));
             } else {
@@ -889,9 +948,19 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             }
         }
         UiAction::ToggleLoadout => {
-            // Bevy flips unconditionally; the render layer hides the
-            // panel for Random (`selected == 0`), and trio gating lives
-            // in the select-close above.
+            // GML `scrMenuDrawLoadout:662-695` verbatim gate: no panel for
+            // Random and races without a loadout (the trio); otherwise
+            // Space/click flips `loadout_open`.
+            world.init_resource::<SelectedCharacter>();
+            world.init_resource::<SaveData>();
+            let race = world.resource::<SelectedCharacter>().0;
+            if !crate::render::loadout_available_for_race(race) {
+                if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+                    menu.loadout_open = false;
+                }
+                emit_denied(world);
+                return;
+            }
             if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
                 menu.loadout_open = !menu.loadout_open;
             }
@@ -1546,6 +1615,68 @@ fn tick_title_input(world: &mut World, edge: MenuEdge) {
             .map(|r| *r as usize)
             .unwrap_or(RaceId::Fish as usize);
         apply_menu_action(world, UiAction::SelectCharacter(gml));
+    }
+    // GML `Menu/Other_11:14-37` verbatim anim tick (runs every step while
+    // the campfire menu is up): loadout open frame, per-player text slide,
+    // portrait slide state machine, splat 0→3, unlock-hint 90-step timer.
+    tick_title_anim(world);
+}
+
+/// GML `Menu/Other_11:14-37` verbatim over sim steps (`timescale` = 1 per
+/// 30 Hz tick): `loadout_frame` approaches open/closed, `textappear`
+/// approaches 0, `portrait_offsets` walks 180→90→-2→0, `splatindex`
+/// climbs 0→3 at 0.4, and the touch `unlock_hint` counts down from 90
+/// steps (`alarm[11]`).
+pub fn tick_title_anim(world: &mut World) {
+    let dt_steps = world
+        .get_resource::<repame_sim::SimTime>()
+        .map(|t| (t.delta_secs * 30.0).max(0.0))
+        .unwrap_or(1.0);
+    let Some(mut menu) = world.get_resource_mut::<MenuState>() else {
+        return;
+    };
+    // Loadout open frame: GML approaches `sprite_get_number-1` when open
+    // else 0. The strip length is renderer-owned; the headless law uses 3
+    // frames (closed 0 → open 3) so `loadout_frame >= 2` still means full
+    // view like the bevy layer expects.
+    let target = if menu.loadout_open { 3.0 } else { 0.0 };
+    menu.loadout_frame = approach_f(menu.loadout_frame, target, dt_steps);
+    for i in 0..4 {
+        if menu.textappear[i] != 0.0 {
+            menu.textappear[i] = approach_f(menu.textappear[i], 0.0, dt_steps);
+        }
+        if menu.portrait_offsets[i] != 0.0 {
+            let amount = menu.portrait_offsets[i].min(180.0);
+            if amount == -2.0 {
+                menu.portrait_offsets[i] = 0.0;
+            } else if amount == 90.0 {
+                menu.portrait_offsets[i] = -2.0;
+            } else {
+                menu.portrait_offsets[i] = 90.0;
+            }
+        }
+    }
+    if menu.splatindex < 3.0 {
+        menu.splatindex = (menu.splatindex + 0.4 * dt_steps).min(3.0);
+    }
+    if menu.unlock_hint_t > 0.0 {
+        menu.unlock_hint_t = (menu.unlock_hint_t - dt_steps / 30.0).max(0.0);
+        if menu.unlock_hint_t <= 0.0 {
+            menu.unlock_hint.clear();
+            menu.unlock_hint_pop = 0.0;
+        } else if menu.unlock_hint_pop > 0.0 {
+            menu.unlock_hint_pop = (menu.unlock_hint_pop - dt_steps).max(0.0);
+        }
+    }
+}
+
+fn approach_f(v: f32, target: f32, step: f32) -> f32 {
+    if v < target {
+        (v + step).min(target)
+    } else if v > target {
+        (v - step).max(target)
+    } else {
+        v
     }
 }
 

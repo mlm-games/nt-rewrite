@@ -167,6 +167,91 @@ impl Default for LoadingState {
 /// Minimum loading-screen time (bevy `LoadingTimer(1.2 s)` verbatim).
 pub const LOADING_MIN_SECS: f32 = 1.2;
 
+/// GML `MakeGame` boot flags verbatim (`Create_0` + `Alarm_0` + `Vlambeer`
+/// recontinue arm): the fan-recreation disclaimer gate, the save-continue
+/// roadmap, and the recontinue cap. Headless defaults preserve the
+/// current boot (disclaimer accepted, no save file on disk) so existing
+/// shells/tests boot straight to the menu; shells with disk set the
+/// fields before the first tick.
+#[derive(Debug, Clone, Resource)]
+pub struct BootFlags {
+    /// GML `save etc/disclaimer`: once true the disclaimer screen never
+    /// shows again. Default true headless (accepted).
+    pub disclaimer_accepted: bool,
+    /// GML `disclaimer` frame counter: `CLICK TO CONTINUE` appears at
+    /// `>= 90` steps.
+    pub disclaimer_t: u32,
+    /// GML `file_exists(savegame_file)`: a continued run waits on the
+    /// roadmap prompt instead of booting to the menu.
+    pub has_save_file: bool,
+    /// GML `global.recontinued_times`: more than 2 recontinuations per
+    /// level deletes the save.
+    pub recontinued_times: u32,
+    /// GML `UberCont.continued_run`: set while loading a save.
+    pub continued_run: bool,
+    /// GML `UberCont.want_quit_to_menu`: quit-to-menu takes the Logo vs
+    /// MenuGen fast path instead of the normal boot.
+    pub want_quit_to_menu: bool,
+}
+
+impl Default for BootFlags {
+    fn default() -> Self {
+        Self {
+            disclaimer_accepted: true,
+            disclaimer_t: 0,
+            has_save_file: false,
+            recontinued_times: 0,
+            continued_run: false,
+            want_quit_to_menu: false,
+        }
+    }
+}
+
+/// GML `MakeGame/Draw_0` disclaimer tick verbatim over 30 Hz steps:
+/// returns true once the run may continue (accepted + past 90 frames +
+/// pressed). The shell owns the prompt text/layout.
+pub fn tick_disclaimer(flags: &mut BootFlags, dt_steps: f32, pressed: bool) -> bool {
+    if flags.disclaimer_accepted && flags.disclaimer_t >= 90 {
+        return true;
+    }
+    flags.disclaimer_t = flags.disclaimer_t.saturating_add(dt_steps.max(0.0) as u32);
+    if flags.disclaimer_t >= 90 && pressed {
+        flags.disclaimer_accepted = true;
+        return true;
+    }
+    false
+}
+
+/// GML `Vlambeer/Create_0` level-entry choice verbatim: after a room
+/// start with a live `GameCont`, skill/crown/ultra points open `LevCont`
+/// (the mutation/crown draft); otherwise `GenCont` builds the floor.
+/// `patiencepick` suppresses the skill arm on level continuations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LevelEntry {
+    LevCont,
+    GenCont,
+}
+
+pub fn choose_level_entry(
+    skillpoints: u32,
+    crownpoints: u32,
+    ultrapoints: u32,
+    patiencepick_continuation: bool,
+) -> LevelEntry {
+    let can_skill = !patiencepick_continuation;
+    if (skillpoints > 0 && can_skill) || crownpoints > 0 || ultrapoints > 0 {
+        LevelEntry::LevCont
+    } else {
+        LevelEntry::GenCont
+    }
+}
+
+/// GML recontinue cap verbatim (`Vlambeer/Create_0:21-26`): past 2
+/// recontinuations the save is deleted instead of loaded.
+pub fn recontinue_deletes_save(recontinued_times: u32) -> bool {
+    recontinued_times > 2
+}
+
 /// Headless quit signal (bevy `AppExit::Success`; no window service
 /// headless, so the shell polls this).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Resource)]
@@ -231,6 +316,15 @@ pub fn goto_state(world: &mut World, next: AppState) {
                 menu.loadout_open = false;
                 menu.title_cursor = cursor;
                 menu.mutation_selected = None;
+                // GML `Menu/Create_0:63-65` verbatim fresh-menu anim state.
+                menu.portrait_offsets = [0.0; 4];
+                menu.textappear = [2.0; 4];
+                menu.splatindex = 0.0;
+                menu.loadout_frame = 0.0;
+                menu.unlock_hint.clear();
+                menu.unlock_hint_pop = 0.0;
+                menu.unlock_hint_t = 0.0;
+                menu.weekly_run_menu = false;
             }
             // GML `MenuGen`: the title screen is a real campfire floor.
             crate::setup::setup_title_campfire(world);

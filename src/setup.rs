@@ -305,6 +305,28 @@ pub fn roll_random_race(save: &SaveData, race: RaceId, rng: &mut StdRng) -> Race
     RaceId::Fish
 }
 
+/// GML `scrRunStart:12-33` random-crown roll verbatim (`macros_general`:
+/// `crwn_random` 0, `crwn_none` 1, real crowns 2..`crownmax` 13):
+/// `do _crown = irandom_range(2, crownmax)` until every player has the
+/// crown unlocked (50 tries), else `crwn_none`. Single-player here, so
+/// one race is checked. Returns the port `CrownKind` (GML id mapped via
+/// `crown_gml_to_port`: GML 2..13 → port 1..12).
+/// The title loadout grid has no random slot yet, so run setup keeps the
+/// stamped crown; this helper carries the law for that slot.
+pub fn roll_random_crown(save: &SaveData, race: RaceId, rng: &mut StdRng) -> CrownKind {
+    for _ in 0..50 {
+        let gml: u8 = rng.random_range(2..=13);
+        let port = CrownKind::from_u8(gml.saturating_sub(1));
+        if port == CrownKind::None {
+            continue;
+        }
+        if save.crown_unlocked(race, gml) {
+            return port;
+        }
+    }
+    CrownKind::None
+}
+
 /// Player components for a race + loadout (bevy `setup_run` lines
 /// 130-182 verbatim, minus sprites/camera: character stats, BigDog
 /// ammo override, crown spawn application).
@@ -603,10 +625,67 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
     // the mask/queue writes below (system callers flush on schedule run).
     world.flush();
 
-    let plan: LevelPlan = {
+    let mut plan: LevelPlan = {
         let run = world.resource::<Run>();
         worldgen::generate_level(&run)
     };
+    // GML `GenCont/Alarm_0 -> scrPopulate -> scrPopChests` verbatim: the
+    // first floor trims to 1 weapon / 1 ammo / 1 rad chest (plus Open-Mind
+    // widening, rad permutations, mimic rolls, hardmode BigWeaponChest).
+    // Seeded off the Generation stream so equal seeds permute identically.
+    {
+        let gen_seed = world.resource::<Run>().gen_seed;
+        let open_mind = world
+            .get_resource::<OpenMind>()
+            .is_some_and(|o| o.0);
+        let player_spawn = glam::Vec2::new(crate::comps_a::TILE * 0.5, crate::comps_a::TILE * 0.5);
+        // Player hp is in the just-spawned bundle: read it back for the
+        // half-health HealthChest arm (GML reads the live player).
+        let (half, rogue, life, love, hardmode, area, sub, loops) = {
+            let mut half = false;
+            let mut rogue = race == RaceId::Rogue;
+            let mut q = world.query::<(&crate::comps_a::Health, &crate::comps_a::RaceState)>();
+            for (hp, rs) in q.iter(world) {
+                half = hp.hp * 2 < hp.max;
+                rogue = rs.race == RaceId::Rogue;
+                break;
+            }
+            let r = world.resource::<crate::comps_a::Run>();
+            (
+                half,
+                rogue,
+                loadout.crown == CrownKind::Life,
+                loadout.crown == CrownKind::Love,
+                r.hardmode,
+                r.area,
+                r.floor_in_area,
+                r.loop_count,
+            )
+        };
+        let out = worldgen::apply_chest_permutations(
+            &mut plan,
+            worldgen::ChestPermuteCtx {
+                area,
+                loops,
+                subarea: sub,
+                rogue_in_run: rogue,
+                player_half_health: half,
+                crown_life: life,
+                crown_love: love,
+                open_mind,
+                noradch: 0,
+                nochest: 0,
+                same_weapons_for: 0,
+                horror_done: false,
+                hardmode,
+                player_pos: player_spawn,
+                seed: gen_seed ^ 0xC0E5_75EED,
+            },
+        );
+        if out.horror {
+            world.resource_mut::<crate::comps_a::Run>().horror = true;
+        }
+    }
     // Level entities spawn here (same plan, same order as the mask
     // build): `Run` leaves the world as an owned value because the
     // spawn call reads it while `Commands` holds `&mut World`.
@@ -1552,15 +1631,13 @@ pub fn spawn_level(
     }
 }
 
-/// Title campfire backdrop (GML `MenuGen/Create_0` + `Alarm_1` sim half:
-/// block-grid floors with jitter, cardinal-neighbour fill, ring walls,
-/// and the 1-in-6 `NightCactus` dressing; no enemies, chests, makers or
-/// run state — the campfire title owns no `GameCont`). `CampChar`
-/// actors, the fire itself, `LogMenu`, the chicken `TV` and the sleeping
-/// BigDog stay render-owned (no port components exist for them yet) and
-/// are not spawned here. Entities carry `GameCleanup`/`LevelCleanup` so
-/// run setup clears them; the `FloorMask` lets title-time systems
-/// collide against the same walls the menu draws.
+/// Title campfire backdrop (GML `MenuGen/Create_0` + `Alarm_1` +
+/// `scrCampfireMenuCreate` sim half: 3x4 jittered 3x3 floor patches,
+/// cardinal-neighbour fill, ring walls, 1-in-6 NightCactus/TopDecal
+/// dressing, `PortalClear` per camper, and the Campfire/LogMenu/CampChar
+/// actors; no enemies, chests, makers or run state). Entities carry
+/// `GameCleanup`/`LevelCleanup` so run setup clears them; the `FloorMask`
+/// lets title-time systems collide against the same walls the menu draws.
 pub fn setup_title_campfire(world: &mut World) {
     {
         let stale: Vec<Entity> = world
@@ -1576,18 +1653,21 @@ pub fn setup_title_campfire(world: &mut World) {
         world.insert_resource(empty_anim_catalog());
     }
 
-    // Deterministic stand-in for MenuGen's unseeded `choose`/`random`
-    // block jitter (same layout every visit, like a fixed campfire).
+    // GML `MenuGen/Create_0` verbatim: 3 rows x 4 cols of 3x3 patches.
+    // `dix=32+col*32`, `diy=32+row*32` px; one `mody=choose(32,0,-32)`
+    // jitters BOTH axes of the patch. In cells (px/32): base
+    // `(1+col+mody_c, 1+row+mody_c)`, `mody_c in {1,0,-1}`.
     let mut rng = StdRng::seed_from_u64(0xC0FFEE);
     let mut seen = std::collections::HashSet::new();
     let mut floors: Vec<(i32, i32)> = Vec::new();
-    for bx in 0..4 {
-        for by in 0..3 {
-            let jx = rng.random_range(-1..=1);
-            let jy = rng.random_range(-1..=1);
+    for row in 0..3 {
+        for col in 0..4 {
+            let mody_c: i32 = [1, 0, -1][rng.random_range(0..3)];
+            let bx = 1 + col + mody_c;
+            let by = 1 + row + mody_c;
             for ox in -1..=1 {
                 for oy in -1..=1 {
-                    let c = (bx * 4 + ox + jx, by * 4 + oy + jy);
+                    let c = (bx + ox, by + oy);
                     if seen.insert(c) {
                         floors.push(c);
                     }
@@ -1605,15 +1685,41 @@ pub fn setup_title_campfire(world: &mut World) {
         }
     }
 
-    // `MenuGen/Alarm_1` dressing verbatim (1-in-6 floors; the port models
-    // the cactus half — `TopDecalNightDesert` is render-owned).
+    // `MenuGen/Alarm_1` dressing verbatim: per floor `random(6)<1`, then
+    // `irandom(21)` — nonzero rolls a NightCactus, zero rolls a
+    // TopDecalNightDesert. GML additionally gates the cactus on
+    // `distance_to_object(CampChar)>24 && distance_to_object(NightCactus)>16`
+    // against the live actors; the port checks the same gates against the
+    // already-placed dressing + the fixed starters below (both in world
+    // px). Floors are dressed in plan order so the fixed stream matches.
     let mut cacti: Vec<glam::Vec2> = Vec::new();
+    let mut decals: Vec<glam::Vec2> = Vec::new();
+    // Fixed starters exist before dressing for the distance gate:
+    // Campfire at GML (64,64); Fish (64,32), Crystal (64,96),
+    // Eyes (104,64), Melting (24,64).
+    let camp_px = glam::Vec2::new(64.0, 64.0);
+    let starter_px = [
+        glam::Vec2::new(64.0, 32.0),
+        glam::Vec2::new(64.0, 96.0),
+        glam::Vec2::new(104.0, 64.0),
+        glam::Vec2::new(24.0, 64.0),
+    ];
     for (cx, cy) in &floors {
-        if rng.random_range(0.0..6.0) < 1.0 && rng.random_range(0..22) != 0 {
-            cacti.push(glam::Vec2::new(
-                *cx as f32 * crate::comps_a::TILE + crate::comps_a::TILE * 0.5,
-                *cy as f32 * crate::comps_a::TILE + crate::comps_a::TILE * 0.5,
-            ));
+        if rng.random_range(0.0..6.0) >= 1.0 {
+            continue;
+        }
+        let at = glam::Vec2::new(
+            *cx as f32 * crate::comps_a::TILE + crate::comps_a::TILE * 0.5,
+            *cy as f32 * crate::comps_a::TILE + crate::comps_a::TILE * 0.5,
+        );
+        if rng.random_range(0..22) != 0 {
+            let near_camper = starter_px.iter().any(|s| s.distance(at) <= 24.0);
+            let near_cactus = cacti.iter().any(|c| c.distance(at) <= 16.0);
+            if !near_camper && !near_cactus {
+                cacti.push(at);
+            }
+        } else {
+            decals.push(at);
         }
     }
 
@@ -1638,6 +1744,8 @@ pub fn setup_title_campfire(world: &mut World) {
     worldgen::build_walls(&camp_run, &floors, &mut plan);
     let floor_set: std::collections::HashSet<(i32, i32)> =
         plan.floor_cells.iter().copied().collect();
+    // Save read outside the command scope (`Commands` holds `&mut World`).
+    let save = world.get_resource::<SaveData>().cloned().unwrap_or_default();
     world.resource_scope(|world, mut mask: Mut<FloorMask>| {
         world.resource_scope(|world, catalog: Mut<AnimCatalog>| {
             let mut commands = world.commands();
@@ -1656,6 +1764,170 @@ pub fn setup_title_campfire(world: &mut World) {
                     crate::worldgen::PropKind::NightCactus,
                     at,
                 );
+            }
+            // `Alarm_1` topdecal half: night-desert top decals ride the
+            // `GroundDecal` prop (art resolves to the night strip
+            // renderer-side via the Campfire area).
+            for at in decals {
+                spawn_prop_sim(
+                    &mut commands,
+                    &catalog,
+                    &camp_run,
+                    crate::worldgen::PropKind::GroundDecal,
+                    at,
+                );
+            }
+            // `scrCampfireMenuCreate` actors verbatim (positions in world
+            // px, same as GML): Campfire (64,64) + LogMenu (64,32), four
+            // fixed starters, scattered Plant..Cuz, chicken TV, BigDog
+            // sleepers. Only unlocked races get campers (locked return
+            // `noone` in GML). Every camper pops a `PortalClear`.
+            let unlocked = |gml: usize| -> bool {
+                crate::state::menus::race_from_gml_id(gml)
+                    .is_some_and(|r| save.race_unlocked(r))
+            };
+            let mut campers: Vec<glam::Vec2> = Vec::new();
+            commands.spawn((
+                GameCleanup,
+                LevelCleanup,
+                crate::comps_b::TitleCampfire,
+                Pos(camp_px),
+            ));
+            commands.spawn((
+                GameCleanup,
+                LevelCleanup,
+                crate::comps_b::TitleLogMenu,
+                Pos(glam::Vec2::new(64.0, 32.0)),
+            ));
+            // GML race ids: Fish 1, Crystal 2, Eyes 3, Melting 4.
+            for (gml, at) in [
+                (1usize, glam::Vec2::new(64.0, 32.0)),
+                (2, glam::Vec2::new(64.0, 96.0)),
+                (3, glam::Vec2::new(104.0, 64.0)),
+                (4, glam::Vec2::new(24.0, 64.0)),
+            ] {
+                if !unlocked(gml) {
+                    continue;
+                }
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    crate::comps_b::TitleCampChar { race_gml: gml, fixed: true },
+                    Pos(at),
+                ));
+                campers.push(at);
+            }
+            // Plant (5) .. Cuz (16), skipping locked; GML scatters with
+            // `move_contact_solid(random_angle, 32+iter*2+random(32)+...)`
+            // until 32px clear of every camper. The port walks the same
+            // distance law off the fixed stream and clamps onto floors
+            // (no physics here; contact-slide is renderer/collision-side).
+            // BigDog (13) keeps its four `PortalClear` dressings.
+            let floor_px: Vec<glam::Vec2> = floors
+                .iter()
+                .map(|(cx, cy)| {
+                    glam::Vec2::new(
+                        *cx as f32 * crate::comps_a::TILE + crate::comps_a::TILE * 0.5,
+                        *cy as f32 * crate::comps_a::TILE + crate::comps_a::TILE * 0.5,
+                    )
+                })
+                .collect();
+            let nearest_floor = |at: glam::Vec2| -> glam::Vec2 {
+                floor_px
+                    .iter()
+                    .min_by(|a, b| {
+                        a.distance_squared(at)
+                            .partial_cmp(&b.distance_squared(at))
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .copied()
+                    .unwrap_or(at)
+            };
+            // Chicken TV anchor for the TV arm below.
+            let mut chicken_at: Option<glam::Vec2> = None;
+            // BigDog sleeper anchor for the four-clear arm below.
+            let mut bigdog_at: Option<glam::Vec2> = None;
+            for gml in 5..=16usize {
+                if !unlocked(gml) {
+                    continue;
+                }
+                // GML starts scattered campers at the campfire.
+                let mut at = camp_px;
+                for iter in 0..50usize {
+                    let dist =
+                        32.0 + iter as f32 * 2.0 + rng.random_range(0.0..32.0)
+                            + rng.random_range(0.0..64.0) * rng.random_range(0.0..1.0);
+                    let ang = rng.random_range(0.0..std::f32::consts::TAU);
+                    let cand = camp_px + glam::Vec2::from_angle(ang) * dist;
+                    let cand = nearest_floor(cand);
+                    let clear = campers.iter().all(|c| c.distance(cand) >= 32.0);
+                    // GML chicken arm also keeps 16px above her head clear.
+                    let chicken_clear = gml != 9
+                        || campers.iter().all(|c| {
+                            (*c - (cand + glam::Vec2::new(0.0, -32.0))).length() >= 16.0
+                        });
+                    if clear && chicken_clear {
+                        at = cand;
+                        break;
+                    }
+                    at = cand;
+                }
+                at = nearest_floor(at);
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    crate::comps_b::TitleCampChar { race_gml: gml, fixed: false },
+                    Pos(at),
+                ));
+                campers.push(at);
+                if gml == 9 {
+                    chicken_at = Some(at);
+                }
+                if gml == 13 {
+                    bigdog_at = Some(at);
+                }
+            }
+            // Chicken TV + 2 half-scale clears; BigDog four clears.
+            if let Some(at) = chicken_at {
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    crate::comps_b::TitleTv,
+                    Pos(glam::Vec2::new(at.x, at.y - 32.0)),
+                ));
+            }
+            if let Some(at) = bigdog_at {
+                for off in [
+                    glam::Vec2::new(-32.0, 0.0),
+                    glam::Vec2::new(32.0, 0.0),
+                    glam::Vec2::new(0.0, -32.0),
+                    glam::Vec2::new(0.0, 32.0),
+                ] {
+                    commands.spawn((
+                        GameCleanup,
+                        LevelCleanup,
+                        PortalClear {
+                            timer: crate::time::GTimer::from_seconds(
+                                5.0 / 30.0,
+                                crate::time::TimerMode::Once,
+                            ),
+                        },
+                        Pos(at + off),
+                    ));
+                }
+            }
+            for at in campers {
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    PortalClear {
+                        timer: crate::time::GTimer::from_seconds(
+                            5.0 / 30.0,
+                            crate::time::TimerMode::Once,
+                        ),
+                    },
+                    Pos(at),
+                ));
             }
         })
     });
@@ -1830,5 +2102,180 @@ mod verbatim_title_to_first_level {
                 .count()
                 > 0
         );
+    }
+
+    #[test]
+    fn title_spawns_campfire_actors_verbatim() {
+        use crate::comps_b::{TitleCampChar, TitleCampfire, TitleLogMenu};
+        let mut world = World::new();
+        world.insert_resource(SaveData::default());
+        setup_title_campfire(&mut world);
+        // GML `scrCampfireMenuCreate`: exactly one Campfire + LogMenu.
+        assert_eq!(
+            world
+                .query_filtered::<Entity, With<TitleCampfire>>()
+                .iter(&world)
+                .count(),
+            1
+        );
+        assert_eq!(
+            world
+                .query_filtered::<Entity, With<TitleLogMenu>>()
+                .iter(&world)
+                .count(),
+            1
+        );
+        // Fresh save unlocks Fish + Crystal: both fixed starters exist.
+        let mut campers: Vec<usize> = world
+            .query::<&TitleCampChar>()
+            .iter(&world)
+            .map(|c| c.race_gml)
+            .collect();
+        campers.sort_unstable();
+        assert!(campers.contains(&1), "Fish camper missing: {:?}", campers);
+        assert!(campers.contains(&2), "Crystal camper missing: {:?}", campers);
+        // Campfire sits at GML (64,64).
+        let mut fires: Vec<glam::Vec2> = world
+            .query::<(&TitleCampfire, &crate::spatial::Pos)>()
+            .iter(&world)
+            .map(|(_, p)| p.0)
+            .collect();
+        assert_eq!(fires.pop(), Some(glam::Vec2::new(64.0, 64.0)));
+    }
+
+    #[test]
+    fn first_floor_trims_chests_to_one_each() {
+        use crate::comps_b::{ChestKind, Pickup, PickupKind, RadChestContainer};
+        let mut world = World::new();
+        world.insert_resource(SaveData {
+            total_runs: 1,
+            ..SaveData::default()
+        });
+        world.insert_resource(SelectedCharacter(RaceId::Fish));
+        setup_run_with_seed(&mut world, 4242);
+        let chest_kind = |p: &Pickup| -> Option<ChestKind> {
+            match p.kind {
+                PickupKind::Chest(k) => Some(k),
+                _ => None,
+            }
+        };
+        let weapons = world
+            .query::<&Pickup>()
+            .iter(&world)
+            .filter_map(chest_kind)
+            .filter(|k| *k == ChestKind::Weapon)
+            .count();
+        let ammos = world
+            .query::<&Pickup>()
+            .iter(&world)
+            .filter_map(chest_kind)
+            .filter(|k| *k == ChestKind::Ammo)
+            .count();
+        let rads = world
+            .query_filtered::<Entity, With<RadChestContainer>>()
+            .iter(&world)
+            .count()
+            + world
+                .query::<&Pickup>()
+                .iter(&world)
+                .filter_map(chest_kind)
+                .filter(|k| {
+                    matches!(
+                        *k,
+                        ChestKind::Rad
+                            | ChestKind::RadBig
+                            | ChestKind::RadMaggot
+                            | ChestKind::Health
+                            | ChestKind::Rogue
+                    )
+                })
+                .count();
+        // GML `scrPopChests` verbatim: 1 base survivor per kind (mimic
+        // rolls can only remove, never add, on floor 1).
+        assert!(weapons <= 1, "weapons: {}", weapons);
+        assert!(ammos <= 1, "ammos: {}", ammos);
+        assert!(rads <= 1, "rads: {}", rads);
+    }
+
+    #[test]
+    fn random_crown_roll_respects_unlocks() {
+        use rand::{SeedableRng, rngs::StdRng};
+        // Fresh Fish holds no real crowns: 50 locked rolls → none.
+        let save = SaveData::default();
+        let mut rng = StdRng::seed_from_u64(7);
+        assert_eq!(
+            roll_random_crown(&save, RaceId::Fish, &mut rng),
+            CrownKind::None
+        );
+        // All crowns open: every roll hits, never none.
+        let mut save = SaveData::default();
+        for gml in 2..=13u8 {
+            save.unlock_crown(RaceId::Fish, gml);
+        }
+        let mut rng = StdRng::seed_from_u64(7);
+        assert_ne!(
+            roll_random_crown(&save, RaceId::Fish, &mut rng),
+            CrownKind::None
+        );
+    }
+
+    #[test]
+    fn background_colors_match_gml_area_table() {
+        use crate::data::AreaId;
+        let px = |hex: u32| -> [f32; 4] {
+            [
+                ((hex >> 16) & 0xFF) as f32 / 255.0,
+                ((hex >> 8) & 0xFF) as f32 / 255.0,
+                (hex & 0xFF) as f32 / 255.0,
+                1.0,
+            ]
+        };
+        assert_eq!(crate::render::background_color(AreaId::Desert), px(0xaf8f6a));
+        assert_eq!(
+            crate::render::background_color(AreaId::Campfire),
+            px(0x6a7aaf)
+        );
+        assert_eq!(crate::render::background_color(AreaId::Palace), px(0x611d24));
+        assert_eq!(crate::render::background_color(AreaId::Labs), px(0x091c20));
+    }
+
+    #[test]
+    fn boot_level_entry_and_recontinue_laws() {
+        use crate::state::{choose_level_entry, recontinue_deletes_save, LevelEntry};
+        // No points → GenCont (first level); any draft opens LevCont.
+        assert_eq!(choose_level_entry(0, 0, 0, false), LevelEntry::GenCont);
+        assert_eq!(choose_level_entry(1, 0, 0, false), LevelEntry::LevCont);
+        assert_eq!(choose_level_entry(0, 1, 0, false), LevelEntry::LevCont);
+        assert_eq!(choose_level_entry(0, 0, 1, false), LevelEntry::LevCont);
+        // Patience continuation suppresses the skill arm only.
+        assert_eq!(choose_level_entry(1, 0, 0, true), LevelEntry::GenCont);
+        assert_eq!(choose_level_entry(0, 0, 1, true), LevelEntry::LevCont);
+        // Recontinue cap: past 2 the save is deleted.
+        assert!(!recontinue_deletes_save(2));
+        assert!(recontinue_deletes_save(3));
+    }
+
+    #[test]
+    fn title_anim_tick_matches_menu_other11() {
+        use crate::state::menus::{tick_title_anim, MenuState};
+        let mut world = World::new();
+        world.insert_resource(MenuState {
+            portrait_offsets: [180.0, 0.0, 0.0, 0.0],
+            textappear: [2.0, 0.0, 0.0, 0.0],
+            splatindex: 0.0,
+            loadout_open: true,
+            loadout_frame: 0.0,
+            ..MenuState::default()
+        });
+        world.insert_resource(repame_sim::SimTime {
+            delta_secs: 1.0 / 30.0,
+            ..Default::default()
+        });
+        tick_title_anim(&mut world);
+        let menu = world.resource::<MenuState>();
+        assert_eq!(menu.portrait_offsets[0], 90.0);
+        assert_eq!(menu.textappear[0], 1.0);
+        assert_eq!(menu.splatindex, 0.4);
+        assert_eq!(menu.loadout_frame, 1.0);
     }
 }
