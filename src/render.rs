@@ -3648,8 +3648,25 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 );
                 header(&mut out, rx, &mut r, "");
             }
-            if save.hard_runs > 0 {
+            // GML `scrDrawStats` HARD block verbatim: gated on `hardgot`
+            // + hard runs, shows the global hard-best race + hard map
+            // (`scrAreaGetMapName(..., hard = true)`), kills, and runs.
+            if save.hardmode_unlocked && save.hard_runs > 0 {
                 header(&mut out, rx, &mut r, "HARD");
+                stat_name(&mut out, rx, &mut r, &race_name(save.hard_best_race));
+                stat_val(
+                    &mut out,
+                    rx,
+                    &mut r,
+                    gml_area_map_name(
+                        save.hard_best_area,
+                        save.hard_best_sub,
+                        save.hard_best_loop,
+                        true,
+                    ),
+                );
+                stat_name(&mut out, rx, &mut r, "kills");
+                stat_val(&mut out, rx, &mut r, save.hard_best_kills.to_string());
                 stat_name(&mut out, rx, &mut r, "runs");
                 stat_val(&mut out, rx, &mut r, save.hard_runs.to_string());
                 header(&mut out, rx, &mut r, "");
@@ -3759,14 +3776,19 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             out
         }
         crate::MenuOverlay::GameOver => {
-            // GML `GameOver/Draw_0` text layer verbatim (the roadmap dot
-            // map and death-cause sprite need unported state, so only
-            // the text rows land here; splats ride `menu_sprites`):
-            // struggle line centered-top at (vw/2,48); the area +
-            // kills rows at y=106 are a port extra (GML draws the
-            // roadmap sprites there); `KILLED BY` (or win `COMPLETION
-            // TIME` + clock) centered at vw/2+86.
+            // GML `GameOver/Draw_0` text layer verbatim: struggle line
+            // top-anchored at (vw/2, view_top+48) (no offset); the
+            // roadmap lives at (_x-48, _y-offsety) with the area/kill
+            // strings at (drawy-14) riding it; `KILLED BY` (or win
+            // `COMPLETION TIME` + clock) centered at (_x+86,
+            // _y-offsety-25/-10); MENU/RETRY are the two `PauseButton`s
+            // at ystart+offsety (178/210). Splat frames + roadmap prefix
+            // ride the anim state (`go_splat`, `go_death_pos`).
             let run = world.get_resource::<crate::comps_a::Run>();
+            let (offsety, _death_pos) = world
+                .get_resource::<MenuState>()
+                .map(|m| (m.go_offsety, m.go_death_pos))
+                .unwrap_or((0.0, 0.0));
             let mut out = Vec::new();
             if let Some(run) = run {
                 let max_sub = area_max_subarea(run.area);
@@ -3799,7 +3821,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 out.push(MenuGuiText {
                     text: run_area_string(run),
                     gx: 52.0,
-                    gy: 106.0,
+                    gy: 106.0 - offsety,
                     color: GUI_WHITE,
                     px: 7.0,
                     centered: false,
@@ -3809,7 +3831,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 out.push(MenuGuiText {
                     text: run.total_kills.to_string(),
                     gx: 135.0,
-                    gy: 106.0,
+                    gy: 106.0 - offsety,
                     color: GUI_WHITE,
                     px: 7.0,
                     centered: false,
@@ -3820,7 +3842,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     out.push(MenuGuiText {
                         text: "COMPLETION TIME".to_string(),
                         gx: cx + 86.0,
-                        gy: 95.0,
+                        gy: 95.0 - offsety,
                         color: GUI_WHITE,
                         px: 7.0,
                         centered: true,
@@ -3830,7 +3852,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     out.push(MenuGuiText {
                         text: run_timer_string(run.tottimer),
                         gx: cx + 86.0,
-                        gy: 110.0,
+                        gy: 110.0 - offsety,
                         color: GUI_GRAY,
                         px: 7.0,
                         centered: true,
@@ -3841,7 +3863,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     out.push(MenuGuiText {
                         text: "KILLED BY".to_string(),
                         gx: cx + 86.0,
-                        gy: 95.0,
+                        gy: 95.0 - offsety,
                         color: GUI_WHITE,
                         px: 7.0,
                         centered: true,
@@ -3852,8 +3874,9 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             } else {
                 out.push(gui_center("GAME OVER", cx, 100.0, GUI_WHITE));
             }
-            out.push(gui_button("MENU", cx, 120.0 + 58.0, GUI_MID));
-            out.push(gui_button("RETRY", cx, 120.0 + 90.0, GUI_MID));
+            // GML `PauseButton`s ride `ystart + offsety`.
+            out.push(gui_button("MENU", cx, 120.0 + 58.0 + offsety, GUI_MID));
+            out.push(gui_button("RETRY", cx, 120.0 + 90.0 + offsety, GUI_MID));
             out
         }
         crate::MenuOverlay::Pause => {
@@ -6297,6 +6320,68 @@ fn roadmap_loop_tint(loop_count: u32) -> [f32; 4] {
     [r + m, g + m, b + m, 1.0]
 }
 
+/// GML `draw_line_pixelated` verbatim (`scrDrawRoadmap` local):
+/// `dist = point_distance`, `dir = point_direction` (0 east, 90 south,
+/// y-down degrees); y-bias +2 when `dir in [90,270)` else +1, then
+/// `draw_sprite_ext(sprPixel, 0, x1, y1b, dist, 1, dir, color, alpha)`.
+/// The sprite pipe has a rotation channel but no line primitive, so the
+/// line rides a stretched `sprPixel` centered at the biased midpoint
+/// with `rotation = atan2(dy, dx)` (beam law). Zero-length draws are
+/// skipped (GML `xscale = 0` draws nothing).
+fn pixel_line(
+    assets: &RenderAssets,
+    to_world: &dyn Fn(f32, f32) -> Vec2,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    tint: [f32; 4],
+    out: &mut Vec<SpriteInstance>,
+) {
+    let dx0 = x2 - x1;
+    let dy0 = y2 - y1;
+    if dx0.hypot(dy0) < 1e-6 {
+        return;
+    }
+    let dir_deg = dy0.atan2(dx0).to_degrees().rem_euclid(360.0);
+    let bias = if (90.0..270.0).contains(&dir_deg) {
+        2.0
+    } else {
+        1.0
+    };
+    let (y1b, y2b) = (y1 + bias, y2 + bias);
+    let dx = x2 - x1;
+    let dy = y2b - y1b;
+    let dist = dx.hypot(dy);
+    if dist < 1e-6 {
+        return;
+    }
+    let rot = dy.atan2(dx);
+    let center = to_world((x1 + x2) * 0.5, (y1b + y2b) * 0.5);
+    if let Some(native) = assets.native_size("images/sprPixel.png") {
+        let nw = native.x.max(1.0);
+        let nh = native.y.max(1.0);
+        if let Some(mut s) = assets.sprite_stretched(
+            "images/sprPixel.png",
+            0,
+            center,
+            Vec2::new(dist / nw, 1.0 / nh),
+            rot,
+            tint,
+        ) {
+            s.anchor = Vec2::new(0.5, 0.5);
+            out.push(s);
+            return;
+        }
+    }
+    out.push(white_quad(
+        center,
+        rot,
+        Vec2::new(dist.max(1.0), 1.0),
+        tint,
+    ));
+}
+
 /// `scrDrawRoadmap` sprite layer (`GameOver/Draw_0`,
 /// `GenCont/Draw_0`): score splats + kills icon (the area/kill strings
 /// ride the text overlay), the 7-area dot strip (`sprMapDot` 3px,
@@ -6305,9 +6390,10 @@ fn roadmap_loop_tint(loop_count: u32) -> [f32; 4] {
 /// `Run.waypoints` (`pos` caps the drawn prefix; game-over passes the
 /// full log). GML area ids: `waypnt % 100` with secrets on a second
 /// row 10px down (`sprMapDotOut`); per-loop colors come from
-/// [`roadmap_loop_tint`]. Connector lines ride stretched `sprPixel`
-/// (the sprite pipe has no line primitive); the 3-line black/white
-/// background hatch collapses to one black + one white line.
+/// [`roadmap_loop_tint`]. Connector lines ride [`pixel_line`] (GML
+/// `draw_line_pixelated`: stretched `sprPixel` at `point_direction`
+/// rotation with the +1/+2 y-bias); the background hatch is 3 black +
+/// 1 white lines verbatim, the waypoint shadow 3 black + 1 color line.
 pub fn roadmap_sprites(
     assets: &RenderAssets,
     to_world: &dyn Fn(f32, f32) -> Vec2,
@@ -6327,20 +6413,6 @@ pub fn roadmap_sprites(
                 out.push(s);
             }
         };
-    let hline = |out: &mut Vec<SpriteInstance>, x0: f32, x1: f32, y: f32, tint: [f32; 4]| {
-        if x1 > x0 {
-            if let Some(s) = assets.sprite_sized(
-                "images/sprPixel.png",
-                0,
-                to_world(x0, y),
-                Vec2::new(x1 - x0, 1.0),
-                false,
-                tint,
-            ) {
-                out.push(s);
-            }
-        }
-    };
     push(
         &mut out,
         "images/sprScoreSplat.png",
@@ -6388,17 +6460,41 @@ pub fn roadmap_sprites(
             BLACK,
         );
         map_x += MAXSUB[area as usize] as f32 * SEG;
-        hline(&mut out, px, map_x + 1.0, py + 1.0, BLACK);
-        hline(&mut out, px + 1.0, map_x, py, WHITE);
+        // GML background hatch verbatim: 3 black + 1 white.
+        pixel_line(assets, &to_world, px, py + 1.0, map_x, drawy + 1.0, BLACK, &mut out);
+        pixel_line(
+            assets,
+            &to_world,
+            px + 1.0,
+            py,
+            map_x + 1.0,
+            drawy,
+            BLACK,
+            &mut out,
+        );
+        pixel_line(
+            assets,
+            &to_world,
+            px + 1.0,
+            py + 1.0,
+            map_x + 1.0,
+            drawy + 1.0,
+            BLACK,
+            &mut out,
+        );
+        pixel_line(
+            assets,
+            &to_world,
+            px + 1.0,
+            py,
+            map_x,
+            drawy,
+            WHITE,
+            &mut out,
+        );
         if area == 7 {
-            push(
-                &mut out,
-                "images/sprPixel.png",
-                0,
-                map_x - 8.0,
-                drawy + 1.0,
-                BLACK,
-            );
+            // GML draws the crown first, then the black pixel only when
+            // the palace holds more than one subarea (always, 3 > 1).
             push(
                 &mut out,
                 "images/sprMapCrown.png",
@@ -6407,13 +6503,25 @@ pub fn roadmap_sprites(
                 drawy + 1.0,
                 WHITE,
             );
+            if MAXSUB[7] > 1 {
+                push(
+                    &mut out,
+                    "images/sprPixel.png",
+                    0,
+                    map_x - 8.0,
+                    drawy + 1.0,
+                    BLACK,
+                );
+            }
         }
         push(&mut out, "images/sprMapDot.png", 0, px, py + 1.0, WHITE);
     }
+    let odd_len = MAXSUB[1] as f32 * SEG;
+    let even_len = MAXSUB[2] as f32 * SEG;
     let wpx = |area_mod: i32, sub: u32| {
         let even = area_mod.div_euclid(2);
         let odd = area_mod - even;
-        x0 + ((odd - 1) * 9 + even * 27 + (sub as i32 - 1) * 9) as f32
+        x0 + ((odd - 1) as f32 * even_len + even as f32 * odd_len + (sub as i32 - 1) as f32 * SEG)
     };
     let count = pos.min(waypoints.len());
     for pass in 0..2 {
@@ -6438,7 +6546,9 @@ pub fn roadmap_sprites(
                 roadmap_loop_tint(wp.lp)
             };
             if wp.sub == 1 {
-                let dot = if secret {
+                // GML shadow pass always draws `sprMapDotOut` black;
+                // the color pass picks `Out` for secrets, `Dot` else.
+                let dot = if pass == 0 || secret {
                     "images/sprMapDotOut.png"
                 } else {
                     "images/sprMapDot.png"
@@ -6446,9 +6556,21 @@ pub fn roadmap_sprites(
                 push(&mut out, dot, 0, mx, my + 1.0, tint);
             }
             if pass == 0 {
-                hline(&mut out, px + 1.0, mx + 1.0, py + 1.0, BLACK);
+                // GML waypoint shadow verbatim: 3 black lines.
+                pixel_line(assets, &to_world, px + 1.0, py + 1.0, mx + 1.0, my + 1.0, BLACK, &mut out);
+                pixel_line(assets, &to_world, px + 2.0, py, mx + 1.0, my, BLACK, &mut out);
+                pixel_line(
+                    assets,
+                    &to_world,
+                    px + 2.0,
+                    py + 1.0,
+                    mx + 1.0,
+                    my + 1.0,
+                    BLACK,
+                    &mut out,
+                );
             } else {
-                hline(&mut out, px + 1.0, mx + 1.0, py, tint);
+                pixel_line(assets, &to_world, px + 1.0, py, mx + 1.0, my, tint, &mut out);
             }
         }
     }
@@ -6610,10 +6732,22 @@ pub fn menu_sprites(
             }
         }
         crate::MenuOverlay::GameOver => {
+            // GML `GameOver/Draw_0` sprite layer verbatim: roadmap at
+            // `(_x - 48, _y - offsety)` with prefix `round(death_pos)`,
+            // `sprKilledBySplat[splatimg]` at `(_x + 86,
+            // _y - offsety - 32)`, `sprGameOverCenterSplat[splatimg]` at
+            // `(_x, view_bottom - 32)`. `_x/_y` is the view center
+            // (`vw/2`, 120 at 240 high).
+            let (offsety, death_pos, splat) = world
+                .get_resource::<MenuState>()
+                .map(|m| (m.go_offsety, m.go_death_pos, m.go_splat))
+                .unwrap_or((0.0, 0.0, 0.0));
+            let splat_frame = splat.floor().clamp(0.0, 2.0) as i32;
+            let cx = vw * 0.5;
             if let Some(s) = assets.sprite_for(
                 "images/sprGameOverCenterSplat.png",
-                0,
-                gui_to_world(vw * 0.5, 240.0 - 10.0),
+                splat_frame,
+                gui_to_world(cx, 240.0 - 32.0),
                 false,
                 0.0,
                 [1.0; 4],
@@ -6622,8 +6756,8 @@ pub fn menu_sprites(
             }
             if let Some(s) = assets.sprite_for(
                 "images/sprKilledBySplat.png",
-                0,
-                gui_to_world(vw * 0.5 + 86.0, 110.0),
+                splat_frame,
+                gui_to_world(cx + 86.0, 120.0 - offsety - 32.0),
                 false,
                 0.0,
                 [1.0; 4],
@@ -6631,15 +6765,14 @@ pub fn menu_sprites(
                 out.push(s);
             }
             if let Some(run) = world.get_resource::<Run>() {
-                let n = run.waypoints.len();
                 let wps = run.waypoints.clone();
                 out.extend(roadmap_sprites(
                     assets,
                     &gui_to_world,
-                    112.0,
-                    121.0,
+                    cx - 48.0,
+                    120.0 - offsety,
                     &wps,
-                    n,
+                    death_pos.round() as usize,
                 ));
             }
         }

@@ -396,15 +396,20 @@ pub fn resolve_player_gameover(
     save.total_runs += 1;
     save.total_kills = save.total_kills.saturating_add(run.total_kills);
     save.total_deaths += 1;
+    if run.hardmode {
+        save.hard_runs += 1;
+    }
     save.win_streak_cur = 0;
     save.total_time_steps = save.total_time_steps.saturating_add(run.tottimer as u64);
-    if run.total_kills > save.best_run_kills {
-        save.best_run_kills = run.total_kills;
-        save.best_run_race = race_state.race as u8;
-        save.best_run_area = crate::worldgen::gml_area_from_run(&run);
-        save.best_run_sub = run.floor_in_area;
-        save.best_run_loop = run.loop_count;
-    }
+    crate::savedata_part::update_best_run_stats(
+        &mut save,
+        race_state.race as u8,
+        crate::worldgen::gml_area_from_run(&run),
+        run.floor_in_area,
+        run.loop_count,
+        run.total_kills,
+        run.hardmode,
+    );
     crate::savedata_part::check_progress_unlocks(
         &mut save,
         run.floor,

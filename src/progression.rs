@@ -2010,13 +2010,15 @@ pub fn tick_throne_sit(
                 save.best_time_steps = run.tottimer;
                 save.best_time_race = race_gml;
             }
-            if run.total_kills > save.best_run_kills {
-                save.best_run_kills = run.total_kills;
-                save.best_run_race = race_gml;
-                save.best_run_area = crate::worldgen::gml_area_from_run(&run);
-                save.best_run_sub = run.floor_in_area;
-                save.best_run_loop = run.loop_count;
-            }
+            crate::savedata_part::update_best_run_stats(
+                &mut save,
+                race_gml,
+                crate::worldgen::gml_area_from_run(&run),
+                run.floor_in_area,
+                run.loop_count,
+                run.total_kills,
+                run.hardmode,
+            );
             dirty.0 = true;
             toast.show("THE STRUGGLE IS OVER");
         }

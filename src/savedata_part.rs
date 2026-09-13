@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::comps_a::{Health, Inventory, Player, RaceState, Run};
 use crate::data::{AreaId, CrownKind, MutationId, RaceId, SkinLetter, WeaponId};
 
-pub const SAVE_VERSION: u32 = 4;
+pub const SAVE_VERSION: u32 = 5;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -87,6 +87,22 @@ pub struct SaveData {
     pub best_run_sub: u32,
     #[serde(default)]
     pub best_run_loop: u32,
+    /// GML `hbst_*` best hardmode run (kills + race + map), written by
+    /// `scrPlayerUpdateBestRunStats` only when `scrGameIsHardmode()`.
+    /// Global aggregate like `best_run_*` (GML keeps per-race arrays;
+    /// the stats screen only shows the global max). New in v5: old
+    /// saves fill zeros via serde defaults, then `tick_sanitize_save`
+    /// stamps the version.
+    #[serde(default)]
+    pub hard_best_kills: u32,
+    #[serde(default)]
+    pub hard_best_race: u8,
+    #[serde(default)]
+    pub hard_best_area: i32,
+    #[serde(default)]
+    pub hard_best_sub: u32,
+    #[serde(default)]
+    pub hard_best_loop: u32,
     /// GML `etc.hard`: hardmode unlocked (loop 2 reached).
     #[serde(default)]
     pub hardmode_unlocked: bool,
@@ -566,6 +582,11 @@ impl Default for SaveData {
             best_run_area: 0,
             best_run_sub: 0,
             best_run_loop: 0,
+            hard_best_kills: 0,
+            hard_best_race: 0,
+            hard_best_area: 0,
+            hard_best_sub: 0,
+            hard_best_loop: 0,
             unlocked_characters: vec!["Fish".to_string()],
             races,
             crown_got: BTreeMap::new(),
@@ -1172,6 +1193,36 @@ pub fn unlock_progress(save: &SaveData) -> (u32, u32) {
         progress += 1;
     }
     (progress, maxprogress)
+}
+
+/// GML `scrPlayerUpdateBestRunStats` best-kill branch verbatim
+/// (custom-mode gate lives with callers): normal runs feed `cbst_*`
+/// (`best_run_*` here), hardmode runs feed `hbst_*` (`hard_best_*`).
+/// Strict `>` only, like GML.
+pub fn update_best_run_stats(
+    save: &mut SaveData,
+    race_gml: u8,
+    area: i32,
+    sub: u32,
+    lp: u32,
+    kills: u32,
+    hardmode: bool,
+) {
+    if hardmode {
+        if kills > save.hard_best_kills {
+            save.hard_best_kills = kills;
+            save.hard_best_race = race_gml;
+            save.hard_best_area = area;
+            save.hard_best_sub = sub;
+            save.hard_best_loop = lp;
+        }
+    } else if kills > save.best_run_kills {
+        save.best_run_kills = kills;
+        save.best_run_race = race_gml;
+        save.best_run_area = area;
+        save.best_run_sub = sub;
+        save.best_run_loop = lp;
+    }
 }
 
 pub fn check_progress_unlocks(

@@ -265,6 +265,14 @@ pub struct MenuState {
     pub credits_scroll: f32,
     /// Live game-over snapshot (`None` until the run ends).
     pub game_over: Option<GameOverScreen>,
+    /// GML `GameOver/Create_0` anim state verbatim: `death_pos` (waypoint
+    /// reveal prefix, +1/draw capped at `waypoints`), `offsety` (128 ->
+    /// 0 at 32/draw), `splatimg` (0 -> 2 at 0.7/draw once the
+    /// letterbox is open; the port has no letterbox gate so it always
+    /// animates). Reset on capture, ticked in `tick_ingame_menu`.
+    pub go_death_pos: f32,
+    pub go_offsety: f32,
+    pub go_splat: f32,
 }
 
 impl Default for MenuState {
@@ -289,6 +297,9 @@ impl Default for MenuState {
             settings_cursor: 0,
             unlock_queue: Vec::new(),
             game_over: None,
+            go_death_pos: 0.0,
+            go_offsety: 128.0,
+            go_splat: 0.0,
         }
     }
 }
@@ -1026,6 +1037,11 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 save.best_run_area = 0;
                 save.best_run_sub = 0;
                 save.best_run_loop = 0;
+                save.hard_best_kills = 0;
+                save.hard_best_race = 0;
+                save.hard_best_area = 0;
+                save.hard_best_sub = 0;
+                save.hard_best_loop = 0;
                 save.unlocked_characters = vec!["Fish".to_string()];
                 save.races.clear();
                 save.crown_got.clear();
@@ -1504,6 +1520,18 @@ fn tick_settings_nav(world: &mut World, nav_v: i8, nav_h: i8, confirm: bool) {
 }
 
 /// In-game menu routing (game-over > pause/overlay > mutation offer).
+/// GML `approach` verbatim for the game-over anim: move `v` toward
+/// `target` by `delta` without overshooting.
+fn approach(v: f32, target: f32, delta: f32) -> f32 {
+    if v < target {
+        (v + delta).min(target)
+    } else if v > target {
+        (v - delta).max(target)
+    } else {
+        v
+    }
+}
+
 fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
     // Offer mirror (bevy `sync_hud` order: mirror before input handling;
     // law shared with `tick_mutation_mirror` via `apply_mutation_mirror`
@@ -1553,7 +1581,8 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
         world.insert_resource(menu);
     }
 
-    // Snapshot the game-over screen once per death.
+    // Snapshot the game-over screen once per death (GML `GameOver/Create_0`
+    // verbatim: `death_pos = 0`, `offsety = 128`, `splatimg = 0`).
     let needs_capture = game_over
         && world
             .get_resource::<MenuState>()
@@ -1562,6 +1591,51 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
         let screen = capture_game_over(world);
         if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
             menu.game_over = screen;
+            menu.go_death_pos = 0.0;
+            menu.go_offsety = 128.0;
+            menu.go_splat = 0.0;
+        }
+    }
+
+    // Fresh run clears a stale snapshot (bevy rebuilds the panel per
+    // death; headless keeps it until the next death).
+    if !game_over
+        && world
+            .get_resource::<MenuState>()
+            .is_some_and(|menu| menu.game_over.is_some())
+    {
+        if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+            menu.game_over = None;
+            menu.go_death_pos = 0.0;
+            menu.go_offsety = 128.0;
+            menu.go_splat = 0.0;
+        }
+    }
+
+    // GML `GameOver/Draw_0` anim verbatim (per-draw advances, here per
+    // 30 Hz tick scaled by `dt * 30`): `death_pos` reveals one waypoint
+    // per tick capped at the log length; `offsety` slides 128 -> 0 at
+    // 32/tick; `splatimg` eases 0 -> 2 at 0.7/tick (the GML
+    // `letterbox_frame >= 2` gate has no port counterpart, so it always
+    // animates once dead).
+    if game_over {
+        let dt = world
+            .get_resource::<repame_sim::SimTime>()
+            .map(|t| t.delta_secs)
+            .unwrap_or(1.0 / 30.0);
+        let steps = (dt * 30.0).max(0.0);
+        let total = world
+            .get_resource::<crate::comps_a::Run>()
+            .map(|r| r.waypoints.len() as f32)
+            .unwrap_or(0.0);
+        if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+            if menu.go_death_pos < total {
+                menu.go_death_pos = (menu.go_death_pos + steps).min(total);
+            }
+            if menu.go_offsety > 0.0 {
+                menu.go_offsety = approach(menu.go_offsety, 0.0, 32.0 * steps);
+            }
+            menu.go_splat = approach(menu.go_splat, 2.0, 0.7 * steps);
         }
     }
 
