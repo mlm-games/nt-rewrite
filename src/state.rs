@@ -205,18 +205,21 @@ pub fn goto_state(world: &mut World, next: AppState) {
             if let Some(mut menu) = world.get_resource_mut::<menus::MenuState>() {
                 menu.main_menu_cursor = 0;
                 menu.settings_cursor = 0;
+                menu.play_submenu = false;
+                menu.play_cursor = 0;
             }
         }
         AppState::Loading => {
             world.insert_resource(LoadingState::default());
         }
         AppState::Title => {
-            // Bevy `sync_shared_ui` on Title enter: hide GO, close
-            // loadout, mirror the selected character.
-            let cursor = world
+            let gml = world
                 .get_resource::<crate::comps_a::SelectedCharacter>()
                 .map(|s| s.0 as usize)
                 .unwrap_or(crate::data::RaceId::Fish as usize);
+            let cursor =
+                menus::roster_position(world.get_resource::<crate::savedata_part::SaveData>(), gml)
+                    .unwrap_or(0);
             world.init_resource::<menus::MenuState>();
             if let Some(mut menu) = world.get_resource_mut::<menus::MenuState>() {
                 menu.title_go_visible = false;
@@ -256,6 +259,8 @@ pub fn reset_pause_state(world: &mut World) {
         menu.mutation_selected = None;
         menu.game_over = None;
         menu.settings_cursor = 0;
+        menu.play_submenu = false;
+        menu.play_cursor = 0;
     }
 }
 
@@ -463,4 +468,3 @@ pub fn tick_sanitize_save(mut save: ResMut<crate::savedata_part::SaveData>) {
         save.version = crate::savedata_part::SAVE_VERSION;
     }
 }
-

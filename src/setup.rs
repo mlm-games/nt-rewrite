@@ -466,6 +466,17 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
         run.game_over = false;
         run.total_kills = 0;
         run.blackswords = 0;
+        run.tottimer = 0;
+        run.popolevel = 0;
+        run.nochest = 0;
+        run.noradch = 0;
+        run.same_weapons_for = 0;
+        run.horror = false;
+        run.shots_fired = 0;
+        run.weapons_picked = 0;
+        run.won = false;
+        run.waypoints.clear();
+        run.push_waypoint();
         world.resource_mut::<crate::state::Paused>().0 = false;
         *world.resource_mut::<Toast>() = Toast::default();
         *world.resource_mut::<crate::state::AppState>() = crate::state::AppState::InGame;
@@ -750,22 +761,19 @@ fn pick_prop_idle(
 fn prop_hurt_dead_paths(idle: &'static str) -> (&'static str, &'static str) {
     match idle {
         "images/sprBushIdle.png" => ("images/sprBushHurt.png", "images/sprBushDead.png"),
-        "images/sprBigFlowerIdle.png" => (
-            "images/sprBigFlowerHurt.png",
-            "images/sprBigFlowerDead.png",
-        ),
-        "images/sprBonePileIdle.png" => (
-            "images/sprBonePileHurt.png",
-            "images/sprBonePileDead.png",
-        ),
+        "images/sprBigFlowerIdle.png" => {
+            ("images/sprBigFlowerHurt.png", "images/sprBigFlowerDead.png")
+        }
+        "images/sprBonePileIdle.png" => {
+            ("images/sprBonePileHurt.png", "images/sprBonePileDead.png")
+        }
         "images/sprNightBonePileIdle.png" => (
             "images/sprNightBonePileHurt.png",
             "images/sprNightBonePileDead.png",
         ),
-        "images/sprPlantPotIdle.png" => (
-            "images/sprPlantPotHurt.png",
-            "images/sprPlantPotDead.png",
-        ),
+        "images/sprPlantPotIdle.png" => {
+            ("images/sprPlantPotHurt.png", "images/sprPlantPotDead.png")
+        }
         "images/sprCarIdle.png" => ("images/sprCarHurt.png", "images/sprCarIdle.png"),
         "images/sprMine.png" | "images/sprMineIdle.png" => {
             ("images/sprMine.png", "images/sprMine.png")
@@ -778,10 +786,7 @@ fn prop_hurt_dead_paths(idle: &'static str) -> (&'static str, &'static str) {
             "images/sprBigSkullOpen.png",
         ),
         "images/sprBarrel.png" => ("images/sprBarrelHurt.png", "images/sprBarrelDead.png"),
-        "images/sprSewerPipe.png" => (
-            "images/sprSewerPipeHurt.png",
-            "images/sprSewerPipeDead.png",
-        ),
+        "images/sprSewerPipe.png" => ("images/sprSewerPipeHurt.png", "images/sprSewerPipeDead.png"),
         "images/sprTires.png" => ("images/sprTiresHurt.png", "images/sprTiresDead.png"),
         "images/sprToxicBarrel.png" => (
             "images/sprToxicBarrelHurt.png",
@@ -820,10 +825,7 @@ fn prop_hurt_dead_paths(idle: &'static str) -> (&'static str, &'static str) {
             "images/sprSodaMachineHurt.png",
             "images/sprSodaMachineDead.png",
         ),
-        "images/sprNewsStand.png" => (
-            "images/sprNewsStandHurt.png",
-            "images/sprNewsStandDead.png",
-        ),
+        "images/sprNewsStand.png" => ("images/sprNewsStandHurt.png", "images/sprNewsStandDead.png"),
         "images/sprTube.png" => ("images/sprTubeHurt.png", "images/sprTubeDead.png"),
         "images/sprMutantTube.png" => (
             "images/sprMutantTubeHurt.png",
@@ -850,22 +852,10 @@ fn prop_hurt_dead_paths(idle: &'static str) -> (&'static str, &'static str) {
             "images/sprOasisBarrelHurt.png",
             "images/sprOasisBarrelDead.png",
         ),
-        "images/sprWaterMine.png" => (
-            "images/sprWaterMineHurt.png",
-            "images/sprWaterMineDead.png",
-        ),
-        "images/sprMoneyPile.png" => (
-            "images/sprMoneyPileHurt.png",
-            "images/sprMoneyPileDead.png",
-        ),
-        "images/sprYVStatue.png" => (
-            "images/sprYVStatueHurt.png",
-            "images/sprYVStatueDead.png",
-        ),
-        "images/sprPizzaBox.png" => (
-            "images/sprPizzaBoxHurt.png",
-            "images/sprPizzaBoxDead.png",
-        ),
+        "images/sprWaterMine.png" => ("images/sprWaterMineHurt.png", "images/sprWaterMineDead.png"),
+        "images/sprMoneyPile.png" => ("images/sprMoneyPileHurt.png", "images/sprMoneyPileDead.png"),
+        "images/sprYVStatue.png" => ("images/sprYVStatueHurt.png", "images/sprYVStatueDead.png"),
+        "images/sprPizzaBox.png" => ("images/sprPizzaBoxHurt.png", "images/sprPizzaBoxDead.png"),
         "images/sprBigGenerator.png" => (
             "images/sprBigGeneratorHurt.png",
             "images/sprBigGeneratorDead.png",
@@ -1428,4 +1418,3 @@ pub fn spawn_level(
         ));
     }
 }
-

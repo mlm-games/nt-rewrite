@@ -15,10 +15,11 @@
 //!
 //! Input map (headless choices, documented because bevy was mouse/key
 //! driven and several bevy keys have no headless counterpart):
-//! - Title: `cycle_weapon` moves the character cursor (wraps 17 pods),
-//!   `weapon_slot` jumps to a pod, `interact` confirms (re-clicking the
-//!   selected race starts loading, bevy parity), `spec` toggles the
-//!   loadout panel shut when open.
+//! - Title: `cycle_weapon` moves the character cursor over the visible
+//!   pod roster (wraps; GML `_char_list` order), `weapon_slot` jumps to
+//!   a gml-id pod (hidden-and-locked races sting `sndNoSelect`),
+//!   `interact` confirms (re-clicking the selected race starts loading,
+//!   bevy parity), `spec` toggles the loadout panel shut when open.
 //! - Mutation: `weapon_slot` (Digit1-4) routes through the bevy two-step
 //!   (`SelectMutation` highlight then `PickMutation` commit, same as
 //!   bevy `handle_mutation_keys`), `cycle_weapon` moves the highlight,
@@ -27,7 +28,8 @@
 //!   `MenuEdge::pause_pressed` (Escape) toggles with bevy's confirm/
 //!   settings-stack laws.
 //! - Game over: `MenuEdge::restart_pressed` (KeyR) restarts via Loading;
-//!   left-click quits to the menu (no keyboard-interact quit, bevy parity).
+//!   MENU/RETRY buttons route to `ConfirmPause(0/1)` (GML direct actions,
+//!   no confirm); stray clicks do nothing.
 //! - Splash: any key/mouse edge advances (bevy `boot_intro` law).
 //! - MainMenu: `interact` plays (bevy PLAY item).
 //!
@@ -98,6 +100,32 @@ pub fn race_from_gml_id(id: usize) -> Option<RaceId> {
         .iter()
         .copied()
         .find(|r| *r as usize == id)
+}
+
+/// GML `scrRaceIsHidden` verbatim (default `count_in_unlockable=true`,
+/// the `Menu/Create_0` call): BigDog always hidden; Frog/Skeleton
+/// hidden while countable.
+pub fn race_is_hidden(race: RaceId) -> bool {
+    matches!(race, RaceId::BigDog | RaceId::Frog | RaceId::Skeleton)
+}
+
+/// GML `Menu/Create_0` pod roster verbatim: every race that is not
+/// hidden, plus hidden races once unlocked (`cgot`, i.e.
+/// [`SaveData::race_unlocked`]). Fresh saves show 14 pods (step 20);
+/// fully unlocked saves show 17 (step 16). [`MenuState::title_cursor`]
+/// indexes this roster, NOT the gml id.
+pub fn visible_roster(save: Option<&SaveData>) -> Vec<RaceId> {
+    CHAR_SELECT_ORDER
+        .iter()
+        .copied()
+        .filter(|r| !race_is_hidden(*r) || save.is_some_and(|s| s.race_unlocked(*r)))
+        .collect()
+}
+
+/// Roster position of a gml id (`None` for hidden-and-locked races,
+/// which have no pod).
+pub fn roster_position(save: Option<&SaveData>, gml: usize) -> Option<usize> {
+    visible_roster(save).iter().position(|r| *r as usize == gml)
 }
 
 /// Crown port id (`CrownKind` discriminant).
@@ -195,8 +223,8 @@ pub fn capture_game_over(world: &mut World) -> Option<GameOverScreen> {
 /// field the views will need, none of the pixels).
 #[derive(Debug, Clone, Resource)]
 pub struct MenuState {
-    /// Cursor into [`CHAR_SELECT_ORDER`] (keyboard/headless stand-in
-    /// for bevy mouse hover + click pods).
+    /// Cursor into the visible pod roster ([`visible_roster`], GML
+    /// `_char_list` order — a roster index, not a gml id).
     pub title_cursor: usize,
     /// GO button armed (bevy `title_go_visible`).
     pub title_go_visible: bool,
@@ -219,11 +247,22 @@ pub struct MenuState {
     /// Main-menu keyboard cursor over the 5 labels (GML gamepad_sel /
     /// bevy `main_menu_hover` parity; 0 PLAY .. 4 QUIT).
     pub main_menu_cursor: usize,
+    /// PLAY-submenu open (GML `PlayButton` rows replace the main-menu
+    /// buttons until one fires or BackButton/Escape closes).
+    pub play_submenu: bool,
+    /// PLAY-submenu keyboard cursor over [`play_rows`].
+    pub play_cursor: usize,
     /// Settings keyboard cursor over the page's actionable rows
     /// (`settings_hot_rows` order in `render.rs`; GML `pointed_item`).
     pub settings_cursor: usize,
     /// Pending unlock popups (producer deferred; see module docs).
     pub unlock_queue: Vec<UnlockPopup>,
+    /// Credits section index (GML `Credits.show` over `credittext`).
+    pub credits_section: usize,
+    /// Seconds on the current credits section (GML `timer`).
+    pub credits_t: f32,
+    /// Credits pan offset in GUI px for tall sections (GML `scroll`).
+    pub credits_scroll: f32,
     /// Live game-over snapshot (`None` until the run ends).
     pub game_over: Option<GameOverScreen>,
 }
@@ -242,6 +281,11 @@ impl Default for MenuState {
             settings_page: 0,
             settings_page_stack: Vec::new(),
             main_menu_cursor: 0,
+            play_submenu: false,
+            play_cursor: 0,
+            credits_section: 0,
+            credits_t: 0.0,
+            credits_scroll: 0.0,
             settings_cursor: 0,
             unlock_queue: Vec::new(),
             game_over: None,
@@ -282,6 +326,34 @@ pub fn route_mutation_digit(menu: &MenuState, idx: usize) -> Option<UiAction> {
         Some(UiAction::PickMutation(idx))
     } else {
         Some(UiAction::SelectMutation(idx))
+    }
+}
+
+/// GML `MainMenuButton/Other_10` PLAY-submenu rows verbatim: NORMAL
+/// always; DAILY/WEEKLY when the tutorial is done; HARD when loop 2
+/// cleared (`hardgot`); CUSTOM last. A single row auto-fires (GML
+/// `event_user(0)`), so fresh/tutorial profiles skip the submenu.
+pub fn play_rows(save: &SaveData) -> Vec<u8> {
+    let mut rows = vec![0];
+    if !save.settings.show_tutorial {
+        rows.push(1);
+        rows.push(2);
+        if save.hardmode_unlocked {
+            rows.push(3);
+        }
+        rows.push(4);
+    }
+    rows
+}
+
+/// GML `PlayButton` label verbatim (`scrMenuButtonName`).
+pub fn play_row_name(row: u8) -> &'static str {
+    match row {
+        0 => "NORMAL",
+        1 => "DAILY",
+        2 => "WEEKLY",
+        3 => "HARD",
+        _ => "CUSTOM",
     }
 }
 
@@ -395,8 +467,62 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             goto_state(world, AppState::Loading);
         }
         UiAction::MainMenuPlay => {
-            emit_cue(world, &UiAction::MainMenuPlay);
-            goto_state(world, AppState::Title);
+            let rows = world
+                .get_resource::<SaveData>()
+                .map(|s| play_rows(&s))
+                .unwrap_or(vec![0]);
+            if rows.len() <= 1 {
+                if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+                    menu.play_submenu = false;
+                    menu.hardmode_selected = false;
+                }
+                emit_cue(world, &UiAction::MainMenuPlay);
+                goto_state(world, AppState::Title);
+            } else {
+                if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+                    menu.play_submenu = true;
+                    menu.play_cursor = 0;
+                }
+                emit_cue(world, &UiAction::MainMenuPlay);
+            }
+        }
+        UiAction::PlaySubmenu(row) => match row {
+            0 => {
+                if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+                    menu.play_submenu = false;
+                    menu.hardmode_selected = false;
+                }
+                emit_cue(world, &UiAction::PlaySubmenu(row));
+                goto_state(world, AppState::Title);
+            }
+            3 => {
+                if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+                    menu.play_submenu = false;
+                    menu.hardmode_selected = true;
+                }
+                emit_cue(world, &UiAction::PlaySubmenu(row));
+                goto_state(world, AppState::Title);
+            }
+            _ => {
+                emit_cue(world, &UiAction::PlaySubmenu(row));
+                emit_denied(world);
+            }
+        },
+        UiAction::ClosePlaySubmenu => {
+            if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+                menu.play_submenu = false;
+                menu.play_cursor = 0;
+            }
+            emit_cue(world, &UiAction::ClosePlaySubmenu);
+        }
+        UiAction::AdvanceCredits => {
+            if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+                let n = crate::render::credit_section_count();
+                menu.credits_section = (menu.credits_section + 1) % n;
+                menu.credits_t = 0.0;
+                menu.credits_scroll = 0.0;
+            }
+            emit_cue(world, &UiAction::AdvanceCredits);
         }
         UiAction::OpenSettings => {
             if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
@@ -419,6 +545,11 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
         UiAction::OpenCredits => {
             world.init_resource::<OverlayMenu>();
             *world.resource_mut::<OverlayMenu>() = OverlayMenu::Credits;
+            if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+                menu.credits_section = 0;
+                menu.credits_t = 0.0;
+                menu.credits_scroll = 0.0;
+            }
             emit_cue(world, &UiAction::OpenCredits);
         }
         UiAction::CloseOverlay => {
@@ -642,11 +773,13 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             }
             world.init_resource::<SelectedCharacter>();
             world.resource_mut::<SelectedCharacter>().0 = race;
+            let pos = roster_position(world.get_resource::<SaveData>(), i);
             if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
-                menu.title_cursor = i;
+                if let Some(pos) = pos {
+                    menu.title_cursor = pos;
+                }
                 menu.title_go_visible = true;
-                // Bevy closes the loadout only for the Dog/Skeleton/Frog
-                // trio (Random keeps whatever the toggle set; the render
+
                 // layer hides the panel for `selected == 0`).
                 if matches!(race, RaceId::BigDog | RaceId::Skeleton | RaceId::Frog) {
                     menu.loadout_open = false;
@@ -878,6 +1011,21 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 save.best_floor = 0;
                 save.total_runs = 0;
                 save.total_kills = 0;
+                save.total_wins = 0;
+                save.total_deaths = 0;
+                save.total_loops = 0;
+                save.total_time_steps = 0;
+                save.hard_runs = 0;
+                save.win_streak_cur = 0;
+                save.win_streak_best = 0;
+                save.best_streak_race = 0;
+                save.best_time_steps = 0;
+                save.best_time_race = 0;
+                save.best_run_kills = 0;
+                save.best_run_race = 0;
+                save.best_run_area = 0;
+                save.best_run_sub = 0;
+                save.best_run_loop = 0;
                 save.unlocked_characters = vec!["Fish".to_string()];
                 save.races.clear();
                 save.crown_got.clear();
@@ -888,6 +1036,11 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
         UiAction::SettingViewCredits => {
             world.init_resource::<OverlayMenu>();
             *world.resource_mut::<OverlayMenu>() = OverlayMenu::Credits;
+            if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+                menu.credits_section = 0;
+                menu.credits_t = 0.0;
+                menu.credits_scroll = 0.0;
+            }
             emit_cue(world, &UiAction::SettingViewCredits);
         }
         UiAction::SettingOpenSubcategory(cat) => {
@@ -1046,6 +1199,23 @@ pub fn tick_menus(world: &mut World) {
             tick_ingame_menu(world, edge);
         }
     }
+
+    if world
+        .get_resource::<OverlayMenu>()
+        .is_some_and(|o| *o == OverlayMenu::Credits)
+        && let Some(mut menu) = world.get_resource_mut::<MenuState>()
+    {
+        menu.credits_t += dt;
+        let n = crate::render::credit_section_count();
+        let rows = crate::render::CREDIT_SECTIONS[menu.credits_section % n].len() as f32;
+        let scroll_max = (rows * 12.0 - 124.0).max(0.0);
+        menu.credits_scroll = ((menu.credits_t - 1.0) * 30.0).clamp(0.0, scroll_max);
+        if menu.credits_t >= 6.0 + scroll_max / 30.0 {
+            menu.credits_section = (menu.credits_section + 1) % n;
+            menu.credits_t = 0.0;
+            menu.credits_scroll = 0.0;
+        }
+    }
 }
 
 /// Main-menu input routing (GML `MainMenuButton` parity): Up/Down move
@@ -1091,6 +1261,57 @@ fn tick_main_menu_input(world: &mut World, edge: MenuEdge) {
         .is_some_and(|o| *o == OverlayMenu::Settings)
     {
         tick_settings_nav(world, nav_v, nav_h, confirm);
+        return;
+    }
+    if world
+        .get_resource::<MenuState>()
+        .is_some_and(|menu| menu.play_submenu)
+    {
+        if edge.pause_pressed {
+            apply_menu_action(world, UiAction::ClosePlaySubmenu);
+            return;
+        }
+        let n = world
+            .get_resource::<SaveData>()
+            .map(|s| play_rows(&s).len())
+            .unwrap_or(1)
+            .max(1);
+        if nav_v != 0 {
+            if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+                menu.play_cursor =
+                    (menu.play_cursor as i16 + nav_v as i16).rem_euclid(n as i16) as usize;
+            }
+            emit_sfx(world, hover_sfx());
+        }
+        if let Some(slot) = slot {
+            let row = world
+                .get_resource::<SaveData>()
+                .map(|s| play_rows(&s))
+                .unwrap_or(vec![0])
+                .get(slot)
+                .copied();
+            if let Some(row) = row {
+                if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+                    menu.play_cursor = slot;
+                }
+                apply_menu_action(world, UiAction::PlaySubmenu(row));
+                return;
+            }
+        }
+        if confirm {
+            let row = world
+                .get_resource::<MenuState>()
+                .and_then(|menu| {
+                    world
+                        .get_resource::<SaveData>()
+                        .map(|s| play_rows(&s))
+                        .unwrap_or(vec![0])
+                        .get(menu.play_cursor)
+                        .copied()
+                })
+                .unwrap_or(0);
+            apply_menu_action(world, UiAction::PlaySubmenu(row));
+        }
         return;
     }
     if nav_v != 0 {
@@ -1200,14 +1421,23 @@ fn tick_title_input(world: &mut World, edge: MenuEdge) {
         apply_menu_action(world, UiAction::ToggleLoadout);
     }
     if cycle != 0 {
+        let len = visible_roster(world.get_resource::<SaveData>())
+            .len()
+            .max(1) as i16;
         if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
-            let len = CHAR_SELECT_ORDER.len() as i16;
             menu.title_cursor = (menu.title_cursor as i16 + cycle as i16).rem_euclid(len) as usize;
         }
     }
     if let Some(slot) = slot {
-        if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
-            menu.title_cursor = slot % CHAR_SELECT_ORDER.len();
+        match roster_position(world.get_resource::<SaveData>(), slot) {
+            Some(pos) => {
+                if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+                    menu.title_cursor = pos;
+                }
+            }
+            None => {
+                emit_denied(world);
+            }
         }
     }
     if back {
@@ -1221,11 +1451,16 @@ fn tick_title_input(world: &mut World, edge: MenuEdge) {
         }
     }
     if confirm {
+        let roster = visible_roster(world.get_resource::<SaveData>());
         let cursor = world
             .get_resource::<MenuState>()
             .map(|menu| menu.title_cursor)
+            .unwrap_or(0);
+        let gml = roster
+            .get(cursor)
+            .map(|r| *r as usize)
             .unwrap_or(RaceId::Fish as usize);
-        apply_menu_action(world, UiAction::SelectCharacter(cursor));
+        apply_menu_action(world, UiAction::SelectCharacter(gml));
     }
 }
 

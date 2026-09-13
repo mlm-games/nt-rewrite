@@ -176,24 +176,33 @@ pub fn run_timer_string(tottimer: u32) -> String {
     format!("{minutes}:{seconds}.{frac}")
 }
 
-/// GML `scrAreaGetMapName` verbatim (unlocalized strings): HQ shows
-/// `HQ{sub}`, the crib shows `$$$`, secret areas `N-?`, the vault
-/// `???`, otherwise `A-S`; a won run shows `END2` on the final HQ floor
-/// else `END1` (GML checks the `Cinematic` throne win first, then the
-/// HQ-final win — headless has no cinematic entity so any non-HQ win is
-/// `END1`); plus ` H#` in hardmode else ` L#` on loops.
-pub fn run_area_string(run: &Run) -> String {
-    let area = crate::worldgen::gml_area_from_run(run);
-    if run.won {
-        // GML `GameCont.win` branch verbatim (modulo the headless
-        // Cinematic/HQ-final approximations documented above).
-        if area == 106 {
-            return "END2".to_string();
-        }
-        return "END1".to_string();
-    }
+/// GML `scrTime` verbatim: `HH:MM:SS` from seconds.
+pub fn scr_time(total_secs: u64) -> String {
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+    format!("{hours:02}:{minutes:02}:{seconds:02}")
+}
+
+/// GML `scrTimeSpeedrun` verbatim: `HH:MM.CC` from 30Hz steps, quirk
+/// included (the centis derive from the whole seconds, not the
+/// fraction — `round(_seconds / 30 * 100)` on the floored value).
+pub fn scr_time_speedrun(steps: u32) -> String {
+    let nsecs = steps / 30;
+    let hours = nsecs / 3600;
+    let minutes = (nsecs % 3600) / 60;
+    let seconds = nsecs % 60;
+    let frac = (seconds * 100 + 15) / 30;
+    format!("{hours:02}:{minutes:02}.{frac:02}")
+}
+
+/// GML `scrAreaGetMapName` area body + loop suffix (unlocalized):
+/// HQ shows `HQ{sub}`, the crib `$$$`, secret areas `N-?`, the vault
+/// `???`, otherwise `A-S`; plus ` H#` in hardmode else ` L#` on loops.
+/// Shared by the live HUD clock row and the stats best-run rows.
+pub fn gml_area_map_name(area: i32, sub: u32, lp: u32, hardmode: bool) -> String {
     let base = if area == 106 {
-        format!("HQ{}", run.floor_in_area)
+        format!("HQ{sub}")
     } else if area == 107 {
         "$$$".to_string()
     } else if area > 100 {
@@ -201,14 +210,30 @@ pub fn run_area_string(run: &Run) -> String {
     } else if area == 100 {
         "???".to_string()
     } else {
-        format!("{area}-{}", run.floor_in_area)
+        format!("{area}-{sub}")
     };
-    if run.loop_count != 0 {
-        let tag = if run.hardmode { 'H' } else { 'L' };
-        format!("{} {tag}{}", base, run.loop_count)
+    if lp != 0 {
+        let tag = if hardmode { 'H' } else { 'L' };
+        format!("{base} {tag}{lp}")
     } else {
         base
     }
+}
+
+/// GML `scrAreaGetMapName` verbatim (unlocalized strings): a won run
+/// shows `END2` on the final HQ floor else `END1` (GML checks the
+/// `Cinematic` throne win first, then the HQ-final win — headless has
+/// no cinematic entity so any non-HQ win is `END1`); otherwise the
+/// [`gml_area_map_name`] body.
+pub fn run_area_string(run: &Run) -> String {
+    let area = crate::worldgen::gml_area_from_run(run);
+    if run.won {
+        if area == 106 {
+            return "END2".to_string();
+        }
+        return "END1".to_string();
+    }
+    gml_area_map_name(area, run.floor_in_area, run.loop_count, run.hardmode)
 }
 
 /// Derive the HUD snapshot from sim state (bevy `sync_hud` state

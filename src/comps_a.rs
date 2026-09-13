@@ -204,6 +204,15 @@ pub struct Score(pub u32);
 #[derive(Resource, Default)]
 pub struct SaveDirty(pub bool);
 
+/// GML `GameCont` waypoint entry verbatim (`waypnt/waysub/waylps`):
+/// gml area id, subarea, loop count at each entered floor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Waypoint {
+    pub area: i32,
+    pub sub: u32,
+    pub lp: u32,
+}
+
 #[derive(Resource)]
 pub struct Run {
     pub floor: u32,
@@ -238,6 +247,10 @@ pub struct Run {
     pub won: bool,
     /// GML `UberCont.hardmode`: +13 hard and +1 loop from the start.
     pub hardmode: bool,
+    /// GML `GameCont.waypnt/waysub/waylps/waypoints`: one entry per
+    /// entered floor (run start + every advance), driving the game-over
+    /// roadmap. Capped so co-op marathons can't grow it unbounded.
+    pub waypoints: Vec<Waypoint>,
 }
 
 impl Default for Run {
@@ -263,6 +276,21 @@ impl Default for Run {
             weapons_picked: 0,
             won: false,
             hardmode: false,
+            waypoints: Vec::new(),
+        }
+    }
+}
+
+impl Run {
+    /// GML `GameCont/Other_5` waypoint push verbatim (current area, sub,
+    /// loops after the advance).
+    pub fn push_waypoint(&mut self) {
+        if self.waypoints.len() < 512 {
+            self.waypoints.push(Waypoint {
+                area: crate::worldgen::gml_area_from_run(self),
+                sub: self.floor_in_area,
+                lp: self.loop_count,
+            });
         }
     }
 }

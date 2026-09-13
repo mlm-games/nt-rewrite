@@ -47,6 +47,46 @@ pub struct SaveData {
     pub total_runs: u32,
     #[serde(default)]
     pub total_kills: u32,
+    /// GML `ctot_wins` sum (stats DAILY/HARD/STREAK denominators).
+    #[serde(default)]
+    pub total_wins: u32,
+    /// GML `ctot_dead` sum.
+    #[serde(default)]
+    pub total_deaths: u32,
+    /// GML `ctot_loop` sum.
+    #[serde(default)]
+    pub total_loops: u32,
+    /// GML `tot_time` in 30Hz steps (stats TOTAL time).
+    #[serde(default)]
+    pub total_time_steps: u64,
+    /// GML `ctot_hard` sum (hardmode runs).
+    #[serde(default)]
+    pub hard_runs: u32,
+    /// GML win-streak state (`cbst_strk` needs the live streak).
+    #[serde(default)]
+    pub win_streak_cur: u32,
+    #[serde(default)]
+    pub win_streak_best: u32,
+    /// GML `cbst_strk` race, as a gml id.
+    #[serde(default)]
+    pub best_streak_race: u8,
+    /// GML `cbst_fast` (0 = no wins yet): fastest win in 30Hz steps.
+    #[serde(default)]
+    pub best_time_steps: u32,
+    /// GML fastest-win race, as a gml id.
+    #[serde(default)]
+    pub best_time_race: u8,
+    /// GML `cbst_kill` best run (kills + race + map).
+    #[serde(default)]
+    pub best_run_kills: u32,
+    #[serde(default)]
+    pub best_run_race: u8,
+    #[serde(default)]
+    pub best_run_area: i32,
+    #[serde(default)]
+    pub best_run_sub: u32,
+    #[serde(default)]
+    pub best_run_loop: u32,
     /// GML `etc.hard`: hardmode unlocked (loop 2 reached).
     #[serde(default)]
     pub hardmode_unlocked: bool,
@@ -87,25 +127,65 @@ pub fn achievement_def(id: u8) -> Option<(&'static str, &'static str, bool, u8)>
         9 => ("ROGUE UNLOCKED", "REACH THE NUCLEAR THRONE", false, 0),
         10 => ("FISH CAN ROLL", "LOOP AS EVERY CHARACTER", true, 0),
         11 => ("CRYSTAL CAN SHIELD", "REACH 4-? AS CRYSTAL", false, 0),
-        12 => ("EVERYTHING HURTS", "AS MELTING, REACH THE NUCLEAR THRONE\nWITHOUT RHINO SKIN AND STRONG SPIRIT", false, 0),
+        12 => (
+            "EVERYTHING HURTS",
+            "AS MELTING, REACH THE NUCLEAR THRONE\nWITHOUT RHINO SKIN AND STRONG SPIRIT",
+            false,
+            0,
+        ),
         13 => ("MMMMMMHMMM!", "REACH 2-? AS EYES", false, 0),
-        14 => ("BLOOD BLOOD BLOOD", "REACH THE NUCLEAR THRONE\nIN UNDER 10 MINUTES AS PLANT", false, 0),
-        15 => ("VERIFIED", "UNLOCK A GOLDEN WEAPON\nFOR EVERY CHARACTER", false, 0),
+        14 => (
+            "BLOOD BLOOD BLOOD",
+            "REACH THE NUCLEAR THRONE\nIN UNDER 10 MINUTES AS PLANT",
+            false,
+            0,
+        ),
+        15 => (
+            "VERIFIED",
+            "UNLOCK A GOLDEN WEAPON\nFOR EVERY CHARACTER",
+            false,
+            0,
+        ),
         16 => ("SCIENCE", "DEFEAT THE TECHNOMANCER AS STEROIDS", true, 0),
         17 => ("6E 69 63 65", "EAT A HYPER WEAPON AS ROBOT", true, 0),
-        18 => ("WAY OF THE CHICKEN", "REACH 2-1 ON HARD MODE AS CHICKEN", true, 0),
+        18 => (
+            "WAY OF THE CHICKEN",
+            "REACH 2-1 ON HARD MODE AS CHICKEN",
+            true,
+            0,
+        ),
         19 => ("FORGET THE OLD DAYS", "DEFEAT MOM AS REBEL", true, 0),
         20 => ("THRILLER", "DEFEAT HYPER CRYSTAL AS HORROR", true, 0),
         21 => ("NEVER LOOK BACK", "DEFEAT CAPTAIN AS ROGUE", true, 0),
         22 => ("CROWN LIFE", "UNLOCK A CROWN AS ANY CHARACTER", false, 0),
         23 => ("ULTRA TIME", "REACH LEVEL ULTRA AS ANY CHARACTER", false, 0),
-        24 => ("GOOD FIND", "UNLOCK A GOLDEN WEAPON\nAS ANY CHARACTER", false, 0),
-        25 => ("GOOD RIDDANCE", "UNLOCK A GOLDEN DISC GUN\nOR GOLDEN NUKE LAUNCHER", true, 0),
+        24 => (
+            "GOOD FIND",
+            "UNLOCK A GOLDEN WEAPON\nAS ANY CHARACTER",
+            false,
+            0,
+        ),
+        25 => (
+            "GOOD RIDDANCE",
+            "UNLOCK A GOLDEN DISC GUN\nOR GOLDEN NUKE LAUNCHER",
+            true,
+            0,
+        ),
         26 => ("NOT BAD", "REACH 7-3 IN DAILY RUN", false, 2),
         27 => ("UNSTOPPABLE", "REACH LEVEL ULTRA AS SKELETON", true, 0),
         28 => ("FROG ZONE", "PLAY AS FROG", true, 0),
-        29 => ("IMPOSSIBLE", "SIT ON THE NUCLEAR THRONE\nAS HEADLESS CHICKEN", true, 0),
-        30 => ("SINCERE APOLOGIES", "KILL YOURSELF WITH A DISC GUN", true, 0),
+        29 => (
+            "IMPOSSIBLE",
+            "SIT ON THE NUCLEAR THRONE\nAS HEADLESS CHICKEN",
+            true,
+            0,
+        ),
+        30 => (
+            "SINCERE APOLOGIES",
+            "KILL YOURSELF WITH A DISC GUN",
+            true,
+            0,
+        ),
         31 => ("BANDIT STOPPER", "DEFEAT BIG BANDIT", false, 1),
         32 => ("DOG OWNER", "DEFEAT BIG DOG", false, 1),
         33 => ("HUNTER KILLER", "DEFEAT LIL HUNTER", false, 1),
@@ -114,24 +194,64 @@ pub fn achievement_def(id: u8) -> Option<(&'static str, &'static str, bool, u8)>
         36 => ("FROG SLAYER", "DEFEAT MOM", true, 1),
         37 => ("CRYSTAL SMASHER", "DEFEAT HYPER CRYSTAL", true, 1),
         38 => ("TECHNO KILLER", "DEFEAT TECHNOMANCER", true, 1),
-        39 => ("VAULT RAIDER", "UNLOCK ALL CROWNS\nAS ANY CHARACTER", false, 1),
+        39 => (
+            "VAULT RAIDER",
+            "UNLOCK ALL CROWNS\nAS ANY CHARACTER",
+            false,
+            1,
+        ),
         40 => ("GO HARD", "UNLOCK HARD MODE", true, 1),
         41 => ("THE STRUGGLE CONTINUES", "LOOP THE GAME", false, 2),
         42 => ("THE STRUGGLE IS OVER", "DEFEAT CAPTAIN", true, 2),
         43 => ("ULTRA MUTANT", "GET 100% OF THE UNLOCKS", false, 2),
         44 => ("GUNZ GOD", "REACH Y.V.'S MANSION.", false, 0),
-        45 => ("ROUND AND HANDSOME", "CARRY 3 GOLDEN WEAPONS AS CUZ.", true, 0),
+        45 => (
+            "ROUND AND HANDSOME",
+            "CARRY 3 GOLDEN WEAPONS AS CUZ.",
+            true,
+            0,
+        ),
         46 => ("RETIREMENT", "UNLOCK ALL B-SKINS.", true, 0),
-        47 => ("CRYSTAL CAN HANDLE THIS", "SURVIVE OVER 100 DAMAGE AS CRYSTAL.", true, 0),
-        48 => ("HHMMMM!", "REACH THE NUCLEAR THRONE\nWITHOUT FIRING A SHOT AS EYES.", true, 0),
+        47 => (
+            "CRYSTAL CAN HANDLE THIS",
+            "SURVIVE OVER 100 DAMAGE AS CRYSTAL.",
+            true,
+            0,
+        ),
+        48 => (
+            "HHMMMM!",
+            "REACH THE NUCLEAR THRONE\nWITHOUT FIRING A SHOT AS EYES.",
+            true,
+            0,
+        ),
         49 => ("MOLTEN", "HAVE 12 MUTATIONS AS MELTING.", true, 0),
         50 => ("KILL KILL KILL", "BLOOD BLOOD BLOOD.", true, 0),
         51 => ("THANKS GUN GOD", "DEFEAT A GUN GOD.", true, 0),
-        52 => ("APPRECIATE REVOLVERS", "REACH THE NUCLEAR THRONE\nWITHOUT PICKING UP ANY WEAPONS\nAS STEROIDS.", true, 0),
-        53 => ("63 72 75 6E 63 68 79", "EAT THE RUSTY REVOLVER AS ROBOT.", true, 0),
-        54 => ("AMATEUR HOUR IS OVER", "DEFEAT EVERY BOSS\nWITH THE BLACK SWORD.", true, 0),
+        52 => (
+            "APPRECIATE REVOLVERS",
+            "REACH THE NUCLEAR THRONE\nWITHOUT PICKING UP ANY WEAPONS\nAS STEROIDS.",
+            true,
+            0,
+        ),
+        53 => (
+            "63 72 75 6E 63 68 79",
+            "EAT THE RUSTY REVOLVER AS ROBOT.",
+            true,
+            0,
+        ),
+        54 => (
+            "AMATEUR HOUR IS OVER",
+            "DEFEAT EVERY BOSS\nWITH THE BLACK SWORD.",
+            true,
+            0,
+        ),
         55 => ("BIGGEST BANDIT", "DEFEAT 1000 BANDITS IN TOTAL.", true, 0),
-        56 => ("DRAMA", "REACH THE I.D.P.D. HEADQUARTERS\nWITH 3 OR LESS MUTATIONS AS HORROR.", true, 0),
+        56 => (
+            "DRAMA",
+            "REACH THE I.D.P.D. HEADQUARTERS\nWITH 3 OR LESS MUTATIONS AS HORROR.",
+            true,
+            0,
+        ),
         57 => ("FORGIVENESS", "DON'T DEFEAT LIL HUNTER AS ROGUE.", true, 0),
         58 => ("STRAPPED", "CARRY 6 CURSED WEAPONS AS CUZ.", true, 0),
         _ => return None,
@@ -150,7 +270,14 @@ pub fn unlock_achievement(save: &mut SaveData, id: u8) -> bool {
         return false;
     }
     save.achievements.insert(key, true);
-    if id != 43 && (0..=58).all(|i| save.achievements.get(&i.to_string()).copied().unwrap_or(false)) {
+    if id != 43
+        && (0..=58).all(|i| {
+            save.achievements
+                .get(&i.to_string())
+                .copied()
+                .unwrap_or(false)
+        })
+    {
         save.achievements.insert("43".to_string(), true);
     }
     true
@@ -424,6 +551,21 @@ impl Default for SaveData {
             best_floor: 0,
             total_runs: 0,
             total_kills: 0,
+            total_wins: 0,
+            total_deaths: 0,
+            total_loops: 0,
+            total_time_steps: 0,
+            hard_runs: 0,
+            win_streak_cur: 0,
+            win_streak_best: 0,
+            best_streak_race: 0,
+            best_time_steps: 0,
+            best_time_race: 0,
+            best_run_kills: 0,
+            best_run_race: 0,
+            best_run_area: 0,
+            best_run_sub: 0,
+            best_run_loop: 0,
             unlocked_characters: vec!["Fish".to_string()],
             races,
             crown_got: BTreeMap::new(),
@@ -882,7 +1024,6 @@ impl SaveData {
 
     pub fn sanitize_loadouts(&mut self) {
         for lo in self.races.values_mut() {
-
             if lo.start_weapon.0 != 0 && lo.start_weapon != lo.stored_weapon {
                 lo.start_weapon = WeaponId(0);
             }
@@ -979,6 +1120,58 @@ pub fn is_race_unlocked(save: &SaveData, race: RaceId) -> bool {
         RaceId::Fish | RaceId::Random => true,
         _ => save.race_unlocked(race),
     }
+}
+
+/// GML `scrInitStats` progress count verbatim (`progress/maxprogress`
+/// for the stats unlocks row): races 1..16 skip the kinda-secret trio
+/// entirely; loadout races count crowns 1..=13 (`crownmax`) plus the
+/// race unlock (no max bump, verbatim) plus skins 1..<3; hardmode adds
+/// one each side. Stored weapons only feed the per-race tally, never
+/// the global one — mirrored by ignoring them here.
+pub fn unlock_progress(save: &SaveData) -> (u32, u32) {
+    use crate::data::RaceId;
+    let mut progress = 0u32;
+    let mut maxprogress = 0u32;
+    for gml in 1..16u8 {
+        let Some(race) = crate::state::menus::race_from_gml_id(gml as usize) else {
+            continue;
+        };
+        if crate::state::menus::race_is_hidden(race) {
+            continue;
+        }
+        if !matches!(
+            race,
+            RaceId::Random | RaceId::BigDog | RaceId::Skeleton | RaceId::Frog
+        ) {
+            maxprogress += 13 + 1;
+            let row = save.crown_row(race);
+            for id in 1..=13usize {
+                maxprogress += 1;
+                if row[id] {
+                    progress += 1;
+                }
+            }
+        }
+        if save.race_unlocked(race) {
+            progress += 1;
+        }
+        let skins = save
+            .races
+            .get(&race)
+            .map(|l| l.unlocked_skins)
+            .unwrap_or([true, false, false, false]);
+        for skin in 1..3usize {
+            maxprogress += 1;
+            if skins[skin] {
+                progress += 1;
+            }
+        }
+    }
+    maxprogress += 1;
+    if save.hardmode_unlocked {
+        progress += 1;
+    }
+    (progress, maxprogress)
 }
 
 pub fn check_progress_unlocks(
@@ -1209,7 +1402,14 @@ pub fn tick_area_skins(
         .next()
         .map(|(p, r)| (p.mutations.len(), r.race))
         .unwrap_or((0, RaceId::Fish));
-    check_area_skins(&mut save, run.area, run.loop_count, skills_len, race, run.hardmode);
+    check_area_skins(
+        &mut save,
+        run.area,
+        run.loop_count,
+        skills_len,
+        race,
+        run.hardmode,
+    );
 }
 
 /// Robot weapon-name skin checks ("hyper" -> B, rusty revolver -> C).
@@ -1288,7 +1488,6 @@ pub fn tick_global_skins(
     _run: Res<Run>,
     player_q: Query<(&Inventory, &Player, &RaceState), With<Player>>,
 ) {
-
     let all_golden = crate::data::PLAYABLE_RACES.iter().all(|&r| {
         if matches!(r, RaceId::BigDog | RaceId::Skeleton | RaceId::Frog) {
             return true;
@@ -1367,10 +1566,7 @@ pub fn tick_global_skins(
         if player.crown == CrownKind::Blood {
             blood += 1;
         }
-        if player
-            .mutations
-            .contains(&MutationId::Bloodlust)
-        {
+        if player.mutations.contains(&MutationId::Bloodlust) {
             blood += 1;
         }
         for w in inv.weapons.iter() {
@@ -1384,4 +1580,3 @@ pub fn tick_global_skins(
         }
     }
 }
-

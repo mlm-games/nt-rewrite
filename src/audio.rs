@@ -1431,6 +1431,14 @@ pub enum UiAction {
     /// Open the run-stats panel (GML `DrawStats` parity over the main
     /// menu; bevy left STATS inert).
     ShowStats,
+    /// Fire one PLAY-submenu row (GML `PlayButton` num 0 NORMAL, 1 DAILY,
+    /// 2 WEEKLY, 3 HARD, 4 CUSTOM). NORMAL/HARD proceed to character
+    /// select; DAILY/WEEKLY/CUSTOM need unported online/custom systems.
+    PlaySubmenu(u8),
+    /// Close the PLAY submenu (GML `BackButton` over the PlayButtons).
+    ClosePlaySubmenu,
+    /// Advance the credits section (GML `Credits` click `_force`).
+    AdvanceCredits,
 }
 
 /// Bridged menu action (bevy `UiBridgeAction` message -> [`Queue`]).
@@ -1472,7 +1480,10 @@ pub fn ui_action_to_cue(action: &UiAction) -> Option<ReactiveCue> {
         | UiAction::SettingsBack
         | UiAction::ShowPauseConfirm(_)
         | UiAction::CancelPauseConfirm
-        | UiAction::ConfirmPause(_) => Some(ReactiveCue::UiClick),
+        | UiAction::ConfirmPause(_)
+        |         UiAction::PlaySubmenu(_)
+        | UiAction::ClosePlaySubmenu
+        | UiAction::AdvanceCredits => Some(ReactiveCue::UiClick),
         UiAction::SettingToggle(_)
         | UiAction::SettingCycle { .. }
         | UiAction::SettingInput { .. }
@@ -1513,6 +1524,19 @@ pub fn ui_action_sfx(action: &UiAction) -> Vec<AudioCue> {
         UiAction::MainMenuPlay => {
             push("sndClick", 0.7);
             push("sndMenuCharSelect", 0.7);
+        }
+        UiAction::PlaySubmenu(0) | UiAction::PlaySubmenu(3) => {
+            push("sndClick", 0.7);
+            push("sndMenuCharSelect", 0.7);
+        }
+        UiAction::PlaySubmenu(_) => {
+            push("sndClick", 0.7);
+        }
+        UiAction::ClosePlaySubmenu => {
+            push("sndClickBack", 0.6);
+        }
+        UiAction::AdvanceCredits => {
+            push("sndClick", 0.7);
         }
         UiAction::QuitToTitle | UiAction::QuitApp => {
             push("sndClickBack", 0.6);

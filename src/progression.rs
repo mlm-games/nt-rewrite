@@ -32,21 +32,23 @@ use repame_sim::SimTime;
 
 use crate::audio::{AudioCue, GameAudio, QueuedReactiveCue, ReactiveCue};
 use crate::comps_a::{
-    FloorMask, FloorStarted, GameCleanup, Health, Inventory, LevelCleanup,
+    Euphoria, FloorMask, FloorStarted, GameCleanup, Health, HeavyHeart, Inventory, LevelCleanup,
     MutationChoice, OpenMind, PendingMutation, PendingUltra, Player, Projectile, RaceState, Run,
-    SaveDirty, ScarierFace, Euphoria, HeavyHeart, Team, Toast, Velocity,
+    SaveDirty, ScarierFace, Team, Toast, Velocity,
 };
 use crate::comps_b::{
     ChestKind, Enemy, FloorTransition, GroundPhysics, LoopTransition, OpenedChest, Pickup,
-    PickupCurse, PickupKind, Portal, PortalCarriedWeapons, PortalClear, PortalClosing,
-    PortalPhase, PortalShock, PortalState, PortalSucking, Prop, PropSprites, SecretEntrance,
-    SitZone, ThroneSit,
+    PickupCurse, PickupKind, Portal, PortalCarriedWeapons, PortalClear, PortalClosing, PortalPhase,
+    PortalShock, PortalState, PortalSucking, Prop, PropSprites, SecretEntrance, SitZone, ThroneSit,
 };
 use crate::data::{
-    AmmoKind, AreaId, CrownKind, MutationId, RaceId, SecretTarget,
-    UltraMutationId, ammo_max, ammo_pickup_amount, area_for_floor, route_coordinates,
+    AmmoKind, AreaId, CrownKind, MutationId, RaceId, SecretTarget, UltraMutationId, ammo_max,
+    ammo_pickup_amount, area_for_floor, route_coordinates,
 };
-use crate::effects::{ChromaticAberration, FlashWhite, SlowMotion, chromatic_pulse, flash_white, slow_motion, spawn_burst};
+use crate::effects::{
+    ChromaticAberration, FlashWhite, SlowMotion, chromatic_pulse, flash_white, slow_motion,
+    spawn_burst,
+};
 use crate::enemy_data::enemy_def;
 use crate::environment::{PropDeathEffect, spawn_prop_corpse, spawn_prop_death_effect};
 use crate::msg::Queue;
@@ -146,10 +148,7 @@ pub fn ultra_choices_for(race: RaceId) -> [UltraMutationId; 2] {
             UltraMutationId::MeltingBrainCapacity,
             UltraMutationId::MeltingDetachment,
         ],
-        RaceId::Plant => [
-            UltraMutationId::PlantTrapper,
-            UltraMutationId::PlantKiller,
-        ],
+        RaceId::Plant => [UltraMutationId::PlantTrapper, UltraMutationId::PlantKiller],
         RaceId::Venuz => [
             UltraMutationId::VenuzBack2Bizniz,
             UltraMutationId::VenuzGunGod,
@@ -190,10 +189,7 @@ pub fn ultra_choices_for(race: RaceId) -> [UltraMutationId; 2] {
             UltraMutationId::FrogToxicLord,
             UltraMutationId::FrogSwampBody,
         ],
-        RaceId::Cuz => [
-            UltraMutationId::CuzHoarder,
-            UltraMutationId::CuzQuickSwap,
-        ],
+        RaceId::Cuz => [UltraMutationId::CuzHoarder, UltraMutationId::CuzQuickSwap],
     }
 }
 
@@ -203,15 +199,9 @@ pub fn ultra_mutation_name(id: UltraMutationId) -> (&'static str, &'static str) 
         UltraMutationId::FishGunWarrant => {
             ("Gun Warrant", "Faster gun handling and stronger rolls")
         }
-        UltraMutationId::FishConfiscate => {
-            ("Confiscate", "Weapon pickups grant extra ammo")
-        }
-        UltraMutationId::CrystalFortress => {
-            ("Fortress", "Much more HP and longer shield")
-        }
-        UltraMutationId::CrystalJuggernaut => {
-            ("Juggernaut", "Move faster while protected")
-        }
+        UltraMutationId::FishConfiscate => ("Confiscate", "Weapon pickups grant extra ammo"),
+        UltraMutationId::CrystalFortress => ("Fortress", "Much more HP and longer shield"),
+        UltraMutationId::CrystalJuggernaut => ("Juggernaut", "Move faster while protected"),
         UltraMutationId::EyesMonsterStyle => {
             ("Monster Style", "Telekinesis and pickup pull are stronger")
         }
@@ -221,45 +211,29 @@ pub fn ultra_mutation_name(id: UltraMutationId) -> (&'static str, &'static str) 
         UltraMutationId::MeltingBrainCapacity => {
             ("Brain Capacity", "Detonate reaches farther and hurts more")
         }
-        UltraMutationId::MeltingDetachment => {
-            ("Detachment", "Gain emergency survivability")
-        }
+        UltraMutationId::MeltingDetachment => ("Detachment", "Gain emergency survivability"),
         UltraMutationId::PlantTrapper => ("Trapper", "Snare lasts longer and slows harder"),
         UltraMutationId::PlantKiller => ("Killer", "Move and fire faster"),
-        UltraMutationId::VenuzBack2Bizniz => {
-            ("Back 2 Bizniz", "Pop Pop grants an extra charge")
-        }
-        UltraMutationId::VenuzGunGod => {
-            ("Ima Gun God", "Major fire-rate and accuracy boost")
-        }
+        UltraMutationId::VenuzBack2Bizniz => ("Back 2 Bizniz", "Pop Pop grants an extra charge"),
+        UltraMutationId::VenuzGunGod => ("Ima Gun God", "Major fire-rate and accuracy boost"),
         UltraMutationId::SteroidsAmbidextrous => {
             ("Ambidextrous", "Faster fire and lower recoil feel")
         }
-        UltraMutationId::SteroidsGetArmed => {
-            ("Get Armed", "Get Loaded refills more ammunition")
-        }
+        UltraMutationId::SteroidsGetArmed => ("Get Armed", "Get Loaded refills more ammunition"),
         UltraMutationId::RobotRefinedTaste => {
             ("Refined Taste", "Ammo and weapon pickups heal more")
         }
-        UltraMutationId::RobotRegurgitate => {
-            ("Regurgitate", "Eating weapons gives better rewards")
-        }
+        UltraMutationId::RobotRegurgitate => ("Regurgitate", "Eating weapons gives better rewards"),
         UltraMutationId::ChickenHarderToKill => {
             ("Harder To Kill", "Headless survival returns with more HP")
         }
-        UltraMutationId::ChickenDetermination => {
-            ("Determination", "Thrown weapons hit harder")
-        }
+        UltraMutationId::ChickenDetermination => ("Determination", "Thrown weapons hit harder"),
         UltraMutationId::RebelPersonalGuard => {
             ("Personal Guard", "Allies live longer and shoot faster")
         }
         UltraMutationId::RebelRiot => ("Riot", "Spawn more allies"),
-        UltraMutationId::HorrorStalker => {
-            ("Stalker", "Beam and radiation effects are stronger")
-        }
-        UltraMutationId::HorrorAnomaly => {
-            ("Anomaly", "Energy weapons and pickups improve")
-        }
+        UltraMutationId::HorrorStalker => ("Stalker", "Beam and radiation effects are stronger"),
+        UltraMutationId::HorrorAnomaly => ("Anomaly", "Energy weapons and pickups improve"),
         UltraMutationId::RogueSuperBlastArmor => {
             ("Super Blast Armor", "Explosion damage is greatly reduced")
         }
@@ -270,18 +244,12 @@ pub fn ultra_mutation_name(id: UltraMutationId) -> (&'static str, &'static str) 
             ("Heavy Artillery", "Rocket barrage gains side rockets")
         }
         UltraMutationId::BigDogGuardian => ("Guardian", "Gain bulk and protection"),
-        UltraMutationId::SkeletonBloodArmor => {
-            ("Blood Armor", "More HP and blood-fueled kills")
-        }
+        UltraMutationId::SkeletonBloodArmor => ("Blood Armor", "More HP and blood-fueled kills"),
         UltraMutationId::SkeletonNecromancy => {
             ("Necromancy", "Kills sometimes heal and refund ammo")
         }
-        UltraMutationId::FrogToxicLord => {
-            ("Toxic Lord", "Toxic clouds are larger and longer")
-        }
-        UltraMutationId::FrogSwampBody => {
-            ("Swamp Body", "Gain bulk and blast resilience")
-        }
+        UltraMutationId::FrogToxicLord => ("Toxic Lord", "Toxic clouds are larger and longer"),
+        UltraMutationId::FrogSwampBody => ("Swamp Body", "Gain bulk and blast resilience"),
         UltraMutationId::CuzHoarder => ("Hoarder", "Carry a full third weapon slot"),
         UltraMutationId::CuzQuickSwap => ("Quick Swap", "Swap ability is nearly instant"),
         UltraMutationId::CuzEmotional => ("Emotional", "Cry more tears, carry more ammo"),
@@ -529,10 +497,7 @@ pub fn roll_mutations(player: &mut Player) -> Vec<MutationId> {
 }
 
 /// Seeded roll (deterministic under a seeded RNG; tests use this).
-pub fn roll_mutations_with(
-    player: &mut Player,
-    rng: &mut impl rand::RngExt,
-) -> Vec<MutationId> {
+pub fn roll_mutations_with(player: &mut Player, rng: &mut impl rand::RngExt) -> Vec<MutationId> {
     let mut pool: Vec<MutationId> = ALL_MUTATIONS
         .iter()
         .copied()
@@ -649,10 +614,7 @@ pub fn handle_mutation_choice(
             flow.toast.show("ULTRA TIME");
         }
 
-        commands.spawn((
-            GameCleanup,
-            QueuedReactiveCue(ReactiveCue::UltraChosen),
-        ));
+        commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::UltraChosen)));
 
         ultra.choices.clear();
         commands.remove_resource::<PendingUltra>();
@@ -711,10 +673,7 @@ pub fn handle_mutation_choice(
         id,
     );
 
-    commands.spawn((
-        GameCleanup,
-        QueuedReactiveCue(ReactiveCue::MutationChosen),
-    ));
+    commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::MutationChosen)));
 
     pending.choices.clear();
     commands.remove_resource::<PendingMutation>();
@@ -1223,10 +1182,7 @@ pub fn portal_check(
     }
 
     run.portal_open = true;
-    commands.spawn((
-        GameCleanup,
-        QueuedReactiveCue(ReactiveCue::PortalOpen),
-    ));
+    commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::PortalOpen)));
 
     let mut rng = rand::rng();
     let pos = mask.random_floor_pos(&mut rng, 80.0);
@@ -1403,9 +1359,7 @@ pub fn tick_portal_shock(
     run: Res<Run>,
     player_q: Query<&Player>,
 ) {
-    let hasted = player_q
-        .single()
-        .is_ok_and(|p| p.crown == CrownKind::Haste);
+    let hasted = player_q.single().is_ok_and(|p| p.crown == CrownKind::Haste);
     let dt = time.delta_secs;
     for (shock_e, shock_pos, mut shock) in &mut shocks {
         shock.timer.tick(dt);
@@ -1497,11 +1451,10 @@ pub fn tick_portal_shock(
                             &mut commands,
                             &catalog,
                             PickupKind::Weapon(weapon),
-                            cpos
-                                + glam::Vec2::new(
-                                    rng.random_range(-2.0..2.0),
-                                    rng.random_range(-2.0..2.0),
-                                ),
+                            cpos + glam::Vec2::new(
+                                rng.random_range(-2.0..2.0),
+                                rng.random_range(-2.0..2.0),
+                            ),
                             0,
                             false,
                         );
@@ -1524,11 +1477,10 @@ pub fn tick_portal_shock(
                             &mut commands,
                             &catalog,
                             PickupKind::Weapon(weapon),
-                            cpos
-                                + glam::Vec2::new(
-                                    rng.random_range(-2.0..2.0),
-                                    rng.random_range(-2.0..2.0),
-                                ),
+                            cpos + glam::Vec2::new(
+                                rng.random_range(-2.0..2.0),
+                                rng.random_range(-2.0..2.0),
+                            ),
                             0,
                             false,
                         );
@@ -1663,11 +1615,7 @@ pub fn tick_portal_clear(
 
 /// Run clock (GML `GameCont.tottimer`: advances one step per live
 /// gameplay tick; HUD timer string + Plant/B throne-skin gate).
-pub fn tick_run_clock(
-    state: Res<AppState>,
-    paused: Res<Paused>,
-    mut run: ResMut<Run>,
-) {
+pub fn tick_run_clock(state: Res<AppState>, paused: Res<Paused>, mut run: ResMut<Run>) {
     if *state == AppState::InGame && !paused.0 && !run.game_over {
         run.tottimer = run.tottimer.saturating_add(1);
     }
@@ -1787,12 +1735,7 @@ pub fn portal_enter(
                 // end: timer and lifetime both run frames/12 s.
                 let mut anim = crate::anim::SpriteAnim::oneshot(eat_path, def);
                 anim.timer = GTimer::from_seconds(1.0 / 12.0, TimerMode::Repeating);
-                let mut ee = commands.spawn((
-                    GameCleanup,
-                    LevelCleanup,
-                    Pos(wep_pos.0),
-                    anim,
-                ));
+                let mut ee = commands.spawn((GameCleanup, LevelCleanup, Pos(wep_pos.0), anim));
                 ee.insert(crate::comps_b::PickupLifetime {
                     timer: GTimer::from_seconds(
                         (def.frames.max(1) as f32 / 12.0).max(0.09),
@@ -1804,10 +1747,7 @@ pub fn portal_enter(
         }
     }
 
-    commands.spawn((
-        GameCleanup,
-        QueuedReactiveCue(ReactiveCue::PortalEnter),
-    ));
+    commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::PortalEnter)));
 }
 
 /// Portal suck: drags the player into the portal core, then flips the
@@ -1885,19 +1825,15 @@ pub fn tick_portal_suck(
         let mut rad_left = false;
         for pickup in &weapon_q {
             match pickup.kind {
-                PickupKind::Chest(
-                    ChestKind::Weapon | ChestKind::BigWeapon,
-                ) => weapon_left = true,
-                PickupKind::Chest(
-                    ChestKind::Rad | ChestKind::RadBig | ChestKind::RadMaggot,
-                ) => rad_left = true,
+                PickupKind::Chest(ChestKind::Weapon | ChestKind::BigWeapon) => weapon_left = true,
+                PickupKind::Chest(ChestKind::Rad | ChestKind::RadBig | ChestKind::RadMaggot) => {
+                    rad_left = true
+                }
                 _ => {}
             }
         }
         run.same_weapons_for += 1;
-        if weapon_left
-            && !(run.area == AreaId::Desert && run.floor_in_area == 1)
-        {
+        if weapon_left && !(run.area == AreaId::Desert && run.floor_in_area == 1) {
             run.nochest += 1;
         }
         if rad_left {
@@ -1912,6 +1848,7 @@ pub fn tick_portal_suck(
     }
     commands.entity(portal_e).despawn();
 
+    let prev_loop = run.loop_count;
     let looped = try_apply_loop_portal_transition(&mut run, &mut loop_transition, &mut trauma);
 
     if looped {
@@ -1933,10 +1870,7 @@ pub fn tick_portal_suck(
         }
         // GML `ctot_loop[race]`: looping as a race counts toward Fish/B.
         save.race_looped.insert(race, true);
-        commands.spawn((
-            GameCleanup,
-            QueuedReactiveCue(ReactiveCue::LoopComplete),
-        ));
+        commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::LoopComplete)));
     }
 
     let entered_secret = if looped {
@@ -1946,16 +1880,10 @@ pub fn tick_portal_suck(
     };
 
     if let Some(secret) = entered_secret {
-        commands.spawn((
-            GameCleanup,
-            QueuedReactiveCue(ReactiveCue::SecretFound),
-        ));
+        commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::SecretFound)));
         toast.show(&format!("ENTERING {}", secret_name(secret)));
     } else if !looped {
-        commands.spawn((
-            GameCleanup,
-            QueuedReactiveCue(ReactiveCue::PortalEnter),
-        ));
+        commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::PortalEnter)));
         toast.show(&format!(
             "FLOOR {}-{}",
             run.world,
@@ -1963,6 +1891,11 @@ pub fn tick_portal_suck(
         ));
     } else {
         toast.show(&format!("LOOP {}", run.loop_count));
+    }
+    run.push_waypoint();
+    if run.loop_count > prev_loop {
+        save.total_loops += 1;
+        dirty.0 = true;
     }
 
     if player.strong_spirit_spent {
@@ -2042,11 +1975,11 @@ pub fn tick_throne_sit(
     mut save: ResMut<SaveData>,
     mut dirty: ResMut<SaveDirty>,
     mut toast: ResMut<Toast>,
-    mut player_q: Query<(Entity, &Pos, &mut Velocity), With<Player>>,
+    mut player_q: Query<(Entity, &Pos, &mut Velocity, &RaceState), With<Player>>,
     mut sit_q: Query<(Entity, &mut ThroneSit), Without<SitZone>>,
     zones: Query<&Pos, With<SitZone>>,
 ) {
-    let Ok((player_e, ppos, mut pvel)) = player_q.single_mut() else {
+    let Ok((player_e, ppos, mut pvel, race_state)) = player_q.single_mut() else {
         return;
     };
     if let Ok((_, mut sit)) = sit_q.single_mut() {
@@ -2062,6 +1995,28 @@ pub fn tick_throne_sit(
             }
             save.total_runs += 1;
             save.total_kills = save.total_kills.saturating_add(run.total_kills);
+            save.total_wins += 1;
+            if run.hardmode {
+                save.hard_runs += 1;
+            }
+            save.total_time_steps = save.total_time_steps.saturating_add(run.tottimer as u64);
+            let race_gml = race_state.race as u8;
+            save.win_streak_cur += 1;
+            if save.win_streak_cur > save.win_streak_best {
+                save.win_streak_best = save.win_streak_cur;
+                save.best_streak_race = race_gml;
+            }
+            if save.best_time_steps == 0 || run.tottimer < save.best_time_steps {
+                save.best_time_steps = run.tottimer;
+                save.best_time_race = race_gml;
+            }
+            if run.total_kills > save.best_run_kills {
+                save.best_run_kills = run.total_kills;
+                save.best_run_race = race_gml;
+                save.best_run_area = crate::worldgen::gml_area_from_run(&run);
+                save.best_run_sub = run.floor_in_area;
+                save.best_run_loop = run.loop_count;
+            }
             dirty.0 = true;
             toast.show("THE STRUGGLE IS OVER");
         }
@@ -2130,9 +2085,7 @@ pub fn tick_floor_transition(
                 .min_by_key(|c| {
                     (((c.0 * 32 + 16) as f32).hypot((c.1 * 32 + 16) as f32) * 1000.0) as i32
                 })
-                .map(|(cx, cy)| {
-                    glam::Vec2::new(*cx as f32 * 32.0 + 16.0, *cy as f32 * 32.0 + 16.0)
-                })
+                .map(|(cx, cy)| glam::Vec2::new(*cx as f32 * 32.0 + 16.0, *cy as f32 * 32.0 + 16.0))
                 .unwrap_or(glam::Vec2::ZERO);
             // GML `scrPopChests` (replaces the old Open-Mind top-up: the
             // bonus only widens the trim, exactly like GML).
@@ -2234,10 +2187,7 @@ pub fn pick_loading_tip(_run: &Run) -> String {
 /// lerp is a no-op and `tick_portal_suck` performs the floor advance).
 pub fn kick_portal_transition(
     commands: &mut Commands,
-    player_q: &mut Query<
-        (Entity, &Pos, Option<&PortalSucking>),
-        (With<Player>, Without<Portal>),
-    >,
+    player_q: &mut Query<(Entity, &Pos, Option<&PortalSucking>), (With<Player>, Without<Portal>)>,
     portal_e: Entity,
     portal_pos: glam::Vec2,
     run: &Run,
@@ -2269,10 +2219,7 @@ pub fn animate_portal(
     mut commands: Commands,
     run: Res<Run>,
     catalog: Res<repame_anim::AnimCatalog>,
-    mut player_q: Query<
-        (Entity, &Pos, Option<&PortalSucking>),
-        (With<Player>, Without<Portal>),
-    >,
+    mut player_q: Query<(Entity, &Pos, Option<&PortalSucking>), (With<Player>, Without<Portal>)>,
     mut q: Query<
         (
             Entity,
@@ -2391,7 +2338,9 @@ pub fn apply_floor_reach_unlocks(
         for race in unlocked {
             toast.show(&format!(
                 "UNLOCKED {}",
-                crate::savedata_part::character_def(race).name.to_ascii_uppercase()
+                crate::savedata_part::character_def(race)
+                    .name
+                    .to_ascii_uppercase()
             ));
         }
     }
@@ -2480,4 +2429,3 @@ pub fn teardown_game(
 // ---------------------------------------------------------------------------
 // Tests.
 // ---------------------------------------------------------------------------
-

@@ -1002,12 +1002,16 @@ impl App {
             }
             self.clicks.clear();
         } else if game_over {
-            // Bevy `game_over_panel`: full-panel left click goes to the
-            // menu (`QuitToTitle`); retry travels via KeyR
-            // (`restart_pressed`). Right-button is a silent no-op here and
-            // never suppresses a coincident left click.
-            if self.clicks.last().copied().is_some() {
-                apply_menu_action(&mut self.sim.world, UiAction::QuitToTitle);
+            if let Some(click) = self.clicks.last().copied() {
+                let viewport_dp = self.view_viewport_dp;
+                if let Some(action) = route_menu_click(
+                    &mut self.sim.world,
+                    MenuOverlay::GameOver,
+                    click.dp,
+                    viewport_dp,
+                ) {
+                    apply_menu_action(&mut self.sim.world, action);
+                }
             }
             self.clicks.clear();
         } else if state == AppState::MainMenu {
@@ -2006,6 +2010,12 @@ fn menu_button_action(
             "SETTINGS" => Some(UiAction::OpenSettings),
             "STATS" => Some(UiAction::ShowStats),
             "QUIT" => Some(UiAction::QuitApp),
+            "NORMAL" => Some(UiAction::PlaySubmenu(0)),
+            "DAILY" => Some(UiAction::PlaySubmenu(1)),
+            "WEEKLY" => Some(UiAction::PlaySubmenu(2)),
+            "HARD" => Some(UiAction::PlaySubmenu(3)),
+            "CUSTOM" => Some(UiAction::PlaySubmenu(4)),
+            "BACK" => Some(UiAction::ClosePlaySubmenu),
             _ => None,
         },
         MenuOverlay::Stats => match text {
@@ -2037,6 +2047,11 @@ fn menu_button_action(
         },
         MenuOverlay::Credits => match text {
             "BACK" => Some(UiAction::CloseOverlay),
+            _ => None,
+        },
+        MenuOverlay::GameOver => match text {
+            "MENU" => Some(UiAction::ConfirmPause(0)),
+            "RETRY" => Some(UiAction::ConfirmPause(1)),
             _ => None,
         },
         _ => None,
@@ -2096,8 +2111,9 @@ fn route_menu_click(
     if hit.is_some() {
         return hit;
     }
-    // Disabled rows sting instead of acting (GML `sndNoSelect` on
-    // unavailable buttons; currently only MainMenu CO-OP).
+    if kind == MenuOverlay::Credits {
+        return Some(UiAction::AdvanceCredits);
+    }
     if menu_row_denied(kind, world, gx, gy, vw) {
         crate::state::menus::emit_denied(world);
     }

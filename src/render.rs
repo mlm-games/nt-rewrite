@@ -3139,6 +3139,206 @@ fn mutation_choice_parts(choice: &str) -> (bool, String, String) {
         (is_ultra, trimmed.to_string(), String::new())
     }
 }
+/// GML `Credits/Other_11` `credittext` verbatim (unlocalized
+/// defaults): 14 titled sections. `@w`/`@y` role lines are headers,
+/// `@s` name lines body; `#` walls are pre-split into one row per
+/// name (GML joins them with newlines the same way). Localizer-only
+/// tokens resolve to the shipped English defaults.
+pub const CREDIT_SECTIONS: &[&[(&str, bool)]] = &[
+    &[("VLAMBEER PRESENTS", true)],
+    &[("A GAME BY", true)],
+    &[
+        ("Project Lead, Design & Development", true),
+        ("Jan Willem Nijman", false),
+        ("Production & Additional Development", true),
+        ("Rami Ismail", false),
+        ("Art Direction, Lead Artist & Animation", true),
+        ("Paul Veer", false),
+        ("Original Soundtrack", true),
+        ("Jukio Kallio", false),
+        ("Sound Design", true),
+        ("Joonas Turner", false),
+        ("Additional Artwork", true),
+        ("Justin Chan", false),
+    ],
+    &[
+        ("Additional Music Credits", true),
+        ("Oasis", true),
+        ("JUKIO KALLIO", false),
+        ("Danny Baranowski", false),
+        ("Pizza Sewers", true),
+        ("JUKIO KALLIO", false),
+        ("Eirik Suhrke", false),
+        ("Venus", true),
+        ("JUKIO KALLIO", false),
+        ("Adam 'Doseone' Drucker", false),
+        ("Cursed Caves", true),
+        ("JUKIO KALLIO", false),
+        ("Richard 'Disasterpeace' Vreeland", false),
+        ("Jungle", true),
+        ("JUKIO KALLIO", false),
+        ("Daniel Hagstrom", false),
+        ("Mansion & Hyper Crystal", true),
+        ("JUKIO KALLIO", false),
+        ("Joonas Turner", false),
+        ("Tea Break", true),
+        ("Original Composition by Eirik Suhrke", false),
+        ("Additional Music Consultation", true),
+        ("Joonas Turner", false),
+    ],
+    &[
+        ("The voice of Fish, Crystal, Eyes,", true),
+        ("Melting, Plant, Steroids,", true),
+        ("Robot, Chicken, Horror, Yung Cuz, Enemies & Bosses", true),
+        ("Joonas Turner", false),
+        ("Rebel & Additional IDPD", true),
+        ("Isa And", false),
+        ("Y.V. & Venus Enemies", true),
+        ("Adam Drucker", false),
+        ("Frog", true),
+        ("Jukio Kallio", false),
+        ("Captain", true),
+        ("Myy Lohi", false),
+        ("Rogue", true),
+        ("Danielle McRae", false),
+        ("Additional IDPD", true),
+        ("Niilo Takalainen", false),
+    ],
+    &[
+        ("Promotional Artwork", true),
+        ("Justin Chan", false),
+        ("Language Design", true),
+        ("Joonas Turner", false),
+        (
+            "Backend Programming Community Management Release Management",
+            true,
+        ),
+        ("Rami Ismail", false),
+        ("Additional Programming Porting", true),
+        ("VADYM 'YELLOWAFTERLIFE' DIACHENKO", false),
+        ("Addional Engineering", true),
+        ("Juju Adams", false),
+    ],
+    &[
+        ("Trailers", true),
+        (
+            "Bram Ruiter Daniel Carneiro Kert Gartner Marlon Wiebe",
+            false,
+        ),
+        ("Event Logistics", true),
+        (
+            "Adriel Wallick Fred Wood Jon Kay Maya Kramer Rami Ismail",
+            false,
+        ),
+    ],
+    &[
+        ("Marketing", true),
+        ("Rami Ismail", false),
+        ("Additional Marketing", true),
+        (
+            "Jan Willem Nijman Joonas Turner Jukio Kallio Justin Chan Paul Veer",
+            false,
+        ),
+    ],
+    &[
+        ("NUCLEAR THRONE MOBILE", true),
+        ("PROJECT CREATOR & MAINTAINER", true),
+        ("TONCHO_", false),
+        ("TESTERS", true),
+        (
+            "EVILCAT   CZIMBALA   SKUHNUH   WINT VOROB   DRAKIN   TIREDMETAL LOMEGAI   PLOWECH   SENJEY",
+            false,
+        ),
+        ("LOCALIZATION CONTRIBUTORS", true),
+        ("LEGACY LOCALIZERS", true),
+        ("BRAZILIAN PORTUGUESE", false),
+        ("MIGUEL TITIO CARTOLA GUIZARD POTATO SALAD", false),
+        ("SPANISH", false),
+        ("FRI BAYRON WALTERLZ", false),
+        ("POLISH", false),
+        ("LOSSTAROTT", false),
+        ("UKRAINIAN", false),
+        ("PRAWO REPKON", false),
+        ("PERSIAN", false),
+        ("PLOOB", false),
+    ],
+    &[
+        ("Valve", true),
+        (
+            "Anna Sweet Augusta Butlin John Bartkiw Matt Nickerson",
+            false,
+        ),
+        ("Humble", true),
+        ("Alex Ting Will Turnbull", false),
+        ("Twitch", true),
+        ("Ernest Le Jon 'Carnage' Joyce", false),
+        ("Devstream Support", true),
+        (
+            "Benn Powell Dominik Johann Gieron Lisa 'Wertle' Brown Seef 'IgnoTV' Ismail Sleepcycles Vlambot XSplit",
+            false,
+        ),
+        ("YoYo Games", true),
+        (
+            "Mike Dailly Russell Kay Peter Hall Sandy Duncan Stuart Poole",
+            false,
+        ),
+        ("SONY Computer Entertainment", true),
+        (
+            "Adam Boyes Andrew Wong Ben Andac Blanca Nunez Ibanez Bob Jordan Brian Silva Dan 'Shoe' Hsu Gio Corsi Jericho Guerrero John Drake John Kopp Julio Perez Justin Massongill Laura Casey Lorenzo Grimaldi Nathalie Closs Nick Suttner Richard Lee Ryan Clements Shahid Kamal Ahmad Shane Bettenhausen Shuhei Yoshida Sid Shuman",
+            false,
+        ),
+        ("Merchandise", true),
+        (
+            "Fangamer Fred Wood Gijs van Kooten Jon 'Jonty' Hicks Jon Kay Level Up Studios Shawn Handyside",
+            false,
+        ),
+        ("Wiki Master", true),
+        ("Gieron", false),
+        ("Thronebutt", true),
+        ("Ivan Ostric", false),
+        ("Chitinlink", false),
+        ("Update Videos", true),
+        ("Tengu Drop", false),
+        ("Bobbing & Weaving", true),
+        ("SleepCycles", false),
+        ("Community Challenges", true),
+        ("Solid", false),
+        ("World Tournament", true),
+        ("Smite", false),
+        ("Special Thanks", true),
+        (
+            "17-Bit Adriel Wallick Alexa Allan Keith Anthony Carboni Bart Jan Bultman Beau Blyth Ben Vance Bisnap Brandon Boyer Brian van Bruggen Bronson Zgeb Burgeroise Chris Charla CodeMan38 Crystal Chan Daniel 'Manna' Hagstrom DED DevilAzite Derek Yu Dutch Game Garden Evan Balster Glitch City Greg Wohlwend Hademar Jack Oatley James Eagler Janette Silvasti Jerry Holkins Jerry van Kooten Jord Coerse JMickle Kakujo Kitty Calis Kosti Kallio Kristy Norindr Mark Essen Martin Kvale Martin van der Wolf Mike Feith Mirva Kontio Neri & Bali Nigel Lowrie Phil Tibitoski Pissasedat Poppenkast Ross Turner Roy Nathan de Groot Richard Boeser Seef Ismail Sidonie Tise Sirpa Kallio Sirpa Niskala Slackbot Ster Sven Ruthner Ted Martens Teddy Diefenbach Tingle Tuuka Vincent Nijman Wiley 'Willy Woggins' Wiggins Zach Gage",
+            false,
+        ),
+        (
+            "Nuclear Throne would not exist without Humble, MOJANG and the organizers of MOJAM 2013",
+            true,
+        ),
+        (
+            "Nuclear Throne was created using YoYoGames' GameMaker",
+            true,
+        ),
+        (
+            "Nuclear Throne extends its thanks to COOL BIG MONY BIZNIZ INC. for providing the image of Yung Venuz.",
+            true,
+        ),
+    ],
+    &[(
+        "Nuclear Throne could not exist without the Vlambeer community. This game could have gone off-track in so many ways, but your patience, support, enthusiasm, feedback and hard work kept us sharp, motivated and eager to find fun and new ways to end your runs.",
+        true,
+    )],
+    &[(
+        "Thanks to our family, our friends and our partners for their unyielding support, love, care and patience. <3",
+        true,
+    )],
+    &[("Thank you for playing!", true)],
+    &[("NUCLEAR THRONE", true)],
+];
+
+/// Section count for the credits cycler ([`MenuState::credits_section`]).
+pub fn credit_section_count() -> usize {
+    CREDIT_SECTIONS.len().max(1)
+}
 
 /// Menu overlay texts for one [`crate::MenuOverlay`] (bevy
 /// `compose_root` panels verbatim: splash is sprite-only (empty);
@@ -3267,10 +3467,54 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 ("STATS", 3),
                 ("QUIT", 4),
             ];
-            let cursor = world
-                .get_resource::<MenuState>()
-                .map(|m| m.main_menu_cursor)
-                .unwrap_or(0);
+            let menu = world.get_resource::<MenuState>().cloned();
+            if menu.as_ref().is_some_and(|m| m.play_submenu) {
+                use crate::savedata_part::SaveData;
+                use crate::state::menus::{play_row_name, play_rows};
+                let save = world
+                    .get_resource::<SaveData>()
+                    .cloned()
+                    .unwrap_or_default();
+                let rows = play_rows(&save);
+                let cursor = menu.map(|m| m.play_cursor).unwrap_or(0);
+                let n = rows.len();
+                let mut out: Vec<MenuGuiText> = rows
+                    .iter()
+                    .enumerate()
+                    .map(|(i, row)| {
+                        let online = matches!(row, 1 | 2);
+                        let color = if online {
+                            GUI_UIDARK
+                        } else if i == cursor {
+                            GUI_WHITE
+                        } else {
+                            GUI_MID
+                        };
+                        MenuGuiText {
+                            text: play_row_name(*row).to_string(),
+                            gx: cx,
+                            gy: 120.0 - n as f32 * 12.0 + i as f32 * 24.0,
+                            color,
+                            px: 16.0,
+                            centered: true,
+                            middle_y: false,
+                            right: false,
+                        }
+                    })
+                    .collect();
+                out.push(MenuGuiText {
+                    text: "BACK".to_string(),
+                    gx: 20.0,
+                    gy: 20.0,
+                    color: GUI_GRAY,
+                    px: 10.0,
+                    centered: true,
+                    middle_y: false,
+                    right: false,
+                });
+                return out;
+            }
+            let cursor = menu.map(|m| m.main_menu_cursor).unwrap_or(0);
             LABELS
                 .iter()
                 .map(|(label, index)| {
@@ -3300,41 +3544,118 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 .collect()
         }
         crate::MenuOverlay::Stats => {
-            // GML `DrawStats` text half (port extra: the sprite trophy
-            // rows need unported art, so lifetime totals land as text).
-            use crate::savedata_part::SaveData;
+            use crate::hud::{gml_area_map_name, scr_time, scr_time_speedrun};
+            use crate::savedata_part::{SaveData, unlock_progress};
+            use crate::state::menus::race_from_gml_id;
             let save = world
                 .get_resource::<SaveData>()
                 .cloned()
                 .unwrap_or_default();
-            vec![
-                gui_center("STATS", cx, 40.0, GUI_CREAM),
-                gui_center(
-                    format!("HIGH SCORE {}", save.high_score),
-                    cx,
-                    80.0,
-                    GUI_CREAM,
-                ),
-                gui_center(
-                    format!("BEST FLOOR {}", save.best_floor),
-                    cx,
-                    100.0,
-                    GUI_CREAM,
-                ),
-                gui_center(format!("RUNS {}", save.total_runs), cx, 120.0, GUI_CREAM),
-                gui_center(format!("KILLS {}", save.total_kills), cx, 140.0, GUI_CREAM),
-                gui_center(
-                    format!(
-                        "HUNTERS {}/{}",
-                        save.unlocked_characters.len().min(CHAR_SELECT_ORDER.len()),
-                        CHAR_SELECT_ORDER.len()
+            let race_name = |gml: u8| {
+                race_from_gml_id(gml as usize)
+                    .map(|r| character_def(r).name.to_ascii_uppercase())
+                    .unwrap_or_else(|| "?".to_string())
+            };
+            let stat_name = |out: &mut Vec<MenuGuiText>, col: f32, line: &mut i32, name: &str| {
+                out.push(MenuGuiText {
+                    text: name.to_string(),
+                    gx: col - 2.0,
+                    gy: 40.0 + *line as f32 * 8.0,
+                    color: GUI_GRAY,
+                    px: 7.0,
+                    centered: false,
+                    middle_y: true,
+                    right: true,
+                });
+            };
+            let stat_val = |out: &mut Vec<MenuGuiText>, col: f32, line: &mut i32, val: String| {
+                out.push(MenuGuiText {
+                    text: val,
+                    gx: col + 2.0,
+                    gy: 40.0 + *line as f32 * 8.0,
+                    color: GUI_WHITE,
+                    px: 7.0,
+                    centered: false,
+                    middle_y: true,
+                    right: false,
+                });
+                *line += 1;
+            };
+            let header = |out: &mut Vec<MenuGuiText>, col: f32, line: &mut i32, name: &str| {
+                if name.is_empty() {
+                    *line += 1;
+                    return;
+                }
+                out.push(gui_center(name, col, 40.0 + *line as f32 * 8.0, GUI_WHITE));
+                *line += 1;
+            };
+            let mut out = vec![gui_center("STATS", cx, 24.0, GUI_CREAM)];
+            let (lx, rx) = (cx - 50.0, cx + 90.0);
+            let mut l = 0;
+            header(&mut out, lx, &mut l, "TOTAL");
+            let (un, unmax) = unlock_progress(&save);
+            let unpct = if unmax == 0 {
+                0
+            } else {
+                (un * 100 / unmax).min(99)
+            };
+            for (name, val) in [
+                ("kills", save.total_kills.to_string()),
+                ("loops", save.total_loops.to_string()),
+                ("runs", save.total_runs.to_string()),
+                ("deaths", save.total_deaths.to_string()),
+                ("wins", save.total_wins.to_string()),
+                ("time", scr_time(save.total_time_steps / 30)),
+                ("unlocks", format!("{unpct:02}%")),
+            ] {
+                stat_name(&mut out, lx, &mut l, name);
+                stat_val(&mut out, lx, &mut l, val);
+            }
+            header(&mut out, lx, &mut l, "");
+            if save.total_runs > 0 {
+                header(&mut out, lx, &mut l, "BEST RUN");
+                stat_name(&mut out, lx, &mut l, &race_name(save.best_run_race));
+                stat_val(
+                    &mut out,
+                    lx,
+                    &mut l,
+                    gml_area_map_name(
+                        save.best_run_area,
+                        save.best_run_sub,
+                        save.best_run_loop,
+                        false,
                     ),
-                    cx,
-                    160.0,
-                    GUI_CREAM,
-                ),
-                gui_button("BACK", cx, 200.0, GUI_GRAY),
-            ]
+                );
+                stat_name(&mut out, lx, &mut l, "kills");
+                stat_val(&mut out, lx, &mut l, save.best_run_kills.to_string());
+                header(&mut out, lx, &mut l, "");
+            }
+            let mut r = 0;
+            if save.total_runs > 0 && save.total_wins > 0 {
+                header(&mut out, rx, &mut r, "BEST STREAK");
+                stat_name(&mut out, rx, &mut r, &race_name(save.best_streak_race));
+                stat_val(&mut out, rx, &mut r, save.win_streak_best.to_string());
+                header(&mut out, rx, &mut r, "");
+            }
+            if save.total_wins > 0 && save.best_time_steps > 0 {
+                header(&mut out, rx, &mut r, "BEST TIME");
+                stat_name(&mut out, rx, &mut r, &race_name(save.best_time_race));
+                stat_val(
+                    &mut out,
+                    rx,
+                    &mut r,
+                    scr_time_speedrun(save.best_time_steps),
+                );
+                header(&mut out, rx, &mut r, "");
+            }
+            if save.hard_runs > 0 {
+                header(&mut out, rx, &mut r, "HARD");
+                stat_name(&mut out, rx, &mut r, "runs");
+                stat_val(&mut out, rx, &mut r, save.hard_runs.to_string());
+                header(&mut out, rx, &mut r, "");
+            }
+            out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
+            out
         }
         crate::MenuOverlay::Title => {
             let selected = world
@@ -3531,6 +3852,8 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             } else {
                 out.push(gui_center("GAME OVER", cx, 100.0, GUI_WHITE));
             }
+            out.push(gui_button("MENU", cx, 120.0 + 58.0, GUI_MID));
+            out.push(gui_button("RETRY", cx, 120.0 + 90.0, GUI_MID));
             out
         }
         crate::MenuOverlay::Pause => {
@@ -3669,9 +3992,9 @@ pub fn settings_hot_rows(page: u8, vw: f32) -> Vec<SettingHotRow> {
         0 => vec![
             btn(72.0, SettingHotOp::Category(1)),
             btn(96.0, SettingHotOp::Category(2)),
-            btn(120.0, SettingHotOp::Category(4)),
-            btn(144.0, SettingHotOp::Category(8)),
-            btn(168.0, SettingHotOp::Category(12)),
+            btn(120.0, SettingHotOp::Category(3)),
+            btn(144.0, SettingHotOp::Category(4)),
+            btn(168.0, SettingHotOp::Category(5)),
             btn(220.0, SettingHotOp::Back),
         ],
         1 => vec![
@@ -3691,16 +4014,16 @@ pub fn settings_hot_rows(page: u8, vw: f32) -> Vec<SettingHotRow> {
             tog(138.0, SettingHotOp::Toggle("particles")),
             tog(156.0, SettingHotOp::Toggle("show_hud")),
             val(174.0, SettingHotOp::Cycle("pixel_mode")),
-            btn(192.0, SettingHotOp::Category(3)),
+            btn(192.0, SettingHotOp::Category(9)),
             btn(220.0, SettingHotOp::Back),
         ],
-        3 => vec![
+        9 => vec![
             tog(56.0, SettingHotOp::Toggle("widescreen")),
             tog(76.0, SettingHotOp::Toggle("fullscreen")),
             tog(96.0, SettingHotOp::Toggle("vsync")),
             btn(200.0, SettingHotOp::Back),
         ],
-        4 => vec![
+        3 => vec![
             tog(48.0, SettingHotOp::Toggle("boss_intros")),
             tog(62.0, SettingHotOp::Toggle("show_tutorial")),
             tog(76.0, SettingHotOp::Toggle("show_timer")),
@@ -3709,25 +4032,25 @@ pub fn settings_hot_rows(page: u8, vw: f32) -> Vec<SettingHotRow> {
             tog(118.0, SettingHotOp::Toggle("achievements_popup")),
             tog(132.0, SettingHotOp::Toggle("auto_pause")),
             btn(146.0, SettingHotOp::Credits),
-            btn(162.0, SettingHotOp::Category(5)),
-            btn(178.0, SettingHotOp::Category(6)),
-            btn(194.0, SettingHotOp::Category(7)),
+            btn(162.0, SettingHotOp::Category(10)),
+            btn(178.0, SettingHotOp::Category(11)),
+            btn(194.0, SettingHotOp::Category(12)),
             btn(228.0, SettingHotOp::Back),
         ],
-        5 => vec![
-            btn(88.0, SettingHotOp::Category(6)),
+        10 => vec![
+            btn(88.0, SettingHotOp::Category(11)),
             btn(200.0, SettingHotOp::Back),
         ],
-        6 => vec![
+        11 => vec![
             btn(90.0, SettingHotOp::ColorCycle),
             btn(200.0, SettingHotOp::Back),
         ],
-        7 => vec![
+        12 => vec![
             btn(80.0, SettingHotOp::ResetOptions),
             btn(110.0, SettingHotOp::EraseProgress),
             btn(200.0, SettingHotOp::Back),
         ],
-        8 => vec![
+        4 => vec![
             tog(48.0, SettingHotOp::Toggle("gamepad_enabled")),
             tog(62.0, SettingHotOp::Toggle("aim_assist")),
             tog(76.0, SettingHotOp::Toggle("auto_aim")),
@@ -3736,14 +4059,13 @@ pub fn settings_hot_rows(page: u8, vw: f32) -> Vec<SettingHotRow> {
             tog(118.0, SettingHotOp::Toggle("fixed_sight")),
             val(132.0, SettingHotOp::Cycle("gamepad_type")),
             val(146.0, SettingHotOp::Slider("controls_scale")),
-            btn(160.0, SettingHotOp::Category(9)),
-            btn(176.0, SettingHotOp::Category(10)),
-            btn(192.0, SettingHotOp::Category(11)),
+            btn(160.0, SettingHotOp::Category(13)),
+            btn(176.0, SettingHotOp::Category(15)),
+            btn(192.0, SettingHotOp::Category(16)),
             btn(228.0, SettingHotOp::Back),
         ],
-        9 => vec![btn(200.0, SettingHotOp::Back)],
-        10 => {
-            // 18px rows like the rendered page (48..174), BACK at 200.
+        13 => vec![btn(200.0, SettingHotOp::Back)],
+        15 => {
             let mut rows: Vec<SettingHotRow> = (0..8)
                 .map(|i| {
                     let key: &'static str = match i {
@@ -3762,8 +4084,8 @@ pub fn settings_hot_rows(page: u8, vw: f32) -> Vec<SettingHotRow> {
             rows.push(btn(200.0, SettingHotOp::Back));
             rows
         }
-        11 => vec![btn(200.0, SettingHotOp::Back)],
-        12 => {
+        16 => vec![btn(200.0, SettingHotOp::Back)],
+        5 => {
             let mut rows: Vec<SettingHotRow> = crate::state::menus::AVAILABLE_LANGUAGES
                 .iter()
                 .enumerate()
@@ -3887,13 +4209,13 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
     let mut out = Vec::new();
     match page {
         0 => {
-            out.push(gui_center("OPTIONS", cx, 24.0, GUI_MID));
+            out.push(gui_center("SETTINGS", cx, 24.0, GUI_MID));
             for (i, (label, _)) in [
                 ("AUDIO", 1u8),
                 ("VIDEO", 2),
-                ("GAME", 4),
-                ("CONTROLS", 8),
-                ("LANGUAGE", 12),
+                ("GAME", 3),
+                ("CONTROLS", 4),
+                ("LANGUAGE", 5),
             ]
             .iter()
             .enumerate()
@@ -3973,7 +4295,7 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             // 10px button box, so sit BACK at 220 like the OPTIONS page.
             out.push(gui_button("BACK", cx, 220.0, GUI_GRAY));
         }
-        3 => {
+        9 => {
             out.push(gui_center("DISPLAY", cx, 24.0, GUI_MID));
             let mut y = 56.0;
             push_toggle(&mut out, "WIDESCREEN", y, s.widescreen);
@@ -3983,10 +4305,7 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             push_toggle(&mut out, "VSYNC", y, s.vsync);
             out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
         }
-        4 => {
-            // Dense page: 7 toggles + 4 buttons must fit above BACK.
-            // At 18/20px spacing DATA landed at y=234 (off the 240 GUI
-            // and on top of BACK at 200); compress to 14/16px and sit
+        3 => {
             // BACK at 228.
             out.push(gui_center("GAME", cx, 24.0, GUI_MID));
             let mut y = 48.0;
@@ -4011,10 +4330,7 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             out.push(gui_button("DATA", cx, y, GUI_MID));
             out.push(gui_button("BACK", cx, 228.0, GUI_GRAY));
         }
-        8 => {
-            // Dense page (same overflow as GAME): compress to 14/16px,
-            // BACK at 228 so EXPERIMENTAL no longer lands at y=232 on
-            // top of BACK at 200.
+        4 => {
             out.push(gui_center("CONTROLS", cx, 24.0, GUI_MID));
             let mut y = 48.0;
             for (label, on) in [
@@ -4052,7 +4368,7 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             out.push(gui_button("EXPERIMENTAL", cx, y, GUI_MID));
             out.push(gui_button("BACK", cx, 228.0, GUI_GRAY));
         }
-        5 => {
+        10 => {
             out.push(gui_center("PROFILE", cx, 24.0, GUI_MID));
             out.push(gui_body("PROFILE NAME", 80.0, 48.0, GUI_CREAM));
             out.push(gui_body(
@@ -4079,7 +4395,7 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             out.push(gui_button("COLOR", cx, 88.0, GUI_MID));
             out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
         }
-        6 => {
+        11 => {
             out.push(gui_center("COLOR", cx, 24.0, GUI_MID));
             out.push(gui_center(
                 format!(
@@ -4097,13 +4413,13 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             out.push(gui_button("CYCLE COLOR", cx, 90.0, GUI_MID));
             out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
         }
-        7 => {
+        12 => {
             out.push(gui_center("DATA", cx, 24.0, GUI_MID));
             out.push(gui_button("RESET OPTIONS", cx, 80.0, GUI_CREAM));
             out.push(gui_button("ERASE PROGRESS", cx, 110.0, GUI_RED2));
             out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
         }
-        9 => {
+        13 => {
             out.push(gui_center("REMAP", cx, 24.0, GUI_MID));
             let mut y = 60.0;
             for label in ["FIRE", "ACTIVE", "SWAP", "PICK"] {
@@ -4113,7 +4429,7 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             out.push(gui_center("PRESS ANY KEY - WIP", cx, y, GUI_GRAY));
             out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
         }
-        10 => {
+        15 => {
             out.push(gui_center("CHAR PREFS", cx, 24.0, GUI_MID));
             let prefs = [
                 s.cprefs_eyes,
@@ -4135,12 +4451,12 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             }
             out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
         }
-        11 => {
+        16 => {
             out.push(gui_center("EXPERIMENTAL", cx, 24.0, GUI_MID));
             out.push(gui_center("KEYBOARD MODE - WIP", cx, 80.0, GUI_GRAY));
             out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
         }
-        12 => {
+        5 => {
             out.push(gui_center("LANGUAGE", cx, 24.0, GUI_MID));
             let mut y = 60.0;
             for lang in crate::state::menus::AVAILABLE_LANGUAGES {
@@ -5130,23 +5446,24 @@ pub fn title_click_action(
     }
     // GO button (armed only). `go_button_pos` is the GML instance position
     // (sprite origin); `sprGoButtonSymbolic` origin is (0,-2) so the
-    // drawn pixels and bbox sit 2 px below it: hit box
-    // [go.x, go.x+31] x [go.y+2, go.y+21] (bbox 0..30/0..18 shifted).
+    let roster =
+        crate::state::menus::visible_roster(world.get_resource::<crate::savedata_part::SaveData>());
     if menu.title_go_visible {
-        let go = go_button_pos([vw, 240.0], CHAR_SELECT_ORDER.len(), 19.0);
+        let go = go_button_pos([vw, 240.0], roster.len(), 19.0);
         let top = go[1] + 2.0;
         if gx >= go[0] && gx <= go[0] + TITLE_GO_W && gy >= top && gy <= top + TITLE_GO_H {
             return Some(UiAction::StartGame);
         }
     }
-    // Pods (bevy hover law: `[x, x+16] x [ystart, ystart+24]`).
-    for (i, pos) in char_pod_layout([vw, 240.0], CHAR_SELECT_ORDER.len(), slot_h)
+    for (i, pos) in char_pod_layout([vw, 240.0], roster.len(), slot_h)
         .iter()
         .enumerate()
     {
         if gx >= pos[0] && gx <= pos[0] + TITLE_POD_W && gy >= pos[1] && gy <= pos[1] + TITLE_POD_H
         {
-            return Some(UiAction::SelectCharacter(CHAR_SELECT_ORDER[i] as usize));
+            if let Some(race) = roster.get(i) {
+                return Some(UiAction::SelectCharacter(*race as usize));
+            }
         }
     }
     None
@@ -5250,9 +5567,7 @@ fn loadout_click_action(
                 cx += crownsize;
                 continue;
             }
-            if crown_hit.is_none()
-                && (gx - cx).hypot(gy - cy) <= crown_r
-            {
+            if crown_hit.is_none() && (gx - cx).hypot(gy - cy) <= crown_r {
                 crown_hit = Some(UiAction::SelectCrown(id));
             }
             cx += crownsize;
@@ -5300,11 +5615,7 @@ fn loadout_click_action(
         // Close arrow at the splat: GML open `_splat_pointed` rect
         // `[splat_x - 109 div 4, splat_x] x [splat_y - 69 div 2, splat_y]`.
         let splat = [w + 2.0, h - 36.0 + 2.0];
-        if gx >= splat[0] - 27.0
-            && gx <= splat[0]
-            && gy >= splat[1] - 34.0
-            && gy <= splat[1]
-        {
+        if gx >= splat[0] - 27.0 && gx <= splat[0] && gy >= splat[1] - 34.0 && gy <= splat[1] {
             return Some(UiAction::ToggleLoadout);
         }
         return None;
@@ -5315,11 +5626,7 @@ fn loadout_click_action(
         // (toggles only — GML offers no crown/weapon picking closed, and
         // Random has no toggle at all).
         let splat = [w + 2.0, h - 36.0 + 2.0];
-        if gx >= splat[0] - 54.0
-            && gx <= splat[0]
-            && gy >= splat[1] - 34.0
-            && gy <= splat[1]
-        {
+        if gx >= splat[0] - 54.0 && gx <= splat[0] && gy >= splat[1] - 34.0 && gy <= splat[1] {
             return Some(UiAction::ToggleLoadout);
         }
     }
@@ -5547,7 +5854,8 @@ fn push_loadout_weapon(
         }
     } else if !meta.wep_sprt.is_empty() && meta.wep_sprt != "mskNone" {
         let path = format!("images/{}.png", meta.wep_sprt);
-        if let Some(s) = assets.sprite_scaled_rotated(&path, 0, pos, 2.0, 30.0f32.to_radians(), tint)
+        if let Some(s) =
+            assets.sprite_scaled_rotated(&path, 0, pos, 2.0, 30.0f32.to_radians(), tint)
         {
             out.push(s);
         }
@@ -5969,6 +6277,184 @@ pub fn splash_sprites(
     out
 }
 
+/// GML `make_color_hsv` parity (h/s/v 0..255): loop-tint colors for
+/// the roadmap waypoint pass (`scrDrawRoadmap` colors each loop
+/// `make_color_hsv((loop * 39) % 255, 200, 200)`).
+fn roadmap_loop_tint(loop_count: u32) -> [f32; 4] {
+    let h = ((loop_count * 39) % 255) as f32 / 255.0 * 360.0;
+    let (s, v) = (200.0 / 255.0, 200.0 / 255.0);
+    let c = v * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = v - c;
+    let (r, g, b) = match h as u32 / 60 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    [r + m, g + m, b + m, 1.0]
+}
+
+/// `scrDrawRoadmap` sprite layer (`GameOver/Draw_0`,
+/// `GenCont/Draw_0`): score splats + kills icon (the area/kill strings
+/// ride the text overlay), the 7-area dot strip (`sprMapDot` 3px,
+/// segment 9px, strip 135px wide centered on `drawx`), the palace
+/// crown, and the waypoint dots + connector lines from
+/// `Run.waypoints` (`pos` caps the drawn prefix; game-over passes the
+/// full log). GML area ids: `waypnt % 100` with secrets on a second
+/// row 10px down (`sprMapDotOut`); per-loop colors come from
+/// [`roadmap_loop_tint`]. Connector lines ride stretched `sprPixel`
+/// (the sprite pipe has no line primitive); the 3-line black/white
+/// background hatch collapses to one black + one white line.
+pub fn roadmap_sprites(
+    assets: &RenderAssets,
+    to_world: &dyn Fn(f32, f32) -> Vec2,
+    drawx: f32,
+    drawy: f32,
+    waypoints: &[crate::comps_a::Waypoint],
+    pos: usize,
+) -> Vec<SpriteInstance> {
+    const SEG: f32 = 9.0;
+    const MAXSUB: [i32; 8] = [0, 3, 1, 3, 1, 3, 1, 3];
+    const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+    const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+    let mut out = Vec::new();
+    let push =
+        |out: &mut Vec<SpriteInstance>, path: &str, frame: i32, x: f32, y: f32, tint: [f32; 4]| {
+            if let Some(s) = assets.sprite_for(path, frame, to_world(x, y), false, 0.0, tint) {
+                out.push(s);
+            }
+        };
+    let hline = |out: &mut Vec<SpriteInstance>, x0: f32, x1: f32, y: f32, tint: [f32; 4]| {
+        if x1 > x0 {
+            if let Some(s) = assets.sprite_sized(
+                "images/sprPixel.png",
+                0,
+                to_world(x0, y),
+                Vec2::new(x1 - x0, 1.0),
+                false,
+                tint,
+            ) {
+                out.push(s);
+            }
+        }
+    };
+    push(
+        &mut out,
+        "images/sprScoreSplat.png",
+        2,
+        drawx - 68.0,
+        drawy - 15.0,
+        WHITE,
+    );
+    push(
+        &mut out,
+        "images/sprScoreSplat.png",
+        2,
+        drawx + 8.0,
+        drawy - 15.0,
+        WHITE,
+    );
+    push(
+        &mut out,
+        "images/sprKillsIcon.png",
+        0,
+        drawx + 14.0,
+        drawy - 15.0,
+        WHITE,
+    );
+    let total: f32 = MAXSUB[1..].iter().map(|m| *m as f32 * SEG).sum();
+    let x0 = drawx - (total as i32 / 2) as f32;
+    let mut map_x = x0;
+    for area in 1..=7 {
+        let (px, py) = (map_x, drawy);
+        push(&mut out, "images/sprMapDot.png", 0, px, py + 2.0, BLACK);
+        push(
+            &mut out,
+            "images/sprMapDot.png",
+            0,
+            px + 1.0,
+            py + 2.0,
+            BLACK,
+        );
+        push(
+            &mut out,
+            "images/sprMapDot.png",
+            0,
+            px + 1.0,
+            py + 1.0,
+            BLACK,
+        );
+        map_x += MAXSUB[area as usize] as f32 * SEG;
+        hline(&mut out, px, map_x + 1.0, py + 1.0, BLACK);
+        hline(&mut out, px + 1.0, map_x, py, WHITE);
+        if area == 7 {
+            push(
+                &mut out,
+                "images/sprPixel.png",
+                0,
+                map_x - 8.0,
+                drawy + 1.0,
+                BLACK,
+            );
+            push(
+                &mut out,
+                "images/sprMapCrown.png",
+                0,
+                map_x - 3.0,
+                drawy + 1.0,
+                WHITE,
+            );
+        }
+        push(&mut out, "images/sprMapDot.png", 0, px, py + 1.0, WHITE);
+    }
+    let wpx = |area_mod: i32, sub: u32| {
+        let even = area_mod.div_euclid(2);
+        let odd = area_mod - even;
+        x0 + ((odd - 1) * 9 + even * 27 + (sub as i32 - 1) * 9) as f32
+    };
+    let count = pos.min(waypoints.len());
+    for pass in 0..2 {
+        let mut cur_loop: Option<u32> = None;
+        let (mut mx, mut my) = (x0, drawy);
+        for wp in waypoints.iter().take(count) {
+            let secret = wp.area >= 100;
+            let area_mod = wp.area % 100;
+            if cur_loop != Some(wp.lp) {
+                cur_loop = Some(wp.lp);
+                mx = x0;
+                my = drawy;
+            }
+            let (px, py) = (mx, my);
+            if !secret {
+                mx = wpx(area_mod, wp.sub);
+            }
+            my = drawy + (SEG + 1.0) * secret as u32 as f32;
+            let tint = if pass == 0 {
+                BLACK
+            } else {
+                roadmap_loop_tint(wp.lp)
+            };
+            if wp.sub == 1 {
+                let dot = if secret {
+                    "images/sprMapDotOut.png"
+                } else {
+                    "images/sprMapDot.png"
+                };
+                push(&mut out, dot, 0, mx, my + 1.0, tint);
+            }
+            if pass == 0 {
+                hline(&mut out, px + 1.0, mx + 1.0, py + 1.0, BLACK);
+            } else {
+                hline(&mut out, px + 1.0, mx + 1.0, py, tint);
+            }
+        }
+    }
+    out
+}
+
 /// Menu art sprites (`Menu/Draw_0`, portrait, loadout, logo, and
 /// game-over splats verbatim where the UI framework cannot draw them):
 /// char pods (`sprCharSelect` frame = race, locked gray), GO button,
@@ -6012,11 +6498,12 @@ pub fn menu_sprites(
                 .native_size("images/sprCharSelect.png")
                 .map(|s| s.y)
                 .unwrap_or(20.0);
-            for (i, pos) in char_pod_layout([vw, 240.0], CHAR_SELECT_ORDER.len(), slot_h)
+            let roster = crate::state::menus::visible_roster(save.as_ref());
+            for (i, pos) in char_pod_layout([vw, 240.0], roster.len(), slot_h)
                 .iter()
                 .enumerate()
             {
-                let race = CHAR_SELECT_ORDER[i];
+                let race = roster[i];
                 let locked = save.as_ref().is_none_or(|s| !s.race_unlocked(race));
                 let (path, tint): (&str, [f32; 4]) = if locked {
                     ("images/sprCharSelectLocked.png", [0.5, 0.5, 0.5, 1.0])
@@ -6027,7 +6514,7 @@ pub fn menu_sprites(
                 };
                 if let Some(s) = assets.sprite_for(
                     path,
-                    i as i32,
+                    race as i32,
                     gui_to_world(pos[0], pos[1]),
                     false,
                     0.0,
@@ -6085,9 +6572,8 @@ pub fn menu_sprites(
             // unlocalized AND multiplayer
             // (`scrCampfireMenuDrawCharText:444`); single-player always
             // uses the bigname text (the overlay lines), so no sprite
-            // here — it would double-draw under the text.
             if go_visible {
-                let dp = go_button_pos([vw, 240.0], CHAR_SELECT_ORDER.len(), 19.0);
+                let dp = go_button_pos([vw, 240.0], roster.len(), 19.0);
                 if let Some(s) = assets.sprite_for(
                     "images/sprGoButtonSymbolic.png",
                     0,
@@ -6143,6 +6629,32 @@ pub fn menu_sprites(
                 [1.0; 4],
             ) {
                 out.push(s);
+            }
+            if let Some(run) = world.get_resource::<Run>() {
+                let n = run.waypoints.len();
+                let wps = run.waypoints.clone();
+                out.extend(roadmap_sprites(
+                    assets,
+                    &gui_to_world,
+                    112.0,
+                    121.0,
+                    &wps,
+                    n,
+                ));
+            }
+        }
+        crate::MenuOverlay::Loading => {
+            if let Some(run) = world.get_resource::<Run>() {
+                let n = run.waypoints.len();
+                let wps = run.waypoints.clone();
+                out.extend(roadmap_sprites(
+                    assets,
+                    &gui_to_world,
+                    vw * 0.5,
+                    120.0,
+                    &wps,
+                    n,
+                ));
             }
         }
         _ => {}
