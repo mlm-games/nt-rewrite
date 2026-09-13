@@ -40,6 +40,7 @@ use repame_sprite::{
 };
 
 use crate::anim::{PlayerAnim, SpriteAnim};
+use crate::audio::UiAction;
 use crate::combat::HitFlash;
 use crate::comps_a::{
     ARENA_H, ARENA_W, AimDir, FloorMask, GrenadeFuse, Health, HitId, Inventory, LightningArc,
@@ -63,7 +64,6 @@ use crate::state::menus::{CHAR_SELECT_ORDER, MenuState};
 use crate::state::{SPLASH_GUN_STEPS, SplashState};
 use crate::weapon_runtime::{sanitize_weapon_id, weapon_meta};
 use crate::weapons_data::AmmoType;
-use crate::audio::UiAction;
 
 /// Atlas page edge for full-catalog loads (matches the engine default).
 pub const ATLAS_SIZE: u32 = 2048;
@@ -1954,7 +1954,11 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
 
     /// Current-slot recoil for the behind-gun draw (GML `wkick` rides the
     /// weapon visual; the player block reads it back).
-    fn weapon_visual_kick(kicks: &[(Entity, usize, f32, f32)], owner: Entity, slot: usize) -> (f32, f32) {
+    fn weapon_visual_kick(
+        kicks: &[(Entity, usize, f32, f32)],
+        owner: Entity,
+        slot: usize,
+    ) -> (f32, f32) {
         kicks
             .iter()
             .find(|(o, s, _, _)| *o == owner && *s == slot)
@@ -2032,19 +2036,17 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             // `gunangle`): `right = -1` when 90 < gunangle < 270, else 1;
             // `back` when 0 < gunangle < 180. Falls back to velocity.x
             // when aim is dead.
-            let (right, back): (f32, bool) = match aim
-                .map(|a| a.0)
-                .filter(|a| a.length_squared() > 0.001)
-            {
-                Some(a) => {
-                    let (r, b) = crate::player::gml_player_right_back_from_aim(a);
-                    (r, b > 0.0)
-                }
-                None => {
-                    let x = vel.map(|v| v.0.x).unwrap_or(0.0);
-                    (if x < 0.0 { -1.0 } else { 1.0 }, false)
-                }
-            };
+            let (right, back): (f32, bool) =
+                match aim.map(|a| a.0).filter(|a| a.length_squared() > 0.001) {
+                    Some(a) => {
+                        let (r, b) = crate::player::gml_player_right_back_from_aim(a);
+                        (r, b > 0.0)
+                    }
+                    None => {
+                        let x = vel.map(|v| v.0.x).unwrap_or(0.0);
+                        (if x < 0.0 { -1.0 } else { 1.0 }, false)
+                    }
+                };
             let flip = right < 0.0;
             let gunangle = aim.map(|a| a.0.y.atan2(a.0.x)).unwrap_or(if flip {
                 std::f32::consts::PI
@@ -2249,17 +2251,17 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
     // tint half): white/black strobe under 0.334 s, solid white once
     // the friction switch armed.
     {
-    let mut q = world.query::<(
-        &Pos,
-        &Projectile,
-        Option<&Velocity>,
-        &Team,
-        Option<&SlashProjectile>,
-        Option<&GrenadeFuse>,
-        Option<&crate::comps_a::ProjectileVisual>,
-    )>();
-    for (pos, proj, vel, team, slash, fuse, visual) in q.iter(world) {
-        let path = projectile_art(proj, team, slash, visual);
+        let mut q = world.query::<(
+            &Pos,
+            &Projectile,
+            Option<&Velocity>,
+            &Team,
+            Option<&SlashProjectile>,
+            Option<&GrenadeFuse>,
+            Option<&crate::comps_a::ProjectileVisual>,
+        )>();
+        for (pos, proj, vel, team, slash, fuse, visual) in q.iter(world) {
+            let path = projectile_art(proj, team, slash, visual);
             let frame = projectile_frame(assets, path, &proj.life);
             let rotation = vel
                 .filter(|v| v.0.length_squared() > 1e-6)
@@ -3301,7 +3303,10 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             // GML `DrawStats` text half (port extra: the sprite trophy
             // rows need unported art, so lifetime totals land as text).
             use crate::savedata_part::SaveData;
-            let save = world.get_resource::<SaveData>().cloned().unwrap_or_default();
+            let save = world
+                .get_resource::<SaveData>()
+                .cloned()
+                .unwrap_or_default();
             vec![
                 gui_center("STATS", cx, 40.0, GUI_CREAM),
                 gui_center(
@@ -3317,12 +3322,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     GUI_CREAM,
                 ),
                 gui_center(format!("RUNS {}", save.total_runs), cx, 120.0, GUI_CREAM),
-                gui_center(
-                    format!("KILLS {}", save.total_kills),
-                    cx,
-                    140.0,
-                    GUI_CREAM,
-                ),
+                gui_center(format!("KILLS {}", save.total_kills), cx, 140.0, GUI_CREAM),
                 gui_center(
                     format!(
                         "HUNTERS {}/{}",
@@ -3441,7 +3441,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             // GML `GameOver/Draw_0` text layer verbatim (the roadmap dot
             // map and death-cause sprite need unported state, so only
             // the text rows land here; splats ride `menu_sprites`):
-            // struggle line centered-middle at (vw/2,48); the area +
+            // struggle line centered-top at (vw/2,48); the area +
             // kills rows at y=106 are a port extra (GML draws the
             // roadmap sprites there); `KILLED BY` (or win `COMPLETION
             // TIME` + clock) centered at vw/2+86.
@@ -3449,8 +3449,9 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             let mut out = Vec::new();
             if let Some(run) = run {
                 let max_sub = area_max_subarea(run.area);
-                let palace_final = run.area == AreaId::Palace && run.floor_in_area >= max_sub;
-                let hq_final = run.area == AreaId::HQ && run.floor_in_area >= max_sub;
+                // GML `== GameCont.maxsubarea` verbatim on both finals.
+                let palace_final = run.area == AreaId::Palace && run.floor_in_area == max_sub;
+                let hq_final = run.area == AreaId::HQ && run.floor_in_area == max_sub;
                 let text = if run.won && hq_final {
                     "THE STRUGGLE IS OVER"
                 } else if run.won {
@@ -3469,7 +3470,9 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     color: GUI_WHITE,
                     px: 7.0,
                     centered: true,
-                    middle_y: true,
+                    // GML draws the struggle `draw_set_valign(fa_top)` at
+                    // `view_yview + 48` (top-anchored, not middle).
+                    middle_y: false,
                     right: false,
                 });
                 out.push(MenuGuiText {
@@ -3644,7 +3647,12 @@ pub enum SettingHotOp {
 pub fn settings_hot_rows(page: u8, vw: f32) -> Vec<SettingHotRow> {
     let cx = vw * 0.5;
     // (gy, cx, hw, op)
-    let btn = |gy: f32, op: SettingHotOp| SettingHotRow { gy, cx, hw: 100.0, op };
+    let btn = |gy: f32, op: SettingHotOp| SettingHotRow {
+        gy,
+        cx,
+        hw: 100.0,
+        op,
+    };
     let tog = |gy: f32, op: SettingHotOp| SettingHotRow {
         gy,
         cx: 140.0,
@@ -3776,12 +3784,7 @@ pub fn settings_hot_rows(page: u8, vw: f32) -> Vec<SettingHotRow> {
 /// Resolve one hot-row activation into a [`UiAction`]. `dir` is the
 /// stepper direction (-1/+1; 0 = keyboard Enter, treated as +1).
 /// Reads live values from `SaveData` for the ±0.1 steppers.
-pub fn settings_hot_action(
-    world: &mut World,
-    page: u8,
-    idx: usize,
-    dir: i8,
-) -> Option<UiAction> {
+pub fn settings_hot_action(world: &mut World, page: u8, idx: usize, dir: i8) -> Option<UiAction> {
     use crate::savedata_part::SaveData;
     let rows = settings_hot_rows(page, 320.0);
     let row = rows.get(idx)?;
@@ -3859,11 +3862,7 @@ pub fn settings_click_action(
         .find(|(_, r)| (gy - r.gy).abs() <= HH && (gx - r.cx).abs() <= r.hw)?;
     let dir = match row.op {
         SettingHotOp::Slider(_) | SettingHotOp::Cycle(_) | SettingHotOp::Volume(_) => {
-            if gx >= row.cx {
-                1
-            } else {
-                -1
-            }
+            if gx >= row.cx { 1 } else { -1 }
         }
         _ => 0,
     };
@@ -4805,8 +4804,12 @@ pub fn crosshair_sprites(
         && !world
             .get_resource::<crate::comps_a::Run>()
             .is_some_and(|r| r.game_over)
-        && world.get_resource::<crate::comps_a::PendingMutation>().is_none()
-        && world.get_resource::<crate::comps_a::PendingUltra>().is_none();
+        && world
+            .get_resource::<crate::comps_a::PendingMutation>()
+            .is_none()
+        && world
+            .get_resource::<crate::comps_a::PendingUltra>()
+            .is_none();
     if !live {
         return out;
     }
@@ -5141,10 +5144,7 @@ pub fn title_click_action(
         .iter()
         .enumerate()
     {
-        if gx >= pos[0]
-            && gx <= pos[0] + TITLE_POD_W
-            && gy >= pos[1]
-            && gy <= pos[1] + TITLE_POD_H
+        if gx >= pos[0] && gx <= pos[0] + TITLE_POD_W && gy >= pos[1] && gy <= pos[1] + TITLE_POD_H
         {
             return Some(UiAction::SelectCharacter(CHAR_SELECT_ORDER[i] as usize));
         }
@@ -5161,12 +5161,7 @@ pub fn title_click_action(
 /// highlights (`SelectMutation`), the highlighted card commits
 /// (`PickMutation`). Stray clicks and empty offers route to nothing, so a
 /// misclick can never confirm a pick or leak into gameplay.
-pub fn mutation_icon_hit_action(
-    world: &mut World,
-    gx: f32,
-    gy: f32,
-    vw: f32,
-) -> Option<UiAction> {
+pub fn mutation_icon_hit_action(world: &mut World, gx: f32, gy: f32, vw: f32) -> Option<UiAction> {
     // Ultra offers win over normal ones (same precedence as `sync_hud_state`
     // and `tick_mutation_mirror`, bevy `hud.rs`): when both resources
     // coexist the screen shows ultra cards, so hit-testing must too.
@@ -5209,8 +5204,8 @@ pub fn mutation_icon_hit_action(
 
 /// Loadout panel hit rects. Open-frame geometry replicates
 /// `menu_loadout_sprites` exactly (same formulas, same walk order —
-/// weapons draw last so they win overlaps); closed-frame zones are the
-/// bevy invisible zones (`title_screen.rs`) scaled by `vw/320`.
+/// weapons draw last so they win overlaps); the closed-frame splat zone
+/// is the GML closed `_splat_pointed` rect (toggle only).
 #[allow(clippy::too_many_arguments)]
 fn loadout_click_action(
     world: &mut World,
@@ -5245,7 +5240,8 @@ fn loadout_click_action(
         let per_row = 14 / per_column;
         let crownright = w + 12.0;
         let crownleft = crownright - per_row as f32 * crownsize;
-        let half = crownsize * 0.5 + 3.0;
+        // GML `point_in_circle(mx, my, crown_x, crown_y, crownsize * 0.5)`.
+        let crown_r = crownsize * 0.5;
         let mut cx = crownright - crownsize * 3.0;
         let mut cy = crowntop - 24.0;
         let mut crown_hit: Option<UiAction> = None;
@@ -5255,8 +5251,7 @@ fn loadout_click_action(
                 continue;
             }
             if crown_hit.is_none()
-                && (gx - cx).abs() <= half
-                && (gy - cy).abs() <= half
+                && (gx - cx).hypot(gy - cy) <= crown_r
             {
                 crown_hit = Some(UiAction::SelectCrown(id));
             }
@@ -5273,10 +5268,10 @@ fn loadout_click_action(
         let skin_count = race_max_skin_count(race);
         let skins_x = crownleft - (crownsize / 2.0).floor() - 22.0;
         let skins_y = (h / 2.0).floor() - (skinsize * 0.5) * skin_count as f32 - 2.0;
-        let shalf = skinsize * 0.5 + 2.0;
+        // GML `point_in_circle(mx, my, skins_x, skins_y, 10)`.
         for j in 0..skin_count {
             let sy = skins_y + j as f32 * skinsize;
-            if (gx - skins_x).abs() <= shalf && (gy - sy).abs() <= shalf {
+            if (gx - skins_x).hypot(gy - sy) <= 10.0 {
                 return Some(UiAction::SelectSkin(j as u8));
             }
         }
@@ -5297,32 +5292,35 @@ fn loadout_click_action(
         };
         for k in 0..nslots {
             let wx = weapons_x + k as f32 * weaponsize;
-            if (gx - wx).abs() <= weaponsize * 0.5 && (gy - weapons_y).abs() <= weaponsize * 0.5 {
+            // GML `point_in_circle(mx, my, weapons_x, weapons_y, 10)`.
+            if (gx - wx).hypot(gy - weapons_y) <= 10.0 {
                 return Some(UiAction::CycleStartWeapon(1));
             }
         }
-        // Close arrow at the splat.
+        // Close arrow at the splat: GML open `_splat_pointed` rect
+        // `[splat_x - 109 div 4, splat_x] x [splat_y - 69 div 2, splat_y]`.
         let splat = [w + 2.0, h - 36.0 + 2.0];
-        if (gx - (splat[0] - 16.0)).abs() <= 14.0 && (gy - (splat[1] - 16.0)).abs() <= 14.0 {
+        if gx >= splat[0] - 27.0
+            && gx <= splat[0]
+            && gy >= splat[1] - 34.0
+            && gy <= splat[1]
+        {
             return Some(UiAction::ToggleLoadout);
         }
         return None;
     }
-    if !open {
-        // Closed-frame invisible zones (bevy `loadout_layer` closed arm,
-        // scaled from 320-space by the live width).
-        let sx = vw / 320.0;
-        let rect = |x: f32, y: f32, rw: f32, rh: f32| {
-            gx >= x * sx && gx <= (x + rw) * sx && gy >= y && gy <= y + rh
-        };
-        if rect(213.0, 136.0, 109.0, 69.0) {
+    if !open && selected != 0 {
+        // Closed-frame splat zone: GML closed `_splat_pointed` rect
+        // `[splat_x - 109 div 2, splat_x] x [splat_y - 69 div 2, splat_y]`
+        // (toggles only — GML offers no crown/weapon picking closed, and
+        // Random has no toggle at all).
+        let splat = [w + 2.0, h - 36.0 + 2.0];
+        if gx >= splat[0] - 54.0
+            && gx <= splat[0]
+            && gy >= splat[1] - 34.0
+            && gy <= splat[1]
+        {
             return Some(UiAction::ToggleLoadout);
-        }
-        if rect(234.0, 172.0, 58.0, 36.0) {
-            return Some(UiAction::CycleStartWeapon(1));
-        }
-        if rect(246.0, 149.0, 32.0, 32.0) {
-            return Some(UiAction::CycleCrown(1));
         }
     }
     None
@@ -5407,11 +5405,14 @@ fn menu_loadout_sprites(
             out.push(s);
         }
     }
-    if let Some(s) = assets.sprite_for(
+    // Splat + arrow (GML frame-0 draw: `draw_sprite_ext(sprLoadoutSplat,
+    // splatindex, splat_x, splat_y, 1, 1.05, ...)`; the y-stretch pins
+    // the bottom-right origin, same as GML).
+    if let Some(s) = assets.sprite_stretched(
         "images/sprLoadoutSplat.png",
         0,
         to_world(splat),
-        false,
+        Vec2::new(1.0, 1.05),
         0.0,
         [1.0; 4],
     ) {
@@ -5523,31 +5524,122 @@ fn menu_loadout_sprites(
         } else {
             [0.5, 0.5, 0.5, 1.0]
         };
-        let meta = weapon_meta(wid);
-        if let Some(lout) = meta.wep_lout {
-            let path = format!("images/{lout}.png");
-            if let Some(s) =
-                assets.sprite_for(&path, 0, to_world([wx, weapons_y]), false, 0.0, tint)
-            {
-                out.push(s);
-            }
-        } else if !meta.wep_sprt.is_empty() && meta.wep_sprt != "mskNone" {
-            let path = format!("images/{}.png", meta.wep_sprt);
-            if let Some(s) = assets.sprite_scaled_rotated(
-                &path,
-                0,
-                to_world([wx, weapons_y]),
-                2.0,
-                30.0f32.to_radians(),
-                tint,
-            ) {
-                out.push(s);
-            }
-        }
+        push_loadout_weapon(assets, wid, to_world([wx, weapons_y]), tint, out);
         wx += weaponsize;
     }
 }
 
+/// One loadout weapon icon at a view point (shared by the open weapon
+/// row and the closed-frame minis): dedicated loadout art native, else
+/// the world sprite at 2x rotated 30 degrees.
+fn push_loadout_weapon(
+    assets: &RenderAssets,
+    wid: WeaponId,
+    pos: Vec2,
+    tint: [f32; 4],
+    out: &mut Vec<SpriteInstance>,
+) {
+    let meta = weapon_meta(wid);
+    if let Some(lout) = meta.wep_lout {
+        let path = format!("images/{lout}.png");
+        if let Some(s) = assets.sprite_for(&path, 0, pos, false, 0.0, tint) {
+            out.push(s);
+        }
+    } else if !meta.wep_sprt.is_empty() && meta.wep_sprt != "mskNone" {
+        let path = format!("images/{}.png", meta.wep_sprt);
+        if let Some(s) = assets.sprite_scaled_rotated(&path, 0, pos, 2.0, 30.0f32.to_radians(), tint)
+        {
+            out.push(s);
+        }
+    }
+}
+
+/// Closed-frame loadout preview (GML `scrCampfireMenuCreate` "Current
+/// loadout" region: mini crown/weapons ride the closed frame for any
+/// non-Random race; splat + arrow need an available loadout, and trio
+/// races get minis only — `!scr_loadout_is_available_for_race` kills
+/// just the splat toggle). Mini positions are headless steady-state
+/// (`_splat_pointed = 0`): crown at `(splat-60, splat-40)`, weapons at
+/// `(splat-44/splat-68, splat-15)`. The haste-crown clock
+/// (`scrDrawClock`) is dropped.
+#[allow(clippy::too_many_arguments)]
+fn menu_loadout_closed_sprites(
+    world: &mut World,
+    assets: &RenderAssets,
+    vwvh: [f32; 2],
+    selected: usize,
+    available: bool,
+    to_world: &dyn Fn([f32; 2]) -> Vec2,
+    out: &mut Vec<SpriteInstance>,
+) {
+    let (w, h) = (vwvh[0], vwvh[1]);
+    let race = CHAR_SELECT_ORDER[selected.min(CHAR_SELECT_ORDER.len() - 1)];
+    let save = world
+        .get_resource::<crate::savedata_part::SaveData>()
+        .cloned();
+    let loadout = save.as_ref().map(|s| s.race_loadout(race).clone());
+    let splat = [w + 2.0, h - 36.0 + 2.0];
+    if available {
+        if let Some(s) = assets.sprite_stretched(
+            "images/sprLoadoutSplat.png",
+            0,
+            to_world(splat),
+            Vec2::new(1.0, 1.05),
+            0.0,
+            [1.0; 4],
+        ) {
+            out.push(s);
+        }
+        if let Some(s) = assets.sprite_for(
+            "images/sprLoadoutArrow.png",
+            0,
+            to_world([splat[0] - 16.0, splat[1] - 16.0]),
+            false,
+            0.0,
+            [1.0; 4],
+        ) {
+            out.push(s);
+        }
+    }
+    let lx = splat[0] - 60.0;
+    let ly = splat[1] - 15.0;
+    let crown = loadout.as_ref().map(|l| l.start_crown).unwrap_or(0);
+    if crown != 0 {
+        let gml = crate::savedata_part::crown_port_to_gml(crown);
+        if let Some(s) = assets.sprite_for(
+            "images/sprLoadoutCrown.png",
+            gml as i32,
+            to_world([lx, ly - 25.0]),
+            false,
+            0.0,
+            [1.0; 4],
+        ) {
+            out.push(s);
+        }
+    }
+    let default_weapon = race_default_weapon(race);
+    let stored = loadout
+        .as_ref()
+        .map(|l| l.stored_weapon)
+        .unwrap_or(WeaponId::NONE);
+    let primary = loadout
+        .as_ref()
+        .map(|l| l.start_weapon)
+        .filter(|w| *w != WeaponId::NONE)
+        .unwrap_or(default_weapon);
+    if stored != WeaponId::NONE && stored != primary {
+        push_loadout_weapon(
+            assets,
+            stored,
+            to_world([lx + 16.0, ly]),
+            [0.75, 0.75, 0.75, 1.0],
+            out,
+        );
+        push_loadout_weapon(assets, primary, to_world([lx - 8.0, ly]), [1.0; 4], out);
+    } else {
+        push_loadout_weapon(assets, primary, to_world([lx, ly]), [1.0; 4], out);
+    }
+}
 /// GML `scrRaceGetStarterWeapon` verbatim (GML weapon ids double as
 /// port [`WeaponId`]s).
 pub fn race_default_weapon(race: RaceId) -> WeaponId {
@@ -5962,7 +6054,10 @@ pub fn menu_sprites(
                 .iter(world)
                 .find(|(rs, _)| rs.race == race)
                 .map(|(_, h)| h.hp);
-            let portrait_dp = [20.0, 240.0 - 36.0 - 8.0 + 44.0];
+            // GML front-layer portrait origin: `_portrait_x = -2 + 18`,
+            // drawn at `_x + 16 - 18` = view-relative -2
+            // (`scrCampfireMenuCreate.gml:339,392`); y = H - 36 - 8 + 44.
+            let portrait_dp = [-2.0, 240.0 - 36.0 - 8.0 + 44.0];
             if let Some((path, frame)) = big_portrait_for(race, skin, hp, area) {
                 if let Some(s) = assets.sprite_for(
                     path,
@@ -5992,15 +6087,11 @@ pub fn menu_sprites(
             // uses the bigname text (the overlay lines), so no sprite
             // here — it would double-draw under the text.
             if go_visible {
-                // GML `sprGoButtonSymbolic` bbox height 19 (`div 2` = 9),
-                // origin (0,-2): instance pos from `go_button_pos`, pixels
-                // drawn 2 px below it (the catalog anchor clamps the -2,
-                // so offset explicitly for GML parity).
                 let dp = go_button_pos([vw, 240.0], CHAR_SELECT_ORDER.len(), 19.0);
                 if let Some(s) = assets.sprite_for(
                     "images/sprGoButtonSymbolic.png",
                     0,
-                    gui_to_world(dp[0], dp[1] + 2.0),
+                    gui_to_world(dp[0], dp[1]),
                     false,
                     0.0,
                     [1.0; 4],
@@ -6009,13 +6100,24 @@ pub fn menu_sprites(
                 }
             }
             // Loadout grid (`scrMenuDrawLoadout` verbatim geometry, open
-            // frame, no tooltips/animation).
+            // frame, no tooltips/animation) plus the closed-frame preview
+            // (splat + arrow + minis ride the closed frame in GML).
             if loadout_open && selected != 0 {
                 menu_loadout_sprites(
                     world,
                     assets,
                     [vw, 240.0],
                     selected,
+                    &|p| gui_to_world(p[0], p[1]),
+                    &mut out,
+                );
+            } else if !loadout_open && selected != 0 {
+                menu_loadout_closed_sprites(
+                    world,
+                    assets,
+                    [vw, 240.0],
+                    selected,
+                    loadout_available_for_race(race),
                     &|p| gui_to_world(p[0], p[1]),
                     &mut out,
                 );
