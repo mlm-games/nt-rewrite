@@ -1604,16 +1604,19 @@ impl App {
             );
         }
         if let Some(rows) = menu_rows {
-            // Bevy `scrim` / game-over panel parity: Pause/Settings/
-            // Credits/GameOver sit on near-opaque black (230/255), so
-            // the frozen room barely reads through. Title/Mutation/
-            // MainMenu/Splash/Loading read through to the spiral/pods
-            // underneath.
+            // GML `GameOver/Draw_0:7-10` dims with `draw_set_alpha(0.7)`
+            // (178/255); pause/settings/credits/stats sit on the
+            // near-opaque bevy `scrim` (230/255).
+            let scrim_alpha = if menu_kind == Some(MenuOverlay::GameOver) {
+                178
+            } else {
+                230
+            };
             if dim_menu {
                 layers.push(UiBox(
                     Modifier::new()
                         .fill_max_size()
-                        .background(Color::from_rgba(0, 0, 0, 230))
+                        .background(Color::from_rgba(0, 0, 0, scrim_alpha))
                         .hit_passthrough(),
                 ));
             }

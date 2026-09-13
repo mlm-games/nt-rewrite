@@ -1146,9 +1146,24 @@ pub fn is_race_unlocked(save: &SaveData, race: RaceId) -> bool {
 /// GML `scrInitStats` progress count verbatim (`progress/maxprogress`
 /// for the stats unlocks row): races 1..16 skip the kinda-secret trio
 /// entirely; loadout races count crowns 1..=13 (`crownmax`) plus the
-/// race unlock (no max bump, verbatim) plus skins 1..<3; hardmode adds
-/// one each side. Stored weapons only feed the per-race tally, never
-/// the global one — mirrored by ignoring them here.
+/// race unlock (no max bump, verbatim) plus skins 1..max-1; hardmode
+/// adds one each side. The `crownmax + 1` stored-weapon slot only feeds
+/// the per-race tally (`race_prog_max`), never the global one —
+/// mirrored by ignoring it here, as do stored weapons. Skin maxima
+/// come from [`race_max_skin_count`] (`scrRaceGetMaxSkinCount(race,
+/// false)` verbatim: BigDog/Frog hold 1, everything else 3 without
+/// the hidden-NTT gate the port does not model).
+pub fn race_max_skin_count(race: crate::data::RaceId) -> usize {
+    use crate::data::RaceId;
+    match race {
+        RaceId::BigDog | RaceId::Frog => 1,
+        _ => 3,
+    }
+}
+
+/// GML `scrRaceGetMaxSkinCount` verbatim (kept as the single source;
+/// [`race_max_skin_count`] is the `_show_secret=false` projection the
+/// progress count uses).
 pub fn unlock_progress(save: &SaveData) -> (u32, u32) {
     use crate::data::RaceId;
     let mut progress = 0u32;
@@ -1164,7 +1179,10 @@ pub fn unlock_progress(save: &SaveData) -> (u32, u32) {
             race,
             RaceId::Random | RaceId::BigDog | RaceId::Skeleton | RaceId::Frog
         ) {
-            maxprogress += 13 + 1;
+            // GML `scrInitStats:36-44`: the global max grows once per
+            // crown (`maxprogress++` for `i = 1..=crownmax`); the
+            // `crownmax + 1` stored-weapon slot only feeds the per-race
+            // tally, never the global one.
             let row = save.crown_row(race);
             for id in 1..=13usize {
                 maxprogress += 1;
@@ -1176,14 +1194,17 @@ pub fn unlock_progress(save: &SaveData) -> (u32, u32) {
         if save.race_unlocked(race) {
             progress += 1;
         }
+        // GML `scrInitStats:57-65`: `for skin = 1; skin <
+        // scrRaceGetMaxSkinCount(race, false); skin++`.
+        let max_skins = race_max_skin_count(race);
         let skins = save
             .races
             .get(&race)
             .map(|l| l.unlocked_skins)
             .unwrap_or([true, false, false, false]);
-        for skin in 1..3usize {
+        for skin in 1..max_skins {
             maxprogress += 1;
-            if skins[skin] {
+            if skins.get(skin).copied().unwrap_or(false) {
                 progress += 1;
             }
         }

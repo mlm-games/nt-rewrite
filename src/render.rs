@@ -374,7 +374,9 @@ fn blit_cell(strip: &[u8], strip_w: u32, src: [u32; 4]) -> Vec<u8> {
 // ---------------------------------------------------------------------------
 
 /// GML `scrAreaGetMaxSubarea` verbatim (non-custom): the 3-floor
-/// areas plus HQ hold 3 subareas, everything else 1.
+/// areas plus HQ hold 3 subareas, everything else 1. The custom-mode
+/// branch (`area_size`/`area_size_alt`) is deferred — the port has no
+/// custom runs, so the static table always applies.
 pub fn area_max_subarea(area: AreaId) -> u32 {
     match area {
         AreaId::Desert | AreaId::Scrapyards | AreaId::FrozenCity | AreaId::Palace | AreaId::HQ => 3,
@@ -2777,6 +2779,15 @@ fn hud_weapon_dx(pos: usize) -> f32 {
 ///   shell adds the `sin(wave)` blink);
 /// - `scrDrawMiscHUD` bottom-right rows, right-aligned at `view-2`:
 ///   run clock then map name (gated on `show_timer`/`show_area`).
+///
+/// Deferred GML HUD rows (need sim state the port never tracks):
+/// `LOW %/NOT ENOUGH %/EMPTY/NOT ENOUGH RADS` low-ammo block
+/// (`drawempty` + `sin(wave)` blink), `FAINTED` pulse, bleed gray bar,
+/// hurt white flash, Rogue/Cuz ammo icons, exp bar + ultra/nomuts
+/// level sprites, ammo-type icon strip + daily/weekly/custom icons,
+/// `scrDrawInteractionHUD`, `scrDrawMiscHUD` cheat/ultra/skill icon
+/// rows, and the analog `scrDrawClock` surface clock (only the digital
+/// `timer_string` is drawn).
 pub fn hud_gui_texts(world: &mut World) -> Vec<HudGuiText> {
     use crate::data::{AmmoKind, ammo_pickup_amount};
 
@@ -3421,41 +3432,82 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             }
         }
         crate::MenuOverlay::Loading => {
+            // GML `GenCont/Draw_0` text layer verbatim: `GENERATING... %`
+            // at `(_cx, _cy - 54)` from `Floor/goal` (pad-2), the
+            // `VERIFYING... %` Venuz branch (`level >= 10` + a Venuz
+            // player), the `@s`-tip at `(_cx, _cy + 24)`, and the
+            // roadmap area/kill strings at `(drawx-60/drawx+23,
+            // drawy-14)` (the dots ride `menu_sprites`). `_cx/_cy` is
+            // the view center (`vw/2`, 120 at 240 high).
             let progress = world
                 .get_resource::<crate::state::LoadingState>()
                 .map(|l| l.progress)
                 .unwrap_or(1.0);
+            let pct = (progress.clamp(0.0, 1.0) * 100.0).round() as u32;
+            // GML `GenCont/Draw_0:13-18`: Venuz verifying branch.
+            let is_venuz = world
+                .query::<&crate::comps_a::RaceState>()
+                .iter(world)
+                .any(|rs| rs.race == crate::data::RaceId::Venuz);
+            let deep_enough = world
+                .get_resource::<crate::comps_a::Run>()
+                .is_some_and(|r| r.floor >= 10);
+            let verb = if deep_enough && is_venuz {
+                "VERIFYING"
+            } else {
+                "GENERATING"
+            };
             let mut out = vec![gui_center(
-                format!(
-                    "GENERATING... {}%",
-                    (progress.clamp(0.0, 1.0) * 100.0).round() as u32
-                ),
+                format!("{verb}... {pct:02}%"),
                 cx,
                 66.0,
                 GUI_GRAY,
             )];
-            let roadmap = world
-                .get_resource::<crate::comps_a::Run>()
-                .map(|r| {
-                    if r.world == 0 && r.floor == 0 {
-                        String::new()
-                    } else {
-                        format!(
-                            "{}-{}  LOOP {}",
-                            r.world,
-                            crate::worldgen::floor_in_world(r.floor),
-                            r.loop_count
-                        )
+            // Tip is picked once per load (stable across draws).
+            let tip = {
+                let fresh = world
+                    .get_resource::<crate::state::LoadingState>()
+                    .map(|l| l.tip.clone())
+                    .unwrap_or_default();
+                if fresh.is_empty() {
+                    let picked = world
+                        .get_resource::<crate::comps_a::Run>()
+                        .map(crate::progression::pick_loading_tip)
+                        .unwrap_or_else(|| "KILL ENEMIES TO LEVEL UP".to_string());
+                    if let Some(mut loading) =
+                        world.get_resource_mut::<crate::state::LoadingState>()
+                    {
+                        loading.tip = picked.clone();
                     }
-                })
-                .unwrap_or_default();
-            if !roadmap.is_empty() {
-                out.push(MenuGuiText {
-                    text: roadmap,
-                    px: 5.0,
-                    right: false,
-                    ..gui_center("", cx, 168.0, GUI_GRAY)
-                });
+                    picked
+                } else {
+                    fresh
+                }
+            };
+            out.push(gui_center(format!("@s{tip}"), cx, 144.0, GUI_GRAY));
+            if let Some(run) = world.get_resource::<crate::comps_a::Run>() {
+                if run.world != 0 || run.floor != 0 {
+                    out.push(MenuGuiText {
+                        text: crate::hud::run_area_string(run),
+                        gx: cx - 108.0,
+                        gy: 106.0,
+                        color: GUI_WHITE,
+                        px: 7.0,
+                        centered: false,
+                        middle_y: true,
+                        right: false,
+                    });
+                    out.push(MenuGuiText {
+                        text: run.total_kills.to_string(),
+                        gx: cx - 25.0,
+                        gy: 106.0,
+                        color: GUI_WHITE,
+                        px: 7.0,
+                        centered: false,
+                        middle_y: true,
+                        right: false,
+                    });
+                }
             }
             out
         }
@@ -3594,10 +3646,13 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             let mut l = 0;
             header(&mut out, lx, &mut l, "TOTAL");
             let (un, unmax) = unlock_progress(&save);
+            // GML `scrDrawStats:82` verbatim: `string_pad_zeroes(round(
+            // unlock / unlockmax * 100), 2) + "%"` — rounds (never
+            // truncates) and can display 100%.
             let unpct = if unmax == 0 {
                 0
             } else {
-                (un * 100 / unmax).min(99)
+                ((un as f32 / unmax as f32) * 100.0).round() as u32
             };
             for (name, val) in [
                 ("kills", save.total_kills.to_string()),
@@ -3637,7 +3692,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 stat_val(&mut out, rx, &mut r, save.win_streak_best.to_string());
                 header(&mut out, rx, &mut r, "");
             }
-            if save.total_wins > 0 && save.best_time_steps > 0 {
+            if save.total_wins > 0 {
                 header(&mut out, rx, &mut r, "BEST TIME");
                 stat_name(&mut out, rx, &mut r, &race_name(save.best_time_race));
                 stat_val(
@@ -3648,6 +3703,14 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 );
                 header(&mut out, rx, &mut r, "");
             }
+            // Deferred GML `scrDrawStats:108-114` DAILY block: it needs
+            // the daily-run systems the port lacks (`dbst_*` bests +
+            // `ctot_days` producers; DAILY/WEEKLY PLAY rows deny with
+            // `sndNoSelect`, so `dailies > 0` can never hold here).
+            // Deferred GML `scrDrawCharStats` per-race page: it needs
+            // per-race `ctot_*`/`cbst_*`/`hbst_*` tracking arrays plus a
+            // select overlay; the sim only keeps the global aggregates
+            // the TOTAL/BEST blocks above read.
             // GML `scrDrawStats` HARD block verbatim: gated on `hardgot`
             // + hard runs, shows the global hard-best race + hard map
             // (`scrAreaGetMapName(..., hard = true)`), kills, and runs.
@@ -3792,20 +3855,24 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             let mut out = Vec::new();
             if let Some(run) = run {
                 let max_sub = area_max_subarea(run.area);
-                // GML `== GameCont.maxsubarea` verbatim on both finals.
+                // GML `GameOver/Create_0` verbatim: base text from the
+                // area/loop position, then a win only overrides to
+                // `THE STRUGGLE IS OVER` on the HQ final. The
+                // `Cinematic`-gated `YOU REACHED THE NUCLEAR THRONE`
+                // has no port counterpart (no Cinematic entity), so a
+                // non-HQ win keeps its base text like GML without one.
                 let palace_final = run.area == AreaId::Palace && run.floor_in_area == max_sub;
                 let hq_final = run.area == AreaId::HQ && run.floor_in_area == max_sub;
-                let text = if run.won && hq_final {
-                    "THE STRUGGLE IS OVER"
-                } else if run.won {
-                    "YOU REACHED THE NUCLEAR THRONE"
-                } else if palace_final {
+                let mut text = if palace_final {
                     "YOU ALMOST REACHED THE NUCLEAR THRONE"
                 } else if run.loop_count > 0 {
                     "THE STRUGGLE CONTINUES"
                 } else {
                     "YOU DID NOT REACH THE NUCLEAR THRONE"
                 };
+                if run.won && hq_final {
+                    text = "THE STRUGGLE IS OVER";
+                }
                 out.push(MenuGuiText {
                     text: text.to_string(),
                     gx: cx,
@@ -3818,9 +3885,12 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     middle_y: false,
                     right: false,
                 });
+                // GML `scrDrawRoadmap:23-24` verbatim: the area/kill
+                // strings ride the roadmap at `(drawx-60, drawy-14)` /
+                // `(drawx+23, drawy-14)` with `drawx = cx-48`.
                 out.push(MenuGuiText {
                     text: run_area_string(run),
-                    gx: 52.0,
+                    gx: cx - 108.0,
                     gy: 106.0 - offsety,
                     color: GUI_WHITE,
                     px: 7.0,
@@ -3830,7 +3900,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 });
                 out.push(MenuGuiText {
                     text: run.total_kills.to_string(),
-                    gx: 135.0,
+                    gx: cx - 25.0,
                     gy: 106.0 - offsety,
                     color: GUI_WHITE,
                     px: 7.0,
@@ -3874,7 +3944,11 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             } else {
                 out.push(gui_center("GAME OVER", cx, 100.0, GUI_WHITE));
             }
-            // GML `PauseButton`s ride `ystart + offsety`.
+            // GML `PauseButton`s ride `ystart + offsety`. Deferred:
+            // the `appear = 3 + image` stagger and the event-run
+            // `sprGameOverResult` swap (`scrGameIsEventRun`; weekly
+            // keeps button 0 as image 1, else button 0 is destroyed) —
+            // the port has no event runs, so both buttons draw at once.
             out.push(gui_button("MENU", cx, 120.0 + 58.0 + offsety, GUI_MID));
             out.push(gui_button("RETRY", cx, 120.0 + 90.0 + offsety, GUI_MID));
             out
@@ -6577,6 +6651,46 @@ pub fn roadmap_sprites(
     out
 }
 
+/// Final waypoint cursor after the counted prefix (GML `scrDrawRoadmap`
+/// `_map_x/_map_y` verbatim): replays the shadow-pass position walk so
+/// the player `sprMapIcon`s land where GML draws them — on the last
+/// counted waypoint, `drawy + 10` on the secret row.
+#[allow(unused_assignments)]
+pub fn roadmap_cursor_pos(
+    waypoints: &[crate::comps_a::Waypoint],
+    pos: usize,
+    drawx: f32,
+    drawy: f32,
+) -> (f32, f32) {
+    const SEG: f32 = 9.0;
+    const MAXSUB: [i32; 8] = [0, 3, 1, 3, 1, 3, 1, 3];
+    let total: f32 = MAXSUB[1..].iter().map(|m| *m as f32 * SEG).sum();
+    let x0 = drawx - (total as i32 / 2) as f32;
+    let odd_len = MAXSUB[1] as f32 * SEG;
+    let even_len = MAXSUB[2] as f32 * SEG;
+    let (mut mx, mut my) = (x0, drawy);
+    let mut cur_loop: Option<u32> = None;
+    for wp in waypoints.iter().take(pos.min(waypoints.len())) {
+        let secret = wp.area >= 100;
+        let area_mod = wp.area % 100;
+        if cur_loop != Some(wp.lp) {
+            cur_loop = Some(wp.lp);
+            mx = x0;
+            my = drawy;
+        }
+        if !secret {
+            let even = area_mod.div_euclid(2);
+            let odd = area_mod - even;
+            mx = x0
+                + ((odd - 1) as f32 * even_len
+                    + even as f32 * odd_len
+                    + (wp.sub as i32 - 1) as f32 * SEG);
+        }
+        my = drawy + (SEG + 1.0) * secret as u32 as f32;
+    }
+    (mx, my)
+}
+
 /// Menu art sprites (`Menu/Draw_0`, portrait, loadout, logo, and
 /// game-over splats verbatim where the UI framework cannot draw them):
 /// char pods (`sprCharSelect` frame = race, locked gray), GO button,
@@ -6766,14 +6880,96 @@ pub fn menu_sprites(
             }
             if let Some(run) = world.get_resource::<Run>() {
                 let wps = run.waypoints.clone();
+                let prefix = death_pos.round() as usize;
                 out.extend(roadmap_sprites(
                     assets,
                     &gui_to_world,
                     cx - 48.0,
                     120.0 - offsety,
                     &wps,
-                    death_pos.round() as usize,
+                    prefix,
                 ));
+                // GML `GameOver/Draw_0` deathcause icon verbatim:
+                // `draw_sprite(scrDeathCauseGetSprite(cause), -1,
+                // _x+86, _y-offsety)` — `-1` rides the GameOver
+                // `image_speed = 0.4`, i.e. `floor(death_pos * 0.4)`
+                // over the strip frames here.
+                if let Some(path) = world
+                    .get_resource::<MenuState>()
+                    .and_then(|m| m.game_over)
+                    .and_then(|g| g.deathcause_sprite)
+                {
+                    let frames = strip_frames(assets, path).max(1) as f32;
+                    let frame = ((death_pos * 0.4).floor() % frames) as i32;
+                    if let Some(s) = assets.sprite_for(
+                        path,
+                        frame,
+                        gui_to_world(cx + 86.0, 120.0 - offsety),
+                        false,
+                        0.0,
+                        [1.0; 4],
+                    ) {
+                        out.push(s);
+                    }
+                }
+                // GML `scrDrawRoadmap:158-197` player icons verbatim:
+                // `sprMapIcon[skin]` at the final cursor (secret row
+                // included), `sprMapIconChickenHeadless[skin]` for a
+                // dead Chicken, `sprMapIconRebelBHooded` for a B-skin
+                // Rebel in the city (GML `area_city` = port
+                // `FrozenCity`). Single-player draws one icon with no
+                // co-op offset.
+                let (cursor_x, cursor_y) =
+                    roadmap_cursor_pos(&wps, prefix, cx - 48.0, 120.0 - offsety);
+                let players: Vec<(RaceId, u8, i32, AreaId)> = {
+                    let area = run.area;
+                    let save = world
+                        .get_resource::<crate::savedata_part::SaveData>()
+                        .cloned();
+                    world
+                        .query::<(&crate::comps_a::RaceState, &Health)>()
+                        .iter(world)
+                        .filter(|(rs, _)| rs.race != crate::data::RaceId::Random)
+                        .map(|(rs, h)| {
+                            let skin = save
+                                .as_ref()
+                                .map(|s| s.race_loadout(rs.race).preferred_skin)
+                                .unwrap_or(0);
+                            (rs.race, skin, h.hp, area)
+                        })
+                        .collect()
+                };
+                for (race, skin, hp, area) in players {
+                    let (path, frame) = if race == RaceId::Chicken && hp <= 0 {
+                        ("images/sprMapIconChickenHeadless.png", skin as i32)
+                    } else if race == RaceId::Rebel
+                        && skin == 1
+                        && area == AreaId::FrozenCity
+                    {
+                        ("images/sprMapIconRebelBHooded.png", 0)
+                    } else {
+                        (
+                            "images/sprMapIcon.png",
+                            crate::state::menus::race_skin_subimage(
+                                race as usize,
+                                skin,
+                            ),
+                        )
+                    };
+                    if frame < 0 {
+                        continue;
+                    }
+                    if let Some(s) = assets.sprite_for(
+                        path,
+                        frame,
+                        gui_to_world(cursor_x, cursor_y),
+                        false,
+                        0.0,
+                        [1.0; 4],
+                    ) {
+                        out.push(s);
+                    }
+                }
             }
         }
         crate::MenuOverlay::Loading => {

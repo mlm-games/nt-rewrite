@@ -148,6 +148,10 @@ pub struct SplashAutoAdvance(pub bool);
 pub struct LoadingState {
     pub t: f32,
     pub progress: f32,
+    /// GML `GenCont` tip verbatim (`draw_text_nt(_cx, _cy + 24, "@s" +
+    /// tip)`): picked once per load so it stays stable across draws
+    /// (lazy-filled by the loading text layer; empty until first draw).
+    pub tip: String,
 }
 
 impl Default for LoadingState {
@@ -155,6 +159,7 @@ impl Default for LoadingState {
         Self {
             t: 0.0,
             progress: 1.0,
+            tip: String::new(),
         }
     }
 }

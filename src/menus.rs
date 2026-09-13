@@ -173,6 +173,51 @@ pub enum UnlockPopup {
     Skin(RaceId, u8),
 }
 
+/// GML `scr_death_cause_is_valid` + `scrDeathCauseGetSprite` verbatim
+/// over the port [`HitId`](crate::comps_a::HitId): enemy hits (either
+/// an explicit kind or an `Enemy(id)` hit) resolve to the killer's
+/// idle strip (`enemy_def(kind).sprite`, the same `spr*Idle` table GML
+/// `scrDeathCauseDefine`s); `Explosion` → `sprExplosion`, `Toxic` →
+/// `sprToxicGas`, `Fire`/`Trap` → `sprTrapGameover`. Everything else
+/// (contact/bullets/crowns/unknown) is not a valid GML cause and draws
+/// nothing — exactly like the `sprite_exists` gate in
+/// `GameOver/Draw_0`.
+pub fn deathcause_sprite_for_hit(
+    hit: Option<crate::comps_a::HitId>,
+    enemy_kind: Option<crate::data::EnemyKind>,
+) -> Option<&'static str> {
+    use crate::comps_a::HitId;
+    if let Some(kind) = enemy_kind {
+        return Some(crate::enemy_data::enemy_def(kind).sprite);
+    }
+    match hit {
+        Some(HitId::Enemy(id)) => crate::data::EnemyKind::from_u16(id)
+            .map(|k| crate::enemy_data::enemy_def(k).sprite),
+        Some(HitId::Explosion(_)) => Some("images/sprExplosion.png"),
+        Some(HitId::Toxic) => Some("images/sprToxicGas.png"),
+        Some(HitId::Fire) | Some(HitId::Trap) => Some("images/sprTrapGameover.png"),
+        _ => None,
+    }
+}
+
+/// GML `scr_race_get_skin_subimage` verbatim (`scrRaces.gml:117`):
+/// Robot-D sits at 56 (NTT bug), else `(skin + (race-1)*2)` for A/B
+/// and `(skin*16 + (race-1))` for C/D; race 0 (Random) draws nothing
+/// (-1). `race_gml` is the gml id, `skin` the letter index (A=0..).
+pub fn race_skin_subimage(race_gml: usize, skin: u8) -> i32 {
+    if race_gml == 0 {
+        return -1;
+    }
+    if race_gml == crate::data::RaceId::Robot as usize && skin == 3 {
+        return 56;
+    }
+    if skin < 2 {
+        (skin as i32) + (race_gml as i32 - 1) * 2
+    } else {
+        (skin as i32) * 16 + (race_gml as i32 - 1)
+    }
+}
+
 /// Game-over screen data (bevy `game_over_panel` reads verbatim:
 /// area, loop, kills, score, best, mutation count; toast stays in the
 /// `Toast` resource for the shell).
@@ -186,6 +231,10 @@ pub struct GameOverScreen {
     pub high_score: u32,
     pub best_floor: u32,
     pub mutation_count: usize,
+    /// GML `GameCont.deathcause` sprite (`GameOver/Draw_0`:
+    /// `scrDeathCauseGetSprite`, `-1` animated frame). `None` when the
+    /// cause is not a valid GML cause (contact/bullets/crowns).
+    pub deathcause_sprite: Option<&'static str>,
 }
 
 /// Snapshot the game-over screen (bevy `hud.rs` death-mutation law:
@@ -215,6 +264,9 @@ pub fn capture_game_over(world: &mut World) -> Option<GameOverScreen> {
             .next()
             .map(|p| p.mutations.len())
             .unwrap_or(0),
+        deathcause_sprite: world.get_resource::<crate::comps_a::LastDamageTaken>().and_then(
+            |last| deathcause_sprite_for_hit(last.hit_id, last.enemy_kind),
+        ),
     };
     Some(screen)
 }

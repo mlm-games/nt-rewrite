@@ -168,7 +168,10 @@ pub fn reset_hud_state(hud: &mut HudState) {
 /// sub-second `timer` counter at 30 steps/s
 /// (`string_pad_zeroes(..., 1)` = at least 1 digit, i.e. no zero padding:
 /// `round(timer / 30 * 100)` prints 0-97 unpadded). `timer` resets every
-/// second, so it equals `tottimer % 30`.
+/// second, so it equals `tottimer % 30` at whole steps; under slow-mo
+/// `timescale` fractions GML accumulates a float while the port derives
+/// from the integer `tottimer`, so sub-step fractions can differ by a
+/// frame (deferred: the sim has no float clock).
 pub fn run_timer_string(tottimer: u32) -> String {
     let minutes = tottimer / 1800;
     let seconds = (tottimer / 30) % 60;
@@ -221,19 +224,53 @@ pub fn gml_area_map_name(area: i32, sub: u32, lp: u32, hardmode: bool) -> String
 }
 
 /// GML `scrAreaGetMapName` verbatim (unlocalized strings): a won run
-/// shows `END2` on the final HQ floor else `END1` (GML checks the
-/// `Cinematic` throne win first, then the HQ-final win — headless has
-/// no cinematic entity so any non-HQ win is `END1`); otherwise the
-/// [`gml_area_map_name`] body.
+/// shows `END2` on the final HQ floor (`area == hq && subarea ==
+/// maxsubarea`), `END1` on a throne win (GML's `Cinematic`-exists
+/// branch — the port has no Cinematic entity, so any other won run is
+/// `END1`, the Cinematic-equivalent mapping), else the
+/// [`gml_area_map_name`] body. The loop suffix still applies to `END`
+/// results, exactly like GML.
 pub fn run_area_string(run: &Run) -> String {
     let area = crate::worldgen::gml_area_from_run(run);
     if run.won {
-        if area == 106 {
-            return "END2".to_string();
+        // Won HQ run below the final subarea: GML matches neither END
+        // branch, so the normal map body shows (with loop suffix).
+        if area == 106 && run.floor_in_area != area_max_subarea_for(run) {
+            return gml_area_map_name(area, run.floor_in_area, run.loop_count, run.hardmode);
         }
-        return "END1".to_string();
+        let base = if area == 106 {
+            "END2".to_string()
+        } else {
+            "END1".to_string()
+        };
+        // GML appends the loop suffix to END results too.
+        return apply_loop_suffix(base, run.loop_count, run.hardmode);
     }
     gml_area_map_name(area, run.floor_in_area, run.loop_count, run.hardmode)
+}
+
+/// GML `area_hq` final-subarea gate for the `END2` branch
+/// (`subarea == maxsubarea`, `scrAreaGetMaxSubarea(hq) == 3`).
+fn area_max_subarea_for(run: &Run) -> u32 {
+    match run.area {
+        crate::data::AreaId::Desert
+        | crate::data::AreaId::Scrapyards
+        | crate::data::AreaId::FrozenCity
+        | crate::data::AreaId::Palace
+        | crate::data::AreaId::HQ => 3,
+        _ => 1,
+    }
+}
+
+/// GML loop-suffix tail of `scrAreaGetMapName`: ` H#` in hardmode else
+/// ` L#` on loops (unlocalized).
+fn apply_loop_suffix(base: String, lp: u32, hardmode: bool) -> String {
+    if lp != 0 {
+        let tag = if hardmode { 'H' } else { 'L' };
+        format!("{base} {tag}{lp}")
+    } else {
+        base
+    }
 }
 
 /// Derive the HUD snapshot from sim state (bevy `sync_hud` state
