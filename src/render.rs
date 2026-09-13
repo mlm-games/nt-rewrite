@@ -215,7 +215,7 @@ impl RenderAssets {
         std::mem::take(&mut self.uploads)
     }
 
-    fn sprite_for(
+    pub(crate) fn sprite_for(
         &self,
         path: &str,
         frame: i32,
@@ -3514,28 +3514,44 @@ pub fn credit_section_count() -> usize {
 pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -> Vec<MenuGuiText> {
     let cx = vw * 0.5;
     match kind {
-        // Boot reel captions (GML `Vlambeer/Draw_0` verbatim): mode 0
-        // save note (ONE centered-middle text at `(cx, cy+24)` — GML
-        // joins with `\n`, the backend renders `#`/newlines), mode 1
-        // Gamemaker line at `(cx, cy)`, mode 3 team block at `(cx, cy)`
-        // (`@yVLAMBEER@s#&#@w...#PRESENT###`). Modes 2/4 sprite-only.
+        // Boot reel captions (GML `Vlambeer/Draw_0` verbatim, expanded to
+        // one row per visual line: `gui_text_layer` renders each row
+        // `.single_line()`, so embedded `\n`/`#` would never break —
+        // GML's single `draw_text_nt` block must arrive pre-split).
+        // Mode 0 save note: 2 white lines, block middle at `cy+24`
+        // (140/150 middle-centers ≈ 144). Mode 1 Gamemaker line at
+        // `(cx, cy)`, `@s`-silver per GML. Mode 3 team block at
+        // `(cx, cy)`: `@yVLAMBEER`, `@s&`, four `@w` names,
+        // `PRESENT`; ys 80..160 average exactly 120 (blanks shape the
+        // rhythm). Modes 2/4 sprite-only.
         crate::MenuOverlay::Splash => {
             let mode = world
                 .get_resource::<SplashState>()
                 .map(|s| s.mode)
                 .unwrap_or(0);
             match mode {
-                0 => vec![MenuGuiText {
-                    text: "DO NOT TURN OFF NUCLEAR THRONE\nWHILE THIS SAVING ICON IS DISPLAYED."
-                        .to_string(),
-                    gx: cx,
-                    gy: 144.0,
-                    color: GUI_WHITE,
-                    px: 7.0,
-                    centered: true,
-                    middle_y: true,
-                    right: false,
-                }],
+                0 => vec![
+                    MenuGuiText {
+                        text: "DO NOT TURN OFF NUCLEAR THRONE".to_string(),
+                        gx: cx,
+                        gy: 140.0,
+                        color: GUI_WHITE,
+                        px: 7.0,
+                        centered: true,
+                        middle_y: true,
+                        right: false,
+                    },
+                    MenuGuiText {
+                        text: "WHILE THIS SAVING ICON IS DISPLAYED.".to_string(),
+                        gx: cx,
+                        gy: 150.0,
+                        color: GUI_WHITE,
+                        px: 7.0,
+                        centered: true,
+                        middle_y: true,
+                        right: false,
+                    },
+                ],
                 1 => vec![MenuGuiText {
                     text: "@sMADE IN GAMEMAKER".to_string(),
                     gx: cx,
@@ -3546,17 +3562,27 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     middle_y: true,
                     right: false,
                 }],
-                3 => vec![MenuGuiText {
-                    text: "@yVLAMBEER@s#&#@wPAUL VEER#JUKIO KALLIO#JOONAS TURNER#JUSTIN CHAN#YELLOWAFTERLIFE@s##PRESENT###"
-                        .to_string(),
+                3 => [
+                    ("@yVLAMBEER", 80.0),
+                    ("@s&", 100.0),
+                    ("@wPAUL VEER", 110.0),
+                    ("@wJUKIO KALLIO", 120.0),
+                    ("@wJOONAS TURNER", 130.0),
+                    ("@wJUSTIN CHAN", 140.0),
+                    ("@wPRESENT", 160.0),
+                ]
+                .iter()
+                .map(|(text, gy)| MenuGuiText {
+                    text: text.to_string(),
                     gx: cx,
-                    gy: 120.0,
+                    gy: *gy,
                     color: GUI_WHITE,
                     px: 7.0,
                     centered: true,
                     middle_y: true,
                     right: false,
-                }],
+                })
+                .collect(),
                 _ => Vec::new(),
             }
         }
@@ -6664,27 +6690,27 @@ pub fn splash_sprites(
             }
         }
         2 => {
-            // Vlambeer card at the view bottom + 10 additive shimmer
-            // copies at +/-4 px, alpha 0.1. GML `Vlambeer/Draw_0`
-            // re-rolls `orandom(4)` every draw, so the offsets must
-            // jitter each 30 Hz step (quantized from `t` to stay
-            // deterministic), not freeze on a static hash.
+            // GML `Vlambeer/Draw_0` verbatim: `draw_sprite(sprite_index,
+            // 0, view_x + (view_w - sprite_w)/2, view_y + (view_h -
+            // sprite_h))` — top-left pinned at `center_x - w/2`,
+            // `bottom - h`, drawn CENTERED (`sprite_for`, not the
+            // top-left `hud_gui_place`: `sprVlambeer` is a top-left
+            // zero-origin strip). + 10 additive shimmer copies at
+            // `orandom(4)` (±4 px), alpha 0.1. GML re-rolls every draw,
+            // so offsets jitter each 30 Hz step (quantized from `t` to
+            // stay deterministic), not frozen on a static hash.
             let (fw, fh) = assets
                 .native_size("images/sprVlambeer.png")
                 .map(|v| (v.x, v.y))
                 .unwrap_or((320.0, 240.0));
-            let px = cx - fw * 0.5;
-            let py = 240.0 - fh;
-            if let Some(s) = hud_gui_place(
-                assets,
+            let top_left = hud_gui_to_world(gm, view, cx - fw * 0.5, 240.0 - fh);
+            if let Some(s) = assets.sprite_for(
                 "images/sprVlambeer.png",
                 0,
-                px,
-                py,
-                1.0,
+                top_left,
+                false,
+                0.0,
                 [1.0; 4],
-                gm,
-                view,
             ) {
                 out.push(s);
             }
@@ -6698,16 +6724,13 @@ pub fn splash_sprites(
                         .wrapping_add(step.wrapping_mul(104_729)),
                 ) - 0.5)
                     * 8.0;
-                if let Some(mut s) = hud_gui_place(
-                    assets,
+                if let Some(mut s) = assets.sprite_for(
                     "images/sprVlambeer.png",
                     0,
-                    px + jx,
-                    py + jy,
-                    1.0,
+                    top_left + Vec2::new(jx, jy),
+                    false,
+                    0.0,
                     [1.0, 1.0, 1.0, 0.1],
-                    gm,
-                    view,
                 ) {
                     // Additive shimmer (`bm_add`).
                     s.blend = SpriteBlend::Additive;
