@@ -3515,40 +3515,30 @@ pub fn credit_section_count() -> usize {
 pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -> Vec<MenuGuiText> {
     let cx = vw * 0.5;
     match kind {
-        // Boot reel captions (`Vlambeer/Draw_0` verbatim): mode 0 save
-        // note (middle block at cy+24), mode 1 Gamemaker line, mode 3
-        // credits (middle block at cy, blanks shape the rhythm).
-        // Modes 2/4 are sprite-only.
+        // Boot reel captions (GML `Vlambeer/Draw_0` verbatim): mode 0
+        // save note (ONE centered-middle text at `(cx, cy+24)` — GML
+        // joins with `\n`, the backend renders `#`/newlines), mode 1
+        // Gamemaker line at `(cx, cy)`, mode 3 team block at `(cx, cy)`
+        // (`@yVLAMBEER@s#&#@w...#PRESENT###`). Modes 2/4 sprite-only.
         crate::MenuOverlay::Splash => {
             let mode = world
                 .get_resource::<SplashState>()
                 .map(|s| s.mode)
                 .unwrap_or(0);
             match mode {
-                0 => vec![
-                    MenuGuiText {
-                        text: "DO NOT TURN OFF NUCLEAR THRONE".to_string(),
-                        gx: cx,
-                        gy: 140.0,
-                        color: GUI_WHITE,
-                        px: 7.0,
-                        centered: true,
-                        middle_y: true,
-                        right: false,
-                    },
-                    MenuGuiText {
-                        text: "WHILE THIS SAVING ICON IS DISPLAYED.".to_string(),
-                        gx: cx,
-                        gy: 150.0,
-                        color: GUI_WHITE,
-                        px: 7.0,
-                        centered: true,
-                        middle_y: true,
-                        right: false,
-                    },
-                ],
+                0 => vec![MenuGuiText {
+                    text: "DO NOT TURN OFF NUCLEAR THRONE\nWHILE THIS SAVING ICON IS DISPLAYED."
+                        .to_string(),
+                    gx: cx,
+                    gy: 144.0,
+                    color: GUI_WHITE,
+                    px: 7.0,
+                    centered: true,
+                    middle_y: true,
+                    right: false,
+                }],
                 1 => vec![MenuGuiText {
-                    text: "MADE IN GAMEMAKER".to_string(),
+                    text: "@sMADE IN GAMEMAKER".to_string(),
                     gx: cx,
                     gy: 120.0,
                     color: GUI_WHITE,
@@ -3557,27 +3547,17 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     middle_y: true,
                     right: false,
                 }],
-                3 => [
-                    ("VLAMBEER", 80.0, GUI_GOLD),
-                    ("PAUL VEER", 100.0, GUI_WHITE),
-                    ("JUKIO KALLIO", 110.0, GUI_WHITE),
-                    ("JOONAS TURNER", 120.0, GUI_WHITE),
-                    ("JUSTIN CHAN", 130.0, GUI_WHITE),
-                    ("YELLOWAFTERLIFE", 140.0, GUI_WHITE),
-                    ("PRESENT", 160.0, GUI_WHITE),
-                ]
-                .iter()
-                .map(|(text, gy, color)| MenuGuiText {
-                    text: text.to_string(),
+                3 => vec![MenuGuiText {
+                    text: "@yVLAMBEER@s#&#@wPAUL VEER#JUKIO KALLIO#JOONAS TURNER#JUSTIN CHAN#YELLOWAFTERLIFE@s##PRESENT###"
+                        .to_string(),
                     gx: cx,
-                    gy: *gy,
-                    color: *color,
+                    gy: 120.0,
+                    color: GUI_WHITE,
                     px: 7.0,
                     centered: true,
                     middle_y: true,
                     right: false,
-                })
-                .collect(),
+                }],
                 _ => Vec::new(),
             }
         }
