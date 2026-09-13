@@ -225,11 +225,10 @@ pub fn gml_area_map_name(area: i32, sub: u32, lp: u32, hardmode: bool) -> String
 
 /// GML `scrAreaGetMapName` verbatim (unlocalized strings): a won run
 /// shows `END2` on the final HQ floor (`area == hq && subarea ==
-/// maxsubarea`), `END1` on a throne win (GML's `Cinematic`-exists
-/// branch — the port has no Cinematic entity, so any other won run is
-/// `END1`, the Cinematic-equivalent mapping), else the
-/// [`gml_area_map_name`] body. The loop suffix still applies to `END`
-/// results, exactly like GML.
+/// maxsubarea`); `END1` only when a `Cinematic` instance exists, which the
+/// port never spawns, so every other won run falls through to the normal
+/// map body. The loop suffix still applies to `END` results, exactly
+/// like GML.
 pub fn run_area_string(run: &Run) -> String {
     let area = crate::worldgen::gml_area_from_run(run);
     if run.won {
@@ -238,13 +237,11 @@ pub fn run_area_string(run: &Run) -> String {
         if area == 106 && run.floor_in_area != area_max_subarea_for(run) {
             return gml_area_map_name(area, run.floor_in_area, run.loop_count, run.hardmode);
         }
-        let base = if area == 106 {
-            "END2".to_string()
-        } else {
-            "END1".to_string()
-        };
-        // GML appends the loop suffix to END results too.
-        return apply_loop_suffix(base, run.loop_count, run.hardmode);
+        if area == 106 {
+            // Final HQ floor: END2 (with loop suffix).
+            return apply_loop_suffix("END2".to_string(), run.loop_count, run.hardmode);
+        }
+        // No Cinematic entity in the port: fall through to the map body.
     }
     gml_area_map_name(area, run.floor_in_area, run.loop_count, run.hardmode)
 }
@@ -282,18 +279,23 @@ pub fn sync_hud_state(world: &World) -> HudState {
     // Coop downed markers for the fainted-bar draw (GML `TopCont/Draw_0`
     // `with Revive` block: raw pos + alarms; the renderer clamps to the
     // view, exactly like GML's `clamp(x, view_xview + 30, ...)`).
-    // Filled before the run gate: bars draw whenever a marker exists.
-    for entity_ref in world.iter_entities() {
-        let (Some(pos), Some(revive)) = (entity_ref.get::<Pos>(), entity_ref.get::<Revive>())
-        else {
-            continue;
-        };
-        hud.fainted_bars.push(FaintedBar {
-            x: pos.0.x,
-            y: pos.0.y,
-            alarm4: revive.alarm4,
-            alarm5: revive.alarm5,
-        });
+    // GML `:85` requires `instance_exists(Player)`, so markers only
+    // surface while a player is alive.
+    let player_alive = world.iter_entities().any(|e| e.contains::<crate::comps_a::Player>());
+    if player_alive {
+        for entity_ref in world.iter_entities() {
+            let (Some(pos), Some(revive)) =
+                (entity_ref.get::<Pos>(), entity_ref.get::<Revive>())
+            else {
+                continue;
+            };
+            hud.fainted_bars.push(FaintedBar {
+                x: pos.0.x,
+                y: pos.0.y,
+                alarm4: revive.alarm4,
+                alarm5: revive.alarm5,
+            });
+        }
     }
 
     let Some(run) = world.get_resource::<Run>() else {

@@ -103,7 +103,10 @@ pub fn player_anim_switch(
         if anim.oneshot && !anim.finished {
             continue;
         }
-        let moving = vel.0.length_squared() > 100.0;
+        // GML `Player/Step_0.gml:192-197` verbatim: `if (!speed)` idle
+        // else walk (hurt handled by the `Without<HurtAnim>` filter, cry
+        // by `animation_end`). Any nonzero speed counts as moving.
+        let moving = vel.0.length_squared() > 1e-6;
         if moving == pa.moving && !anim.oneshot {
             continue;
         }
@@ -129,7 +132,7 @@ pub fn enemy_anim_switch(
             continue;
         }
 
-        let moving = vel.0.length_squared() > 80.0;
+        let moving = vel.0.length_squared() > 1e-6;
         let idle = sprites.idle;
         let walk = sprites.walk.unwrap_or(idle);
         let desired = if moving { walk } else { idle };
@@ -322,8 +325,14 @@ pub fn prop_hurt_on_damage(
     }
 }
 
-/// Restore idle/walk when the hurt strip lapses (timer, 2-frame cap,
-/// hard 0.35 s timeout, or finished oneshot — bevy parity).
+/// Restore idle when the hurt strip lapses (GML verbatim:
+/// `Player/Step_0.gml:199-202`, `enemy/Step_0.gml:27-29,39-41`,
+/// `prop/Step_1.gml:8-10`: `if (sprite_index == spr_hurt &&
+/// image_index > 2) sprite_index = spr_idle` — always idle, never walk,
+/// no timer; GML's only `+5` is i-frames in `scr_hit`, not a visual
+/// timer). `anim.frame > 2` is the `image_index > 2` equivalent; the
+/// finished-oneshot arm is a safety net for strips shorter than 3
+/// frames, which GML would loop past `> 2` but our oneshot clamps.
 /// `PropSprites.flip_x` is intentionally NOT written here: the render
 /// phase resolves prop facing straight from `PropSprites`.
 pub fn tick_hurt_anims(
@@ -339,28 +348,19 @@ pub fn tick_hurt_anims(
         Option<&PropSprites>,
     )>,
 ) {
-    for (e, mut hurt, mut anim, vel, mut pa, prop_sprites) in &mut q {
+    for (e, mut hurt, mut anim, _vel, mut pa, prop_sprites) in &mut q {
         hurt.timer.tick(time.delta_secs);
-        let frame_done = anim.frame >= 2;
-        let hard_timeout = hurt.timer.elapsed_secs() > 0.35;
-        if !(hurt.timer.just_finished()
-            || frame_done
-            || hard_timeout
-            || (anim.oneshot && anim.finished))
-        {
+        let frame_done = anim.frame > 2;
+        if !(frame_done || (anim.oneshot && anim.finished)) {
             continue;
         }
-        let moving = vel.map(|v| v.0.length_squared() > 100.0).unwrap_or(false);
-        let path = if moving {
-            hurt.walk.unwrap_or(hurt.idle)
-        } else {
-            hurt.idle
-        };
+        // GML restores `spr_idle` unconditionally (never walk).
+        let path = hurt.idle;
         if let Some(def) = catalog.def(path) {
             anim.set_path(path, def, false);
         }
         if let Some(ref mut pa) = pa {
-            pa.moving = moving;
+            pa.moving = false;
         }
         let _ = prop_sprites;
 
@@ -368,7 +368,10 @@ pub fn tick_hurt_anims(
     }
 }
 
-/// Interrupt with the muzzle-flash strip (oneshot, 0.25 s).
+/// Interrupt with the muzzle-flash strip (oneshot, 0.25 s approximation:
+/// GML uses per-enemy alarm periods — Guardian 12 steps, Wolf ~30+rand,
+/// Crab 1-frame re-fire loop — not a global duration; 0.25 s keeps the
+/// bevy parity until per-enemy alarm data is modeled).
 pub fn play_fire(
     commands: &mut Commands,
     entity: Entity,
@@ -390,24 +393,21 @@ pub fn play_fire(
     });
 }
 
-/// Restore idle/walk when the flash strip lapses.
+/// Restore idle when the flash strip lapses (GML verbatim: Wolf/Guardian
+/// alarms restore `spr_idle`; the walk strip re-engages next step via the
+/// `speed != 0` switch when the actor is still moving).
 pub fn tick_fire_anims(
     time: Res<SimTime>,
     catalog: Res<AnimCatalog>,
     mut commands: Commands,
     mut q: Query<(Entity, &mut FireAnim, &mut SpriteAnim, Option<&Velocity>), Without<HurtAnim>>,
 ) {
-    for (e, mut fire, mut anim, vel) in &mut q {
+    for (e, mut fire, mut anim, _vel) in &mut q {
         fire.timer.tick(time.delta_secs);
         if !fire.timer.just_finished() {
             continue;
         }
-        let moving = vel.map(|v| v.0.length_squared() > 100.0).unwrap_or(false);
-        let path = if moving {
-            fire.walk.unwrap_or(fire.idle)
-        } else {
-            fire.idle
-        };
+        let path = fire.idle;
         if let Some(def) = catalog.def(path) {
             anim.set_path(path, def, false);
         }
@@ -425,7 +425,7 @@ pub fn tick_player_dying(
     for (e, mut dying) in &mut q {
         dying.timer.tick(time.delta_secs);
         if dying.timer.just_finished() {
-            commands.entity(e).despawn();
+            commands.entity(e).try_despawn();
         }
     }
 }

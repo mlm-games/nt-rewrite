@@ -1097,6 +1097,16 @@ impl SaveData {
         if skin == 0 {
             return true;
         }
+        // GML `scr_loadout_race_set_skin` verbatim: `cgot && cskingot`.
+        // Skin letters past the race max (`scrRaceGetMaxSkinCount`, secret
+        // gate unmodeled so BigDog/Frog hold 1, everything else 3) never
+        // unlock even if a flag was set.
+        if !self.race_unlocked(race) {
+            return false;
+        }
+        if (skin as usize) >= race_max_skin_count(race) {
+            return false;
+        }
         race != RaceId::Random
             && self.races.get(&race).is_some_and(|lo| {
                 lo.unlocked_skins

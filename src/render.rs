@@ -2745,9 +2745,10 @@ fn hud_gui_left(
 
 /// GML weapon-row draw order: the active weapon first, backup second,
 /// then any extra (`scrDrawPlayerHUD` iterates `_wep`, `_bwep`,
-/// `extra_weps`). Returns inventory slot indices in draw order (max 3).
+/// `extra_weps`). Returns inventory slot indices in draw order
+/// (unbounded — Steroids/Cuz extras draw past two slots).
 fn hud_weapon_order(hud: &HudState) -> Vec<usize> {
-    let n = hud.weapon_ids.len().min(3).max(1);
+    let n = hud.weapon_ids.len().max(1);
     let cur = hud.current_weapon.min(n - 1);
     let mut order = vec![cur];
     order.extend((0..n).filter(|&s| s != cur));
@@ -2756,12 +2757,12 @@ fn hud_weapon_order(hud: &HudState) -> Vec<usize> {
 
 /// GML weapon-row x positions: 24, then +44, then +20 per extra
 /// (`_dx += 44` for the first slot, `+20` afterwards once extras
-/// exist — i.e. 24/68/88).
+/// exist — i.e. 24/68/88/108/...).
 fn hud_weapon_dx(pos: usize) -> f32 {
     match pos {
         0 => 24.0,
         1 => 68.0,
-        _ => 88.0,
+        _ => 88.0 + (pos as f32 - 2.0) * 20.0,
     }
 }
 
@@ -4759,27 +4760,11 @@ pub fn hud_sprites(
         }
     }
 
-    // Rad/exp bar + level badge (GML verbatim: exp frame =
-    // `frac*16` at GUI (4,4); `sprExpBarLevel` while an offer is
-    // pending (`skillpoints/ultrapoints`); `sprUltraLevel` at (11,16)
-    // past the level cap).
-    if let Some(s) = hud_gui_place(
-        assets,
-        "images/sprExpBar.png",
-        (hud.rads as f32 / hud.max_rads.max(1) as f32)
-            .clamp(0.0, 1.0)
-            .mul_add(16.0, 0.0)
-            .floor()
-            .min(16.0) as i32,
-        4.0,
-        4.0,
-        1.0,
-        [1.0; 4],
-        gm,
-        view,
-    ) {
-        out.push(s);
-    }
+    // Rad/exp bar + level badge (GML `scrDrawPlayerHUD:186-190` verbatim:
+    // `sprExpBarLevel` first while an offer is pending
+    // (`skillpoints/ultrapoints/wantdestinyskill`), then `sprExpBar` with
+    // `frac*16` at GUI (4,4) on top; `sprUltraLevel` at (11,16) past the
+    // level cap).
     let offer_pending = world.get_resource::<PendingMutation>().is_some()
         || world.get_resource::<PendingUltra>().is_some();
     if offer_pending {
@@ -4796,6 +4781,23 @@ pub fn hud_sprites(
         ) {
             out.push(s);
         }
+    }
+    if let Some(s) = hud_gui_place(
+        assets,
+        "images/sprExpBar.png",
+        (hud.rads as f32 / hud.max_rads.max(1) as f32)
+            .clamp(0.0, 1.0)
+            .mul_add(16.0, 0.0)
+            .floor()
+            .min(16.0) as i32,
+        4.0,
+        4.0,
+        1.0,
+        [1.0; 4],
+        gm,
+        view,
+    ) {
+        out.push(s);
     }
     if hud.level >= 10 {
         if let Some(s) = assets.sprite_scaled_rotated(
@@ -5003,10 +5005,11 @@ pub fn hud_sprites(
 
     // Held ultra + skill icons (GML `scrDrawMiscHUD:68-113` verbatim):
     // ultras on `sprEGIconHUD` straight from the held frame at y=13,
-    // then skills on `sprSkillIconHUD` at the GML skill id at y=12
-    // (patience draws its overlay when spent). Top-right from GUI
-    // `view_width - 12` in 16 px steps, wrapping at x<=120 (rows stack
-    // +16).
+    // then skills on `sprSkillIconHUD` at the GML skill id at y=12.
+    // Patience (`mut_patience` with a stored `patienceskill`) draws
+    // `sprSkillIconHUD` + `sprPatienceIconHUD` at the SAME `_px` with a
+    // single advance. Top-right from GUI `view_width - 12` in 16 px
+    // steps, wrapping at x<=120 (rows stack +16).
     {
         let vw = view[2];
         let held_race = race_skin.map(|(r, _)| r).unwrap_or(RaceId::Fish);
@@ -5014,15 +5017,20 @@ pub fn hud_sprites(
         if let Some(u) = ultra {
             ultras.push(("images/sprEGIconHUD.png", ultra_hud_frame(held_race, u)));
         }
-        let mut skills: Vec<(&str, i32)> = Vec::new();
+        // Each skill slot is (base, optional patience overlay drawn at the
+        // same cursor before the single advance).
+        let mut skills: Vec<((&str, i32), Option<(&str, i32)>)> = Vec::new();
         for m in &mutations {
-            skills.push((
+            let base = (
                 "images/sprSkillIconHUD.png",
                 crate::hud::mutation_skill_index(*m) as i32,
-            ));
-            if *m == MutationId::Patience && patience_used {
-                skills.push(("images/sprPatienceIconHUD.png", 0));
-            }
+            );
+            let overlay = if *m == MutationId::Patience && patience_used {
+                Some(("images/sprPatienceIconHUD.png", 0))
+            } else {
+                None
+            };
+            skills.push((base, overlay));
         }
         let mut x = vw - 12.0;
         let mut y = 13.0;
@@ -5048,7 +5056,7 @@ pub fn hud_sprites(
         if !skills.is_empty() && y == 13.0 {
             y = 12.0;
         }
-        for (path, frame) in skills {
+        for ((path, frame), overlay) in skills {
             if let Some(s) = assets.sprite_scaled_rotated(
                 path,
                 frame,
@@ -5058,6 +5066,18 @@ pub fn hud_sprites(
                 [1.0; 4],
             ) {
                 out.push(s);
+            }
+            if let Some((opath, oframe)) = overlay {
+                if let Some(s) = assets.sprite_scaled_rotated(
+                    opath,
+                    oframe,
+                    hud_gui_to_world(gm, view, x, y),
+                    gm.s,
+                    0.0,
+                    [1.0; 4],
+                ) {
+                    out.push(s);
+                }
             }
             x -= 16.0;
             if x <= 120.0 {

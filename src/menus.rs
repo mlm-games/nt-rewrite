@@ -736,7 +736,11 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
         UiAction::SettingsCategory(cat) => {
             if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
                 let cur = menu.settings_page;
-                menu.settings_page_stack.push(cur);
+                // GML `scrOptionsMenu.gml:160-172` verbatim: push only when
+                // actually changing category.
+                if cur != cat {
+                    menu.settings_page_stack.push(cur);
+                }
                 menu.settings_page = cat;
                 menu.settings_cursor = 0;
             }
@@ -934,6 +938,10 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
         UiAction::CycleCrown(dir) => {
             world.init_resource::<SelectedCharacter>();
             let race = world.resource::<SelectedCharacter>().0;
+            // GML loadout has no crown row for Random (mirrors SelectCrown).
+            if race == RaceId::Random {
+                return;
+            }
             world.init_resource::<SaveData>();
             let mut next = world.resource::<SaveData>().race_loadout(race).start_crown;
             for _ in 0..CrownKind::ALL.len() {
@@ -1114,7 +1122,10 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
         UiAction::SettingOpenSubcategory(cat) => {
             if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
                 let cur = menu.settings_page;
-                menu.settings_page_stack.push(cur);
+                // Same GML `category != _category` gate as SettingsCategory.
+                if cur != cat {
+                    menu.settings_page_stack.push(cur);
+                }
                 menu.settings_page = cat;
                 menu.settings_cursor = 0;
             }
