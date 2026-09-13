@@ -450,6 +450,11 @@ pub fn route_mutation_digit(menu: &MenuState, idx: usize) -> Option<UiAction> {
 /// always; DAILY/WEEKLY when the tutorial is done; HARD when loop 2
 /// cleared (`hardgot`); CUSTOM last. A single row auto-fires (GML
 /// `event_user(0)`), so fresh/tutorial profiles skip the submenu.
+/// DAILY/WEEKLY draw `c_uidark`-dimmed when `!can_daily/can_weekly`
+/// (offline: the port has no daily/weekly backend, so both read
+/// unavailable) but STAY clickable — GML opens the Leaderboards
+/// instead of starting the run. The port has no Leaderboards entity,
+/// so the click stings `sndNoSelect` (same feedback class).
 pub fn play_rows(save: &SaveData) -> Vec<u8> {
     let mut rows = vec![0];
     if !save.settings.show_tutorial {
@@ -461,6 +466,15 @@ pub fn play_rows(save: &SaveData) -> Vec<u8> {
         rows.push(4);
     }
     rows
+}
+
+/// GML `UberCont.can_daily/can_weekly` verbatim: both gate on the
+/// online daily/weekly fetch (`Other_62`: `daily_seed > 0` /
+/// `weekly_data[? "seed"]`). The port has no online backend, so both
+/// are always false — DAILY/WEEKLY always draw dimmed (GML
+/// `image_blend = c_uidark` arm in `MainMenuButton/Other_10`).
+pub fn play_row_available(_save: &SaveData, row: u8) -> bool {
+    !matches!(row, 1 | 2)
 }
 
 /// GML `PlayButton` label verbatim (`scrMenuButtonName`).
@@ -620,6 +634,13 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 emit_cue(world, &UiAction::PlaySubmenu(row));
                 goto_state(world, AppState::Title);
             }
+            // GML `PlayButton/Other_10` verbatim: DAILY/WEEKLY with
+            // `!can_daily/can_weekly` open the Leaderboards (daily /
+            // weekly board) + `sndMenuScores` INSTEAD of starting a run;
+            // CUSTOM loads the custom presets into
+            // `MenuOptions(CustomMode)`. The port has neither backend,
+            // so all three sting `sndNoSelect` (same feedback class as
+            // the unavailable-button early-`exit`).
             _ => {
                 emit_cue(world, &UiAction::PlaySubmenu(row));
                 emit_denied(world);

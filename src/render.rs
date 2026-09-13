@@ -3672,7 +3672,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             let menu = world.get_resource::<MenuState>().cloned();
             if menu.as_ref().is_some_and(|m| m.play_submenu) {
                 use crate::savedata_part::SaveData;
-                use crate::state::menus::{play_row_name, play_rows};
+                use crate::state::menus::{play_row_available, play_row_name, play_rows};
                 let save = world
                     .get_resource::<SaveData>()
                     .cloned()
@@ -3684,8 +3684,12 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     .iter()
                     .enumerate()
                     .map(|(i, row)| {
-                        let online = matches!(row, 1 | 2);
-                        let color = if online {
+                        // GML `MainMenuButton/Other_10` verbatim:
+                        // DAILY/WEEKLY draw `c_uidark`-dimmed when
+                        // `!can_daily/can_weekly` (offline here, so
+                        // always dimmed) but stay listed in the same
+                        // positions.
+                        let color = if !play_row_available(&save, *row) {
                             GUI_UIDARK
                         } else if i == cursor {
                             GUI_WHITE
@@ -4779,7 +4783,14 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
         }
         3 => {
-            // BACK at 228.
+            // GML `Game` category verbatim (`Other_20.hml:218`): boss
+            // intros, tutorial, timer, area, pause-button (mobile-only
+            // in GML; shown here — desktop shells ignore it), the
+            // `ACHIEVEMENT#POPUPS` two-line switch, auto-pause
+            // (desktop-only in GML), VIEW CREDITS, then PROFILE (the
+            // COLOR/DATA leaves live under PROFILE in GML; the port
+            // surfaces all three here so they stay reachable without
+            // the text-entry pages).
             out.push(gui_center("GAME", cx, 24.0, GUI_MID));
             let mut y = 48.0;
             for (label, on) in [
@@ -4788,7 +4799,7 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
                 ("SHOW TIMER", s.show_timer),
                 ("SHOW AREA", s.show_area),
                 ("PAUSE BUTTON", s.pause_button),
-                ("ACHIEVEMENT POPUPS", s.achievements_popup),
+                ("ACHIEVEMENT#POPUPS", s.achievements_popup),
                 ("AUTO PAUSE", s.auto_pause),
             ] {
                 push_toggle(&mut out, label, y, on);
@@ -4804,21 +4815,20 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             out.push(gui_button("BACK", cx, 228.0, GUI_GRAY));
         }
         4 => {
+            // GML `Controls` category verbatim (`Other_20.gml:520`):
+            // GAMEPAD, GAMEPAD STYLE (XBOX ONE for XBONE), the
+            // mobile-only AIM ASSIST / FULL AUTOAIM / VOLUME CONTROLS /
+            // SPLIT AIM & FIRE / FIXED SIGHT / SIZE SCALE rows (shown
+            // here; desktop shells ignore them), REMAP CONTROLS (with
+            // the `(GAMEPAD)`/`(KEYBOARD)` suffix the port cannot know),
+            // CHARACTER PREFERENCES + EXPERIMENTAL OPTIONS (mobile-only
+            // in GML). Names use the GML loc defaults.
             out.push(gui_center("CONTROLS", cx, 24.0, GUI_MID));
             let mut y = 48.0;
-            for (label, on) in [
-                ("GAMEPAD", s.gamepad_enabled),
-                ("AIM ASSIST", s.aim_assist),
-                ("AUTO AIM", s.auto_aim),
-                ("VOLUME CONTROLS", s.volume_controls),
-                ("SPLIT FIRE", s.split_fire),
-                ("FIXED SIGHT", s.fixed_sight),
-            ] {
-                push_toggle(&mut out, label, y, on);
-                y += 14.0;
-            }
+            push_toggle(&mut out, "GAMEPAD", y, s.gamepad_enabled);
+            y += 14.0;
             out.push(gui_body("GAMEPAD STYLE", 80.0, y, GUI_CREAM));
-            let names = ["XBONE", "PS4", "Switch", "SteamDeck"];
+            let names = ["XBOX ONE", "PS4", "Switch", "SteamDeck"];
             out.push(gui_body(
                 format!("< {} >", names[(s.gamepad_type as usize) % names.len()]),
                 200.0,
@@ -4826,6 +4836,16 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
                 GUI_GRAY,
             ));
             y += 14.0;
+            for (label, on) in [
+                ("AIM ASSIST", s.aim_assist),
+                ("FULL AUTOAIM", s.auto_aim),
+                ("VOLUME CONTROLS", s.volume_controls),
+                ("SPLIT AIM & FIRE", s.split_fire),
+                ("FIXED SIGHT", s.fixed_sight),
+            ] {
+                push_toggle(&mut out, label, y, on);
+                y += 14.0;
+            }
             out.push(gui_body("SIZE SCALE", 80.0, y, GUI_CREAM));
             out.push(gui_body(
                 format!("{:.0}%", s.controls_scale * 100.0),
@@ -4834,11 +4854,11 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
                 GUI_GRAY,
             ));
             y += 14.0;
-            out.push(gui_button("REMAP", cx, y, GUI_MID));
+            out.push(gui_button("REMAP CONTROLS", cx, y, GUI_MID));
             y += 16.0;
-            out.push(gui_button("CHAR PREFS", cx, y, GUI_MID));
+            out.push(gui_button("CHARACTER PREFERENCES", cx, y, GUI_MID));
             y += 16.0;
-            out.push(gui_button("EXPERIMENTAL", cx, y, GUI_MID));
+            out.push(gui_button("EXPERIMENTAL OPTIONS", cx, y, GUI_MID));
             out.push(gui_button("BACK", cx, 228.0, GUI_GRAY));
         }
         10 => {
@@ -7443,6 +7463,50 @@ pub fn menu_sprites(
                     120.0,
                     &wps,
                     n,
+                ));
+            }
+        }
+        crate::MenuOverlay::Pause => {
+            // GML `UberCont/Draw_0` paused branch sprite layer verbatim:
+            // frozen `pausespr` screenshot (shell-owned surface, not
+            // drawn here) + corner `sprCharSplat` pair at `(view_left,
+            // view_bottom-31)` / mirrored at `(view_right,
+            // view_bottom-31)` + FULL roadmap at `(view_center,
+            // view_center)` (`pos = 1000`, i.e. the whole run). The
+            // `PAUSED` bigname + buttons ride the text layer. Ordered
+            // campfire portraits need the room actors the port
+            // despawns on pause, so only the splat pair + roadmap draw
+            // here.
+            let cx = vw * 0.5;
+            if let Some(s) = assets.sprite_for(
+                "images/sprCharSplat.png",
+                0,
+                gui_to_world(0.0, 240.0 - 31.0),
+                false,
+                0.0,
+                [1.0; 4],
+            ) {
+                out.push(s);
+            }
+            if let Some(s) = assets.sprite_for(
+                "images/sprCharSplat.png",
+                0,
+                gui_to_world(vw, 240.0 - 31.0),
+                true,
+                0.0,
+                [1.0; 4],
+            ) {
+                out.push(s);
+            }
+            if let Some(run) = world.get_resource::<Run>() {
+                let wps = run.waypoints.clone();
+                out.extend(roadmap_sprites(
+                    assets,
+                    &gui_to_world,
+                    cx,
+                    120.0,
+                    &wps,
+                    1000,
                 ));
             }
         }
