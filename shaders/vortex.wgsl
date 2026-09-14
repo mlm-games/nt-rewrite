@@ -15,6 +15,8 @@ struct VortexGlobals {
     // Per-wisp bolt clock (lanim, langle radians), indexed like wisps.
     // vec4 (not vec2): uniform arrays need a 16-byte stride.
     streams: array<vec4<f32>, 128>,
+    // Venuz star motes ([x, y, xscale, frame]; x < -100 parks the slot).
+    stars: array<vec4<f32>, 128>,
     glob_a: vec4<f32>,
     glob_b: vec4<f32>,
     // Look center + visible extent in wisp coord space.
@@ -28,7 +30,8 @@ struct VortexGlobals {
 @group(1) @binding(3) var spiral_proto_tex: texture_2d<f32>;
 @group(1) @binding(4) var spiral_idpd_tex: texture_2d<f32>;
 @group(1) @binding(5) var spiral_idpd2_tex: texture_2d<f32>;
-@group(1) @binding(6) var lin_smp: sampler;
+@group(1) @binding(6) var star_tex: texture_2d<f32>;
+@group(1) @binding(7) var lin_smp: sampler;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -257,6 +260,32 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             let black_a = clamp(1.0 - xs, 0.0, 1.0);
             if (black_a > 0.001) {
                 acc = mix(acc, vec3<f32>(0.0), tex.a * black_a);
+            }
+        }
+    }
+    // SpiralStar pass - drawn AFTER debris (GML `with` order), on top.
+    // CPU supplies [x, y, xscale, frame]; x < -100 = empty slot.
+    // sprSpiralStar is a 2-frame 3x3 strip (frame 0/1, origin centre).
+    for (var si: u32 = 0u; si < 128u; si = si + 1u) {
+        let st = g.stars[si];
+        if (st.x < -100.0) { continue; }
+        let xs = st.z;
+        if (xs <= 0.001) { continue; }
+        var srel = gui - st.xy;
+        // GML draws stars unrotated (image_angle stays 0: the Step
+        // never turns it), scaled by xscale on both axes.
+        let sduv = srel / (1.5 * xs) * 0.5 + vec2<f32>(0.5, 0.5);
+        if (all(sduv > vec2<f32>(0.0)) & all(sduv < vec2<f32>(1.0))) {
+            // two 3px frames side by side in the 6x3 strip
+            let suv_x = (st.w * 3.0 + 0.5 + sduv.x * 2.0) / 6.0;
+            let suv_y = (0.5 + sduv.y * 2.0) / 3.0;
+            let stex = textureSample(star_tex, lin_smp, vec2<f32>(suv_x, suv_y));
+            // scrDrawSpiral: white 1, then black (1 - xscale)
+            acc = mix(acc, stex.rgb, stex.a);
+            out_alpha = max(out_alpha, stex.a);
+            let sblack = clamp(1.0 - xs, 0.0, 1.0);
+            if (sblack > 0.001) {
+                acc = mix(acc, vec3<f32>(0.0), stex.a * sblack);
             }
         }
     }

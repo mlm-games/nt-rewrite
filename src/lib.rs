@@ -390,8 +390,8 @@ impl App {
 
     /// Vortex background textures for a GML area (decoded once per
     /// area; slots match the shader bindings: spiral, bolt, debris,
-    /// proto, idpd, idpd2). Missing files fall back to area 0 debris
-    /// so the pass always has six bound slots.
+    /// proto, idpd, idpd2, star). Missing files fall back to area 0 debris
+    /// so the pass always has seven bound slots.
     fn load_vortex_textures(dir: &Path, gml_area: u8) -> Vec<VortexTexture> {
         fn decode(dir: &Path, name: &str) -> Option<(u32, u32, Vec<u8>)> {
             decode_png(&dir.join("images").join(format!("{name}.png"))).ok()
@@ -407,6 +407,7 @@ impl App {
             "sprSpiralProto",
             "sprSpiralIDPD",
             "sprSpiralIDPD2",
+            "sprSpiralStar",
         ]
         .into_iter()
         .enumerate()
@@ -456,7 +457,30 @@ impl App {
             // game step (30 Hz), never per render frame, and freezes
             // over pause/menus/game over.
             self.step_camera_fixed();
+            // GML `Nothing2/Create_0` sets `bossfight` on its fresh
+            // `SpiralCont`: no debris births while Throne II runs (any
+            // phase — pending spawn, live fight, death pageant).
+            self.spiral.bossfight_suppressed = self
+                .sim
+                .world
+                .query::<&crate::comps_b::Enemy>()
+                .iter(&self.sim.world)
+                .any(|e| e.kind == crate::data::EnemyKind::ThroneII)
+                || self
+                    .sim
+                    .world
+                    .query::<&crate::comps_b::CampfireState>()
+                    .iter(&self.sim.world)
+                    .any(|c| {
+                        matches!(c.phase, crate::comps_b::CampfirePhase::SpawnThroneII)
+                    });
             self.spiral.step(1.0);
+            // GML `scrDrawSpiral` bolt/debris one-shots fire inline in
+            // the draw script: lightning `sndPortalLightning{1..8}` once
+            // per wisp (non-menu only), flyby `sndPortalFlyby{1..4}` once
+            // per debris mote at `xscale > 1.3` (any caller). Drain here,
+            // right after the step, so each fires exactly once.
+            self.drain_spiral_sounds();
             self.maybe_rewarm_spiral();
             ran += 1;
         }
@@ -562,6 +586,75 @@ impl App {
             .unwrap_or((AreaId::Desert, 0));
         if gml_area_for_area(area) != self.spiral.gml_area {
             self.spiral = SpiralCtl::warmed_up_for_area_seeded(area, seed);
+        }
+    }
+
+    /// Drain the spiral one-shots after each fixed step (GML
+    /// `scrDrawSpiral` plays them inline while drawing): bolt
+    /// `sndPortalLightning{1..8}` once per wisp (the draw script gates
+    /// on `!_is_menu`, i.e. every state but the campfire title — the
+    /// same `bg_alpha == 1` set the snapshot uses), flyby
+    /// `sndPortalFlyby{1..4}` once per debris mote at `xscale > 1.3`.
+    /// Variant/stem rolls use the spiral's deterministic stream off the
+    /// run seed so equal seeds sound identical.
+    fn drain_spiral_sounds(&mut self) {
+        use crate::audio::AudioCue;
+        use crate::msg::Queue;
+        // GML `draw_clear` caller: everyone but `Menu`. The port's
+        // `bg_alpha` is 0 only on the title, so reuse the last snapshot
+        // decision (updated every `view`; defaults to sounding before
+        // the first frame, exactly like a fresh GML room entering draw).
+        let audible = self.last_bg_alpha > 0.5;
+        let seed = self.spiral.seed;
+        let mut cues: Vec<AudioCue> = Vec::new();
+        for (i, s) in self.spiral.streams.iter_mut().enumerate() {
+            if audible && s.bolt_sound_due() {
+                let n = 1 + (crate::vortex::stream_pick(seed, i as u32, 7) % 8);
+                cues.push(AudioCue {
+                    name: match n {
+                        1 => "sndPortalLightning1",
+                        2 => "sndPortalLightning2",
+                        3 => "sndPortalLightning3",
+                        4 => "sndPortalLightning4",
+                        5 => "sndPortalLightning5",
+                        6 => "sndPortalLightning6",
+                        7 => "sndPortalLightning7",
+                        _ => "sndPortalLightning8",
+                    },
+                    // GML `snd_play(_sound, 0.9 + random(0.2), 1)`.
+                    volume: 1.0,
+                    variance: 0.0,
+                });
+            }
+        }
+        for (i, d) in self.spiral.debris.iter_mut().enumerate() {
+            if d.flyby_due() {
+                let n = 1 + (crate::vortex::stream_pick(seed, 10_000 + i as u32, 11) % 4);
+                let vol = self
+                    .sim
+                    .world
+                    .get_resource::<crate::savedata_part::SaveData>()
+                    .map(|s| s.settings.ambience_volume)
+                    .unwrap_or(1.0);
+                cues.push(AudioCue {
+                    name: match n {
+                        1 => "sndPortalFlyby1",
+                        2 => "sndPortalFlyby2",
+                        3 => "sndPortalFlyby3",
+                        _ => "sndPortalFlyby4",
+                    },
+                    // GML `snd_play_pitchvol(_snd, 0.1, opt_ambvol)`.
+                    volume: vol,
+                    variance: 0.1,
+                });
+            }
+        }
+        if !cues.is_empty() {
+            self.sim.world.init_resource::<Queue<AudioCue>>();
+            let mut q = self.sim.world.resource_mut::<Queue<AudioCue>>();
+            for c in cues {
+                q.push(c);
+            }
         }
     }
 
@@ -1290,11 +1383,13 @@ impl App {
                 ));
             }
             // Spiral CPU layer (GML `scrDrawSpiral` center figures):
-            // crown orbit + player hurt figures over the vortex
-            // background, i.e. whenever the live-gameplay background is
-            // off.
-            let live = state == AppState::InGame && menu_kind.is_none() && !paused && !game_over;
-            if !live {
+            // crown orbit + player hurt figures ride every spiral
+            // caller — `Menu`, `GenCont`, `LevCont`, `GameOver`,
+            // `NothingSpiral` and the active-gameplay background alike.
+            // The vortex layer mounts in every state but Splash, so the
+            // figures draw in all of those too (they gate themselves on
+            // Throne-II/Credits/players).
+            if !matches!(menu_kind, Some(MenuOverlay::Splash)) {
                 s.extend(spiral_figures(
                     &mut self.sim.world,
                     assets,
@@ -1330,13 +1425,40 @@ impl App {
         self.last_sprite_count = batch.len();
 
         // Vortex snapshot -> mounted background pass. `bg_alpha` is
-        // shell-selected (1 over live gameplay, 0 over menus); the
-        // snapshot drives `VortexPass` (GML `scrDrawSpiral` fullscreen
-        // quad) mounted as the bottom layer, so the swirling portal
-        // shows behind sprites in game and menus alike (pause/game
-        // over dim it through the scrim overlay, never by hiding it:
-        // mutation/title read through to the spiral underneath).
-        let bg_alpha = if state == AppState::InGame { 1.0 } else { 0.0 };
+        // GML `scrDrawSpiral` verbatim: `draw_clear(c_black)` runs only
+        // when the caller is NOT `Menu` — i.e. opaque black behind the
+        // spiral everywhere except the campfire title, which draws the
+        // spiral transparently over the menu art. Bevy `vortex_needs_black`
+        // parity: Loading opaque (GENERATING sits between the bars);
+        // InGame opaque only while a floor transition or mutation/ultra
+        // cover runs; Splash/MainMenu transparent (black clear behind).
+        let ft_active = self
+            .sim
+            .world
+            .get_resource::<crate::comps_b::FloorTransition>()
+            .is_some_and(|f| f.active);
+        let pending_pick = self
+            .sim
+            .world
+            .get_resource::<crate::comps_a::PendingMutation>()
+            .is_some()
+            || self
+                .sim
+                .world
+                .get_resource::<crate::comps_a::PendingUltra>()
+                .is_some();
+        let bg_alpha = match state {
+            AppState::Title => 0.0,
+            AppState::Loading => 1.0,
+            AppState::InGame => {
+                if ft_active || pending_pick {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            AppState::Splash | AppState::MainMenu => 0.0,
+        };
         let snap = self.spiral.snapshot(bg_alpha);
         self.last_bg_alpha = snap.bg_alpha;
         // Vortex art follows the GML area (debris strip is per-area);
@@ -1361,10 +1483,14 @@ impl App {
         } else {
             None
         };
-        // Pre-run rooms (splash boot reel, logo menu) sit on black
-        // (GML `Vlambeer/Draw_0` clears black); the area fill only
-        // shows once a run exists. No flat fill under the mounted
-        // vortex pass (it would cover the spiral).
+        // The area fill only shows where GML paints it: `GenCont/Create_0`
+        // `background_set_colour(scrAreaGetBackroundColor(GameCont.area))`
+        // runs once per generated floor, and the campfire title inherits
+        // the same call via `MenuGen`. Splash/MainMenu have no area yet
+        // (`Vlambeer/Create_0` never sets a colour; `Vlambeer/Draw_0`
+        // clears black). No flat fill under the mounted vortex pass (it
+        // would cover the spiral); where the pass is absent the fill
+        // stands in for the room colour.
         let background = if vortex_layer.is_some() {
             None
         } else if matches!(

@@ -153,10 +153,15 @@ pub struct Vard {
 /// deterministic splitmix stream over `(seed, birth, tick)` so
 /// snapshots stay contract-stable across runs with the same seed.
 /// `langle` is radians; dead slots hold `lanim = -1`.
+/// `sound_played` is GML `Spiral.lsound` verbatim: the
+/// `sndPortalLightning{1..8}` one-shot fires once per wisp, the first
+/// tick its bolt becomes visible outside menus (drained by the shell
+/// audio layer; see `WispStream::bolt_sound_due`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WispStream {
     pub lanim: f32,
     pub langle: f32,
+    pub sound_played: bool,
 }
 
 impl WispStream {
@@ -164,12 +169,26 @@ impl WispStream {
         Self {
             lanim: -1.0,
             langle: 0.0,
+            sound_played: false,
         }
     }
 
     /// True while the bolt shows (GML `lanim > 0 && lanim < 6`).
     pub fn bolt_visible(&self) -> bool {
         self.lanim > 0.0 && self.lanim < 6.0
+    }
+
+    /// GML `scrDrawSpiral` bolt-sound gate verbatim: fires once per
+    /// wisp, the first tick the bolt is visible (`lanim in (0, 6)`;
+    /// the caller additionally gates on non-menu, since GML only
+    /// plays the sound when `!_is_menu`). Marks played; the caller
+    /// emits `sndPortalLightning{1..8}` at pitch `0.9 + rand * 0.2`.
+    pub fn bolt_sound_due(&mut self) -> bool {
+        if !self.sound_played && self.bolt_visible() {
+            self.sound_played = true;
+            return true;
+        }
+        false
     }
 }
 
@@ -187,7 +206,25 @@ fn stream_hash01(seed: u64, birth: u32, tick: u32, salt: u64) -> f32 {
     ((z >> 11) as f32) / 9_007_199_254_740_992.0
 }
 
+/// Deterministic small-int pick in `0..n` off the same splitmix stream
+/// (GML `irandom(n - 1)` replacement for the draw-script one-shots:
+/// bolt `sndPortalLightning{1..8}` variant, flyby `sndPortalFlyby{1..4}`
+/// variant). `slot` decorrelates wisps/motes; `tag` decorrelates the
+/// two rolls from each other and from the `stream_hash01` lanes.
+pub fn stream_pick(seed: u64, slot: u32, tag: u64) -> u32 {
+    let mut z = seed
+        .wrapping_add((slot as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+        .wrapping_add(tag.wrapping_mul(0x94D0_49BB_1331_11EB));
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    (z >> 11) as u32
+}
+
 /// Ribbon debris mote (feeds `debris_ring`, hence the snapshot).
+/// `sound_played` is GML `SpiralDebris.sound` verbatim: the `sndPortalFlyby`
+/// one-shot fires once when `image_xscale > 1.3` (drained by the shell
+/// audio layer; see `Debris::flyby_due`).
 #[derive(Clone, Copy, Debug)]
 pub struct Debris {
     pub alive: bool,
@@ -200,12 +237,42 @@ pub struct Debris {
     pub xscale: f32,
     pub grow: f32,
     pub image_angle: f32,
+    /// GML strip frame (`random(image_number)` float; the shader floors).
     pub frame: f32,
+    pub sound_played: bool,
+}
+
+impl Debris {
+    /// GML `SpiralDebris/Step_0` sound gate verbatim: fires once when
+    /// the mote grows past 1.3 (marks played; the caller emits the
+    /// `sndPortalFlyby{1..4}` cue with pitch 0.1 + ambience volume).
+    pub fn flyby_due(&mut self) -> bool {
+        if !self.sound_played && self.xscale > 1.3 {
+            self.sound_played = true;
+            return true;
+        }
+        false
+    }
 }
 
 /// Headless spiral control (bevy `SpiralCtl` minus the render-only
 /// `retired` entity list; `head`/`dhead` are `pub` here so the write-only
 /// ring cursors never trip dead-code lints outside test builds).
+///
+/// GML notes (`objects/SpiralCont/Step_0.gml`, `objects/Spiral/Step_0.gml`,
+/// `objects/SpiralDebris/Step_0.gml`, `objects/SpiralStar/Step_0.gml`):
+/// - Wisp births inherit the emitter pos (`instance_create(x, y, Spiral)`
+///   at the cont's just-stepped `x/y`); each wisp's `xstart/ystart` is
+///   that birth pos, NOT the cont's live pos. The ring therefore stores
+///   the birth pos per slot.
+/// - `image_angle` is stored in RADIANS on each `Spiral` (`other.
+///   image_angle` is degrees; GML trig takes degrees so the drawn value
+///   is deg-based, but the stored `image_angle` field itself is the
+///   radian conversion — the shader's `cos/sin(rot)` needs radians).
+/// - `SpiralStar` has NO alpha gate (spirals never despawn either;
+///   only debris culls offscreen). The star shader pass is additive
+///   white with `1 - xscale` black; the wisp pass uses real art, never
+///   a white quad.
 #[derive(Resource, Debug)]
 pub struct SpiralCtl {
     pub angle: f32,
@@ -213,7 +280,9 @@ pub struct SpiralCtl {
     acc: f32,
     pub ring: Vec<[f32; 4]>,
     pub head: usize,
-    debris: Vec<Debris>,
+    /// GML `SpiralDebris` motes (`sound_played` drained per step for
+    /// the `sndPortalFlyby` one-shot; see `drain_spiral_sounds`).
+    pub debris: Vec<Debris>,
     pub debris_ring: Vec<[f32; 4]>,
     pub dhead: usize,
     pub stars: Vec<Star>,
@@ -228,6 +297,15 @@ pub struct SpiralCtl {
     pub seed: u64,
     /// Per-ring-slot lightning streams, indexed exactly like `ring`.
     pub streams: Vec<WispStream>,
+    /// GML `SpiralCont.bossfight` verbatim (`instance_exists(Nothing2) ||
+    /// instance_exists(Nothing2Appear) || instance_exists(NothingSpiral)`):
+    /// while set, no `SpiralDebris` births. GML `Nothing2/Create_0`
+    /// spawns `NothingSpiral` + a fresh `SpiralCont` on throne-II rise,
+    /// so the live port condition is a live Throne-II enemy (any phase:
+    /// `SpawnThroneII` pending, `ThroneII` fighting, `Nothing2Death`
+    /// pageant) — refreshed per tick by the shell from the live `Enemy`
+    /// query. Sim-only warmups default it off.
+    pub bossfight_suppressed: bool,
 }
 
 impl SpiralCtl {
@@ -270,6 +348,7 @@ impl SpiralCtl {
                     grow: 0.0,
                     image_angle: 0.0,
                     frame: 0.0,
+                    sound_played: false,
                 })
                 .collect(),
             debris_ring: vec![[-1000.0; 4]; MAX_DEBRIS],
@@ -282,6 +361,7 @@ impl SpiralCtl {
             kind: SpiralKind::for_gml_area(gml_area),
             gml_area,
             seed,
+            bossfight_suppressed: false,
             streams: vec![WispStream::dead(); MAX_WISPS],
         };
         for _ in 0..WARMUP_TICKS {
@@ -342,6 +422,12 @@ impl SpiralCtl {
             if kind == SpiralKind::Venuz {
                 self.push_star(x, y);
             } else {
+                // GML `SpiralCont/Step_0`: `image_angle = other.image_angle`
+                // copies the cont angle in DEGREES, then `scrDrawSpiral`
+                // draws at `image_angle + 45` with GML-degree trig. The
+                // shader samples with radians trig, so the ring stores
+                // `(angle_deg + 45).to_radians()` (rotation only; the `+45`
+                // is wisp-art-only — the bolt pass strips it back out).
                 let mut rot = (self.angle + 45.0).to_radians();
                 if kind == SpiralKind::Idpd && (self.ticks as i64 % 11) <= 1 {
                     // GML only swaps sprite_index to sprSpiralIDPD2 here;
@@ -351,6 +437,9 @@ impl SpiralCtl {
                 // Ring slot must match shader lookup `(birth-1) % N`:
                 // birth == ticks here, so slot is (ticks-1) % N.
                 let slot = (self.ticks as usize - 1) % MAX_WISPS;
+                // GML `instance_create(x, y, Spiral)`: the wisp's
+                // `xstart/ystart` freeze at the emitter pos (the cont's
+                // just-stepped `x/y`), NOT the cont's live pos.
                 self.ring[slot] = [x, y, self.ticks, rot];
                 self.head = (slot + 1) % MAX_WISPS;
                 // GML `Spiral/Create_0`: `lanim = -random(300)`,
@@ -360,12 +449,18 @@ impl SpiralCtl {
                     lanim: -stream_hash01(self.seed, birth, 0, STREAM_HEAD_SALT) * 300.0,
                     langle: stream_hash01(self.seed, birth, 0, STREAM_ANGLE_SALT)
                         * std::f32::consts::TAU,
+                    sound_played: false,
                 };
 
                 let proto = kind == SpiralKind::Proto;
-                if rand::random::<f32>() * 16.0 < 1.0
-                    && (proto || rand::random::<f32>() * 3.0 < 1.0)
-                {
+                // GML `!bossfight` gate verbatim: no debris births while
+                // the Throne-II fight runs (`Nothing2`/`Nothing2Appear`/
+                // `NothingSpiral` alive); the port reads it off
+                // `bossfight_suppressed`.
+                let debris_ok = !self.bossfight_suppressed
+                    && rand::random::<f32>() * 16.0 < 1.0
+                    && (proto || rand::random::<f32>() * 3.0 < 1.0);
+                if debris_ok {
                     if rand::random::<f32>() * 50.0 < 1.0
                         && let Some((path, frame)) = variant_debris_for_gml_area(self.gml_area)
                     {
@@ -383,7 +478,11 @@ impl SpiralCtl {
                             xscale: 0.0,
                             grow: 0.0,
                             image_angle: 0.0,
-                            frame: (rand::random::<f32>() * 4.0).floor().min(3.0),
+                            // GML `sprDebrisN` default arm: the strip
+                            // frame is `random(image_number)`; only the
+                            // rare area-flavoured vard pins frame 1.
+                            frame: rand::random::<f32>() * 4.0,
+                            sound_played: false,
                         };
                         self.dhead = (self.dhead + 1) % MAX_DEBRIS;
                     }
@@ -552,9 +651,12 @@ impl SpiralCtl {
     /// paddings (`-1` wisps, `-1000` debris), plus each wisp's own
     /// `lanim`/`langle` stream (GML `Spiral` bolt clock) indexed like
     /// the ring. Background is always black
-    /// (bevy `background_color`); `bg_alpha` is shell-selected (bevy
-    /// `vortex_needs_black`: 1 while a floor transition/level-up cover
-    /// runs, 0 over menus).
+    /// (bevy `background_color`); `bg_alpha` follows GML `scrDrawSpiral`
+    /// verbatim (opaque everywhere except the campfire title; see the
+    /// `bg_alpha` match at the `VortexPass` mount in `lib.rs`).
+    /// Sound flags (`WispStream::sound_played`, `Debris::sound_played`)
+    /// stay sim-side — the snapshot carries no audio, the shell drains
+    /// the flags directly (GML plays them inline in the draw script).
     pub fn snapshot(&self, bg_alpha: f32) -> VortexSnapshot {
         let mut wisps = [[-1.0; 4]; VORTEX_WISPS];
         for (dst, src) in wisps.iter_mut().zip(self.ring.iter()) {
@@ -568,10 +670,29 @@ impl SpiralCtl {
         for (dst, src) in streams.iter_mut().zip(self.streams.iter()) {
             *dst = [src.lanim, src.langle];
         }
+        // GML `SpiralStar/Step_0` integrates draw pos on the mote
+        // (`x = xstart + lengthdir_x(dist * xscale, angle)` with the
+        // xscale-only radius on BOTH axes); the snapshot bakes the same
+        // pos here so the shader stays a pure sampler.
+        let mut stars = [[-1000.0, 0.0, 0.0, 0.0]; VORTEX_WISPS];
+        for (dst, src) in stars.iter_mut().zip(self.stars.iter()) {
+            if !src.alive {
+                continue;
+            }
+            let rad = src.dist * src.xscale;
+            let dir = src.angle.to_radians();
+            *dst = [
+                src.xstart + rad * dir.cos(),
+                src.ystart - rad * dir.sin(),
+                src.xscale,
+                src.frame,
+            ];
+        }
         VortexSnapshot {
             wisps,
             debris,
             streams,
+            stars,
             ticks: self.ticks,
             drain_bias: self.drain_bias,
             bg_rgb: [0.0, 0.0, 0.0],
@@ -624,4 +745,3 @@ pub fn tick_spiral(time: Res<SimTime>, ctl: Option<ResMut<SpiralCtl>>) {
     };
     ctl.step(time.delta_secs * 30.0);
 }
-

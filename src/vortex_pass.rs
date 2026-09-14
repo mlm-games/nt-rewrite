@@ -16,8 +16,8 @@ use repose_render_wgpu::{CallbackResources, ScreenDescriptor, WgpuCallback};
 
 pub const VORTEX_WISPS: usize = 128;
 pub const VORTEX_DEBRIS: usize = 32;
-/// Art texture slots: spiral, bolt, debris, proto, idpd, idpd2.
-pub const VORTEX_TEXTURES: usize = 6;
+/// Art texture slots: spiral, bolt, debris, proto, idpd, idpd2, star.
+pub const VORTEX_TEXTURES: usize = 7;
 
 /// Plain-data snapshot. Field-for-field the nt tick outputs: ring and
 /// debris arrays with nt's paddings (`NEG_ONE` wisps, `-1000` debris),
@@ -31,6 +31,10 @@ pub struct VortexSnapshot {
     pub debris: [[f32; 4]; VORTEX_DEBRIS],
     /// Per-wisp `Spiral` bolt clock (`lanim`, `langle` in radians).
     pub streams: [[f32; 2]; VORTEX_WISPS],
+    /// Venuz `SpiralStar` motes (`[x, y, xscale, frame]`, GML draw pos
+    /// already integrated; `x < -100` parks empty slots, same sentinel
+    /// convention as debris). Drawn after debris (GML `with` order).
+    pub stars: [[f32; 4]; VORTEX_WISPS],
     pub ticks: f32,
     pub drain_bias: f32,
     pub bg_rgb: [f32; 3],
@@ -49,6 +53,7 @@ impl VortexSnapshot {
             wisps: [[-1.0, -1.0, -1.0, -1.0]; VORTEX_WISPS],
             debris: [[-1000.0, 0.0, 0.0, 0.0]; VORTEX_DEBRIS],
             streams: [[-1.0, 0.0]; VORTEX_WISPS],
+            stars: [[-1000.0, 0.0, 0.0, 0.0]; VORTEX_WISPS],
             ticks: 0.0,
             drain_bias: 0.0,
             bg_rgb: [0.0, 0.0, 0.0],
@@ -61,7 +66,7 @@ impl VortexSnapshot {
 
     fn uniform_words(&self) -> Vec<f32> {
         let mut raw = Vec::with_capacity(
-            VORTEX_WISPS * 4 + VORTEX_DEBRIS * 4 + VORTEX_WISPS * 4 + 12,
+            VORTEX_WISPS * 4 + VORTEX_DEBRIS * 4 + VORTEX_WISPS * 4 + VORTEX_WISPS * 4 + 12,
         );
         for w in &self.wisps {
             raw.extend_from_slice(w);
@@ -73,6 +78,9 @@ impl VortexSnapshot {
         for s in &self.streams {
             raw.extend_from_slice(&[s[0], s[1], 0.0, 0.0]);
         }
+        for s in &self.stars {
+            raw.extend_from_slice(s);
+        }
         raw.extend_from_slice(&[self.ticks, self.drain_bias, self.bg_rgb[0], self.bg_rgb[1]]);
         raw.extend_from_slice(&[self.bg_rgb[2], self.bg_alpha, self.thresh, self.kindpacked]);
         raw.extend_from_slice(&self.view);
@@ -82,7 +90,7 @@ impl VortexSnapshot {
 
 /// One art texture upload: tight `w`*`h`*4 RGBA8, row-major top first.
 /// `slot` selects the art (0 spiral, 1 bolt, 2 debris, 3 proto,
-/// 4 idpd, 5 idpd2). Queued on load / area-switch frames only.
+/// 4 idpd, 5 idpd2, 6 star). Queued on load / area-switch frames only.
 #[derive(Clone, Debug)]
 pub struct VortexTexture {
     pub slot: u32,
@@ -108,7 +116,7 @@ impl VortexPass {
                 include_str!("../shaders/vortex.wgsl"),
                 FullscreenDesc {
                     texture_slots: VORTEX_TEXTURES as u32,
-                    // nt forces linear on all six (nearest made wisps
+                    // nt forces linear on all seven (nearest made wisps
                     // blocky); half-texel inset lives in-shader.
                     filter: TextureFilter::Linear,
                 },

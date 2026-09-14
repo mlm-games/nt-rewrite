@@ -24,16 +24,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Seeded RNG for sim decisions (same crate+version as the bevy build).
 rand = "0.10"
-repose-core = "0.30"
-repose-ui = "0.30"
-repose-canvas = "0.30"
-repose-render-wgpu = "0.30"
+repose-core = { path = "../Repos/repose/crates/repose-core", version = "0.30" }
+repose-ui = { path = "../Repos/repose/crates/repose-ui", version = "0.30" }
+repose-canvas = { path = "../Repos/repose/crates/repose-canvas", version = "0.30" }
+repose-render-wgpu = { path = "../Repos/repose/crates/repose-render-wgpu", version = "0.30" }
 # Direct dep for the in-crate vortex background pass (`vortex_pass.rs`
 # implements `repose_render_wgpu::WgpuCallback`; must unify with its 30).
 wgpu = "30"
-# Pixel UI font registration (`register_font_data`; the family name the
-# `Text` views request must resolve here).
-repose-text = "0.30"
+repose-text = { path = "../Repos/repose/crates/repose-text", version = "0.30" }
 anyhow = "1"
 log = "0.4"
 

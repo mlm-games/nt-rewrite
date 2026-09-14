@@ -61,7 +61,7 @@ use crate::hud::{HudState, run_area_string, run_timer_string, sync_hud_state};
 use crate::savedata_part::{character_def, race_active_text, race_passive_text};
 use crate::spatial::Pos;
 use crate::state::menus::{CHAR_SELECT_ORDER, MenuState};
-use crate::state::{SPLASH_GUN_STEPS, SplashState};
+use crate::state::{OverlayMenu, SPLASH_GUN_STEPS, SplashState};
 use crate::weapon_runtime::{sanitize_weapon_id, weapon_meta};
 use crate::weapons_data::AmmoType;
 
@@ -7539,15 +7539,21 @@ pub fn spiral_figure_layout(
 ) -> Vec<(String, i32, Vec2, f32, f32)> {
     let mut out = Vec::new();
     let deg = std::f32::consts::PI / 180.0;
+    // GML degree trig (`sin`/`cos` take degrees); `deg_sin`/`deg_cos`
+    // keep the conversion explicit so raw `.sin()` on degree values
+    // never slips in.
+    let deg_sin = |d: f32| (d * deg).sin();
     if crown != CrownKind::None {
         let gml = crate::savedata_part::crown_port_to_gml(crown as u8);
-        let r = 15.0 + (angle_deg / 60.0).sin() * 4.0;
+        // GML `lengthdir_x(r, a) = r*cos(a)`, `lengthdir_y(r, a) =
+        // -r*sin(a)` (y-down, 90 = north): the y term negates.
+        let r = 15.0 + deg_sin(angle_deg / 60.0) * 4.0;
         let a = -angle_deg / 5.3;
         out.push((
             format!("images/sprCrown{gml}Idle.png"),
             1,
-            center + Vec2::new((a * deg).cos() * r, (a * deg).sin() * r),
-            0.6 + (angle_deg / 200.0).sin() / 4.0,
+            center + Vec2::new((a * deg).cos() * r, -(a * deg).sin() * r),
+            0.6 + deg_sin(angle_deg / 200.0) / 4.0,
             -angle_deg * 2.2 * deg,
         ));
     }
@@ -7560,7 +7566,7 @@ pub fn spiral_figure_layout(
             hurt.clone(),
             1,
             center + Vec2::new(n as f32 * 8.0, n as f32 * 6.0),
-            0.8 + (a / 200.0).sin() / 5.0,
+            0.8 + deg_sin(a / 200.0) / 5.0,
             -a * 2.0 * deg,
         ));
     }
@@ -7572,7 +7578,10 @@ pub fn spiral_figure_layout(
 /// player figure per player, over the vortex background. `center` is the
 /// view center (GML `fishx/fishy`), `angle_deg` the spiral angle in
 /// degrees (GML `image_angle`; port `SpiralCtl.angle` is degrees too).
-/// Skipped while Throne II lives (GML `Nothing2` gate).
+/// Skipped while Throne II lives (GML `Nothing2` gate: Nothing2,
+/// Nothing2Corpse and Nothing2Death all suppress the figures — the port
+/// reads it off any live Throne-II enemy) or while `Credits` runs
+/// without a crown carrier (GML `!instance_exists(Credits)` gate).
 pub fn spiral_figures(
     world: &mut World,
     assets: &RenderAssets,
@@ -7581,11 +7590,23 @@ pub fn spiral_figures(
 ) -> Vec<SpriteInstance> {
     let mut out = Vec::new();
 
+    // GML `scrDrawSpiral` figure gate verbatim: nothing draws while
+    // Throne II runs (`Nothing2`/`Nothing2Corpse`/`Nothing2Death` — the
+    // port reads it off any live Throne-II enemy), and the whole block
+    // (crown + players) is inside `!instance_exists(Credits)`.
     let throne_ii_alive = world
         .query::<&Enemy>()
         .iter(world)
         .any(|e| e.kind == EnemyKind::ThroneII);
     if throne_ii_alive {
+        return out;
+    }
+    // GML `with SpiralCont` figure block sits inside
+    // `if !instance_exists(Credits)`: the credits spiral is bare.
+    let in_credits = world
+        .get_resource::<OverlayMenu>()
+        .is_some_and(|o| *o == OverlayMenu::Credits);
+    if in_credits {
         return out;
     }
 
