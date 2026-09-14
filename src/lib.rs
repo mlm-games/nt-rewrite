@@ -638,6 +638,9 @@ impl App {
             return;
         }
         let rest = self.cam.center;
+        // (`cursor_to_world` borrows `self.cam` only, so resolve the
+        // live cursor before the `world` borrow below.)
+        let live_hover = self.cursor_to_world().or(self.hover);
         let world = &mut self.sim.world;
         let player = player_pos(world).unwrap_or(rest);
         // Current weapon drives the aim-lean divisor (melee 8, bolts
@@ -655,7 +658,9 @@ impl App {
         // a window edge and never feels like the original). Uses the
         // live cursor unprojection (see `cursor_to_world`), so the lean
         // follows the on-screen cursor as the camera moves.
-        let (aim_dir, aim_dis) = match self.cursor_to_world().or(self.hover) {
+        // (`cursor_to_world` borrows `self.cam` only, so it was
+        // resolved into `live_hover` before the `world` borrow above.)
+        let (aim_dir, aim_dis) = match live_hover {
             Some(h) => {
                 let d = h - player;
                 let len = d.length();
@@ -1832,7 +1837,8 @@ impl App {
                 ) {
                     // SAFETY: synchronous compose-time dispatch only.
                     let app = unsafe { &mut *cursor_ptr };
-                    app.cursor_move(ev.position_in_window());
+                    let p = ev.position_in_window();
+                    app.cursor_move(Vec2::new(p.x, p.y));
                 }
             })
             .on_pointer_down(move |ev: PointerEvent| {
