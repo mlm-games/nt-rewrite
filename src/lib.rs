@@ -230,6 +230,15 @@ pub struct App {
     /// the newest position matters). Steers `aim_axis` every frame in
     /// game, bevy `player_aim` mouse-path parity.
     hover: Option<Vec2>,
+    /// Latest cursor position in window-physical px (root
+    /// `on_pointer_move`, y-down). Unlike [`App::hover`] (a world point
+    /// baked through the camera at event time), this stays valid as the
+    /// camera moves: [`App::feed_input`] unprojects it through the
+    /// *current* camera each frame — bevy `player_aim`
+    /// (`window.cursor_position()` + `viewport_to_world_2d`) parity. The
+    /// player therefore keeps aiming at the on-screen cursor while
+    /// walking, instead of at a stale world point behind them.
+    cursor_px: Option<Vec2>,
     pause_edge: bool,
     restart_edge: bool,
     interact_edge: bool,
@@ -348,6 +357,7 @@ impl App {
             edges: Vec::new(),
             clicks: Vec::new(),
             hover: None,
+            cursor_px: None,
             pause_edge: false,
             restart_edge: false,
             interact_edge: false,
@@ -642,8 +652,10 @@ impl App {
         // lean caps at 48 px (bevy `player_aim` `MAX_LOOK` parity: the
         // playable builds clamp the lookahead there; unbounded
         // `dis/viewdist` drifts whole screens when the cursor sits at
-        // a window edge and never feels like the original).
-        let (aim_dir, aim_dis) = match self.hover {
+        // a window edge and never feels like the original). Uses the
+        // live cursor unprojection (see `cursor_to_world`), so the lean
+        // follows the on-screen cursor as the camera moves.
+        let (aim_dir, aim_dis) = match self.cursor_to_world().or(self.hover) {
             Some(h) => {
                 let d = h - player;
                 let len = d.length();
@@ -866,6 +878,29 @@ impl App {
     /// Left mouse button up: release the held latch.
     fn lmb_up(&mut self) {
         self.lmb_held = false;
+    }
+
+    /// Stage the cursor's window-physical px position (root
+    /// `on_pointer_move`, y-down). Stored raw — [`App::cursor_to_world`]
+    /// unprojects it through the live camera each frame.
+    fn cursor_move(&mut self, phys_px: Vec2) {
+        self.cursor_px = Some(phys_px);
+    }
+
+    /// Live cursor in world coords: the staged window-physical px point
+    /// unprojected through this frame's camera (`Camera2d::dp_to_world_pt`
+    /// over the dp viewport extent — bevy `player_aim`
+    /// `viewport_to_world_2d` parity). `None` until the first pointer
+    /// move; callers fall back to the last viewport `Hover` world point
+    /// (touch/pen never stage cursor moves).
+    fn cursor_to_world(&self) -> Option<Vec2> {
+        let px = self.cursor_px?;
+        let d = self.view_density.max(1e-6);
+        let dp = [px.x / d, px.y / d];
+        let extent = camera_fit_extent(self.view_viewport_dp, self.view_density);
+        // `world_size` here is the dp viewport extent; `dp_to_world_pt`
+        // divides the dp point by the same fit the viewport paints with.
+        Some(self.cam.dp_to_world_pt(self.view_viewport_dp, extent, dp))
     }
 
     /// Stage one gamepad snapshot for this tick (shells map
@@ -1134,10 +1169,14 @@ impl App {
             self.sim.world.resource_mut::<NtInput>().press_interact();
         }
 
-        // Per-frame cursor aim (bevy `player_aim` mouse path): the latest
-        // hover steers `aim_axis` every tick, not just on clicks, so
-        // `AimDir` tracks the cursor continuously (the follow camera
-        // reads the hover distance directly as GML `dis_fire`).
+        // Per-frame cursor aim (bevy `player_aim` mouse path): the
+        // cursor's *screen* position unprojected through the current
+        // camera steers `aim_axis` every tick, not just on hover events,
+        // so `AimDir` tracks the on-screen cursor continuously while the
+        // player walks (bevy reads `window.cursor_position()` live each
+        // frame; a latched world point would go stale as the camera
+        // moves). The follow camera reads the same live point's distance
+        // directly as GML `dis_fire`).
         // Stick input wins when nonzero (bevy precedence:
         // `sample_keyboard` leaves `aim_axis` zero, a gamepad shell may
         // layer on top). Frozen outside live play (pause/menus/game
@@ -1157,7 +1196,11 @@ impl App {
                 .next()
                 .map(|(p, _)| p.0);
             if let Some(pp) = player_pos {
-                if let Some(hover) = self.hover {
+                // Live cursor, unprojected through this frame's camera
+                // (see `cursor_px`): valid even when the pointer hasn't
+                // moved since the camera did.
+                let aim_hover = self.cursor_to_world().or(self.hover);
+                if let Some(hover) = aim_hover {
                     let mut input = self.sim.world.resource_mut::<NtInput>();
                     if input.aim_axis == Vec2::ZERO {
                         let dir = hover - pp;
@@ -1773,7 +1816,25 @@ impl App {
         let rmb_ptr_up = self as *mut App;
         let lmb_ptr_down = self as *mut App;
         let lmb_ptr_up = self as *mut App;
+        let cursor_ptr = self as *mut App;
         let root_mod = root_mod
+            // Live cursor in window-physical px (bevy `player_aim`
+            // `window.cursor_position()` parity): fires on every pointer
+            // move even when the camera — and therefore the viewport
+            // `Hover` world point — hasn't been recomputed, so aim tracks
+            // the on-screen cursor while the player walks. Touch/pen
+            // moves are skipped (sticks own those; `TouchMove` covers
+            // them).
+            .on_pointer_move(move |ev: PointerEvent| {
+                if matches!(
+                    ev.kind,
+                    repose_core::input::PointerKind::Mouse
+                ) {
+                    // SAFETY: synchronous compose-time dispatch only.
+                    let app = unsafe { &mut *cursor_ptr };
+                    app.cursor_move(ev.position_in_window());
+                }
+            })
             .on_pointer_down(move |ev: PointerEvent| {
                 if matches!(ev.event, PointerEventKind::Down(PointerButton::Secondary)) {
                     // SAFETY: synchronous compose-time dispatch only.
