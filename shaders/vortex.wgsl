@@ -3,12 +3,14 @@
 // Rendered as ONE fullscreen quad: each wisp is a transformed sample of the
 // real spiral art; growth/alpha/lightning follow the GameMaker laws.
 // Bevy-isms removed: no `#import`, no material bind-group macro. Uniforms
-// arrive in one globals block; the seven art textures share one Linear
-// sampler (bevy parity: Linear enforced every tick — nearest made wisps
-// blocky).
-// `view` maps screen uv to wisp coord space: bevy parity is
-// view = (160, 120, 1920, 1440) — quad top edge then maps to gui -600,
-// exactly like the original `mesh.uv` formula.
+// arrive in one globals block; the seven art textures share one Nearest
+// sampler (GML parity: `interpolate_pixels=false` on desktop — point
+// sampling, crisp 1px debris; GML makes no filter calls at all).
+// `view` maps screen uv to wisp coord space: the live GUI view rect
+// `(view_w/2, 120, view_w, 240)` — GML `display_set_gui_size(view)`
+// makes GUI px == view px 1:1, so uv spans the GUI exactly and wisps
+// drawn at GUI coords land 1:1 on screen, filling the corners like
+// `draw_sprite_ext(view_xview + x, ...)` does.
 
 struct VortexGlobals {
     wisps: array<vec4<f32>, 128>,

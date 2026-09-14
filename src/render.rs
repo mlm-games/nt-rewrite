@@ -2905,8 +2905,10 @@ pub fn hud_gui_texts(world: &mut World) -> Vec<HudGuiText> {
         // or the type matches the primary weapon's type.
         let active = pos == 0 || steroids || kind as usize == t1 as usize;
         // GML `scrDrawPlayerHUD:152-157` verbatim: active white else
-        // silver; dry `c_uidark`; at/below one pickup red (active) or
-        // gray (inactive).
+        // silver; dry `c_uidark` (#333333 = 51,51,51); at/below one
+        // pickup red (active, `c_red` = 252,56,0) or gray (inactive,
+        // `c_gray` = 128,128,128); healthy inactive `c_silver`
+        // (192,192,192).
         let color = if amount <= 0 {
             [51, 51, 51, 255]
         } else if amount <= ammo_pickup_amount(kind).max(0) {
@@ -2922,8 +2924,11 @@ pub fn hud_gui_texts(world: &mut World) -> Vec<HudGuiText> {
         };
         out.push(hud_gui_left(
             amount.to_string(),
+            // GML `scrDrawPlayerHUD:162` verbatim: `_dx + 18, _dy + 5`
+            // with `_dy = 16` (NOT 21 — the ammo digits sit 5 px below
+            // the gun row origin, inside the 14-tall part window).
             hud_weapon_dx(pos) + 18.0,
-            21.0,
+            16.0 + 5.0,
             color,
             false,
             false,
@@ -3244,15 +3249,22 @@ pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
         })
         .collect();
     let hud: HudState = sync_hud_state(world);
-    // GML `SkillText` verbatim (`scrLevelUpScreenSubmit` +
-    // `TopCont/Draw_75` + `LevCont/Draw_64`): `"@d" + loc(txt)` at the
-    // SkillText pos, centered-middle, blinking while `disappear % 2`
-    // (the blink gate lives in `hud_overlay_lines`, like LOW HP).
+    // GML `SkillText` verbatim (`scrLevelUpScreenSubmit` spawn at the
+    // level-up spot + `TopCont/Draw_75` / `LevCont/Draw_64` draw
+    // `"@d" + loc(txt)` AT THE SkillText INSTANCE POS — i.e. the
+    // offer Carlson position (view center-ish, NOT a fixed y=200) —
+    // centered-middle, blinking while `disappear % 2` (the blink gate
+    // lives in `hud_overlay_lines`, like LOW HP). The port has no
+    // SkillText entity, so the toast rides the offer textbox anchor
+    // `(cx, 179)` while an offer is open, else the legacy top-center
+    // fallback. (The old fixed `gy: 200.0` matched neither.)
     if !hud.toast.is_empty() {
+        let offer_open = world.get_resource::<PendingMutation>().is_some()
+            || world.get_resource::<PendingUltra>().is_some();
         items.push(MenuGuiText {
             text: format!("@d{}", hud.toast),
             gx: cx,
-            gy: 200.0,
+            gy: if offer_open { 179.0 } else { 120.0 },
             color: [255, 255, 255, 255],
             px: 7.0,
             centered: true,
@@ -5139,9 +5151,12 @@ pub fn hud_sprites(
     };
 
     // Health bar + fills (GML `scrDrawPlayerHUD:17-58`: bar frame 2 at
-    // (20,4); fills are frame 0 xscale-stretched from (22,7), ghost in
-    // the darkened HSV variant, live in `opt_healthcol`; hurt flash =
-    // white frame 0 at the hp width).
+    // (20,4) via `draw_sprite` (origin (0,0): pixels at exactly
+    // (20,4)); fills are `draw_sprite_ext` frame 0 xscale-stretched
+    // from (22,7) — `sprHealthFill` is a (0,0)-origin 1x8 strip so the
+    // left edge pins at x=22 while the width shrinks. Ghost in the
+    // darkened HSV variant, live in `opt_healthcol`; hurt flash =
+    // white frame 0 at the hp width. Desktop nudges both by +0.01.
     let gm = hud_gui_map(view);
     if let Some(s) = hud_gui_place(
         assets,
@@ -5243,14 +5258,22 @@ pub fn hud_sprites(
     // GML `_level_max <= 0` (no-muts custom): the port never sets a 0
     // cap (level floor is 1), so this arm is vacuous — documented, not
     // drawn.
+    // GML `sprUltraLevel` at (11,16) via `draw_sprite` (NOT `_ext`):
+    // honors the strip origin (4,5 of 8x8), so pixels center near
+    // (11,16) — the old `sprite_scaled_rotated` treated (11,16) as the
+    // quad center, shifting it half a cell. `hud_gui_place` lands the
+    // art top-left on the GUI point like `draw_sprite` does.
     if hud.level >= 10 {
-        if let Some(s) = assets.sprite_scaled_rotated(
+        if let Some(s) = hud_gui_place(
+            assets,
             "images/sprUltraLevel.png",
             0,
-            hud_gui_to_world(gm, view, 11.0, 16.0),
-            gm.s,
-            0.0,
+            11.0,
+            16.0,
+            1.0,
             [1.0; 4],
+            gm,
+            view,
         ) {
             out.push(s);
         }
@@ -5318,8 +5341,14 @@ pub fn hud_sprites(
     // runs (PLAY sub-rows deny; `Run` carries no continued flag), so
     // all three arms are vacuous — documented, not drawn.
 
-    // Rogue/Cuz ammo pips (GML GUI (110,4), subimage by fill progress,
-    // 0 when dry; Cuz draws `sprCuzAmmoHUDU` under the Emotional ultra).
+    // Rogue/Cuz ammo pips (GML GUI `draw_sprite(sprite, sub, 110, 4)`:
+    // top-left origin art drawn with its TOP-LEFT at (110,4) — GML
+    // `draw_sprite` (not `_ext`) honors the strip origin, and these
+    // strips carry origin (1,1), so pixels land at (109,3). Subimage
+    // `ammo ? max(1, floor((frames-1) * progress)) : 0`; Cuz draws
+    // `sprCuzAmmoHUDU` under the Emotional ultra. `hud_gui_place`
+    // already lands the art top-left on the GUI point (same helper
+    // as the health bar/ammo icons), so pass the GML point verbatim.
     if let Some((race, skin)) = race_skin {
         let pip = if race == RaceId::Rogue {
             let cskin = skin == crate::data::SkinLetter::C;
@@ -5351,32 +5380,34 @@ pub fn hud_sprites(
         if let Some((path, ammo, max)) = pip {
             let frames = strip_frames(assets, path).max(1);
             let progress = (ammo / max).clamp(0.0, 1.0);
+            // GML verbatim: `_subimage = ammo ? max(1,
+            // floor(_subimage_max * progress)) : 0` with
+            // `_subimage_max = sprite_get_number - 1`.
             let sub = if ammo <= 0.0 {
                 0
             } else {
                 (((frames as f32 - 1.0) * progress).floor() as i32).max(1)
             };
-            if let Some(s) = assets.sprite_scaled_rotated(
-                path,
-                sub,
-                hud_gui_to_world(gm, view, 110.0, 4.0),
-                gm.s,
-                0.0,
-                [1.0; 4],
-            ) {
+            if let Some(s) = hud_gui_place(assets, path, sub, 110.0, 4.0, 1.0, [1.0; 4], gm, view)
+            {
                 out.push(s);
             }
         }
     }
 
-    // Offer icons (GML `LevCont/Other_10` layout verbatim: single
-    // bottom row at GUI y=219, `step = min(32, floor(view_width/(n+1)))`,
-    // `scale = max(0.65, step/32)`, centered on the live view center
-    // with a -12 shift at n>=10; selected card lifts 1 px and draws
-    // white, others gray).
-    // Normal offers ride `sprSkillIcon` at the GML skill id (scaled);
-    // ultra offers ride `sprEGSkillIcon` at `(race-1)*3+tier-1`
-    // (unscaled — GML only scales SkillIcon).
+    // Offer icons (GML `LevCont/Other_10` layout verbatim: the offer
+    // row sits at `_yview = view_yview + view_height - 21` — GUI y=219
+    // — with `step = min(32, floor(view_width/(n+1)))`, `half = step
+    // div 2` (integer!), `scale = max(0.65, step/32)`, centered on the
+    // live view center with a -12 shift at n>=10; SkillIcon cards draw
+    // at `image_xscale/yscale = scale` (UltraIcon/CrownIcon unscaled).
+    // Selected card lifts 1 px (`y - sign(selected)`) and draws white,
+    // others gray. The selected card's textbox is ONE centered-middle
+    // text at `(w/2, H-61-selected)` = (cx, 179) — see the Mutation
+    // overlay arm (`menu_gui_texts_vw`). Normal offers ride
+    // `sprSkillIcon` at the GML skill id (scaled); ultra offers ride
+    // `sprEGSkillIcon` at `(race-1)*3+tier-1` (unscaled — GML only
+    // scales SkillIcon).
     {
         // Ultra offers win over normal ones (same precedence as
         // `sync_hud_state`, `tick_mutation_mirror` and the click
@@ -5433,6 +5464,11 @@ pub fn hud_sprites(
                     ("images/sprSkillIconHUD.png", frame)
                 };
                 let is_selected = selected == Some(i);
+                // GML `draw_sprite_ext(sprite, skill, x, y + appeary -
+                // sign(selected), ..., selected ? c_white : c_gray)`:
+                // unselected cards are full gray (not half-alpha), and
+                // the lift is `sign(selected)` = 1 for any nonzero
+                // selection value. Steady state here (`appeary = 0`).
                 let lift = if is_selected { 1.0 } else { 0.0 };
                 let tint = if is_selected {
                     [1.0; 4]
@@ -5454,9 +5490,11 @@ pub fn hud_sprites(
     }
 
     // Held ultra + skill icons (GML `scrDrawMiscHUD:68-113` verbatim):
-    // ultras on `sprEGIconHUD` straight from the held frame at y=13,
-    // then skills on `sprSkillIconHUD` at the GML skill id at y=12.
-    // Patience (`mut_patience` with a stored `patienceskill`) draws
+    // ultras on `sprEGIconHUD` with the held ultra's own frame at y=13,
+    // then skills on `sprSkillIconHUD` at the GML skill id at y=12
+    // (the `_py--` runs once after the ultra loop, even with zero
+    // ultras — so the skill row is ALWAYS y=12, never 13). Patience
+    // (`mut_patience` with a stored `patienceskill`) draws
     // `sprSkillIconHUD` + `sprPatienceIconHUD` at the SAME `_px` with a
     // single advance. Top-right from GUI `view_width - 12` in 16 px
     // steps, wrapping at x<=120 (rows stack +16).
@@ -5501,11 +5539,10 @@ pub fn hud_sprites(
                 y += 16.0;
             }
         }
-        // GML `_py--`: the skill row sits one px lower and continues
-        // the cursor.
-        if !skills.is_empty() && y == 13.0 {
-            y = 12.0;
-        }
+        // GML `_py--` runs unconditionally after the ultra loop: the
+        // skill row is ALWAYS y=12 (the old `y == 13.0` guard wrongly
+        // kept y=13 when no ultra was held).
+        y -= 1.0;
         for ((path, frame), overlay) in skills {
             if let Some(s) = assets.sprite_scaled_rotated(
                 path,
@@ -7351,11 +7388,11 @@ pub fn menu_sprites(
                 let race = roster[i];
                 // GML `CharSelect/Draw_0` verbatim: `can =
                 // scr_race_is_unlocked(race) || UberCont.weekly_run`,
-                // strip `can ? sprCharSelect : sprCharSelectLocked`,
-                // tint white iff `can && selected`, else gray. `selected`
-                // tracks the picked race (cursor pod or
-                // `my_player.race`); the port's `title_cursor` pod is the
-                // same slot single-player.
+                // `draw_sprite_ext(can ? sprite_index :
+                // sprCharSelectLocked, race, x, y, 1, 1, 0, color, 1)`
+                // with `color = (can && selected) ? c_white : c_gray`
+                // (`c_gray` = 128,128,128 — NOT half-alpha). Pods are
+                // view-snapped (`x = view_xview + xstart`).
                 let weekly = menu.as_ref().is_some_and(|m| m.weekly_run_menu);
                 let can = save.as_ref().is_some_and(|s| s.race_unlocked(race)) || weekly;
                 let selected_race = CHAR_SELECT_ORDER[selected.min(CHAR_SELECT_ORDER.len() - 1)];

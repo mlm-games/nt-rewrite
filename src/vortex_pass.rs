@@ -41,8 +41,10 @@ pub struct VortexSnapshot {
     pub bg_alpha: f32,
     pub thresh: f32,
     pub kindpacked: f32,
-    /// Look center + visible extent in wisp coord space. Bevy parity is
-    /// `[160, 120, 1920, 1440]` (the 6x quad centered on the camera).
+    /// Look center + visible extent in wisp coord space. Snapshot
+    /// overrides this per frame with the live GUI view (`view_w/2,
+    /// 120, view_w, 240`); the constant is the 320x240-base fallback
+    /// (warmups/tests without a live width).
     pub view: [f32; 4],
 }
 
@@ -116,11 +118,13 @@ impl VortexPass {
                 include_str!("../shaders/vortex.wgsl"),
                 FullscreenDesc {
                     texture_slots: VORTEX_TEXTURES as u32,
-                    // Bevy parity (`nt-recreated-bevy` `vortex.rs:850-863`:
-                    // Linear enforced every tick — "nearest made wisps
-                    // blocky"). The verified-good reference renders smooth;
-                    // match it.
-                    filter: TextureFilter::Linear,
+                    // GML parity (`options/{windows,linux,...}`:
+                    // `interpolate_pixels=false`; only html5/operagx/tvos/
+                    // reddit opt in). No `texture_set_interpolation` /
+                    // `gpu_set_texfilter` call anywhere in GML either, so
+                    // the whole game samples point — crisp 1px debris
+                    // rocks, crisp wisps.
+                    filter: TextureFilter::Nearest,
                 },
             ),
             snapshot,

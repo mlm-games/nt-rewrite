@@ -38,13 +38,26 @@ const WARMUP_TICKS: u32 = 150;
 /// `despawn_vortex_when_done` drain constant).
 pub const DRAIN_TICKS: f32 = 26.0;
 
-/// GUI-space size the spiral laws are written in (bevy `ui_art` values).
+/// GUI-space size the spiral laws are written in (GML
+/// `game_screen_width/height` base; the HEIGHT is always 240, the WIDTH
+/// is the live view width — `view_width = 240 * aspect` with
+/// `opt_resolution` on (default), 320 portrait-floored. GML
+/// `SpiralCont/Step_0` centers on `view_width div 2`, so the vortex
+/// tracks wide windows; the sim carries the live width in
+/// [`SpiralCtl::view_w`] ( refreshed per frame by the shell; warmups
+/// default to the 320 base).
 pub const GUI_W: f32 = 320.0;
 pub const GUI_H: f32 = 240.0;
 
-/// Look center + visible extent in wisp coord space. Bevy parity is the 6x
-/// quad centered on the camera.
-pub const VORTEX_VIEW: [f32; 4] = [160.0, 120.0, 1920.0, 1440.0];
+/// Fallback look center + visible extent in wisp coord space: the
+/// 320x240 base view 1:1. The live snapshot overrides this with the
+/// live GUI view (`view_w/2, 120, view_w, 240`) so the fullscreen quad
+/// maps screen px to GUI px exactly like GML (`display_set_gui_size`
+/// = view size). The old 6x value (`[160, 120, 1920, 1440]`) was a
+/// mistranslation of bevy's 6x WORLD-space mesh size: on a fullscreen
+/// quad it shrank every wisp 6x toward the center, so the vortex
+/// never filled the corners.
+pub const VORTEX_VIEW: [f32; 4] = [160.0, 120.0, 320.0, 240.0];
 
 /// Spiral visual variant, selected by GML area.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -306,6 +319,12 @@ pub struct SpiralCtl {
     /// pageant) — refreshed per tick by the shell from the live `Enemy`
     /// query. Sim-only warmups default it off.
     pub bossfight_suppressed: bool,
+    /// Live GUI view width in px (GML `view_width`: 240 * aspect with
+    /// `opt_resolution` on, 320 portrait-floored). The emitter orbit
+    /// centers on `view_w/2` (`SpiralCont/Step_0`: `view_width div 2`);
+    /// the snapshot maps `view = (view_w/2, 120, view_w, 240)`. The
+    /// shell refreshes this per frame; warmups default to 320.
+    pub view_w: f32,
 }
 
 impl SpiralCtl {
@@ -362,6 +381,7 @@ impl SpiralCtl {
             gml_area,
             seed,
             bossfight_suppressed: false,
+            view_w: GUI_W,
             streams: vec![WispStream::dead(); MAX_WISPS],
         };
         for _ in 0..WARMUP_TICKS {
@@ -414,10 +434,14 @@ impl SpiralCtl {
             let kind = self.kind;
 
             self.angle += spiral_angle_inc(self.angle, kind);
+            // GML `SpiralCont/Step_0` verbatim: IDPD/Venuz lock to the
+            // VIEW center (`view_width div 2`, `view_height div 2`);
+            // Normal/Proto drift around it on the sine orbit (also
+            // view-centered — `x = _cx + ...`, never camera-centered).
             let (x, y) = if matches!(kind, SpiralKind::Idpd | SpiralKind::Venuz) {
-                (GUI_W / 2.0, GUI_H / 2.0)
+                (self.view_w / 2.0, GUI_H / 2.0)
             } else {
-                orbit(self.angle)
+                orbit(self.angle, self.view_w)
             };
             if kind == SpiralKind::Venuz {
                 self.push_star(x, y);
@@ -699,7 +723,11 @@ impl SpiralCtl {
             bg_alpha,
             thresh: self.thresh(),
             kindpacked: self.kindpacked(),
-            view: VORTEX_VIEW,
+            // Live GUI view rect: `display_set_gui_size(view)` makes GUI
+            // px == view px 1:1, so the fullscreen quad maps uv 1:1 onto
+            // `(view_w, 240)` centered at `(view_w/2, 120)` — GML draws
+            // wisps at `view + local`, i.e. screen px == GUI px.
+            view: [self.view_w / 2.0, GUI_H / 2.0, self.view_w, GUI_H],
         }
     }
 }
@@ -715,12 +743,19 @@ pub fn spiral_angle_inc(angle: f32, kind: SpiralKind) -> f32 {
     }
 }
 
-/// Wisp emitter position for the angle (bevy `orbit`, verbatim).
-pub fn orbit(angle: f32) -> (f32, f32) {
+/// Wisp emitter position for the angle (GML `SpiralCont/Step_0`
+/// orbit verbatim): view-centered (`_cx = view_width div 2`) with the
+/// ±80x/±50y sine drift. `view_w` is the live GUI view width.
+pub fn orbit(angle: f32, view_w: f32) -> (f32, f32) {
     (
-        GUI_W / 2.0 + deg_sin(angle / 921.0) * deg_sin(angle / 500.0) * 80.0,
+        view_w / 2.0 + deg_sin(angle / 921.0) * deg_sin(angle / 500.0) * 80.0,
         GUI_H / 2.0 + deg_cos(angle / 583.0) * deg_sin(angle / 500.0) * 50.0,
     )
+}
+
+/// Legacy 320-base orbit (warmup/tests without a live view width).
+pub fn orbit_base(angle: f32) -> (f32, f32) {
+    orbit(angle, GUI_W)
 }
 
 // GML uses degrees, the sim uses radians.

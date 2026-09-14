@@ -574,16 +574,23 @@ impl App {
         if state == AppState::InGame && self.adv_state != AppState::InGame {
             self.spiral.kill();
         }
-        // NOTE: no kill on InGame -> menu edges. Bevy parity
-        // (`nt-recreated-bevy` `VortexPlugin`: kill only on
-        // `OnEnter(InGame)` / `OnExit(Loading)`; `despawn_vortex_when_done`
-        // only in Title|InGame; `spawn_spiral_field` warms MainMenu only
-        // when the resource is missing): by quit time the run spiral is
-        // long dead and drained, so the menu shows plain black. Killing
-        // here would restart a visible 26-tick drain of desert wisps over
-        // the menu — the stale-background bug. GML rebuilds a live
-        // `SpiralCont` on `room_restart`, but the verified-good reference
-        // is bevy-black, so match that.
+        // GML `room_restart` parity (`Vlambeer/Create_0`
+        // `want_quit_to_menu` branch + `BackButton/Other_10` Menu branch):
+        // quitting to the logo menu builds a FRESH live `SpiralCont`, so
+        // the title shows a live vortex over black — never the previous
+        // run's leftover drain. Entering MainMenu re-warms campfire
+        // (GML `area_campfire`), exactly like the fresh cont's
+        // `repeat 150` warmup.
+        if state == AppState::MainMenu && self.adv_state != AppState::MainMenu {
+            self.spiral = SpiralCtl::warmed_up_for_area_seeded(AreaId::Campfire, seed);
+        }
+        // NOTE: no kill on InGame -> Title. GML destroys the whole
+        // session (`BackButton`: `with all instance_destroy`) and the
+        // campfire `Menu` draws its OWN fresh spiral (`Menu/Draw_0`
+        // `scrDrawSpiral()` with no `draw_clear`); the port Title state
+        // reuses `setup_title_campfire` the same way. Killing here would
+        // leave a stale drain behind — the old stale-background comment
+        // below had it backwards (bevy-black is not GML).
         let cover = state == AppState::InGame
             && (self
                 .sim
@@ -709,19 +716,24 @@ impl App {
     }
 
     fn maybe_rewarm_spiral(&mut self) {
-        // Menus never re-warm (bevy parity: `spawn_spiral_field` warms
-        // MainMenu only when the resource is missing; ours is a permanent
-        // `App` field). Without this gate, quitting to the menu resets
-        // the run to campfire/seed 0, the area change fires a fresh warm,
-        // and the menu shows a live vortex where bevy shows black.
-        // Gameplay area/seed changes (portal, new run) still re-warm.
+        // GML `room_restart` parity: any gameplay area/seed change
+        // (portal, new run, quit-to-menu campfire reset) re-warms the
+        // spiral for the new room — `Vlambeer/Create_0` builds a fresh
+        // `SpiralCont` on every restart, and `PlayButton/Other_10`
+        // destroys it when entering the campfire `MenuGen` (no spiral
+        // over the char-select camp; the Title state mounts no vortex
+        // layer). The lifecycle step above owns the menu transitions;
+        // this only tracks live area/seed drift.
         let state = self
             .sim
             .world
             .get_resource::<AppState>()
             .copied()
             .unwrap_or_default();
-        if !matches!(state, AppState::Loading | AppState::InGame) {
+        if !matches!(
+            state,
+            AppState::Loading | AppState::InGame | AppState::MainMenu
+        ) {
             return;
         }
         let run = self.sim.world.get_resource::<crate::comps_a::Run>();
@@ -1444,6 +1456,10 @@ impl App {
         self.view_world_size = gml_view;
         self.view_viewport_dp = viewport_dp;
         self.view_density = density.max(1e-6);
+        // GML `SpiralCont/Step_0` centers the emitter on `view_width
+        // div 2`: refresh the live GUI width so the vortex (and its
+        // snapshot view rect) tracks wide windows 1:1.
+        self.spiral.view_w = gml_view[0];
 
         let area = self
             .sim
@@ -1546,7 +1562,13 @@ impl App {
             let hud_dt = dt.as_secs_f32().clamp(0.0, 0.1);
             // World crosshair (GML `TopCont/Draw_0`, over the room,
             // under the HUD text) plus coop fainted bars at the
-            // view-clamped positions.
+            // view-clamped positions. All three world-HUD passes
+            // (`with Player` crosshair, `Revive` bars, `Portal`
+            // arrow) require live run actors; the Loading room is
+            // empty by construction (`goto_state` teardown + GML
+            // `room_restart`), so they self-suppress there exactly
+            // like GML (and stay off on Title/menus via their own
+            // live-run gates).
             let mut cross = crosshair_sprites(&mut self.sim.world, assets, hud_dt);
             stamp_z(&mut cross, Z_CROSSHAIR);
             s.extend(cross);
@@ -1565,26 +1587,49 @@ impl App {
             s.extend(portal);
             // Spiral CPU layer (GML `scrDrawSpiral` center figures):
             // crown orbit + player hurt figures ride every spiral
-            // caller — `Menu`, `GenCont`, `LevCont`, `GameOver`,
-            // `NothingSpiral` and the active-gameplay background alike.
-            // The vortex layer mounts in every state but Splash, so the
-            // figures draw in all of those too (they gate themselves on
-            // Throne-II/Credits/players).
-            if !matches!(menu_kind, Some(MenuOverlay::Splash)) {
+            // caller — `GenCont`, `LevCont`, `NothingSpiral` and the
+            // logo/title spirals alike. NOT the campfire `Menu`
+            // (figures need a live `SpiralCont`, which `PlayButton`
+            // destroys on entry) and NOT GameOver (the dead run's
+            // cont died at generation end). Gated on the mounted
+            // vortex layer so figures never float over the flat
+            // campfire camp or the game-over dim.
+            // NOTE: `center` is the vortex look point (GUI view
+            // center), not the world camera — GML draws figures at
+            // `view + cont.x/y` (view-local coords), independent of
+            // the room camera.
+            let vortex_mounted_later = self.assets.is_some()
+                && !self.vortex_tex.is_empty()
+                && !matches!(menu_kind, Some(MenuOverlay::Splash))
+                && !matches!(menu_kind, Some(MenuOverlay::Title))
+                && (self.spiral.alive || !self.spiral.is_done());
+            if vortex_mounted_later {
+                let gui_view = gml_view_size(viewport_dp);
+                let figs_center = Vec2::new(
+                    view[0] + gui_view[0] * 0.5,
+                    view[1] + gui_view[1] * 0.5,
+                );
                 let mut figs = spiral_figures(
                     &mut self.sim.world,
                     assets,
-                    self.cam.center,
+                    figs_center,
                     self.spiral.angle,
                 );
                 stamp_z(&mut figs, Z_SPIRAL_FIGURES);
                 s.extend(figs);
             }
             // View-anchored HUD bars (Draw-GUI-64: above all world-space
-            // layers). The rect is computed here so bars/icons land on
-            // the live view.
+            // layers). GML `GenCont/Draw_0` draws ONLY spiral +
+            // GENERATING + roadmap — no PlayerHUD/MiscHUD — and the
+            // Loading room starts empty (`goto_state` teardown), so the
+            // HUD stays off while Loading like GML (TopCont draws the
+            // HUD only once the run's actors exist).
             let hud_view = view_rect_world(viewport_dp, world_size, &self.cam);
-            let mut h = hud_sprites(&mut self.sim.world, assets, hud_view, hud_dt);
+            let mut h = if state == AppState::Loading {
+                Vec::new()
+            } else {
+                hud_sprites(&mut self.sim.world, assets, hud_view, hud_dt)
+            };
             stamp_z(&mut h, Z_HUD);
             s.extend(h);
             // Boot reel (`Vlambeer/Draw_0` + `Logo/Draw_0`).
@@ -1636,13 +1681,13 @@ impl App {
         self.last_sprite_count = batch.len();
 
         // Vortex snapshot -> mounted background pass. `bg_alpha` is
-        // GML `scrDrawSpiral` verbatim: `draw_clear(c_black)` runs only
-        // when the caller is NOT `Menu` — i.e. opaque black behind the
-        // spiral everywhere except the campfire title, which draws the
-        // spiral transparently over the menu art. Bevy `vortex_needs_black`
-        // parity: Loading opaque (GENERATING sits between the bars);
-        // InGame opaque only while a floor transition or mutation/ultra
-        // cover runs; Splash/MainMenu transparent (black clear behind).
+        // GML `scrDrawSpiral` verbatim: `draw_clear(c_black)` runs in
+        // every caller EXCEPT `Menu` — i.e. opaque black behind the
+        // spiral on Logo/MainMenu/Loading/covers, transparent over the
+        // campfire camp on Title. InGame mounts the pass only while a
+        // floor transition or mutation/ultra cover runs (the only
+        // spiral callers in a run); Splash mounts nothing (black
+        // clear behind the reel).
         let ft_active = self
             .sim
             .world
@@ -1684,12 +1729,7 @@ impl App {
         let vortex_layer = if self.assets.is_some()
             && !self.vortex_tex.is_empty()
             && !matches!(menu_kind, Some(MenuOverlay::Splash))
-            // The campfire title has no `SpiralCont` (`MenuGen` never
-            // builds one; PLAY destroys it) — the camp sits on the flat
-            // campfire colour. A drained-away spiral stays gone
-            // (`GenCont/Destroy` at generation end; bevy
-            // `despawn_vortex_when_done`): live gameplay past the drain,
-            // Title and GameOver show the flat area colour instead.
+            // (caller list documented at the figure gate above)
             && !matches!(menu_kind, Some(MenuOverlay::Title))
             && (self.spiral.alive || !self.spiral.is_done())
         {
@@ -1926,6 +1966,11 @@ impl App {
         if self.was_state != AppState::InGame && state == AppState::InGame {
             self.gml_cam.snap = true;
         }
+        // GML `room_restart` parity (`Vlambeer/Create_0` logo branch):
+        // the quit-to-menu room recenters the camera (0,0) over black
+        // with a fresh live spiral — the previous run's look point and
+        // drain never carry over. Same for Title entry (campfire camp
+        // snaps to the Campfire actor).
         if matches!(state, AppState::MainMenu | AppState::Title)
             && !matches!(self.was_state, AppState::MainMenu | AppState::Title)
         {
