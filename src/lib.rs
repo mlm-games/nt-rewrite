@@ -94,8 +94,8 @@ use crate::input::{
     sample_touch,
 };
 use crate::render::{
-    ATLAS_PAGES, ATLAS_SIZE, CamPoi, CamStepInput, GmlCamera, RenderAssets, Z_BLOOM,
-    Z_CROSSHAIR, Z_FAINTED, Z_FOG, Z_FX, Z_HUD, Z_MENU, Z_PORTAL_INDICATOR, Z_SHADOW, Z_SIDEART,
+    ATLAS_PAGES, ATLAS_SIZE, CamPoi, CamStepInput, GmlCamera, RenderAssets, Z_BLOOM, Z_CROSSHAIR,
+    Z_FAINTED, Z_FOG, Z_FX, Z_HUD, Z_MENU, Z_PORTAL_INDICATOR, Z_SHADOW, Z_SIDEART,
     Z_SPIRAL_FIGURES, Z_SPLASH, background_color, bloom_sprites, cam_viewdist_for,
     crosshair_sprites, decode_png, fainted_bar_sprites, fog_sprites, fx_instances, fx_texts,
     gml_camera_step, gml_view_scale, gml_view_size, hud_gui_texts_dp, hud_sprites, menu_gui_texts,
@@ -562,6 +562,14 @@ impl App {
             self.spiral = SpiralCtl::warmed_up_for_area_seeded(area, seed);
         }
         if state == AppState::InGame && self.adv_state != AppState::InGame {
+            self.spiral.kill();
+        }
+        if self.adv_state == AppState::InGame
+            && matches!(
+                state,
+                AppState::MainMenu | AppState::Title | AppState::Splash
+            )
+        {
             self.spiral.kill();
         }
         let cover = state == AppState::InGame
@@ -1513,8 +1521,7 @@ impl App {
             s.extend(h);
             // Boot reel (`Vlambeer/Draw_0` + `Logo/Draw_0`).
             if menu_kind == Some(MenuOverlay::Splash) {
-                let mut splash =
-                    splash_sprites(&mut self.sim.world, assets, view);
+                let mut splash = splash_sprites(&mut self.sim.world, assets, view);
                 stamp_z(&mut splash, Z_SPLASH);
                 s.extend(splash);
             }

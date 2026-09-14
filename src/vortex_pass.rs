@@ -116,9 +116,7 @@ impl VortexPass {
                 include_str!("../shaders/vortex.wgsl"),
                 FullscreenDesc {
                     texture_slots: VORTEX_TEXTURES as u32,
-                    // nt forces linear on all seven (nearest made wisps
-                    // blocky); half-texel inset lives in-shader.
-                    filter: TextureFilter::Linear,
+                    filter: TextureFilter::Nearest,
                 },
             ),
             snapshot,
@@ -172,7 +170,6 @@ impl WgpuCallback for VortexPass {
         self.pass.paint(info, rpass, resources);
     }
 }
-
 
 /// f32 words to little-endian bytes (no bytemuck dependency needed).
 fn f32_le_bytes(words: &[f32]) -> Vec<u8> {

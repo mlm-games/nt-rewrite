@@ -3225,6 +3225,10 @@ pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
     if !show_hud {
         return Vec::new();
     }
+    let player_alive = world.query::<&Player>().iter(world).next().is_some();
+    if !player_alive {
+        return Vec::new();
+    }
     let vw = gml_view_size(canvas_dp)[0];
     let cx = vw * 0.5;
     let mut items: Vec<MenuGuiText> = hud_gui_texts(world)
@@ -5065,6 +5069,10 @@ pub fn hud_sprites(
         .get_resource::<crate::savedata_part::SaveData>()
         .is_some_and(|s| !s.settings.show_hud)
     {
+        return out;
+    }
+    let player_alive = world.query::<&Player>().iter(world).next().is_some();
+    if !player_alive {
         return out;
     }
     let hud: HudState = sync_hud_state(world);
