@@ -574,14 +574,16 @@ impl App {
         if state == AppState::InGame && self.adv_state != AppState::InGame {
             self.spiral.kill();
         }
-        if self.adv_state == AppState::InGame
-            && matches!(
-                state,
-                AppState::MainMenu | AppState::Title | AppState::Splash
-            )
-        {
-            self.spiral.kill();
-        }
+        // NOTE: no kill on InGame -> menu edges. Bevy parity
+        // (`nt-recreated-bevy` `VortexPlugin`: kill only on
+        // `OnEnter(InGame)` / `OnExit(Loading)`; `despawn_vortex_when_done`
+        // only in Title|InGame; `spawn_spiral_field` warms MainMenu only
+        // when the resource is missing): by quit time the run spiral is
+        // long dead and drained, so the menu shows plain black. Killing
+        // here would restart a visible 26-tick drain of desert wisps over
+        // the menu — the stale-background bug. GML rebuilds a live
+        // `SpiralCont` on `room_restart`, but the verified-good reference
+        // is bevy-black, so match that.
         let cover = state == AppState::InGame
             && (self
                 .sim
@@ -707,6 +709,21 @@ impl App {
     }
 
     fn maybe_rewarm_spiral(&mut self) {
+        // Menus never re-warm (bevy parity: `spawn_spiral_field` warms
+        // MainMenu only when the resource is missing; ours is a permanent
+        // `App` field). Without this gate, quitting to the menu resets
+        // the run to campfire/seed 0, the area change fires a fresh warm,
+        // and the menu shows a live vortex where bevy shows black.
+        // Gameplay area/seed changes (portal, new run) still re-warm.
+        let state = self
+            .sim
+            .world
+            .get_resource::<AppState>()
+            .copied()
+            .unwrap_or_default();
+        if !matches!(state, AppState::Loading | AppState::InGame) {
+            return;
+        }
         let run = self.sim.world.get_resource::<crate::comps_a::Run>();
         let (area, seed) = run
             .map(|r| (r.area, r.gen_seed))
@@ -1487,9 +1504,12 @@ impl App {
             let assets = self.assets.as_ref().expect("checked");
             // Cursor world position for the GML crosshair distance
             // (`KeyCont.dis_fire` parity; `None` until the first hover).
-            self.sim
-                .world
-                .insert_resource(crate::render::HoverWorld(self.hover));
+            // Uses the live cursor unprojection when available so the
+            // crosshair tracks the on-screen cursor as the camera moves
+            // (same source as aim; falls back to the last Hover).
+            self.sim.world.insert_resource(crate::render::HoverWorld(
+                self.cursor_to_world().or(self.hover),
+            ));
             // Blob shadows first (GML `shad` surface: under the actors).
             // Every layer stamps its z-ladder rung (render.rs `Z_*`,
             // GML `__global_object_depths` order): without rungs every

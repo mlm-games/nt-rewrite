@@ -2799,16 +2799,15 @@ fn hud_gui_left(
     }
 }
 
-/// GML weapon-row draw order: the active weapon first, backup second,
-/// then any extra (`scrDrawPlayerHUD` iterates `_wep`, `_bwep`,
-/// `extra_weps`). Returns inventory slot indices in draw order
+/// GML weapon-row draw order: `_wep` at position 0, `_bwep` at 1,
+/// then `extra_weps` (`scrDrawPlayerHUD` iterates `_hud_weapon_index`
+/// 0, 1, 2... — position 0 is ALWAYS the primary slot, never the
+/// active one; swapping guns swaps `_wep`/`_bwep` sim-side instead).
+/// Returns inventory slot indices in draw order
 /// (unbounded — Steroids/Cuz extras draw past two slots).
 fn hud_weapon_order(hud: &HudState) -> Vec<usize> {
     let n = hud.weapon_ids.len().max(1);
-    let cur = hud.current_weapon.min(n - 1);
-    let mut order = vec![cur];
-    order.extend((0..n).filter(|&s| s != cur));
-    order
+    (0..n).collect()
 }
 
 /// GML weapon-row x positions: 24, then +44, then +20 per extra
@@ -5538,15 +5537,21 @@ pub fn hud_sprites(
         }
     }
 
-    // Weapon strip (GML `scrDrawPlayerHUD:99-146` verbatim): active
-    // weapon left at GUI x=24, then 68, then +20 for extras, y=16;
-    // 4-way outline (white when active, `#404040` else) drawn only for
-    // the active gun / broke batch / darkness / letterbox; body in
+    // Weapon strip (GML `scrDrawPlayerHUD:99-146` verbatim): `_wep`
+    // at GUI x=24, `_bwep` at 68, then +20 for extras, y=16 (slot
+    // order — position 0 is always the primary slot; swapping guns
+    // swaps `_wep`/`_bwep` sim-side via `scrSwapWeps`, never the draw
+    // order). Each gun is a `draw_sprite_part_ext` pixel window
+    // `(xoffset, yoffset+swapanim-8, weapon_width, 14+swapanim)` with
+    // `weapon_width` 16 (32 for a slot-0 melee): the window's top-left
+    // lands exactly on `(dx, dy)`, 4-way outline (white when
+    // `_is_active_weapon = (index==0 || Steroids)` else `#404040`,
+    // only for active/broke/darkness/letterbox) at ±1 px, body in
     // `c_black`; `gpu_fog` tints for curse (`c_curse`) / ultra rad guns
-    // (`c_ultra`) / golden (`c_gold`); melee parts 32 px wide, else 16.
+    // (`c_ultra`) / golden (`c_gold`).
     // (`swapanim` y-offset + the white 0.2 reload wipe are sim-state the
     // port never tracks, so the steady frame draws.)
-    for (pos, slot) in order.into_iter().enumerate() {
+    for (pos, slot) in order.iter().copied().enumerate() {
         let Some(id) = hud.weapon_ids.get(slot).copied() else {
             continue;
         };
@@ -5581,20 +5586,90 @@ pub fn hud_sprites(
                 1.0,
             ]
         };
+        // GML part window, steady frame (`swapanim = 0`): source rect
+        // `(xoffset, yoffset-8, weapon_width, 14)` of the strip cell,
+        // 32 px wide only for a slot-0 melee (`Ammo.None`).
+        let melee = meta.wep_type == AmmoType::None;
+        let order_len = hud.weapon_ids.len();
+        let ww = if (pos == 0 || order_len <= 2) && melee {
+            32.0
+        } else {
+            16.0
+        };
         // 4-way outline quads (1 px GUI offsets around the body).
         for (ox, oy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
-            if let Some(s) =
-                hud_gui_place(assets, &path, 1, dx + ox, 16.0 + oy, 1.0, outline, gm, view)
-            {
+            if let Some(s) = hud_weapon_part(
+                assets, &path, dx + ox, 16.0 + oy, ww, outline, gm, view,
+            ) {
                 out.push(s);
             }
         }
         let body_tint = fog.unwrap_or([0.0, 0.0, 0.0, 1.0]);
-        if let Some(s) = hud_gui_place(assets, &path, 1, dx, 16.0, 1.0, body_tint, gm, view) {
+        if let Some(s) = hud_weapon_part(assets, &path, dx, 16.0, ww, body_tint, gm, view) {
             out.push(s);
         }
     }
     out
+}
+
+/// One GML `draw_sprite_part_ext` weapon window: source rect
+/// `(xoffset, yoffset-8, ww, 14)` of strip frame 1 (steady
+/// `swapanim = 0`), drawn with its top-left at GUI `(dx, dy)`.
+/// UVs lerp inside the frame cell (the atlas packs whole frames, so a
+/// sub-rect is a straight sub-range); the quad size is the window in
+/// GUI px with a centered anchor (GML draws with the sprite's own
+/// origin, i.e. centered on the window middle here).
+fn hud_weapon_part(
+    assets: &RenderAssets,
+    path: &str,
+    dx: f32,
+    dy: f32,
+    ww: f32,
+    tint: [f32; 4],
+    map: HudGuiMap,
+    view: [f32; 4],
+) -> Option<SpriteInstance> {
+    let (uv, def) = assets.uv(path, 1)?;
+    let (sw, sh) = (def.w as f32, def.h as f32);
+    if sw <= 0.0 || sh <= 0.0 {
+        return None;
+    }
+    // Source window in strip px, clamped to the cell (short cells show
+    // what exists; GML would sample edge texels past short art).
+    let sx = (def.xorigin as f32).clamp(0.0, sw);
+    let sy = (def.yorigin as f32 - 8.0).clamp(0.0, sh);
+    let ww = ww.min((sw - sx).max(1.0));
+    let wh = 14.0_f32.min((sh - sy).max(1.0));
+    // Frame cell spans uv.min..uv.max; the window is the matching
+    // fraction of it (atlas Y is down, same as the strip).
+    let fx0 = sx / sw;
+    let fy0 = sy / sh;
+    let fx1 = (sx + ww) / sw;
+    let fy1 = (sy + wh) / sh;
+    let uv_min = Vec2::new(
+        uv.min[0] + (uv.max[0] - uv.min[0]) * fx0,
+        uv.min[1] + (uv.max[1] - uv.min[1]) * fy0,
+    );
+    let uv_max = Vec2::new(
+        uv.min[0] + (uv.max[0] - uv.min[0]) * fx1,
+        uv.min[1] + (uv.max[1] - uv.min[1]) * fy1,
+    );
+    let size = Vec2::new(ww * map.s, wh * map.s);
+    let top_left = hud_gui_to_world(map, view, dx, dy);
+    Some(SpriteInstance {
+        center: top_left + size * 0.5,
+        rotation: 0.0,
+        size,
+        anchor: Vec2::new(0.5, 0.5),
+        flip_x: false,
+        flip_y: false,
+        uv_min: Vec2::new(uv_min[0], uv_min[1]),
+        uv_max: Vec2::new(uv_max[0], uv_max[1]),
+        color: tint_to_linear(tint),
+        page: uv.page,
+        z: 0.0,
+        blend: SpriteBlend::Alpha,
+    })
 }
 
 /// Coop fainted bars (GML `TopCont/Draw_0` `Revive` block verbatim):

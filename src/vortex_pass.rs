@@ -116,7 +116,11 @@ impl VortexPass {
                 include_str!("../shaders/vortex.wgsl"),
                 FullscreenDesc {
                     texture_slots: VORTEX_TEXTURES as u32,
-                    filter: TextureFilter::Nearest,
+                    // Bevy parity (`nt-recreated-bevy` `vortex.rs:850-863`:
+                    // Linear enforced every tick — "nearest made wisps
+                    // blocky"). The verified-good reference renders smooth;
+                    // match it.
+                    filter: TextureFilter::Linear,
                 },
             ),
             snapshot,

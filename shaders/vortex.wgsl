@@ -3,9 +3,9 @@
 // Rendered as ONE fullscreen quad: each wisp is a transformed sample of the
 // real spiral art; growth/alpha/lightning follow the GameMaker laws.
 // Bevy-isms removed: no `#import`, no material bind-group macro. Uniforms
-// arrive in one globals block; the seven art textures share one Nearest
-// sampler (GML `interpolate_pixels=false` on desktop; GML never changes
-// the filter at runtime).
+// arrive in one globals block; the seven art textures share one Linear
+// sampler (bevy parity: Linear enforced every tick — nearest made wisps
+// blocky).
 // `view` maps screen uv to wisp coord space: bevy parity is
 // view = (160, 120, 1920, 1440) — quad top edge then maps to gui -600,
 // exactly like the original `mesh.uv` formula.
