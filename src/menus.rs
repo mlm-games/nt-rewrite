@@ -1821,8 +1821,16 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
     let game_over = world.get_resource::<Run>().is_some_and(|run| run.game_over);
 
     // Escape toggles pause (bevy `handle_pause_input`; transitions never
-    // block headless — no `Transition` resource exists here).
+    // block headless — no `Transition` resource exists here). GML
+    // `UberCont/Step_1` swallows the pause request while a generation
+    // cover runs (`GenCont`/`LevCont` rooms: floor transition or
+    // mutation/ultra offer).
     if edge.pause_pressed && !game_over {
+        let generating = world
+            .get_resource::<crate::comps_b::FloorTransition>()
+            .is_some_and(|f| f.active)
+            || world.get_resource::<PendingMutation>().is_some()
+            || world.get_resource::<PendingUltra>().is_some();
         world.init_resource::<crate::state::Paused>();
         world.init_resource::<OverlayMenu>();
         world.init_resource::<PendingUnpause>();
@@ -1843,6 +1851,7 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
             false,
             false,
             true,
+            generating,
         );
         world.insert_resource(paused);
         world.insert_resource(overlay);

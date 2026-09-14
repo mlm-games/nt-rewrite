@@ -310,6 +310,18 @@ pub fn goto_state(world: &mut World, next: AppState) {
             ensure_menu_room(world);
         }
         AppState::Loading => {
+            // GML `room_restart` parity (bevy `teardown_game` on InGame
+            // exit): the generating room starts empty — `GenCont` draws
+            // only the spiral + GENERATING + roadmap. Without this the
+            // stale Title camp (fresh runs) or dead run (RETRY) renders
+            // through the whole 1.2 s load. `setup_run` re-teardowns at
+            // the end of the load; both are idempotent. Run/MenuState
+            // resources survive (setup_run resets them) — only session
+            // entities + the floor mask go.
+            crate::setup::teardown_session_entities(world);
+            world.init_resource::<crate::comps_a::FloorMask>();
+            *world.resource_mut::<crate::comps_a::FloorMask>() =
+                crate::comps_a::FloorMask::default();
             world.insert_resource(LoadingState::default());
         }
         AppState::Title => {
@@ -486,8 +498,11 @@ pub fn tick_loading(world: &mut World, dt: f32) {
 
 /// Escape-pause tick (bevy `handle_pause_input` verbatim, minus engine
 /// key reads: the shell passes `escape_pressed`). Gated to InGame,
-/// `block_input` (transition animation, shell-owned), and live runs
-/// (game-over swallows Escape, bevy parity).
+/// `block_input` (transition animation, shell-owned), live runs
+/// (game-over swallows Escape, bevy parity), and non-generating rooms:
+/// GML `UberCont/Step_1` only honors `want_pause` when no `GenCont`
+/// exists, so Escape during a floor transition or mutation/ultra offer
+/// is swallowed.
 pub fn tick_escape_pause(
     paused: &mut Paused,
     overlay: &mut OverlayMenu,
@@ -496,8 +511,9 @@ pub fn tick_escape_pause(
     game_over: bool,
     block_input: bool,
     escape_pressed: bool,
+    generating: bool,
 ) {
-    if !escape_pressed || block_input || game_over {
+    if !escape_pressed || block_input || game_over || generating {
         return;
     }
     match *overlay {

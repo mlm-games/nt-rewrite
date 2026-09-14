@@ -94,12 +94,14 @@ use crate::input::{
     sample_touch,
 };
 use crate::render::{
-    ATLAS_PAGES, ATLAS_SIZE, CamPoi, CamStepInput, GmlCamera, RenderAssets, background_color,
-    bloom_sprites, cam_viewdist_for, crosshair_sprites, decode_png, fainted_bar_sprites,
-    fog_sprites, fx_instances, fx_texts, gml_camera_step, gml_view_scale, gml_view_size,
-    hud_gui_texts_dp, hud_sprites, menu_gui_texts, menu_gui_texts_dp, menu_gui_texts_vw,
-    menu_sprites, portal_indicator_sprites, shadow_sprites, sideart_sprites, spiral_figures,
-    splash_sprites, view_rect_world, world_camera, world_instances,
+    ATLAS_PAGES, ATLAS_SIZE, CamPoi, CamStepInput, GmlCamera, RenderAssets, Z_BLOOM,
+    Z_CROSSHAIR, Z_FAINTED, Z_FOG, Z_FX, Z_HUD, Z_MENU, Z_PORTAL_INDICATOR, Z_SHADOW, Z_SIDEART,
+    Z_SPIRAL_FIGURES, Z_SPLASH, background_color, bloom_sprites, cam_viewdist_for,
+    crosshair_sprites, decode_png, fainted_bar_sprites, fog_sprites, fx_instances, fx_texts,
+    gml_camera_step, gml_view_scale, gml_view_size, hud_gui_texts_dp, hud_sprites, menu_gui_texts,
+    menu_gui_texts_dp, menu_gui_texts_vw, menu_sprites, portal_indicator_sprites, shadow_sprites,
+    sideart_sprites, spiral_figures, splash_sprites, stamp_z, view_rect_world, world_camera,
+    world_instances,
 };
 use crate::schedule::build_sim_schedule;
 use crate::setup::setup_run_with_seed;
@@ -201,6 +203,16 @@ pub struct App {
     /// Previous frame's app state (entering InGame snaps the camera on
     /// the fresh player instead of swooping from the menu look point).
     was_state: AppState,
+    /// Previous fixed step's app state (drives the spiral lifecycle in
+    /// [`App::advance`]: Loading entry re-warms, InGame entry kills —
+    /// separate from the view-side `was_state`, which updates a frame
+    /// later in [`App::view`]).
+    adv_state: AppState,
+    /// Previous fixed step's generation-cover flag (floor transition or
+    /// mutation/ultra offer). Rising edge re-warms the spiral
+    /// (`GenCont`/`LevCont` build a fresh `SpiralCont`); falling edge
+    /// kills it (`GenCont/Destroy` destroys it at generation end).
+    adv_cover: bool,
     spiral: SpiralCtl,
     assets: Option<RenderAssets>,
     /// Art dir the catalog loaded from (vortex background textures
@@ -325,6 +337,8 @@ impl App {
             },
             was_transitioning: false,
             was_state: AppState::default(),
+            adv_state: AppState::default(),
+            adv_cover: false,
             spiral,
             assets: None,
             assets_dir: None,
@@ -439,6 +453,23 @@ impl App {
         self.last_bg_alpha
     }
 
+    /// Spiral liveness for the vortex mount decision (headless
+    /// diagnostics, same pattern as `last_sprite_count`).
+    pub fn spiral_alive(&self) -> bool {
+        self.spiral.alive
+    }
+
+    /// Spiral drain completion (mount decision: a done spiral stays
+    /// gone until the next cover re-warms it).
+    pub fn spiral_done(&self) -> bool {
+        self.spiral.is_done()
+    }
+
+    /// Spiral clock (headless freeze assertion).
+    pub fn spiral_ticks(&self) -> f32 {
+        self.spiral.ticks
+    }
+
     /// Advance wall-clock time into fixed steps. Returns steps run.
     ///
     /// Each step: `Sim::tick` (clock + heartbeat), frame-counter mirror,
@@ -472,17 +503,90 @@ impl App {
                     .query::<&crate::comps_b::CampfireState>()
                     .iter(&self.sim.world)
                     .any(|c| matches!(c.phase, crate::comps_b::CampfirePhase::SpawnThroneII));
-            self.spiral.step(1.0);
+            // Pause freezes the spiral: GML `UberCont/Step_1`
+            // `instance_deactivate_all` leaves `SpiralCont` (not in the
+            // activate list) frozen while the pause menu is up. Sounds
+            // drain below regardless (already gated on audibility).
+            let paused = self
+                .sim
+                .world
+                .get_resource::<crate::state::Paused>()
+                .is_some_and(|p| p.0);
+            if !paused {
+                self.spiral.step(1.0);
+            }
             // GML `scrDrawSpiral` bolt/debris one-shots fire inline in
             // the draw script: lightning `sndPortalLightning{1..8}` once
             // per wisp (non-menu only), flyby `sndPortalFlyby{1..4}` once
             // per debris mote at `xscale > 1.3` (any caller). Drain here,
             // right after the step, so each fires exactly once.
             self.drain_spiral_sounds();
+            // Area/seed-change rewarm first so the lifecycle below sees
+            // the post-transition seed (in particular: `setup_run` deals
+            // a fresh seed at load end, which must NOT resurrect the
+            // spiral the InGame-entry kill just put down).
             self.maybe_rewarm_spiral();
+            self.step_spiral_lifecycle();
             ran += 1;
         }
         ran
+    }
+
+    /// Spiral lifecycle per fixed step (GML `SpiralCont` create/destroy
+    /// parity, bevy `mark_vortex_dead` / `ensure_spiral_for_levelup`
+    /// parity — the view-layer half; the sim `SpiralCtl` resource that
+    /// the ambience duck keys off is untouched):
+    /// - Entering Loading warms a FRESH spiral for the run (`Vlambeer`
+    ///   builds a fresh `SpiralCont` + `GenCont` on every `room_restart`,
+    ///   including RETRY — a continued mid-flight spiral would jump).
+    /// - Entering InGame kills it (`GenCont/Destroy` destroys the cont
+    ///   at generation end; the 26-tick drain plays out like bevy's).
+    /// - A rising generation cover (floor transition or mutation/ultra
+    ///   offer) re-warms (`GenCont`/`LevCont` rooms build theirs); the
+    ///   falling edge kills (`GenCont/Destroy` at the end of the
+    ///   transition). Live gameplay, Title (no `SpiralCont` in the
+    ///   `MenuGen` room) and GameOver therefore show no spiral — just
+    ///   the flat area colour, exactly like GML.
+    fn step_spiral_lifecycle(&mut self) {
+        let state = self
+            .sim
+            .world
+            .get_resource::<AppState>()
+            .copied()
+            .unwrap_or_default();
+        let run = self.sim.world.get_resource::<crate::comps_a::Run>();
+        let (area, seed) = run
+            .map(|r| (r.area, r.gen_seed))
+            .unwrap_or((AreaId::Desert, 0));
+        if state == AppState::Loading && self.adv_state != AppState::Loading {
+            self.spiral = SpiralCtl::warmed_up_for_area_seeded(area, seed);
+        }
+        if state == AppState::InGame && self.adv_state != AppState::InGame {
+            self.spiral.kill();
+        }
+        let cover = state == AppState::InGame
+            && (self
+                .sim
+                .world
+                .get_resource::<crate::comps_b::FloorTransition>()
+                .is_some_and(|f| f.active)
+                || self
+                    .sim
+                    .world
+                    .get_resource::<crate::comps_a::PendingMutation>()
+                    .is_some()
+                || self
+                    .sim
+                    .world
+                    .get_resource::<crate::comps_a::PendingUltra>()
+                    .is_some());
+        if cover && !self.adv_cover {
+            self.spiral = SpiralCtl::warmed_up_for_area_seeded(area, seed);
+        } else if !cover && self.adv_cover {
+            self.spiral.kill();
+        }
+        self.adv_state = state;
+        self.adv_cover = cover;
     }
 
     /// One fixed-step GML camera step (`objects/BackCont/Step_0.gml`).
@@ -1331,55 +1435,58 @@ impl App {
                 .world
                 .insert_resource(crate::render::HoverWorld(self.hover));
             // Blob shadows first (GML `shad` surface: under the actors).
+            // Every layer stamps its z-ladder rung (render.rs `Z_*`,
+            // GML `__global_object_depths` order): without rungs every
+            // sprite shares z=0 and the engine's `(blend, z, page)` sort
+            // lets atlas page lottery HUD bars under floor tiles. Push
+            // order matches rung order, so the canvas path (push-ordered)
+            // and the GPU path (z-sorted) agree.
             let mut s = shadow_sprites(&mut self.sim.world, assets);
-            s.extend(world_instances(&mut self.sim.world, assets));
-            s.extend(fx_instances(&mut self.sim.world, assets));
+            stamp_z(&mut s, Z_SHADOW);
+            let mut w = world_instances(&mut self.sim.world, assets);
+            stamp_z(&mut w, crate::render::Z_WORLD);
+            s.extend(w);
+            let mut f = fx_instances(&mut self.sim.world, assets);
+            stamp_z(&mut f, Z_FX);
+            s.extend(f);
             // Additive bloom over the world (GML `scrDrawBloom`, gated
             // on `opt_bloom` inside).
-            s.extend(bloom_sprites(&mut self.sim.world, assets));
-            // View-anchored HUD (bevy camera-child GUI parity): the rect
-            // is computed first so bars/icons land on the live view.
-            let hud_view = view_rect_world(viewport_dp, world_size, &self.cam);
+            let mut b = bloom_sprites(&mut self.sim.world, assets);
+            stamp_z(&mut b, Z_BLOOM);
+            s.extend(b);
+            // Area fog over the room (GML TopCont/Draw_0, sewers only).
+            let mut fog = fog_sprites(
+                &mut self.sim.world,
+                assets,
+                viewport_dp,
+                world_size,
+                &self.cam,
+            );
+            stamp_z(&mut fog, Z_FOG);
+            s.extend(fog);
+            let view = view_rect_world(viewport_dp, world_size, &self.cam);
             // Ghost decay runs on the render dt (GML steps it per sim
             // tick at 30 Hz).
             let hud_dt = dt.as_secs_f32().clamp(0.0, 0.1);
-            s.extend(hud_sprites(&mut self.sim.world, assets, hud_view, hud_dt));
-            // Area fog over the room (GML TopCont/Draw_0, sewers only)
-            // plus coop fainted bars at the view-clamped positions.
-            s.extend(fog_sprites(
+            // World crosshair (GML `TopCont/Draw_0`, over the room,
+            // under the HUD text) plus coop fainted bars at the
+            // view-clamped positions.
+            let mut cross = crosshair_sprites(&mut self.sim.world, assets, hud_dt);
+            stamp_z(&mut cross, Z_CROSSHAIR);
+            s.extend(cross);
+            let mut faint = fainted_bar_sprites(&mut self.sim.world, assets, view);
+            stamp_z(&mut faint, Z_FAINTED);
+            s.extend(faint);
+            // Offscreen portal arrow (GML `TopCont/Draw_0` tail).
+            let mut portal = portal_indicator_sprites(
                 &mut self.sim.world,
                 assets,
                 viewport_dp,
                 world_size,
                 &self.cam,
-            ));
-            let view = view_rect_world(viewport_dp, world_size, &self.cam);
-            s.extend(fainted_bar_sprites(&mut self.sim.world, assets, view));
-            // World crosshair + offscreen portal arrow (GML
-            // `TopCont/Draw_0`, over the room, under the HUD text).
-            s.extend(crosshair_sprites(&mut self.sim.world, assets, hud_dt));
-            s.extend(portal_indicator_sprites(
-                &mut self.sim.world,
-                assets,
-                viewport_dp,
-                world_size,
-                &self.cam,
-            ));
-            // Boot reel (`Vlambeer/Draw_0` + `Logo/Draw_0`).
-            if menu_kind == Some(MenuOverlay::Splash) {
-                s.extend(splash_sprites(&mut self.sim.world, assets, view));
-            }
-            // Menu art sprites (char pods, portrait, loadout, splats).
-            if let Some(kind) = menu_kind {
-                s.extend(menu_sprites(
-                    kind,
-                    &mut self.sim.world,
-                    assets,
-                    viewport_dp,
-                    world_size,
-                    &self.cam,
-                ));
-            }
+            );
+            stamp_z(&mut portal, Z_PORTAL_INDICATOR);
+            s.extend(portal);
             // Spiral CPU layer (GML `scrDrawSpiral` center figures):
             // crown orbit + player hurt figures ride every spiral
             // caller — `Menu`, `GenCont`, `LevCont`, `GameOver`,
@@ -1388,22 +1495,53 @@ impl App {
             // figures draw in all of those too (they gate themselves on
             // Throne-II/Credits/players).
             if !matches!(menu_kind, Some(MenuOverlay::Splash)) {
-                s.extend(spiral_figures(
+                let mut figs = spiral_figures(
                     &mut self.sim.world,
                     assets,
                     self.cam.center,
                     self.spiral.angle,
-                ));
+                );
+                stamp_z(&mut figs, Z_SPIRAL_FIGURES);
+                s.extend(figs);
+            }
+            // View-anchored HUD bars (Draw-GUI-64: above all world-space
+            // layers). The rect is computed here so bars/icons land on
+            // the live view.
+            let hud_view = view_rect_world(viewport_dp, world_size, &self.cam);
+            let mut h = hud_sprites(&mut self.sim.world, assets, hud_view, hud_dt);
+            stamp_z(&mut h, Z_HUD);
+            s.extend(h);
+            // Boot reel (`Vlambeer/Draw_0` + `Logo/Draw_0`).
+            if menu_kind == Some(MenuOverlay::Splash) {
+                let mut splash =
+                    splash_sprites(&mut self.sim.world, assets, view);
+                stamp_z(&mut splash, Z_SPLASH);
+                s.extend(splash);
+            }
+            // Menu art sprites (char pods, portrait, loadout, splats).
+            if let Some(kind) = menu_kind {
+                let mut menu = menu_sprites(
+                    kind,
+                    &mut self.sim.world,
+                    assets,
+                    viewport_dp,
+                    world_size,
+                    &self.cam,
+                );
+                stamp_z(&mut menu, Z_MENU);
+                s.extend(menu);
             }
             // Sideart chrome around the view (GML `UberCont/Draw_74`:
             // over everything, game and menus alike).
-            s.extend(sideart_sprites(
+            let mut side = sideart_sprites(
                 &mut self.sim.world,
                 assets,
                 viewport_dp,
                 world_size,
                 &self.cam,
-            ));
+            );
+            stamp_z(&mut side, Z_SIDEART);
+            s.extend(side);
             let texts = fx_texts(&mut self.sim.world);
             (s, texts)
         } else {
@@ -1471,6 +1609,14 @@ impl App {
         let vortex_layer = if self.assets.is_some()
             && !self.vortex_tex.is_empty()
             && !matches!(menu_kind, Some(MenuOverlay::Splash))
+            // The campfire title has no `SpiralCont` (`MenuGen` never
+            // builds one; PLAY destroys it) — the camp sits on the flat
+            // campfire colour. A drained-away spiral stays gone
+            // (`GenCont/Destroy` at generation end; bevy
+            // `despawn_vortex_when_done`): live gameplay past the drain,
+            // Title and GameOver show the flat area colour instead.
+            && !matches!(menu_kind, Some(MenuOverlay::Title))
+            && (self.spiral.alive || !self.spiral.is_done())
         {
             let mut pass = VortexPass::new(snap);
             pass.extend_textures(self.vortex_tex.clone());
@@ -1484,11 +1630,14 @@ impl App {
         // The area fill only shows where GML paints it: `GenCont/Create_0`
         // `background_set_colour(scrAreaGetBackroundColor(GameCont.area))`
         // runs once per generated floor, and the campfire title inherits
-        // the same call via `MenuGen`. Splash/MainMenu have no area yet
-        // (`Vlambeer/Create_0` never sets a colour; `Vlambeer/Draw_0`
-        // clears black). No flat fill under the mounted vortex pass (it
-        // would cover the spiral); where the pass is absent the fill
-        // stands in for the room colour.
+        // the same call via `MenuGen` (flat campfire blue, no spiral —
+        // the title mounts no vortex layer). Splash/MainMenu have no
+        // area yet (`Vlambeer/Create_0` never sets a colour;
+        // `Vlambeer/Draw_0` clears black). Live gameplay past the spiral
+        // drain and GameOver (whose spiral died at generation end) also
+        // fall back to the flat room colour. No flat fill under the
+        // mounted vortex pass (it would cover the spiral); where the
+        // pass is absent the fill stands in for the room colour.
         let background = if vortex_layer.is_some() {
             None
         } else if matches!(

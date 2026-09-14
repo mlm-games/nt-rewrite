@@ -1006,6 +1006,42 @@ pub fn healthcol_dark(c: [f32; 4]) -> [f32; 4] {
 /// overlap is deterministic. Edge texels stretch ~3%: invisible.
 pub const GRID_OVERLAP: f32 = 1.0;
 
+/// Sprite z-ladder (GML `__global_object_depths` draw order verbatim:
+/// higher GM depth draws first = further back, so the port's `z` runs
+/// the other way — larger `z` draws on top; the engine stable-sorts by
+/// `(blend, z, page)`, keeping push order on ties).
+///
+/// GM order (back → front): Floor(10) → Detail(8) → BackCont-shadows(5)
+/// → Corpse(1) → Wall/shots(0) → Player/Ally(-2) → Portal(-3) →
+/// SubTopCont wall-tops/bloom(-6) → TopCont fog/crosshair/revive(-15) →
+/// SpiralCont figures(-101) → Draw-GUI HUD text/menus → Menu(-1001).
+/// The world batch keeps its internal push order at 0 (bevy parity —
+/// untouched); every chrome layer above it stamps one rung so atlas
+/// page can never lottery a HUD bar under a floor tile again.
+pub const Z_SHADOW: f32 = -10.0;
+pub const Z_WORLD: f32 = 0.0;
+pub const Z_FX: f32 = 1.0;
+pub const Z_BLOOM: f32 = 2.0;
+pub const Z_FOG: f32 = 3.0;
+pub const Z_CROSSHAIR: f32 = 4.0;
+pub const Z_FAINTED: f32 = 5.0;
+pub const Z_PORTAL_INDICATOR: f32 = 6.0;
+pub const Z_SPIRAL_FIGURES: f32 = 7.0;
+pub const Z_HUD: f32 = 10.0;
+pub const Z_SPLASH: f32 = 15.0;
+pub const Z_MENU: f32 = 20.0;
+pub const Z_SIDEART: f32 = 30.0;
+
+/// Stamp a layer rung over a finished push batch (keeps the producer's
+/// internal push order: the engine sort is stable on `(blend, z, page)`
+/// ties). `pub(crate)` so the view composer assigns rungs per layer
+/// next to the push order (single place both are visible).
+pub(crate) fn stamp_z(out: &mut [SpriteInstance], z: f32) {
+    for s in out.iter_mut() {
+        s.z = z;
+    }
+}
+
 /// Place a strip quad by its art top-left (GM draw origin): the catalog
 /// anchor lands `center` so origin-(0,0) floor/wall art sits on the grid
 /// exactly like bevy's `sprite_at_gm_origin` (passing a cell center would
@@ -4274,19 +4310,26 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             // GML `PauseButton`s ride `ystart + offsety` at
             // `(center, center+58)` and `(center, center+90)` with
             // `appear = 3 + image` (image 0 MENU appear 3, image 1 RETRY
-            // appear 4). Event-run swaps (`sprGameOverResult`, weekly
-            // keeps button 0 as RETRY else destroys it) need the event
-            // systems the port lacks — both buttons draw at once.
+            // appear 4). `PauseButton/Draw_0` draws at `_dy = y + appear`
+            // (a few px low while appearing — never parked off-screen),
+            // so the buttons are clickable from the first frame. Event-run
+            // swaps (`sprGameOverResult`, weekly keeps button 0 as RETRY
+            // else destroys it) need the event systems the port lacks —
+            // both buttons draw at once.
             let appear = world
                 .get_resource::<MenuState>()
-                .map(|m| m.go_appear)
+                .map(|m| m.go_appear.max(0.0))
                 .unwrap_or(0.0);
-            let by = if appear > 0.0 { 240.0 } else { 0.0 };
-            out.push(gui_button("MENU", cx, 120.0 + 58.0 + offsety + by, GUI_MID));
+            out.push(gui_button(
+                "MENU",
+                cx,
+                120.0 + 58.0 + offsety + appear,
+                GUI_MID,
+            ));
             out.push(gui_button(
                 "RETRY",
                 cx,
-                120.0 + 90.0 + offsety + by,
+                120.0 + 90.0 + offsety + appear,
                 GUI_MID,
             ));
             out
@@ -7903,3 +7946,73 @@ pub fn hud_texts_dp(
 //   orandom shake, snap, round, knock decay; view-layer state in
 //   `App`); the only deviation is no per-run snap reset beyond boot
 //   and floor starts, so transitions don't re-swoop from the origin.
+
+#[cfg(test)]
+mod verbatim_ui_layers {
+    use super::*;
+    use crate::state::menus::MenuState;
+
+    /// Reported bug verbatim: HUD bars/icons rendered behind floor
+    /// ground. Every sprite used to share z=0, so the engine's
+    /// `(blend, z, page)` sort let atlas page decide — floor tiles won
+    /// over the health bar whenever their page sorted later. The
+    /// z-ladder (GML `__global_object_depths` order) keeps GUI chrome
+    /// above world chrome on every backend.
+    #[test]
+    fn z_ladder_orders_chrome_above_world() {
+        assert!(Z_SHADOW < Z_WORLD);
+        assert!(Z_WORLD < Z_FX);
+        assert!(Z_FX <= Z_BLOOM);
+        assert!(Z_BLOOM < Z_FOG);
+        assert!(Z_FOG < Z_CROSSHAIR);
+        assert!(Z_CROSSHAIR < Z_FAINTED);
+        assert!(Z_FAINTED < Z_PORTAL_INDICATOR);
+        assert!(Z_PORTAL_INDICATOR < Z_SPIRAL_FIGURES);
+        assert!(Z_SPIRAL_FIGURES < Z_HUD);
+        assert!(Z_HUD < Z_SPLASH);
+        assert!(Z_SPLASH < Z_MENU);
+        assert!(Z_MENU < Z_SIDEART);
+    }
+
+    /// `stamp_z` assigns the rung without disturbing intra-layer push
+    /// order (the engine sort is stable on ties).
+    #[test]
+    fn stamp_z_assigns_rung_only() {
+        let mut v = vec![SpriteInstance::default(), SpriteInstance::default()];
+        stamp_z(&mut v, Z_HUD);
+        assert!(v.iter().all(|s| s.z == Z_HUD));
+    }
+
+    /// Reported bug verbatim: clicking MENU right after dying did
+    /// nothing — the game-over buttons parked a full screen below the
+    /// view (`+240`) while `appear` ticked down, so the first frames'
+    /// clicks missed. GML `PauseButton/Draw_0` draws at `_dy = y +
+    /// appear` from frame one, so the buttons sit at `ystart + offsety
+    /// + appear` here too: on-screen and clickable immediately.
+    #[test]
+    fn gameover_buttons_ride_appear_not_offscreen() {
+        let mut world = World::new();
+        world.insert_resource(Run {
+            area: AreaId::Desert,
+            ..Default::default()
+        });
+        world.init_resource::<MenuState>();
+        // Fresh capture: offsety=128, appear=4 (worst case).
+        let texts = menu_gui_texts_vw(crate::MenuOverlay::GameOver, &mut world, 426.0);
+        let menu = texts.iter().find(|t| t.text == "MENU").expect("MENU row");
+        let retry = texts.iter().find(|t| t.text == "RETRY").expect("RETRY row");
+        // ystart + offsety + appear: 178+128+4 / 210+128+4.
+        assert!((menu.gy - 310.0).abs() < 1.0, "MENU gy {}", menu.gy);
+        assert!((retry.gy - 342.0).abs() < 1.0, "RETRY gy {}", retry.gy);
+        // Settle the anim: buttons land exactly on the GML ystarts.
+        if let Some(mut menu_state) = world.get_resource_mut::<MenuState>() {
+            menu_state.go_offsety = 0.0;
+            menu_state.go_appear = 0.0;
+        }
+        let texts = menu_gui_texts_vw(crate::MenuOverlay::GameOver, &mut world, 426.0);
+        let menu = texts.iter().find(|t| t.text == "MENU").expect("MENU row");
+        let retry = texts.iter().find(|t| t.text == "RETRY").expect("RETRY row");
+        assert!((menu.gy - 178.0).abs() < 1.0, "MENU gy {}", menu.gy);
+        assert!((retry.gy - 210.0).abs() < 1.0, "RETRY gy {}", retry.gy);
+    }
+}

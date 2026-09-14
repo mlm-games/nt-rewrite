@@ -2436,4 +2436,66 @@ mod verbatim_title_to_first_level {
         );
         assert_eq!(world.resource::<Run>().area, crate::data::AreaId::Campfire);
     }
+
+    /// Reported bug verbatim: the loading screen must show the vortex,
+    /// not the previous room. GML `room_restart` hands `GenCont` a fresh
+    /// room, so GENERATING draws over spiral + black only. Entering
+    /// Loading therefore tears down session entities + the floor mask
+    /// up front (bevy `teardown_game` on InGame exit); `setup_run`
+    /// rebuilds at the end of the load. Covers both the fresh-run path
+    /// (Title camp) and RETRY after death (dead run).
+    #[test]
+    fn loading_enter_clears_stale_world() {
+        use crate::state::{AppState, goto_state};
+        for seed in [4242u64, 777] {
+            let mut world = World::new();
+            world.insert_resource(SaveData {
+                total_runs: 1,
+                ..SaveData::default()
+            });
+            world.insert_resource(SelectedCharacter(RaceId::Fish));
+            setup_run_with_seed(&mut world, seed);
+            assert!(!world.resource::<FloorMask>().cells.is_empty());
+            world.resource_mut::<Run>().game_over = true;
+            world.insert_resource(AppState::InGame);
+            goto_state(&mut world, AppState::Loading);
+            assert_eq!(*world.resource::<AppState>(), AppState::Loading);
+            assert!(
+                world
+                    .query::<&crate::comps_b::Enemy>()
+                    .iter(&world)
+                    .next()
+                    .is_none(),
+                "dead-run enemies render through the loading screen"
+            );
+            assert!(
+                world.resource::<FloorMask>().cells.is_empty(),
+                "dead-run floor renders through the loading screen"
+            );
+            // Run selection resources survive for setup_run at load end.
+            assert!(world.get_resource::<SelectedCharacter>().is_some());
+            assert!(world.get_resource::<SaveData>().is_some());
+        }
+    }
+
+    /// Fresh Title → Loading drops the campfire camp the same way (GML
+    /// GO → `room_restart` destroys the camp before `GenCont` builds).
+    #[test]
+    fn loading_enter_clears_title_camp() {
+        use crate::state::{AppState, goto_state};
+        let mut world = World::new();
+        world.insert_resource(SaveData::default());
+        world.insert_resource(AppState::Title);
+        setup_title_campfire(&mut world);
+        assert!(!world.resource::<FloorMask>().cells.is_empty());
+        goto_state(&mut world, AppState::Loading);
+        assert!(world.resource::<FloorMask>().cells.is_empty());
+        assert!(
+            world
+                .query_filtered::<Entity, With<crate::comps_b::TitleCampfire>>()
+                .iter(&world)
+                .count()
+                == 0
+        );
+    }
 }
