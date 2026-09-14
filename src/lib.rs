@@ -471,9 +471,7 @@ impl App {
                     .world
                     .query::<&crate::comps_b::CampfireState>()
                     .iter(&self.sim.world)
-                    .any(|c| {
-                        matches!(c.phase, crate::comps_b::CampfirePhase::SpawnThroneII)
-                    });
+                    .any(|c| matches!(c.phase, crate::comps_b::CampfirePhase::SpawnThroneII));
             self.spiral.step(1.0);
             // GML `scrDrawSpiral` bolt/debris one-shots fire inline in
             // the draw script: lightning `sndPortalLightning{1..8}` once
@@ -584,7 +582,7 @@ impl App {
         let (area, seed) = run
             .map(|r| (r.area, r.gen_seed))
             .unwrap_or((AreaId::Desert, 0));
-        if gml_area_for_area(area) != self.spiral.gml_area {
+        if gml_area_for_area(area) != self.spiral.gml_area || self.spiral.seed != seed {
             self.spiral = SpiralCtl::warmed_up_for_area_seeded(area, seed);
         }
     }
@@ -1682,23 +1680,22 @@ impl App {
             self.gml_cam.snap = true;
         }
         self.was_transitioning = transitioning;
-        // Fresh runs (Loading -> InGame via `setup_run`) snap onto the
-        // new player instead of lerping across the map from the old
-        // menu look point.
         if self.was_state != AppState::InGame && state == AppState::InGame {
             self.gml_cam.snap = true;
         }
+        if matches!(state, AppState::MainMenu | AppState::Title)
+            && !matches!(self.was_state, AppState::MainMenu | AppState::Title)
+        {
+            self.gml_cam.snap = true;
+        }
         self.was_state = state;
-        // No bars over the pre-run rooms (boot reel, logo menu and
-        // campfire run on a bare view — GML `Menu` calls
+
         // `scrLetterbox(false,0)`). Loading IS letterboxed: GML
         // `GenCont/Create_0` ends with `scrLetterbox(true)`, so the
         // GENERATING screen sits between the bars.
         let bare_room = matches!(
             menu_kind,
-            Some(
-                MenuOverlay::Splash | MenuOverlay::MainMenu | MenuOverlay::Title
-            )
+            Some(MenuOverlay::Splash | MenuOverlay::MainMenu | MenuOverlay::Title)
         );
         let letterboxed = (!live_now && !bare_room) || boss_intro || transitioning;
         if letterboxed {
@@ -2279,12 +2276,14 @@ fn route_menu_click(
             let action = menu_button_action(kind, &t.text, confirm)?;
             // Bevy `bigname_button_at` parity: every menu button owns a
             // fixed 120x22 GUI box centered on its (gx, gy) (the dp text
-            // boxes are full-width alignment boxes and overlap, so they
-            // can never route). The pause columns and rows stay disjoint
-            // at this size.
             const HW: f32 = 60.0;
             const HH: f32 = 11.0;
-            if (gx - t.gx).abs() <= HW && (gy - t.gy).abs() <= HH {
+            let (hx, hy) = if kind == MenuOverlay::MainMenu && t.text == "BACK" {
+                (16.0, 20.0)
+            } else {
+                (t.gx, t.gy)
+            };
+            if (gx - hx).abs() <= HW && (gy - hy).abs() <= HH {
                 Some(action)
             } else {
                 None

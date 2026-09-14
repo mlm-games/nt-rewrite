@@ -27,19 +27,18 @@ use bevy_ecs::prelude::*;
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 use repame_anim::AnimCatalog;
-use repame_fx::{DamageNumber, Particle};
 
 use crate::anim::{PlayerAnim, SpriteAnim};
 use crate::comps_a::{
     ARENA_H, ARENA_W, AimDir, CrownState, Euphoria, FireCooldown, FloorMask, FloorStarted,
     GameCleanup, Health, HeavyHeart, Hitbox, Inventory, LevelCleanup, MAX_AMMO_TYPES,
-    MAX_WEAPON_SLOTS, MutationChoice, NextHurt, OpenMind, PLAYER_BASE_SPEED, PLAYER_RADIUS, Player,
-    RaceState, Run, SaveDirty, ScarierFace, Score, SelectedCharacter, Team, Toast, Velocity,
-    WallCell, WallTile,
+    MAX_WEAPON_SLOTS, MutationChoice, NextHurt, OpenMind, PLAYER_BASE_SPEED, PLAYER_RADIUS,
+    PendingMutation, PendingUltra, Player, RaceState, Run, SaveDirty, ScarierFace, Score,
+    SelectedCharacter, Team, Toast, Velocity, WallCell, WallTile,
 };
 use crate::comps_b::{
-    BigGenerator, BloodFlower, ChestKind, CrownPedestal, Enemy, GoldBarrelDrop, GoldCar,
-    LoopTransition, ManholeCover, PendingDelayedBoss, PortalClear, Prop, PropHpTracker,
+    BigGenerator, BloodFlower, ChestKind, CrownPedestal, Enemy, FloorTransition, GoldBarrelDrop,
+    GoldCar, LoopTransition, ManholeCover, PendingDelayedBoss, PortalClear, Prop, PropHpTracker,
     PropSprites, ProtoStatue, RadChestContainer, SecretEntrance, SnowmanAmbush, ThroneCarpet,
     ThroneStatueProp,
 };
@@ -460,6 +459,31 @@ pub fn spawn_player_loaded(
 /// loadout player spawn, floor mask from the generated plan,
 /// `FloorStarted` queue, crown toast; `AppState::InGame` marks the
 /// transition the bevy caller scheduled around `setup_run`).
+/// GML `scrCleanupSessionInstances` verbatim
+/// (`scrCleanupSessionInstances.gml:1-11`): `with all { if (object_index
+/// == UberCont || == CoopController || == Console) continue;
+/// instance_destroy(id, false) }`. The port's persistent controllers carry
+/// no entities (resources own that state), so this despawns every live
+/// entity — the `scrGameRestart` quit/restart path destroys the whole
+/// session before rebuilding. `setup_run_with_seed` and
+/// `setup_title_campfire` both funnel through here so menu transitions
+/// can never inherit a dead run's world.
+pub fn teardown_session_entities(world: &mut World) {
+    //
+    let stale: Vec<Entity> = world
+        .query::<Entity>()
+        .iter(world)
+        .filter(|e| {
+            world
+                .get_entity(*e)
+                .is_ok_and(|r| r.get::<bevy_ecs::resource::IsResource>().is_none())
+        })
+        .collect();
+    for e in stale {
+        let _ = world.despawn(e);
+    }
+}
+
 pub fn setup_run(world: &mut World) {
     let seed: u64 = rand::rng().random_range(0..u64::MAX);
     setup_run_with_seed(world, seed);
@@ -467,22 +491,7 @@ pub fn setup_run(world: &mut World) {
 
 /// Deterministic `setup_run` (tests pin the floor seed).
 pub fn setup_run_with_seed(world: &mut World, seed: u64) {
-    {
-        let stale: Vec<Entity> = world
-            .query_filtered::<Entity, Or<(With<GameCleanup>, With<LevelCleanup>)>>()
-            .iter(world)
-            .collect();
-        for e in stale {
-            world.despawn(e);
-        }
-        let floaters: Vec<Entity> = world
-            .query_filtered::<Entity, Or<(With<DamageNumber>, With<Particle>)>>()
-            .iter(world)
-            .collect();
-        for e in floaters {
-            world.despawn(e);
-        }
-    }
+    teardown_session_entities(world);
 
     world.init_resource::<Score>();
     world.init_resource::<Run>();
@@ -538,9 +547,9 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
         // 5-floor `TutCont` level. The port has no tutorial steps and no
         // completion event, so the layout applies to first-ever runs only
         // (`total_runs == 0`); afterwards the flag reads as completed.
-        let tutorial = world.get_resource::<SaveData>().is_some_and(|s| {
-            s.settings.show_tutorial && s.total_runs == 0
-        });
+        let tutorial = world
+            .get_resource::<SaveData>()
+            .is_some_and(|s| s.settings.show_tutorial && s.total_runs == 0);
         let mut run = world.resource_mut::<Run>();
         run.floor = 1;
         run.world = 1;
@@ -635,9 +644,7 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
     // Seeded off the Generation stream so equal seeds permute identically.
     {
         let gen_seed = world.resource::<Run>().gen_seed;
-        let open_mind = world
-            .get_resource::<OpenMind>()
-            .is_some_and(|o| o.0);
+        let open_mind = world.get_resource::<OpenMind>().is_some_and(|o| o.0);
         let player_spawn = glam::Vec2::new(crate::comps_a::TILE * 0.5, crate::comps_a::TILE * 0.5);
         // Player hp is in the just-spawned bundle: read it back for the
         // half-health HealthChest arm (GML reads the live player).
@@ -1446,11 +1453,7 @@ pub fn spawn_level(
     for &(wx, wy) in &plan.small_walls {
         wall_set.insert((wx as i32, wy as i32));
     }
-    spawn_wall_tiles(
-        &mut *commands,
-        wall_set.into_iter().collect(),
-        &floor_set,
-    );
+    spawn_wall_tiles(&mut *commands, wall_set.into_iter().collect(), &floor_set);
 
     for (kind, pos) in &plan.props {
         spawn_prop_sim(commands, catalog, run, *kind, *pos);
@@ -1632,6 +1635,55 @@ pub fn spawn_level(
 }
 
 /// Title campfire backdrop (GML `MenuGen/Create_0` + `Alarm_1` +
+/// GML `Vlambeer` logo-room branch verbatim (`Vlambeer/Create_0` with
+/// `want_quit_to_menu` and no `CoopController`): the room restarts with
+/// no gameplay instances — just `Logo` + `SpiralCont` over the black
+/// clear color. The port has no room primitive, so this is the blanket
+/// teardown plus the resource half of the room restart (empty campfire
+/// `Run` for the spiral variant, silenced area audio, cleared
+/// transition/offer covers). The campfire floor itself is NOT built here
+/// (GML builds it only in `MenuGen`, i.e. on PLAY into the title) — the
+/// logo menu sits over black, and `world_instances` emits nothing with
+/// an empty mask.
+pub fn setup_logo_room(world: &mut World) {
+    teardown_session_entities(world);
+    world.init_resource::<FloorMask>();
+    (*world.resource_mut::<FloorMask>()) = FloorMask::default();
+    reset_menu_room_resources(world);
+}
+
+/// Shared resource half of the menu-room restarts (`setup_logo_room`
+/// above + `setup_title_campfire` below): empty campfire `Run` (GML
+/// `GameCont` reads campfire with no run alive → spiral variant +
+/// debris strip), silenced area audio (`audio_stop_all`), cleared
+/// transition/offer covers.
+fn reset_menu_room_resources(world: &mut World) {
+    world.init_resource::<Run>();
+    {
+        let mut run = world.resource_mut::<Run>();
+        run.floor = 0;
+        run.world = 0;
+        run.area = crate::data::AreaId::Campfire;
+        run.loop_count = 0;
+        run.floor_in_area = 0;
+        run.gen_seed = 0;
+        run.portal_open = false;
+        run.game_over = false;
+        run.total_kills = 0;
+        run.tottimer = 0;
+        run.won = false;
+        run.hardmode = false;
+        run.tutorial = false;
+        run.waypoints.clear();
+    }
+    world.init_resource::<crate::audio::AreaAudioState>();
+    *world.resource_mut::<crate::audio::AreaAudioState>() = crate::audio::AreaAudioState::default();
+    world.init_resource::<crate::audio::GameAudio>();
+    world.remove_resource::<PendingMutation>();
+    world.remove_resource::<PendingUltra>();
+    world.insert_resource(FloorTransition::default());
+}
+
 /// `scrCampfireMenuCreate` sim half: 3x4 jittered 3x3 floor patches,
 /// cardinal-neighbour fill, ring walls, 1-in-6 NightCactus/TopDecal
 /// dressing, `PortalClear` per camper, and the Campfire/LogMenu/CampChar
@@ -1639,15 +1691,7 @@ pub fn spawn_level(
 /// `GameCleanup`/`LevelCleanup` so run setup clears them; the `FloorMask`
 /// lets title-time systems collide against the same walls the menu draws.
 pub fn setup_title_campfire(world: &mut World) {
-    {
-        let stale: Vec<Entity> = world
-            .query_filtered::<Entity, Or<(With<GameCleanup>, With<LevelCleanup>)>>()
-            .iter(world)
-            .collect();
-        for e in stale {
-            world.despawn(e);
-        }
-    }
+    teardown_session_entities(world);
     world.init_resource::<FloorMask>();
     if world.get_resource::<AnimCatalog>().is_none() {
         world.insert_resource(empty_anim_catalog());
@@ -1745,7 +1789,10 @@ pub fn setup_title_campfire(world: &mut World) {
     let floor_set: std::collections::HashSet<(i32, i32)> =
         plan.floor_cells.iter().copied().collect();
     // Save read outside the command scope (`Commands` holds `&mut World`).
-    let save = world.get_resource::<SaveData>().cloned().unwrap_or_default();
+    let save = world
+        .get_resource::<SaveData>()
+        .cloned()
+        .unwrap_or_default();
     world.resource_scope(|world, mut mask: Mut<FloorMask>| {
         world.resource_scope(|world, catalog: Mut<AnimCatalog>| {
             let mut commands = world.commands();
@@ -1783,8 +1830,7 @@ pub fn setup_title_campfire(world: &mut World) {
             // sleepers. Only unlocked races get campers (locked return
             // `noone` in GML). Every camper pops a `PortalClear`.
             let unlocked = |gml: usize| -> bool {
-                crate::state::menus::race_from_gml_id(gml)
-                    .is_some_and(|r| save.race_unlocked(r))
+                crate::state::menus::race_from_gml_id(gml).is_some_and(|r| save.race_unlocked(r))
             };
             let mut campers: Vec<glam::Vec2> = Vec::new();
             commands.spawn((
@@ -1812,7 +1858,10 @@ pub fn setup_title_campfire(world: &mut World) {
                 commands.spawn((
                     GameCleanup,
                     LevelCleanup,
-                    crate::comps_b::TitleCampChar { race_gml: gml, fixed: true },
+                    crate::comps_b::TitleCampChar {
+                        race_gml: gml,
+                        fixed: true,
+                    },
                     Pos(at),
                 ));
                 campers.push(at);
@@ -1854,18 +1903,19 @@ pub fn setup_title_campfire(world: &mut World) {
                 // GML starts scattered campers at the campfire.
                 let mut at = camp_px;
                 for iter in 0..50usize {
-                    let dist =
-                        32.0 + iter as f32 * 2.0 + rng.random_range(0.0..32.0)
-                            + rng.random_range(0.0..64.0) * rng.random_range(0.0..1.0);
+                    let dist = 32.0
+                        + iter as f32 * 2.0
+                        + rng.random_range(0.0..32.0)
+                        + rng.random_range(0.0..64.0) * rng.random_range(0.0..1.0);
                     let ang = rng.random_range(0.0..std::f32::consts::TAU);
                     let cand = camp_px + glam::Vec2::from_angle(ang) * dist;
                     let cand = nearest_floor(cand);
                     let clear = campers.iter().all(|c| c.distance(cand) >= 32.0);
                     // GML chicken arm also keeps 16px above her head clear.
                     let chicken_clear = gml != 9
-                        || campers.iter().all(|c| {
-                            (*c - (cand + glam::Vec2::new(0.0, -32.0))).length() >= 16.0
-                        });
+                        || campers
+                            .iter()
+                            .all(|c| (*c - (cand + glam::Vec2::new(0.0, -32.0))).length() >= 16.0);
                     if clear && chicken_clear {
                         at = cand;
                         break;
@@ -1876,7 +1926,10 @@ pub fn setup_title_campfire(world: &mut World) {
                 commands.spawn((
                     GameCleanup,
                     LevelCleanup,
-                    crate::comps_b::TitleCampChar { race_gml: gml, fixed: false },
+                    crate::comps_b::TitleCampChar {
+                        race_gml: gml,
+                        fixed: false,
+                    },
                     Pos(at),
                 ));
                 campers.push(at);
@@ -1932,6 +1985,7 @@ pub fn setup_title_campfire(world: &mut World) {
         })
     });
     world.flush();
+    reset_menu_room_resources(world);
 }
 
 #[cfg(test)]
@@ -1970,15 +2024,9 @@ mod verbatim_title_to_first_level {
         assert_eq!(race_starter_weapon(RaceId::Cuz), WEAPON_GOLDEN_REVOLVER);
         assert_eq!(race_starter_weapon(RaceId::Chicken), WEAPON_CHICKEN_SWORD);
         assert_eq!(race_starter_weapon(RaceId::Rogue), WEAPON_ROGUE_RIFLE);
-        assert_eq!(
-            race_starter_weapon(RaceId::BigDog),
-            WEAPON_DOG_SPIN_ATTACK
-        );
+        assert_eq!(race_starter_weapon(RaceId::BigDog), WEAPON_DOG_SPIN_ATTACK);
         assert_eq!(race_starter_weapon(RaceId::Skeleton), WEAPON_RUSTY_REVOLVER);
-        assert_eq!(
-            race_starter_weapon(RaceId::Frog),
-            WEAPON_GOLDEN_FROG_PISTOL
-        );
+        assert_eq!(race_starter_weapon(RaceId::Frog), WEAPON_GOLDEN_FROG_PISTOL);
     }
 
     #[test]
@@ -2133,7 +2181,11 @@ mod verbatim_title_to_first_level {
             .collect();
         campers.sort_unstable();
         assert!(campers.contains(&1), "Fish camper missing: {:?}", campers);
-        assert!(campers.contains(&2), "Crystal camper missing: {:?}", campers);
+        assert!(
+            campers.contains(&2),
+            "Crystal camper missing: {:?}",
+            campers
+        );
         // Campfire sits at GML (64,64).
         let mut fires: Vec<glam::Vec2> = world
             .query::<(&TitleCampfire, &crate::spatial::Pos)>()
@@ -2230,18 +2282,24 @@ mod verbatim_title_to_first_level {
                 1.0,
             ]
         };
-        assert_eq!(crate::render::background_color(AreaId::Desert), px(0xaf8f6a));
+        assert_eq!(
+            crate::render::background_color(AreaId::Desert),
+            px(0xaf8f6a)
+        );
         assert_eq!(
             crate::render::background_color(AreaId::Campfire),
             px(0x6a7aaf)
         );
-        assert_eq!(crate::render::background_color(AreaId::Palace), px(0x611d24));
+        assert_eq!(
+            crate::render::background_color(AreaId::Palace),
+            px(0x611d24)
+        );
         assert_eq!(crate::render::background_color(AreaId::Labs), px(0x091c20));
     }
 
     #[test]
     fn boot_level_entry_and_recontinue_laws() {
-        use crate::state::{choose_level_entry, recontinue_deletes_save, LevelEntry};
+        use crate::state::{LevelEntry, choose_level_entry, recontinue_deletes_save};
         // No points → GenCont (first level); any draft opens LevCont.
         assert_eq!(choose_level_entry(0, 0, 0, false), LevelEntry::GenCont);
         assert_eq!(choose_level_entry(1, 0, 0, false), LevelEntry::LevCont);
@@ -2257,7 +2315,7 @@ mod verbatim_title_to_first_level {
 
     #[test]
     fn title_anim_tick_matches_menu_other11() {
-        use crate::state::menus::{tick_title_anim, MenuState};
+        use crate::state::menus::{MenuState, tick_title_anim};
         let mut world = World::new();
         world.insert_resource(MenuState {
             portrait_offsets: [180.0, 0.0, 0.0, 0.0],
@@ -2277,5 +2335,105 @@ mod verbatim_title_to_first_level {
         assert_eq!(menu.textappear[0], 1.0);
         assert_eq!(menu.splatindex, 0.4);
         assert_eq!(menu.loadout_frame, 1.0);
+    }
+
+    /// Reported bug verbatim: dying then clicking MENU must not leave
+    /// the previous game's background over the title screen. GML
+    /// `scrGameRestart(true)` destroys the session and restarts the
+    /// room, so the logo menu rebuilds over an empty campfire — never
+    /// over the dead run's floor.
+    #[test]
+    fn menu_after_death_clears_run_world() {
+        use crate::audio::UiAction;
+        use crate::state::AppState;
+        use crate::state::menus::{MenuState, apply_menu_action};
+        let mut world = World::new();
+        world.insert_resource(SaveData {
+            total_runs: 1,
+            ..SaveData::default()
+        });
+        world.insert_resource(SelectedCharacter(RaceId::Fish));
+        setup_run_with_seed(&mut world, 4242);
+        let run_cells = world.resource::<FloorMask>().cells.len();
+        assert!(run_cells > 0);
+        world.resource_mut::<Run>().game_over = true;
+        world.insert_resource(AppState::InGame);
+        world.init_resource::<MenuState>();
+        apply_menu_action(&mut world, UiAction::ConfirmPause(0));
+        assert_eq!(
+            *world.resource::<AppState>(),
+            AppState::MainMenu,
+            "MENU must land on the logo menu"
+        );
+        assert!(
+            !world
+                .query::<&crate::comps_b::Enemy>()
+                .iter(&world)
+                .next()
+                .is_some(),
+            "dead-run enemies draw behind the menu"
+        );
+        assert!(
+            world.resource::<FloorMask>().cells.is_empty(),
+            "dead-run floor draws behind the logo menu"
+        );
+        let run = world.resource::<Run>();
+        assert_eq!(run.area, crate::data::AreaId::Campfire);
+        assert!(!run.game_over);
+    }
+
+    /// Pause-MENU mid-run takes the same clean-room path (GML
+    /// `scrGameRestart(true)` regardless of death): the logo menu sits
+    /// over the empty room, and PLAY rebuilds the campfire from there.
+    #[test]
+    fn pause_menu_mid_run_clears_world() {
+        use crate::audio::UiAction;
+        use crate::state::AppState;
+        use crate::state::menus::{MenuState, apply_menu_action};
+        let mut world = World::new();
+        world.insert_resource(SaveData {
+            total_runs: 1,
+            ..SaveData::default()
+        });
+        world.insert_resource(SelectedCharacter(RaceId::Fish));
+        setup_run_with_seed(&mut world, 4242);
+        world.insert_resource(AppState::InGame);
+        world.init_resource::<MenuState>();
+        apply_menu_action(&mut world, UiAction::ConfirmPause(0));
+        assert_eq!(*world.resource::<AppState>(), AppState::MainMenu);
+        assert!(
+            world
+                .query::<&crate::comps_b::Enemy>()
+                .iter(&world)
+                .next()
+                .is_none(),
+            "run enemies survive pause-MENU"
+        );
+        assert_eq!(world.resource::<Run>().area, crate::data::AreaId::Campfire);
+    }
+
+    /// PLAY from the logo menu rebuilds the campfire title room (GML
+    /// `PlayButton` → `MenuGen`): entering Title never inherits the
+    /// previous room's instances.
+    #[test]
+    fn title_entry_rebuilds_campfire_room() {
+        use crate::audio::UiAction;
+        use crate::comps_b::TitleCampfire;
+        use crate::state::AppState;
+        use crate::state::menus::apply_menu_action;
+        let mut world = World::new();
+        world.insert_resource(SaveData::default());
+        world.insert_resource(SelectedCharacter(RaceId::Fish));
+        world.insert_resource(AppState::MainMenu);
+        apply_menu_action(&mut world, UiAction::MainMenuPlay);
+        assert_eq!(*world.resource::<AppState>(), AppState::Title);
+        assert_eq!(
+            world
+                .query_filtered::<Entity, With<TitleCampfire>>()
+                .iter(&world)
+                .count(),
+            1
+        );
+        assert_eq!(world.resource::<Run>().area, crate::data::AreaId::Campfire);
     }
 }

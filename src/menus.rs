@@ -214,8 +214,9 @@ pub fn deathcause_sprite_for_hit(
         return Some(crate::enemy_data::enemy_def(kind).sprite);
     }
     match hit {
-        Some(HitId::Enemy(id)) => crate::data::EnemyKind::from_u16(id)
-            .map(|k| crate::enemy_data::enemy_def(k).sprite),
+        Some(HitId::Enemy(id)) => {
+            crate::data::EnemyKind::from_u16(id).map(|k| crate::enemy_data::enemy_def(k).sprite)
+        }
         Some(HitId::Explosion(_)) => Some("images/sprExplosion.png"),
         Some(HitId::Toxic) => Some("images/sprToxicGas.png"),
         Some(HitId::Fire) | Some(HitId::Trap) => Some("images/sprTrapGameover.png"),
@@ -287,9 +288,9 @@ pub fn capture_game_over(world: &mut World) -> Option<GameOverScreen> {
             .next()
             .map(|p| p.mutations.len())
             .unwrap_or(0),
-        deathcause_sprite: world.get_resource::<crate::comps_a::LastDamageTaken>().and_then(
-            |last| deathcause_sprite_for_hit(last.hit_id, last.enemy_kind),
-        ),
+        deathcause_sprite: world
+            .get_resource::<crate::comps_a::LastDamageTaken>()
+            .and_then(|last| deathcause_sprite_for_hit(last.hit_id, last.enemy_kind)),
     };
     Some(screen)
 }
@@ -732,6 +733,7 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             emit_cue(world, &UiAction::Resume);
         }
         UiAction::QuitToTitle => {
+            crate::setup::setup_logo_room(world);
             world.init_resource::<crate::state::Paused>();
             world.resource_mut::<crate::state::Paused>().0 = false;
             emit_cue(world, &UiAction::QuitToTitle);
@@ -876,7 +878,7 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
         }
         UiAction::ConfirmPause(kind) => {
             if kind == 0 {
-                // Quit to menu (bevy clears transition + NextState MainMenu).
+                crate::setup::setup_logo_room(world);
                 world.init_resource::<crate::state::Paused>();
                 world.resource_mut::<crate::state::Paused>().0 = false;
                 emit_cue(world, &UiAction::ConfirmPause(kind));

@@ -3704,13 +3704,11 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         MenuGuiText {
                             text: play_row_name(*row).to_string(),
                             gx: cx,
-                            // GML `MainMenuButton/Other_10`: PLAY rows at
-                            // `view_center - count*12`, step 24.
                             gy: 120.0 - n as f32 * 12.0 + i as f32 * 24.0,
                             color,
                             px: 16.0,
                             centered: true,
-                            middle_y: false,
+                            middle_y: true,
                             right: false,
                         }
                     })
@@ -3731,12 +3729,6 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             LABELS
                 .iter()
                 .map(|(label, index)| {
-                    // GML `Logo/Alarm_1`: 5 buttons at `x = view_center`,
-                    // `y = view_center - 48`, step 24 (72..168 at
-                    // 240 high). White on cursor, uigray when available,
-                    // uidark when not. Only CO-OP is gated
-                    // (`MultiplayerConfig false`); STATS opens the stats
-                    // panel like GML `DrawStats`.
                     let available = matches!(index, 0 | 2 | 3 | 4);
                     let color = if !available {
                         GUI_UIDARK
@@ -3752,7 +3744,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         color,
                         px: 16.0,
                         centered: true,
-                        middle_y: false,
+                        middle_y: true,
                         right: false,
                     }
                 })
@@ -3927,32 +3919,24 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 return Vec::new();
             };
             let def = character_def(race);
-            // GML `scrCampfireMenuDrawCharText` verbatim (single-player,
-            // bottom-left): name at `(0, H-36)` via `draw_text_bigname`,
-            // skills `Passive\nActive` two lines below (top-left, x=8);
-            // hidden while `textappear == 2` (fresh select). H is 240,
-            // so the name sits at GUI y=204.
             let textappear = world
                 .get_resource::<MenuState>()
                 .map(|m| m.textappear[0])
                 .unwrap_or(0.0);
-            let mut rows = vec![MenuGuiText {
-                text: def.name.to_ascii_uppercase().to_string(),
-                gx: 0.0,
-                gy: 204.0,
-                color: GUI_WHITE,
-                px: 14.0,
-                centered: false,
-                middle_y: false,
-                right: false,
-            }];
+            let mut rows = Vec::new();
             if textappear != 2.0 {
                 rows.push(MenuGuiText {
-                    text: format!(
-                        "{}\n{}",
-                        race_passive_text(race),
-                        race_active_text(race)
-                    ),
+                    text: def.name.to_ascii_uppercase().to_string(),
+                    gx: 0.0,
+                    gy: 204.0,
+                    color: GUI_WHITE,
+                    px: 14.0,
+                    centered: false,
+                    middle_y: false,
+                    right: false,
+                });
+                rows.push(MenuGuiText {
+                    text: format!("{}\n{}", race_passive_text(race), race_active_text(race)),
                     gx: 8.0,
                     gy: 212.0,
                     color: GUI_WHITE,
@@ -3962,25 +3946,36 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     right: false,
                 });
             }
-            // GML pod tooltips (`Menu/Draw_74` over each CharSelect):
-            // unlocked pods show `Races:<id>:Name`, locked pods the
-            // unlock description. The port draws them over the cursor
+            {
+                let hardmode = world
+                    .get_resource::<MenuState>()
+                    .is_some_and(|m| m.hardmode_selected);
+                if hardmode {
+                    rows.push(MenuGuiText {
+                        text: "HARD".to_string(),
+                        gx: vw * 0.5,
+                        gy: 120.0 - 45.0,
+                        color: GUI_WHITE,
+                        px: 10.0,
+                        centered: true,
+                        middle_y: true,
+                        right: false,
+                    });
+                }
+            }
+
             // pod (keyboard parity for GML's mouse/gamepad `tooltip`).
             {
                 let menu = world.get_resource::<MenuState>().cloned();
                 let save = world
                     .get_resource::<crate::savedata_part::SaveData>()
                     .cloned();
-                let roster =
-                    crate::state::menus::visible_roster(save.as_ref());
+                let roster = crate::state::menus::visible_roster(save.as_ref());
                 let cursor = menu.as_ref().map(|m| m.title_cursor).unwrap_or(0);
                 let slot_h = 20.0;
                 if let Some(pod_race) = roster.get(cursor) {
                     let weekly = menu.as_ref().is_some_and(|m| m.weekly_run_menu);
-                    let can = save
-                        .as_ref()
-                        .is_some_and(|s| s.race_unlocked(*pod_race))
-                        || weekly;
+                    let can = save.as_ref().is_some_and(|s| s.race_unlocked(*pod_race)) || weekly;
                     let tip = if can {
                         character_def(*pod_race)
                             .name
@@ -4053,7 +4048,11 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 .is_some_and(|s| s.0 == crate::data::RaceId::Robot);
             let (title, subtitle, extra) = if is_ultra {
                 if is_robot {
-                    ("LEVEL ULTRA", "@sINSTALL @gULTRA@s UPDATE".to_string(), None)
+                    (
+                        "LEVEL ULTRA",
+                        "@sINSTALL @gULTRA@s UPDATE".to_string(),
+                        None,
+                    )
                 } else {
                     (
                         "LEVEL ULTRA",
@@ -4098,17 +4097,11 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         crate::data::RaceId::Crystal => "TELEPORTATION",
                         crate::data::RaceId::Eyes => "STRONGER TELEKINESIS",
                         crate::data::RaceId::Melting => "BIGGER CORPSE EXPLOSIONS",
-                        crate::data::RaceId::Plant => {
-                            "SNARE FINISHES ENEMIES#IN UNDER 33% @rHP"
-                        }
+                        crate::data::RaceId::Plant => "SNARE FINISHES ENEMIES#IN UNDER 33% @rHP",
                         crate::data::RaceId::Venuz => "BRRRAP",
-                        crate::data::RaceId::Steroids => {
-                            "DUAL FIRING MAY GIVE AMMO SOMETIMES"
-                        }
+                        crate::data::RaceId::Steroids => "DUAL FIRING MAY GIVE AMMO SOMETIMES",
                         crate::data::RaceId::Robot => "BETTER GUN NUTRITION",
-                        crate::data::RaceId::Chicken => {
-                            "THROWN WEAPONS CAN PIERCE ENEMIES"
-                        }
+                        crate::data::RaceId::Chicken => "THROWN WEAPONS CAN PIERCE ENEMIES",
                         crate::data::RaceId::Rebel => "HIGHER ALLY RATE OF FIRE",
                         crate::data::RaceId::Horror => {
                             "GAIN @rHP@s WHEN USING#@gBEAM@s FOR A LONG TIME"
@@ -4124,8 +4117,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 let box_text = if sel_id
                     == Some(crate::hud::mutation_skill_index(
                         crate::data::MutationId::ThroneButt,
-                    ))
-                {
+                    )) {
                     // GML multirace check over live players.
                     let mut races: Vec<crate::data::RaceId> = world
                         .query::<&RaceState>()
@@ -4147,15 +4139,12 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                             .collect();
                         format!("@w{}@s", lines.join("\n"))
                     } else {
-                        let tb = races
-                            .first()
-                            .map(|r| race_tb(*r))
-                            .unwrap_or(race_tb(
-                                world
-                                    .get_resource::<SelectedCharacter>()
-                                    .map(|s| s.0)
-                                    .unwrap_or(crate::data::RaceId::Fish),
-                            ));
+                        let tb = races.first().map(|r| race_tb(*r)).unwrap_or(race_tb(
+                            world
+                                .get_resource::<SelectedCharacter>()
+                                .map(|s| s.0)
+                                .unwrap_or(crate::data::RaceId::Fish),
+                        ));
                         format!("@w{}@s", tb)
                     }
                 } else if desc.is_empty() {
@@ -4288,15 +4277,18 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             // appear 4). Event-run swaps (`sprGameOverResult`, weekly
             // keeps button 0 as RETRY else destroys it) need the event
             // systems the port lacks — both buttons draw at once.
-            // `appear` stagger is headless-owned (`go_appear`) so clicks
-            // land only once the buttons finish sliding in, like GML.
             let appear = world
                 .get_resource::<MenuState>()
                 .map(|m| m.go_appear)
                 .unwrap_or(0.0);
             let by = if appear > 0.0 { 240.0 } else { 0.0 };
             out.push(gui_button("MENU", cx, 120.0 + 58.0 + offsety + by, GUI_MID));
-            out.push(gui_button("RETRY", cx, 120.0 + 90.0 + offsety + by, GUI_MID));
+            out.push(gui_button(
+                "RETRY",
+                cx,
+                120.0 + 90.0 + offsety + by,
+                GUI_MID,
+            ));
             out
         }
         crate::MenuOverlay::Pause => {
@@ -4316,11 +4308,6 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             // steps gates clicks). The port draws the steady state
             // (`appear = 0`); the appear lift is documented here so the
             // shell can animate it. RETRY is suppressed on daily runs
-            // (`scrGameIsDailyRun`) — the port has no daily runs, so it
-            // always draws. Confirm swaps in BACK `(left+52, bottom-48)`
-            // + QUIT/RETRY `(right-52, bottom-48)` (image 5/6 bignames).
-            // `ARE YOU SURE?` is the port's confirm caption (GML shows
-            // no caption; the swapped buttons ARE the confirm).
             let hardmode = world
                 .get_resource::<crate::comps_a::Run>()
                 .is_some_and(|r| r.hardmode);
@@ -4332,7 +4319,6 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 let right = if confirm == 0 { "QUIT" } else { "RETRY" };
                 let right_color = if confirm == 0 { GUI_RED2 } else { GUI_GREEN };
                 vec![
-                    gui_center("ARE YOU SURE?", cx, 120.0, GUI_WHITE),
                     gui_button("BACK", 52.0, 192.0, GUI_MID),
                     gui_button(right, vw - 52.0, 192.0, right_color),
                 ]
@@ -4378,7 +4364,11 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             // (`height > gui_h - 36`) set `largetext` and pan.
             let rows = CREDIT_SECTIONS[section % n].len() as f32;
             let tall = rows * 12.0 > 240.0 - 36.0;
-            let gy = if tall { 120.0 + scroll - rows * 12.0 + 240.0 * 0.6 } else { 120.0 };
+            let gy = if tall {
+                120.0 + scroll - rows * 12.0 + 240.0 * 0.6
+            } else {
+                120.0
+            };
             vec![MenuGuiText {
                 text: format!("@s{body}"),
                 gx: cx,
@@ -5533,7 +5523,12 @@ pub fn hud_sprites(
         let outline: [f32; 4] = if active {
             [1.0; 4]
         } else {
-            [0x40 as f32 / 255.0, 0x40 as f32 / 255.0, 0x40 as f32 / 255.0, 1.0]
+            [
+                0x40 as f32 / 255.0,
+                0x40 as f32 / 255.0,
+                0x40 as f32 / 255.0,
+                1.0,
+            ]
         };
         // 4-way outline quads (1 px GUI offsets around the body).
         for (ox, oy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
@@ -6704,14 +6699,9 @@ pub fn splash_sprites(
                 .map(|v| (v.x, v.y))
                 .unwrap_or((320.0, 240.0));
             let top_left = hud_gui_to_world(gm, view, cx - fw * 0.5, 240.0 - fh);
-            if let Some(s) = assets.sprite_for(
-                "images/sprVlambeer.png",
-                0,
-                top_left,
-                false,
-                0.0,
-                [1.0; 4],
-            ) {
+            if let Some(s) =
+                assets.sprite_for("images/sprVlambeer.png", 0, top_left, false, 0.0, [1.0; 4])
+            {
                 out.push(s);
             }
             let step = (t * 30.0).floor().max(0.0) as u32;
@@ -6896,12 +6886,7 @@ fn pixel_line(
             return;
         }
     }
-    out.push(white_quad(
-        center,
-        rot,
-        Vec2::new(dist.max(1.0), 1.0),
-        tint,
-    ));
+    out.push(white_quad(center, rot, Vec2::new(dist.max(1.0), 1.0), tint));
 }
 
 /// `scrDrawRoadmap` sprite layer (`GameOver/Draw_0`,
@@ -6983,7 +6968,16 @@ pub fn roadmap_sprites(
         );
         map_x += MAXSUB[area as usize] as f32 * SEG;
         // GML background hatch verbatim: 3 black + 1 white.
-        pixel_line(assets, &to_world, px, py + 1.0, map_x, drawy + 1.0, BLACK, &mut out);
+        pixel_line(
+            assets,
+            &to_world,
+            px,
+            py + 1.0,
+            map_x,
+            drawy + 1.0,
+            BLACK,
+            &mut out,
+        );
         pixel_line(
             assets,
             &to_world,
@@ -7079,8 +7073,26 @@ pub fn roadmap_sprites(
             }
             if pass == 0 {
                 // GML waypoint shadow verbatim: 3 black lines.
-                pixel_line(assets, &to_world, px + 1.0, py + 1.0, mx + 1.0, my + 1.0, BLACK, &mut out);
-                pixel_line(assets, &to_world, px + 2.0, py, mx + 1.0, my, BLACK, &mut out);
+                pixel_line(
+                    assets,
+                    &to_world,
+                    px + 1.0,
+                    py + 1.0,
+                    mx + 1.0,
+                    my + 1.0,
+                    BLACK,
+                    &mut out,
+                );
+                pixel_line(
+                    assets,
+                    &to_world,
+                    px + 2.0,
+                    py,
+                    mx + 1.0,
+                    my,
+                    BLACK,
+                    &mut out,
+                );
                 pixel_line(
                     assets,
                     &to_world,
@@ -7092,7 +7104,16 @@ pub fn roadmap_sprites(
                     &mut out,
                 );
             } else {
-                pixel_line(assets, &to_world, px + 1.0, py, mx + 1.0, my, tint, &mut out);
+                pixel_line(
+                    assets,
+                    &to_world,
+                    px + 1.0,
+                    py,
+                    mx + 1.0,
+                    my,
+                    tint,
+                    &mut out,
+                );
             }
         }
     }
@@ -7160,10 +7181,24 @@ pub fn menu_sprites(
     let vw = view[2];
     let gui_to_world = |x: f32, y: f32| hud_gui_to_world(gm, view, x, y);
     match kind {
-        crate::MenuOverlay::Splash | crate::MenuOverlay::MainMenu => {
-            // Splash art rides `splash_sprites` (per-mode boot reel);
-            // the logo room shows no static logo (GML destroys `Logo`
-            // once the menu buttons spawn).
+        crate::MenuOverlay::Splash => {}
+        crate::MenuOverlay::MainMenu => {
+            let vw = view[2];
+            let cx = vw * 0.5;
+            let cy = 120.0;
+            for i in 0..5u32 {
+                let gy = cy - 48.0 + i as f32 * 24.0;
+                if let Some(s) = assets.sprite_for(
+                    "images/sprMainMenuSplat.png",
+                    0,
+                    gui_to_world(cx, gy),
+                    false,
+                    0.0,
+                    [1.0; 4],
+                ) {
+                    out.push(s);
+                }
+            }
         }
         crate::MenuOverlay::Title => {
             let menu = world.get_resource::<MenuState>().cloned();
@@ -7196,10 +7231,8 @@ pub fn menu_sprites(
                 // `my_player.race`); the port's `title_cursor` pod is the
                 // same slot single-player.
                 let weekly = menu.as_ref().is_some_and(|m| m.weekly_run_menu);
-                let can =
-                    save.as_ref().is_some_and(|s| s.race_unlocked(race)) || weekly;
-                let selected_race = CHAR_SELECT_ORDER
-                    [selected.min(CHAR_SELECT_ORDER.len() - 1)];
+                let can = save.as_ref().is_some_and(|s| s.race_unlocked(race)) || weekly;
+                let selected_race = CHAR_SELECT_ORDER[selected.min(CHAR_SELECT_ORDER.len() - 1)];
                 let is_selected = i == cursor || race == selected_race;
                 let (path, tint): (&str, [f32; 4]) = if !can {
                     ("images/sprCharSelectLocked.png", [0.5, 0.5, 0.5, 1.0])
@@ -7434,18 +7467,12 @@ pub fn menu_sprites(
                 for (race, skin, hp, area) in players {
                     let (path, frame) = if race == RaceId::Chicken && hp <= 0 {
                         ("images/sprMapIconChickenHeadless.png", skin as i32)
-                    } else if race == RaceId::Rebel
-                        && skin == 1
-                        && area == AreaId::FrozenCity
-                    {
+                    } else if race == RaceId::Rebel && skin == 1 && area == AreaId::FrozenCity {
                         ("images/sprMapIconRebelBHooded.png", 0)
                     } else {
                         (
                             "images/sprMapIcon.png",
-                            crate::state::menus::race_skin_subimage(
-                                race as usize,
-                                skin,
-                            ),
+                            crate::state::menus::race_skin_subimage(race as usize, skin),
                         )
                     };
                     if frame < 0 {

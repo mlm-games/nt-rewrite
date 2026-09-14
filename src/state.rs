@@ -269,6 +269,15 @@ pub struct TransitionBlock(pub bool);
 /// when leaving InGame or entering a menu state; menu transients
 /// cleared). Replaces bevy `NextState` + animated `Transition`
 /// (deferred to the shell — see module docs).
+///
+/// GML room-restart parity: entering `MainMenu` from anywhere rebuilds
+/// the logo room (the blanket teardown + campfire `Run` reset live in
+/// `setup_title_campfire`; calling it here as well as in the action arms
+/// keeps direct `goto_state(MainMenu)` callers — tests, splash timeout —
+/// on the same clean-room law, and it is idempotent). Entering `Title`
+/// rebuilds the campfire room the same way. Both are skipped when the
+/// world already reads as a fresh campfire room so repeated enters stay
+/// free.
 pub fn goto_state(world: &mut World, next: AppState) {
     let prev = world
         .get_resource::<AppState>()
@@ -298,6 +307,7 @@ pub fn goto_state(world: &mut World, next: AppState) {
                 menu.play_submenu = false;
                 menu.play_cursor = 0;
             }
+            ensure_menu_room(world);
         }
         AppState::Loading => {
             world.insert_resource(LoadingState::default());
@@ -326,13 +336,39 @@ pub fn goto_state(world: &mut World, next: AppState) {
                 menu.unlock_hint_t = 0.0;
                 menu.weekly_run_menu = false;
             }
-            // GML `MenuGen`: the title screen is a real campfire floor.
             crate::setup::setup_title_campfire(world);
         }
         AppState::Splash => {
             world.insert_resource(SplashState::default());
         }
         _ => {}
+    }
+}
+
+/// GML logo-room law shared by the `MainMenu` entry above: rebuild the
+/// empty logo room unless the world already reads as one (no session
+/// instances + campfire `Run` + empty mask). Keeps repeated `MainMenu`
+/// enters free while guaranteeing no dead-run world ever sits under the
+/// PLAY rows.
+fn ensure_menu_room(world: &mut World) {
+    let stale_instances = world
+        .query::<Entity>()
+        .iter(world)
+        .filter(|e| {
+            world
+                .get_entity(*e)
+                .is_ok_and(|r| r.get::<bevy_ecs::resource::IsResource>().is_none())
+        })
+        .next()
+        .is_some();
+    let campfire_run = world
+        .get_resource::<crate::comps_a::Run>()
+        .is_some_and(|r| r.area == crate::data::AreaId::Campfire && !r.game_over);
+    let empty_mask = world
+        .get_resource::<crate::comps_a::FloorMask>()
+        .is_none_or(|m| m.cells.is_empty());
+    if stale_instances || !campfire_run || !empty_mask {
+        crate::setup::setup_logo_room(world);
     }
 }
 
