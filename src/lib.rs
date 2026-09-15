@@ -420,6 +420,10 @@ impl App {
         fn decode(dir: &Path, name: &str) -> Option<(u32, u32, Vec<u8>)> {
             decode_png(&dir.join("images").join(format!("{name}.png"))).ok()
         }
+        // GML `SpiralDebris/Create_0` verbatim: the mote strip is
+        // `sprDebris + GameCont.area` — the FULL GML area number, not the
+        // art variant. Campfire (area 0) reuses `sprDebris0`; secret areas
+        // use their own (`sprDebris101` …). Never `sprDebris1` here.
         let debris = decode(dir, &format!("sprDebris{gml_area}"))
             .or_else(|| decode(dir, "sprDebris0"))
             .unwrap_or((1u32, 1u32, vec![255, 255, 255, 255]));
@@ -611,13 +615,15 @@ impl App {
         }
         // GML `PlayButton/Other_10:108` verbatim: entering the campfire
         // char-select DESTROYS the `SpiralCont` (`instance_destroy`) while
-        // the leftover `Spiral/SpiralDebris/SpiralStar` motes drain out
-        // (no cont: wisp kill-plane 3.0, debris/drain growth 1.5x, no new
-        // births). The `Menu/Draw_0` `scrDrawSpiral` call draws that
-        // draining remnant transparently (no `draw_clear`) over the
-        // campfire camp — fading to the flat camp in ~a second, NOT a
-        // live vortex. Killing (not re-warming) here reproduces it: the
-        // 26-tick drain plays out, then the layer unmounts.
+        // the leftover `Spiral/SpiralDebris/SpiralStar` motes keep stepping
+        // in a cont-less room (drain growth 1.5x, wisp kill-plane 3.0, no
+        // new births — but `lanim` keeps realtime cadence, so bolts keep
+        // flashing). The `Menu/Draw_0` `scrDrawSpiral` call draws that
+        // still-live remnant transparently (no `draw_clear`) over the
+        // campfire camp. Only once every mote is culled does the flat
+        // camp show. Killing (not re-warming) here reproduces it; the
+        // layer stays mounted until `is_done` (~a second of visible
+        // remnant, exactly like GML).
         if state == AppState::Title && self.adv_state != AppState::Title {
             self.spiral.kill();
         }
@@ -1788,14 +1794,20 @@ impl App {
         // The area fill only shows where GML paints it: `GenCont/Create_0`
         // `background_set_colour(scrAreaGetBackroundColor(GameCont.area))`
         // runs once per generated floor, and the campfire title inherits
-        // the same call via `MenuGen` (flat campfire blue, no spiral —
-        // the title mounts no vortex layer). Splash/MainMenu have no
-        // area yet (`Vlambeer/Create_0` never sets a colour;
-        // `Vlambeer/Draw_0` clears black). Live gameplay past the spiral
-        // drain and GameOver (whose spiral died at generation end) also
-        // fall back to the flat room colour. No flat fill under the
-        // mounted vortex pass (it would cover the spiral); where the
-        // pass is absent the fill stands in for the room colour.
+        // the same call via `MenuGen`. But the fill must NEVER sit under
+        // a mounted vortex pass as a fullscreen quad: GML's
+        // `Menu/Draw_0` calls `scrDrawSpiral()` FIRST (transparent, no
+        // `draw_clear`) and draws the camp floors OVER it — the spiral
+        // shows through the gaps between floor tiles. A fullscreen fill
+        // quad in the sprite viewport would bury the vortex layer
+        // underneath (the "no vortex on the title screen" bug). So:
+        // mounted vortex pass -> no fill (the pass's own bg_alpha owns
+        // the backdrop: opaque black on Loading/covers, transparent on
+        // Title); unmounted pass -> the flat room colour stands in.
+        // Splash/MainMenu have no area yet (`Vlambeer/Create_0` never
+        // sets a colour; `Vlambeer/Draw_0` clears black). Live gameplay
+        // past the spiral drain and GameOver (whose spiral died at
+        // generation end) also fall back to the flat room colour.
         let background = if vortex_layer.is_some() {
             None
         } else if matches!(
@@ -2009,12 +2021,25 @@ impl App {
         // GML `room_restart` parity (`Vlambeer/Create_0` logo branch):
         // the quit-to-menu room recenters the camera (0,0) over black
         // with a fresh live spiral — the previous run's look point and
-        // drain never carry over. Same for Title entry (campfire camp
-        // snaps to the Campfire actor).
-        if matches!(state, AppState::MainMenu | AppState::Title)
-            && !matches!(self.was_state, AppState::MainMenu | AppState::Title)
+        // drain never carry over.
+        if matches!(state, AppState::MainMenu)
+            && !matches!(self.was_state, AppState::MainMenu)
         {
             self.gml_cam.snap = true;
+        }
+        // GML `Menu/Create_0` verbatim: `with Campfire
+        // scr_camera_set_position(x, y)` — the campfire actor sits at
+        // world (64,64), so the view top-left snaps to (64,64) and the
+        // camp + spiral center stay framed. (The fixed-step camera only
+        // runs InGame, and only InGame consumes `snap`, so menus must
+        // place the view camera directly here.)
+        if matches!(state, AppState::Title) {
+            let vw_vh = self.view_world_size;
+            self.cam = world_camera(
+                Vec2::new(64.0 + vw_vh[0] * 0.5, 64.0 + vw_vh[1] * 0.5),
+                gml_view_scale(self.view_viewport_dp),
+            );
+            self.cam.offset = Vec2::ZERO;
         }
         self.was_state = state;
 

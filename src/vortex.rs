@@ -34,9 +34,6 @@ const STREAM_RATE_SALT: u64 = 0x94D0_49BB_1331_11EB;
 pub const MAX_DEBRIS: usize = VORTEX_DEBRIS;
 /// Warmup ticks so a freshly spawned spiral is already full.
 const WARMUP_TICKS: u32 = 150;
-/// Ticks after death before the spiral is done (bevy
-/// `despawn_vortex_when_done` drain constant).
-pub const DRAIN_TICKS: f32 = 26.0;
 
 /// GUI-space size the spiral laws are written in (GML
 /// `game_screen_width/height` base; the HEIGHT is always 240, the WIDTH
@@ -425,16 +422,50 @@ impl SpiralCtl {
         }
     }
 
-    /// Drain finished (bevy `despawn_vortex_when_done` gate, minus the
-    /// state-gated despawn which stays shell-side).
+    /// Drain finished: every wisp past the kill plane AND every debris
+    /// mote culled AND every star/vard dead. GML has no timer here — the
+    /// `SpiralCont` object destroys itself only via the Step_0 gate, and
+    /// `Menu/Draw_0` keeps calling `scrDrawSpiral` (drawing the leftover
+    /// motes) for as long as the campfire room lives. A tick-count gate
+    /// here unmounted the layer after ~0.9 s while motes were still
+    /// visibly swirling — the "no vortex on the title screen" bug.
+    /// `kill()` only freezes births; the layer must stay mounted until
+    /// the sky is actually empty.
     pub fn is_done(&self) -> bool {
         if self.alive {
             return false;
         }
-        match self.death_tick {
-            Some(death) => self.ticks - death >= DRAIN_TICKS,
-            None => false,
+        let wisps_live = self
+            .ring
+            .iter()
+            .any(|w| w[2] >= 0.0 && self.wisp_scale_at(self.ticks - w[2]) <= 3.0);
+        let debris_live = self.debris.iter().any(|d| d.alive);
+        let extras_live = self.stars.iter().any(|s| s.alive) || self.vards.iter().any(|v| v.alive);
+        !wisps_live && !debris_live && !extras_live
+    }
+
+    /// Current xscale of a wisp born `age` ticks ago under the drain
+    /// growth law (GML `Spiral/Step_0` with `!instance_exists(SpiralCont)`:
+    /// base update then `grow *= 1.5` every tick — matches the shader's
+    /// `drain_bias` fast-forward, so `is_done` unmounts the layer when the
+    /// visuals actually empty, ~20 ticks after the kill like GML).
+    fn wisp_scale_at(&self, age: f32) -> f32 {
+        if age <= 0.0 {
+            return 0.0;
         }
+        let male = self.kind == SpiralKind::Proto;
+        let mut grow = 0.0f32;
+        let mut xs = if male { 0.0055 } else { 0.0 };
+        let mut t = 0.0f32;
+        while t < age {
+            let step = (age - t).min(1.0);
+            grow += (0.0002 + if male { 0.0003 } else { 0.0 }) * step;
+            xs += grow * step;
+            grow = (grow + 1.0) * (1.0 + 0.0005 * xs) - 1.0;
+            grow *= 1.5f32.powf(step);
+            t += step;
+        }
+        xs
     }
 
     /// GML `Spiral/Step_0` growth law verbatim (shared by the shader's
@@ -925,7 +956,14 @@ mod vortex_ui_parity {
         world.insert_resource(crate::comps_a::Run::default());
         let mut dead = SpiralCtl::warmed_up_for_gml_area(1);
         dead.kill();
-        dead.ticks += DRAIN_TICKS + 1.0;
+        // Step the drain until the sky is actually empty (GML has no
+        // timer here — motes die on the kill plane / view cull).
+        for _ in 0..400 {
+            dead.step(1.0);
+            if dead.is_done() {
+                break;
+            }
+        }
         assert!(dead.is_done());
         world.insert_resource(dead);
         rewarm_view_spiral(&mut world);
@@ -933,5 +971,23 @@ mod vortex_ui_parity {
         assert!(ctl.alive, "menu spiral must be live (fresh SpiralCont)");
         assert!(!ctl.is_done());
         assert_eq!(ctl.kind, SpiralKind::Normal);
+    }
+
+    /// A freshly killed full spiral is NOT done: the leftover motes are
+    /// still swirling (GML `Menu/Draw_0` keeps drawing them). The old
+    /// tick-count gate called this done after ~0.9 s — the "no vortex on
+    /// the title screen" bug.
+    #[test]
+    fn killed_spiral_stays_mounted_while_motes_live() {
+        let mut ctl = SpiralCtl::warmed_up_for_gml_area_seeded(0, 1234);
+        ctl.view_w = 426.0;
+        ctl.kill();
+        assert!(
+            !ctl.is_done(),
+            "freshly killed spiral must stay mounted (motes still live)"
+        );
+        let snap = ctl.snapshot(0.0);
+        let live_wisps = snap.wisps.iter().filter(|w| w[2] >= 0.0).count();
+        assert!(live_wisps > 64, "warmup must leave a full ring behind");
     }
 }

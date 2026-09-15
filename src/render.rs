@@ -472,9 +472,11 @@ fn area_sprites_full(
     (f, b, t, o, tr)
 }
 
-/// Dark surround tile for the padded floor bounds.
-/// Bevy `spawn_level` verbatim: route-based `sprFloorN` (same arms as
-/// [`area_sprites`]), overridden by `sprFloorEx1` when the catalog has it.
+/// Dark surround tile for the padded floor bounds (currently unused:
+/// GML draws the room background colour plus live floor cells only — no
+/// outside ring — so the viewport stays transparent over the vortex
+/// layer. Kept for the public API while the GML law is re-verified).
+#[allow(dead_code)]
 fn outside_sprite_for_run(floor: u32, has: impl Fn(&str) -> bool) -> &'static str {
     if has("images/sprFloorEx1.png") {
         return "images/sprFloorEx1.png";
@@ -503,6 +505,14 @@ fn area_sprites_for_run(
 ) -> (&'static str, &'static str, &'static str) {
     let route = area_sprites(floor);
     let secret: Option<(&'static str, &'static str, &'static str)> = match area {
+        // GML `Floor/Create_0` verbatim: the campfire title (`MenuGen`
+        // / `Menu` present) uses `sprFloor0` + area-0 walls — the dark
+        // slate camp, never the desert route strips.
+        AreaId::Campfire => Some((
+            "images/sprFloor0.png",
+            "images/sprWall0Bot.png",
+            "images/sprWall0Top.png",
+        )),
         AreaId::Oasis => Some((
             "images/sprFloor101.png",
             "images/sprWall101Bot.png",
@@ -560,6 +570,21 @@ fn area_sprites_full_for_run(
     &'static str,
 ) {
     let route = area_sprites_full(floor);
+    // GML `Floor/Create_0`: campfire uses the area-0 family throughout
+    // (floor, bot, top, out, trans) with the same per-slot catalog
+    // fallback the secret areas use.
+    if area == AreaId::Campfire {
+        let (rf, rb, rt) = area_sprites_for_run(floor, area, has);
+        let o = "images/sprWall0Out.png";
+        let tr = "images/sprWall0Trans.png";
+        return (
+            rf,
+            rb,
+            rt,
+            if has(o) { o } else { route.3 },
+            if has(tr) { tr } else { route.4 },
+        );
+    }
     let num: u8 = match area {
         AreaId::Oasis => 101,
         AreaId::PizzaSewers => 102,
@@ -1519,7 +1544,6 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
         let has = |p: &str| assets.catalog.def(p).is_some();
         let (floor_png, wall_bot_png, wall_top_png, wall_out_png, wall_trans_png) =
             area_sprites_full_for_run(floor, area, has);
-        let outside_png = outside_sprite_for_run(floor, has);
         let (mut minx, mut miny, mut maxx, mut maxy) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
         for &(cx, cy) in &cells {
             minx = minx.min(cx);
@@ -1527,24 +1551,24 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             maxx = maxx.max(cx);
             maxy = maxy.max(cy);
         }
+        // GML draws the room background colour first
+        // (`background_set_colour`), then ONLY the live floor cells —
+        // there is no padded outside ring of floor tiles. The old
+        // ±6-cell darkened ring covered the whole viewport with opaque
+        // quads and buried the transparent vortex layer underneath on
+        // the campfire title (the "no vortex on the title screen"
+        // bug). Lit strip over mask cells only; the room colour shows
+        // everywhere else.
         if minx <= maxx {
-            for cy in (miny - 6)..=(maxy + 6) {
-                for cx in (minx - 6)..=(maxx + 6) {
+            for cy in miny..=maxy {
+                for cx in minx..=maxx {
+                    if !cells.contains(&(cx, cy)) {
+                        continue;
+                    }
                     let top_left = Vec2::new(cx as f32 * TILE, cy as f32 * TILE);
-                    if cells.contains(&(cx, cy)) {
-                        if let Some(s) =
-                            place_top_left(assets, floor_png, 0, top_left, [1.0; 4], GRID_OVERLAP)
-                        {
-                            out.push(s);
-                        }
-                    } else if let Some(s) = place_top_left(
-                        assets,
-                        outside_png,
-                        0,
-                        top_left,
-                        [0.45, 0.45, 0.48, 1.0],
-                        GRID_OVERLAP,
-                    ) {
+                    if let Some(s) =
+                        place_top_left(assets, floor_png, 0, top_left, [1.0; 4], GRID_OVERLAP)
+                    {
                         out.push(s);
                     }
                 }
