@@ -1273,10 +1273,10 @@ pub fn gml_camera_step(cam: &mut GmlCamera, vw: f32, vh: f32, s: &CamStepInput, 
     }
 }
 
-/// GPU camera for a look point: `units_per_pixel` is 1 (the world
-/// extent passed to the engine fit IS the GML view — see `view` in
-/// `lib.rs`; any other scale double-applies the framing zoom).
-/// GML has no zoom.
+/// GPU camera for a look point: `units_per_pixel` carries the GML
+/// view scale (see [`gml_view_scale`] — GML has no zoom). Pair with the
+/// dp viewport extent ([`camera_fit_extent`](crate::camera_fit_extent))
+/// so the engine fit shows `viewport * scale` world units.
 pub fn world_camera(center: Vec2, scale: f32) -> Camera2d {
     Camera2d {
         center,
@@ -1305,11 +1305,9 @@ pub fn gml_view_size(viewport_dp: [f32; 2]) -> [f32; 2] {
     [vw, 240.0]
 }
 
-/// Superseded scale law (`max(240/h, 320/w)` over the dp viewport,
-/// 1280x720 → 1/3): kept for tests/docs only. The live frame passes the
-/// GML view as the world extent with `units_per_pixel = 1` (see `view`
-/// in `lib.rs`), so this must NOT feed the camera — that double-applies
-/// the framing zoom (9x, camp/vortex/GUI off-screen).
+/// `units_per_pixel` for [`world_camera`] so the framed view matches
+/// [`gml_view_size`] exactly: `max(240/h, 320/w)` over the dp viewport
+/// (1280x720 → 1/3, i.e. [`crate::comps_a::NT_CAM_SCALE`]).
 pub fn gml_view_scale(viewport_dp: [f32; 2]) -> f32 {
     let (w, h) = (viewport_dp[0].max(1.0), viewport_dp[1].max(1.0));
     (240.0 / h).max(320.0 / w).max(1e-6)

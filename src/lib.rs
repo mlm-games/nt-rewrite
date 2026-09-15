@@ -86,7 +86,7 @@ use repose_ui::{AnnotatedText, Box as UiBox, Column, Text, TextStyle, ViewExt, Z
 
 use crate::audio::UiAction;
 use crate::comps_a::CurrentFrame as CombatFrame;
-use crate::comps_a::{Player, Projectile, WallCell, WallTile};
+use crate::comps_a::{NT_CAM_SCALE, Player, Projectile, WallCell, WallTile};
 use crate::comps_b::{Enemy, Pickup, Prop};
 use crate::data::AreaId;
 use crate::input::{
@@ -98,7 +98,7 @@ use crate::render::{
     Z_FAINTED, Z_FOG, Z_FX, Z_HUD, Z_MENU, Z_PORTAL_INDICATOR, Z_SHADOW, Z_SIDEART,
     Z_SPIRAL_FIGURES, Z_SPLASH, background_color, bloom_sprites, cam_viewdist_for,
     crosshair_sprites, decode_png, fainted_bar_sprites, fog_sprites, fx_instances, fx_texts,
-    gml_camera_step, gml_view_size, hud_gui_texts_dp, hud_sprites, menu_gui_texts,
+    gml_camera_step, gml_view_scale, gml_view_size, hud_gui_texts_dp, hud_sprites, menu_gui_texts,
     menu_gui_texts_dp, menu_gui_texts_vw, menu_sprites, portal_indicator_sprites, shadow_sprites,
     sideart_sprites, spiral_figures, splash_sprites, stamp_z, view_rect_world, world_camera,
     world_instances,
@@ -329,9 +329,11 @@ impl App {
         let spiral = SpiralCtl::warmed_up_for_area_seeded(area, seed);
         // GML `BackCont` boot: the 320x240-base view opens snapped
         // on the player (`force_snap_camera_position` on generation
-        // end; GML has no zoom). `upp = 1`: the world extent is the
-        // GML view (see the `world_size` note in `view`).
-        let cam = world_camera(player_pos(&mut sim.world).unwrap_or(Vec2::ZERO), 1.0);
+        // end; GML has no zoom).
+        let cam = world_camera(
+            player_pos(&mut sim.world).unwrap_or(Vec2::ZERO),
+            NT_CAM_SCALE,
+        );
 
         Self {
             sim,
@@ -976,9 +978,9 @@ impl App {
         let px = self.cursor_px?;
         let d = self.view_density.max(1e-6);
         let dp = [px.x / d, px.y / d];
-        // Same world extent the viewport paints with (the GML view, not
-        // the dp viewport extent — see the `world_size` note in `view`).
-        let extent = self.view_world_size;
+        let extent = camera_fit_extent(self.view_viewport_dp, self.view_density);
+        // `world_size` here is the dp viewport extent; `dp_to_world_pt`
+        // divides the dp point by the same fit the viewport paints with.
         Some(self.cam.dp_to_world_pt(self.view_viewport_dp, extent, dp))
     }
 
@@ -1492,17 +1494,12 @@ impl App {
             viewport_px[0] / density.max(1e-6),
             viewport_px[1] / density.max(1e-6),
         ];
-        // Engine framing contract (`Camera2d`: visible width =
-        // `viewport_dp * units_per_pixel / zoom`): the GML view IS the
-        // world extent, so `world_size = gml_view` and `upp = 1` (the
-        // old `world_size = viewport extent` + `upp = gml_scale`
-        // double-applied the scale — 9x zoom that threw the camp,
-        // vortex, and GUI sprites off-screen).
-        let gml_view = gml_view_size(viewport_dp);
-        let world_size = gml_view;
+        let world_size = camera_fit_extent(viewport_px, density);
         // GML `scrSetViewSize` verbatim: the framed view is always 240
-        // world px tall (`gml_view_size`), mapped 1:1 onto the canvas
-        // (`units_per_pixel = 1`, `world_size = gml_view).
+        // world px tall (`gml_view_size`), so the camera scale is derived
+        // per window, not fixed (`gml_view_scale`: 1280x720 → 1/3).
+        let gml_scale = gml_view_scale(viewport_dp);
+        let gml_view = gml_view_size(viewport_dp);
         self.view_world_size = gml_view;
         self.view_viewport_dp = viewport_dp;
         self.view_density = density.max(1e-6);
@@ -1553,16 +1550,14 @@ impl App {
         // 30 Hz in [`App::step_camera_fixed`] (frozen over
         // pause/menus/game over, so menus keep the last camera).
         // GML has no zoom: the view is always 240 world px tall
-        // (`gml_view_size`), snapped on room start by `gml_cam.snap`.
-        // `gml_cam` tracks the top-left corner; the GPU camera centers
-        // the look point. `units_per_pixel = 1`: the world extent IS
-        // the GML view (see the `world_size` note above), so any other
-        // scale double-applies the framing zoom.
+        // (`gml_view_size`, `gml_view_scale` units per px), snapped on
+        // room start by `gml_cam.snap`. `gml_cam` tracks the top-left
+        // corner; the GPU camera centers the look point.
         let center = Vec2::new(
             self.gml_cam.x + gml_view[0] * 0.5,
             self.gml_cam.y + gml_view[1] * 0.5,
         );
-        self.cam = world_camera(center, 1.0);
+        self.cam = world_camera(center, gml_scale);
         self.cam.offset = Vec2::ZERO;
 
         // Sprite layer: real instances with assets, placeholder quads
@@ -2051,7 +2046,10 @@ impl App {
         // place the view camera directly here.)
         if matches!(state, AppState::Title) {
             let vw_vh = self.view_world_size;
-            self.cam = world_camera(Vec2::new(64.0 + vw_vh[0] * 0.5, 64.0 + vw_vh[1] * 0.5), 1.0);
+            self.cam = world_camera(
+                Vec2::new(64.0 + vw_vh[0] * 0.5, 64.0 + vw_vh[1] * 0.5),
+                gml_view_scale(self.view_viewport_dp),
+            );
             self.cam.offset = Vec2::ZERO;
         }
         self.was_state = state;
@@ -2249,10 +2247,11 @@ pub fn resolve_assets_dir() -> Option<PathBuf> {
     None
 }
 
-/// Legacy fit extent (viewport size in dp). Superseded and uncalled:
-/// the live frame passes the GML view as the world extent with
-/// `units_per_pixel = 1` (see `view`), so the engine fit shows the live
-/// GML view 1:1 (1280x720 -> 426x240) with no double scale.
+/// Fit extent for the follow camera: the viewport size in dp. GML has
+/// no zoom: the per-frame [`gml_view_scale`](crate::render::gml_view_scale)
+/// carries `units_per_pixel`, so the engine fit shows the live GML view
+/// (1280x720 -> 426x240). Pre-scaling here would apply the scale twice
+/// (once in the extent, once in the fit).
 ///
 /// `viewport_px` is physical pixels (`Scheduler.size`); `density` is
 /// the dp->px scale, so a 1.25x HiDPI window still frames the same view.
