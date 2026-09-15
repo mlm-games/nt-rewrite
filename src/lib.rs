@@ -1564,6 +1564,17 @@ impl App {
             let menu = self.sim.world.resource_mut::<MenuState>();
             menu_overlay_kind(state, overlay, &menu, run_game_over)
         };
+        // GML `Vlambeer/Alarm_0`: the `SpiralCont` exists only once the
+        // reel reaches the `Logo` phase (`mode >= 3` fires the alarm
+        // that creates cont + `Logo` and destroys the `Vlambeer` card;
+        // the port's mode 4 is that logo phase). Modes 0-3 are black +
+        // text with no spiral caller.
+        let logo_live = menu_kind != Some(MenuOverlay::Splash)
+            || self
+                .sim
+                .world
+                .get_resource::<crate::state::SplashState>()
+                .is_some_and(|s| s.mode >= 4);
         let paused = self
             .sim
             .world
@@ -1677,6 +1688,7 @@ impl App {
             let vortex_mounted_later = self.assets.is_some()
                 && !self.vortex_tex.is_empty()
                 && !matches!(menu_kind, Some(MenuOverlay::Title))
+                && logo_live
                 && (self.spiral.alive || !self.spiral.is_done());
             if vortex_mounted_later {
                 let gui_view = gml_view_size(viewport_dp);
@@ -1809,16 +1821,16 @@ impl App {
                 self.vortex_tex_area = Some(gml_area);
             }
         }
-        // Logo/Splash mounts while the boot spiral is live (GML
-        // `Vlambeer/Alarm_0` creates a live `SpiralCont` under the
-        // `Logo`; `SpiralCont/Draw_0` paints it opaque). Title mounts
-        // while its entry drain plays out (GML `Menu/Draw_0` draws the
-        // leftover motes transparently over the camp; once done the
-        // flat camp shows). Every other caller in the list mounts
-        // unconditionally (caller list documented at the figure gate
-        // above).
+        // Logo/Splash mounts only once the `Logo` exists (gated on
+        // `logo_live` above). Title mounts while its entry drain plays
+        // out (GML `Menu/Draw_0` draws the leftover motes transparently
+        // over the camp; once done the flat camp shows). Every other
+        // caller in the list mounts unconditionally (caller list
+        // documented at the figure gate above).
+        let splash_gated = !logo_live;
         let vortex_layer = if self.assets.is_some()
             && !self.vortex_tex.is_empty()
+            && !splash_gated
             && (self.spiral.alive || !self.spiral.is_done())
         {
             let mut pass = VortexPass::new(snap);
