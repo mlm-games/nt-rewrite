@@ -1620,22 +1620,21 @@ impl App {
             // lets atlas page lottery HUD bars under floor tiles. Push
             // order matches rung order, so the canvas path (push-ordered)
             // and the GPU path (z-sorted) agree.
-            // GML `scrGameIsGenerationScreen` verbatim: while a
-            // generation screen owns the draw (`GenCont`, `LevCont` in
-            // the port's overlay, `MenuGen` behind the campfire title)
-            // the room draws NOTHING — spiral + cover text only. The
-            // old world floor sits under an opaque vortex backdrop on
-            // Loading/covers and would paint straight through the
-            // fullscreen pass (the "tiles over the vortex" bug); on
-            // Title the camp draws but every HUD/chrome layer above the
-            // world stays off (no crosshair, bars, arrows, HUD sprites,
-            // menu art, sideart, or damage numbers — GML's `Menu`
-            // draw scripts own that chrome, not `TopCont`).
+            // GML `scrGameIsGenerationScreen` verbatim: while the
+            // generation conts own the draw (`GenCont` behind Loading,
+            // `LevCont` behind the mutation/ultra offer) the room draws
+            // NOTHING but the spiral + cover text — the old floor sits
+            // under an opaque vortex backdrop and would paint straight
+            // through the fullscreen pass (the "tiles over the vortex"
+            // bug). The campfire title is NOT a generation screen for
+            // draw purposes: `MenuGen` builds the camp, then `Menu`
+            // draws spiral remnant + camp + pods + portraits (`Menu`
+            // draw scripts own that chrome, not `TopCont` — so the
+            // TopCont-sourced HUD bars stay off but the Menu chrome
+            // stays on).
             let generation_screen = matches!(
                 menu_kind,
-                Some(MenuOverlay::Loading)
-                    | Some(MenuOverlay::Mutation)
-                    | Some(MenuOverlay::Title)
+                Some(MenuOverlay::Loading) | Some(MenuOverlay::Mutation)
             );
             let playing = !generation_screen;
             let mut s = if playing {
@@ -1786,23 +1785,24 @@ impl App {
                 s.extend(splash);
             }
             // Menu art sprites (char pods, portrait, loadout, splats).
-            // Gated on `playing` too: the generation screens own their
-            // chrome (`GenCont`/`LevCont` text + roadmap, `Menu` pods +
-            // portraits) and must not inherit the HUD/menu chrome of
-            // whatever overlay the menu state happens to carry.
-            if playing {
-                if let Some(kind) = menu_kind {
-                    let mut menu = menu_sprites(
-                        kind,
-                        &mut self.sim.world,
-                        assets,
-                        viewport_dp,
-                        world_size,
-                        &self.cam,
-                    );
-                    stamp_z(&mut menu, Z_MENU);
-                    s.extend(menu);
-                }
+            // `Menu` draws these in `Draw_0`/`Draw_74` on every screen
+            // it owns (campfire title AND generation covers — the offer
+            // row is `LevCont` chrome but the pods/portraits persist
+            // underneath in GML, just buried under the opaque spiral).
+            // They ride the sprite viewport UNDER the opaque vortex
+            // pass, so covers stay clean while the title keeps its
+            // camp chrome.
+            if let Some(kind) = menu_kind {
+                let mut menu = menu_sprites(
+                    kind,
+                    &mut self.sim.world,
+                    assets,
+                    viewport_dp,
+                    world_size,
+                    &self.cam,
+                );
+                stamp_z(&mut menu, Z_MENU);
+                s.extend(menu);
             }
             // Sideart chrome around the view (GML `UberCont/Draw_74`:
             // over everything, game and menus alike — but never over a
