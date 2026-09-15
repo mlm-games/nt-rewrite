@@ -118,14 +118,7 @@ impl VortexPass {
                 include_str!("../shaders/vortex.wgsl"),
                 FullscreenDesc {
                     texture_slots: VORTEX_TEXTURES as u32,
-                    // Bevy-reference parity (`nt-recreated-bevy`
-                    // `vortex.rs`: every vortex texture set to Linear —
-                    // "nearest made wisps blocky"). The bolt especially
-                    // needs it: 176px art minified into ~20px means
-                    // thin 1-2px streaks fall between texels and vanish
-                    // under Nearest. Matches GML's smooth
-                    // `draw_sprite_ext` sampling.
-                    filter: TextureFilter::Nearest,
+                    filter: TextureFilter::Linear,
                 },
             ),
             snapshot,

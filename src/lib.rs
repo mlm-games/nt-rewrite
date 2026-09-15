@@ -412,6 +412,12 @@ impl App {
         Ok(())
     }
 
+    /// Vortex background textures for a GML area (headless-observable;
+    /// same decode the live frame uses on area switches).
+    pub fn debug_vortex_textures(dir: &Path, gml_area: u8) -> Vec<VortexTexture> {
+        Self::load_vortex_textures(dir, gml_area)
+    }
+
     /// Vortex background textures for a GML area (decoded once per
     /// area; slots match the shader bindings: spiral, bolt, debris,
     /// proto, idpd, idpd2, star). Missing files fall back to area 0 debris
@@ -465,6 +471,11 @@ impl App {
 
     pub fn last_bg_alpha(&self) -> f32 {
         self.last_bg_alpha
+    }
+
+    /// Spiral snapshot for one rendered frame (headless-observable).
+    pub fn spiral_snapshot(&self, bg_alpha: f32) -> crate::vortex_pass::VortexSnapshot {
+        self.spiral.snapshot(bg_alpha)
     }
 
     /// Spiral liveness for the vortex mount decision (headless
@@ -2496,7 +2507,9 @@ fn gui_text_layer(row: &crate::render::GuiRow) -> View {
             .font_family(NT_UI_FONT_FAMILY)
             .single_line()
     };
-    if row.5 {
+    if row.3 {
+        text = text.text_align(repose_core::text::TextAlign::Center);
+    } else if row.5 {
         text = text.text_align(repose_core::text::TextAlign::Right);
     }
     Column(

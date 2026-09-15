@@ -118,7 +118,7 @@ pub fn kind_for_area(area: AreaId) -> SpiralKind {
 /// `lib.rs` only fires on `AppState` edges, which the actions already
 /// consumed). Prefers the `Run`'s seed when present so the menu vortex
 /// stays in the run's deterministic stream; seed 0 when no run exists.
-pub fn rewarm_view_spiral(world: &mut World) {
+pub fn rewarm_view_spiral(world: &mut World, view_w: f32) {
     let seed = world
         .get_resource::<crate::comps_a::Run>()
         .map(|r| r.gen_seed)
@@ -126,7 +126,7 @@ pub fn rewarm_view_spiral(world: &mut World) {
     // The logo room is campfire (`setup_logo_room` resets the run there);
     // GML reads `GameCont.area` at cont creation, which is campfire here.
     let mut ctl = SpiralCtl::warmed_up_for_area_seeded(AreaId::Campfire, seed);
-    ctl.view_w = GUI_W;
+    ctl.view_w = view_w;
     world.insert_resource(ctl);
 }
 
@@ -435,13 +435,29 @@ impl SpiralCtl {
         if self.alive {
             return false;
         }
-        let wisps_live = self
-            .ring
-            .iter()
-            .any(|w| w[2] >= 0.0 && self.wisp_scale_at(self.ticks - w[2]) <= 3.0);
-        let debris_live = self.debris.iter().any(|d| d.alive);
-        let extras_live = self.stars.iter().any(|s| s.alive) || self.vards.iter().any(|v| v.alive);
-        !wisps_live && !debris_live && !extras_live
+        let wisps_live = self.ring.iter().any(|w| {
+            if w[2] < 0.0 {
+                return false;
+            }
+            let age = self.ticks - w[2];
+            if age < 0.0 {
+                return true;
+            }
+            self.wisp_scale_at(age) <= self.thresh()
+        });
+        if wisps_live {
+            return false;
+        }
+        if self.debris.iter().any(|d| d.alive) {
+            return false;
+        }
+        if self.stars.iter().any(|s| s.alive) {
+            return false;
+        }
+        if self.vards.iter().any(|v| v.alive) {
+            return false;
+        }
+        true
     }
 
     /// Current xscale of a wisp born `age` ticks ago under the drain
@@ -966,7 +982,7 @@ mod vortex_ui_parity {
         }
         assert!(dead.is_done());
         world.insert_resource(dead);
-        rewarm_view_spiral(&mut world);
+        rewarm_view_spiral(&mut world, GUI_W);
         let ctl = world.resource::<SpiralCtl>();
         assert!(ctl.alive, "menu spiral must be live (fresh SpiralCont)");
         assert!(!ctl.is_done());

@@ -3,10 +3,8 @@
 // Rendered as ONE fullscreen quad: each wisp is a transformed sample of the
 // real spiral art; growth/alpha/lightning follow the GameMaker laws.
 // Bevy-isms removed: no `#import`, no material bind-group macro. Uniforms
-// arrive in one globals block; the seven art textures share one Nearest
-// sampler (GML parity — `options/*/options_*.yy` set
-// `interpolate_pixels: false` on every desktop target, so
-// `draw_sprite_ext` samples NEAREST; Linear blurred the 8px debris).
+// arrive in one globals block; the seven art textures share one Linear
+// sampler.
 // `view` maps screen uv to wisp coord space: the live GUI view rect
 // `(view_w/2, 120, view_w, 240)` — GML `display_set_gui_size(view)`
 // makes GUI px == view px 1:1, so uv spans the GUI exactly and wisps
@@ -213,9 +211,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
         let suv = rel / (32.0 * s * 10.0) * 0.5 + vec2<f32>(0.5, 0.5);
         if (all(suv > vec2<f32>(0.0)) & all(suv < vec2<f32>(1.0))) {
-        // GML Spiral image_speed=2 on a 2-frame strip advances 2/step, so
-        // image_index is permanently 0: every wisp shows frame 0.
-        let sframe = 0.0;
+        // GML `Spiral/Create_0`: `image_speed = 2` on the 2-frame
+        // `sprSpiral` strip advances the float index 2/step, so the
+        // wrapped frame alternates 0, 1, 0, 1... (NOT pinned to 0:
+        // even steps show the square-hole frame 0, odd steps the
+        // round-hole frame 1 — the shimmering GML vortex core).
+        let sframe = f32(u32(tick_now) % 2u);
             // Half-texel inset to avoid atlas bleeding (sprite is 64x64 in 128x64 strip)
             let uv_x = (sframe * 64.0 + 0.5 + suv.x * 63.0) / 128.0;
             let uv_y = (0.5 + suv.y * 63.0) / 64.0;

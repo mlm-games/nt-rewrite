@@ -369,6 +369,10 @@ pub struct MenuState {
     /// GML `Menu.weekly` verbatim: weekly runs bypass race locks and hide
     /// the pod roster treatment (`can = unlocked || weekly_run`).
     pub weekly_run_menu: bool,
+    /// GML `CharSelect.tooltip` verbatim: true only while the cursor pod
+    /// is pointed (mouse hover) or gamepad-selected. Headless defaults
+    /// to false (no pointer), so the pod name tooltip row stays hidden.
+    pub title_pod_pointed: bool,
 }
 
 impl Default for MenuState {
@@ -407,6 +411,7 @@ impl Default for MenuState {
             unlock_hint_pop: 0.0,
             unlock_hint_t: 0.0,
             weekly_run_menu: false,
+            title_pod_pointed: false,
         }
     }
 }
@@ -739,7 +744,9 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             emit_cue(world, &UiAction::QuitToTitle);
             goto_state(world, AppState::MainMenu);
             // Same fresh-`SpiralCont` law as the ConfirmPause(0) arm.
-            crate::vortex::rewarm_view_spiral(world);
+            // `App::view` refreshes `view_w` every frame, so the rewarm
+            // only needs to be live here; width syncs on the next frame.
+            crate::vortex::rewarm_view_spiral(world, crate::vortex::GUI_W);
         }
         UiAction::QuitApp => {
             world.init_resource::<QuitRequested>();
@@ -892,7 +899,9 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 // MainMenu-entry lifecycle makes, kept explicit so direct
                 // `goto_state(MainMenu)` shells like tests stay covered).
                 // Seed 0: GML builds the cont fresh at room start.
-                crate::vortex::rewarm_view_spiral(world);
+                // `App::view` refreshes `view_w` every frame, so the rewarm
+                // only needs to be live here; width syncs on the next frame.
+                crate::vortex::rewarm_view_spiral(world, crate::vortex::GUI_W);
             } else {
                 // Restart via loading (fresh run: drop stale highlight).
                 world.init_resource::<crate::state::Paused>();
@@ -1653,6 +1662,10 @@ fn tick_title_input(world: &mut World, edge: MenuEdge) {
             .max(1) as i16;
         if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
             menu.title_cursor = (menu.title_cursor as i16 + cycle as i16).rem_euclid(len) as usize;
+            // GML `CharSelect/Draw_0` tooltip verbatim: keyboard pod
+            // moves point the new pod (`_pointed`), so the name tooltip
+            // follows the cursor.
+            menu.title_pod_pointed = true;
         }
     }
     if let Some(slot) = slot {

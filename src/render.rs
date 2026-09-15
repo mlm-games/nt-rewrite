@@ -3142,10 +3142,13 @@ pub fn nt_tag_color(tag: char) -> Option<[u8; 4]> {
 }
 
 /// Split GML `draw_text_nt` text into color runs: `@x` opens the tagged
-/// color, `#`/`\n` stay inside the run as literal line breaks (the shell
-/// wraps on them; GML `#` writes a newline via `string_hash_to_newline`
-/// before parsing), `\@` escapes a literal `@`. Every other `@?`
-/// sequence keeps its chars in the base color.
+/// color, `\@` escapes a literal `@`. `#` stays inside the run as a
+/// literal line break (the shell wraps on it; GML `#` writes a newline
+/// via `string_hash_to_newline` before parsing). Raw `\n` never reaches
+/// this backend: multi-line rows are pre-split into one [`MenuGuiText`]
+/// per visual line at the producer (GML draws each line of the block at
+/// its own y). Every other `@?` sequence keeps its chars in the base
+/// color.
 pub fn nt_text_segments(text: &str, base: [u8; 4]) -> Vec<(String, [u8; 4])> {
     fn push(seg: &mut Vec<(String, [u8; 4])>, buf: &mut String, color: [u8; 4]) {
         if buf.is_empty() {
@@ -3218,14 +3221,31 @@ pub fn gui_texts_dp(canvas_dp: [f32; 2], items: Vec<MenuGuiText>) -> Vec<GuiRow>
         .map(|t| {
             let font_px = (t.px * k).round().clamp(8.0, 180.0);
             let (left, box_w, centered) = if t.centered {
-                // Keep the box inside the canvas: the 2*gx law overflows
-                // past the right edge for gx > vw/2 (e.g. GameOver
-                // KILLED BY at cx+86), so clamp to the symmetric fit.
-                let bw = (2.0 * t.gx.min(vw - t.gx).max(1.0) * k).max(font_px);
+                // GML centers `draw_text_nt` on `gx`: the box spans the
+                // symmetric fit around `gx` (`2 * min(gx, vw - gx)`),
+                // centered content inside. View-centered rows (gx = cx)
+                // get the full width; column headers (stats TOTAL at
+                // `statx`) center on their column. The old full-width
+                // box dragged column headers to `vw/2` (the centered
+                // part of the "left-shortened stats" bug); the older
+                // symmetric fit without centering clipped wide rows.
+                let half = t.gx.min(vw - t.gx).max(1.0);
+                let bw = (2.0 * half * k).max(font_px);
                 (t.gx * k - bw * 0.5, bw, true)
             } else if t.right {
-                let bw = (120.0 * k).max(font_px);
-                (w - (vw - t.gx) * k - bw, bw, false)
+                // GML right-aligns on `gx`: the row's box right edge
+                // lands exactly on `gx * k`, content right-aligned
+                // inside. The old fixed 120px box pushed short rows
+                // left of their anchor (the "left-shortened stats"
+                // bug); HUD clock/area rows need a wide-enough box to
+                // reach `vw - 2`, stats names only need their column.
+                let right = t.gx * k;
+                let bw = if t.gx >= vw - 3.0 {
+                    (120.0 * k).max(font_px)
+                } else {
+                    (60.0 * k).max(font_px)
+                };
+                (right - bw, bw, false)
             } else {
                 let left = t.gx * k;
                 let bw = (200.0 * k).max(font_px).min((w - left).max(font_px));
@@ -3805,7 +3825,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                             gx: cx,
                             gy: 120.0 - n as f32 * 12.0 + i as f32 * 24.0,
                             color,
-                            px: 16.0,
+                            px: 12.0,
                             centered: true,
                             middle_y: true,
                             right: false,
@@ -3841,7 +3861,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         gx: cx,
                         gy: 120.0 - 48.0 + *index as f32 * 24.0,
                         color,
-                        px: 16.0,
+                        px: 12.0,
                         centered: true,
                         middle_y: true,
                         right: false,
@@ -3871,6 +3891,9 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             // headers centered; blank headers advance the (fractional)
             // line.
             let stat_name = |out: &mut Vec<MenuGuiText>, col: f32, line: &mut f32, name: &str| {
+                // GML `draw_stat` verbatim: the NAME right-aligns on
+                // `statx - 1` (right edge = `col - 1`), so the row's box
+                // right edge sits at `col - 1`, not `col`.
                 out.push(MenuGuiText {
                     text: name.to_string(),
                     gx: col - 1.0,
@@ -3900,7 +3923,22 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     *line += 1.0;
                     return;
                 }
-                out.push(gui_center(name, col, 40.0 + *line * 8.0, GUI_WHITE));
+                // GML `draw_stat_header` verbatim: centered on `statx`
+                // (`fa_center` at `col`), NOT on the view center — the
+                // old `gui_center(name, col, ...)` built a full-width
+                // box that centered on `vw/2`, dragging "TOTAL" right
+                // of its column (the centered part of the
+                // "left-shortened stats" bug).
+                out.push(MenuGuiText {
+                    text: name.to_string(),
+                    gx: col,
+                    gy: 40.0 + *line * 8.0,
+                    color: GUI_WHITE,
+                    px: 7.0,
+                    centered: true,
+                    middle_y: true,
+                    right: false,
+                });
                 *line += 1.0;
             };
             let mut out = vec![MenuGuiText {
@@ -3908,7 +3946,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 gx: cx,
                 gy: 24.0,
                 color: GUI_MID,
-                px: 10.0,
+                px: 12.0,
                 centered: true,
                 middle_y: true,
                 right: false,
@@ -4029,15 +4067,25 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     gx: 0.0,
                     gy: 204.0,
                     color: GUI_WHITE,
-                    px: 14.0,
+                    px: 12.0,
                     centered: false,
                     middle_y: false,
                     right: false,
                 });
                 rows.push(MenuGuiText {
-                    text: format!("{}\n{}", race_passive_text(race), race_active_text(race)),
+                    text: race_passive_text(race).to_string(),
                     gx: 8.0,
                     gy: 212.0,
+                    color: GUI_WHITE,
+                    px: 7.0,
+                    centered: false,
+                    middle_y: false,
+                    right: false,
+                });
+                rows.push(MenuGuiText {
+                    text: race_active_text(race).to_string(),
+                    gx: 8.0,
+                    gy: 220.0,
                     color: GUI_WHITE,
                     px: 7.0,
                     centered: false,
@@ -4063,7 +4111,10 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 }
             }
 
-            // pod (keyboard parity for GML's mouse/gamepad `tooltip`).
+            // pod tooltip (`Menu/Draw_74`: `CharSelect.tooltip`, set only
+            // while the mouse points at the pod or the gamepad selects
+            // it). Headless has no pointer, so the row only shows while
+            // the gamepad/hover path marks the cursor pod pointed.
             {
                 let menu = world.get_resource::<MenuState>().cloned();
                 let save = world
@@ -4071,31 +4122,35 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     .cloned();
                 let roster = crate::state::menus::visible_roster(save.as_ref());
                 let cursor = menu.as_ref().map(|m| m.title_cursor).unwrap_or(0);
+                let pointed = menu.as_ref().is_some_and(|m| m.title_pod_pointed);
                 let slot_h = 20.0;
-                if let Some(pod_race) = roster.get(cursor) {
-                    let weekly = menu.as_ref().is_some_and(|m| m.weekly_run_menu);
-                    let can = save.as_ref().is_some_and(|s| s.race_unlocked(*pod_race)) || weekly;
-                    let tip = if can {
-                        character_def(*pod_race)
-                            .name
-                            .to_ascii_uppercase()
-                            .to_string()
-                    } else {
-                        crate::state::menus::unlock_hint_for_race(*pod_race)
-                    };
-                    if let Some(pos) =
-                        char_pod_layout([vw, 240.0], roster.len(), slot_h).get(cursor)
-                    {
-                        rows.push(MenuGuiText {
-                            text: tip,
-                            gx: pos[0] + TITLE_POD_W * 0.5,
-                            gy: pos[1] - 12.0,
-                            color: GUI_WHITE,
-                            px: 7.0,
-                            centered: true,
-                            middle_y: true,
-                            right: false,
-                        });
+                if pointed {
+                    if let Some(pod_race) = roster.get(cursor) {
+                        let weekly = menu.as_ref().is_some_and(|m| m.weekly_run_menu);
+                        let can =
+                            save.as_ref().is_some_and(|s| s.race_unlocked(*pod_race)) || weekly;
+                        let tip = if can {
+                            character_def(*pod_race)
+                                .name
+                                .to_ascii_uppercase()
+                                .to_string()
+                        } else {
+                            crate::state::menus::unlock_hint_for_race(*pod_race)
+                        };
+                        if let Some(pos) =
+                            char_pod_layout([vw, 240.0], roster.len(), slot_h).get(cursor)
+                        {
+                            rows.push(MenuGuiText {
+                                text: tip,
+                                gx: pos[0] + TITLE_POD_W * 0.5,
+                                gy: pos[1] - 12.0,
+                                color: GUI_WHITE,
+                                px: 7.0,
+                                centered: true,
+                                middle_y: true,
+                                right: false,
+                            });
+                        }
                     }
                 }
                 // GML `Menu.unlock_hint` box verbatim (touch locked-pod
@@ -4213,7 +4268,10 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         crate::data::RaceId::Random => "???",
                     }
                 };
-                let box_text = if sel_id
+                // Throne Butt special (`box_text`): multi-race parties
+                // return early above with one row per race; single-race
+                // falls through to the shared box split below.
+                let box_text: String = if sel_id
                     == Some(crate::hud::mutation_skill_index(
                         crate::data::MutationId::ThroneButt,
                     )) {
@@ -4226,41 +4284,70 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     races.sort_by_key(|r| *r as u8);
                     races.dedup();
                     if races.len() > 1 {
+                        // Multi-race Throne Butt: one line per race at
+                        // the block-middle spacing (same law as the box
+                        // split below, inlined for the per-line color
+                        // tags).
                         let lines: Vec<String> = races
                             .iter()
                             .map(|r| {
                                 format!(
-                                    "{} - {}",
+                                    "@w{} - {}@s",
                                     character_def(*r).name.to_ascii_uppercase(),
                                     race_tb(*r)
                                 )
                             })
                             .collect();
-                        format!("@w{}@s", lines.join("\n"))
-                    } else {
-                        let tb = races.first().map(|r| race_tb(*r)).unwrap_or(race_tb(
-                            world
-                                .get_resource::<SelectedCharacter>()
-                                .map(|s| s.0)
-                                .unwrap_or(crate::data::RaceId::Fish),
-                        ));
-                        format!("@w{}@s", tb)
+                        let n = lines.len().max(1) as f32;
+                        for (i, line) in lines.iter().enumerate() {
+                            out.push(MenuGuiText {
+                                text: line.clone(),
+                                gx: cx,
+                                gy: 179.0 + (i as f32 - (n - 1.0) * 0.5) * 8.0,
+                                color: GUI_WHITE,
+                                px: 7.0,
+                                centered: true,
+                                middle_y: true,
+                                right: false,
+                            });
+                        }
+                        return out;
                     }
+                    let tb = races.first().map(|r| race_tb(*r)).unwrap_or(race_tb(
+                        world
+                            .get_resource::<SelectedCharacter>()
+                            .map(|s| s.0)
+                            .unwrap_or(crate::data::RaceId::Fish),
+                    ));
+                    format!("@w{}@s", tb)
                 } else if desc.is_empty() {
                     format!("@w{}", name.to_ascii_uppercase())
                 } else {
                     format!("@w{}#@s{}@s", name.to_ascii_uppercase(), desc)
                 };
-                out.push(MenuGuiText {
-                    text: box_text,
-                    gx: cx,
-                    gy: 179.0,
-                    color: GUI_WHITE,
-                    px: 7.0,
-                    centered: true,
-                    middle_y: true,
-                    right: false,
-                });
+                // GML draws the `"@wName#@sDesc@s"` box as ONE
+                // centered-middle block: `middle_y` centers on the whole
+                // block, so split per line around the block middle
+                // (`gy + (i - (n-1)/2) * 8`).
+                let box_lines: Vec<&str> = box_text
+                    .split('#')
+                    .flat_map(|s| s.split('\n'))
+                    .collect();
+                let n = box_lines.len().max(1) as f32;
+                for (i, line) in box_lines.iter().enumerate() {
+                    // `gui_multiline` cannot carry per-block middle
+                    // centering, so the split stays inline here.
+                    out.push(MenuGuiText {
+                        text: line.to_string(),
+                        gx: cx,
+                        gy: 179.0 + (i as f32 - (n - 1.0) * 0.5) * 8.0,
+                        color: GUI_WHITE,
+                        px: 7.0,
+                        centered: true,
+                        middle_y: true,
+                        right: false,
+                    });
+                }
             }
             out
         }
@@ -4465,6 +4552,9 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 .map(|m| m.credits_scroll)
                 .unwrap_or(0.0);
             let n = credit_section_count();
+            // GML draws the section body as ONE centered-middle block
+            // (lines at `gy + i * 12` around the block middle); split
+            // per line here since the shell renders `.single_line()`.
             let body = CREDIT_SECTIONS[section % n].join("\n@s");
             // GML scroll law (`Credits/Step_0`): only tall sections
             // (`height > gui_h - 36`) set `largetext` and pan.
@@ -4475,16 +4565,22 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             } else {
                 120.0
             };
-            vec![MenuGuiText {
-                text: format!("@s{body}"),
-                gx: cx,
-                gy,
-                color: GUI_WHITE,
-                px: 7.0,
-                centered: true,
-                middle_y: !tall,
-                right: false,
-            }]
+            let lines: Vec<&str> = body.split('\n').collect();
+            let nlines = lines.len().max(1) as f32;
+            lines
+                .into_iter()
+                .enumerate()
+                .map(|(i, line)| MenuGuiText {
+                    text: format!("@s{line}"),
+                    gx: cx,
+                    gy: gy + (i as f32 - (nlines - 1.0) * 0.5) * 12.0,
+                    color: GUI_WHITE,
+                    px: 7.0,
+                    centered: true,
+                    middle_y: true,
+                    right: false,
+                })
+                .collect()
         }
     }
 }
@@ -8247,5 +8343,87 @@ mod ui_parity_regression {
         assert_eq!(gml_view_size([321.0, 240.0]), [322.0, 240.0]);
         // Portrait still floors at 320.
         assert_eq!(gml_view_size([200.0, 400.0]), [320.0, 240.0]);
+    }
+
+    /// GML `draw_text_nt` block law: one row per visual line (the shell
+    /// renders `.single_line()`), so multi-line producers pre-split.
+    /// The Title passive/active pair arrives as two rows at gy/gy+8,
+    /// never one `\n` row (the literal-`\n` overlap bug).
+    #[test]
+    fn title_skill_rows_are_two_rows() {
+        let mut world = World::new();
+        world.insert_resource(crate::comps_a::SelectedCharacter(crate::data::RaceId::Fish));
+        let mut menu = crate::state::menus::MenuState::default();
+        // Steady state: GML `textappear` approaches 0 after entry (2.0
+        // hides the name/skill rows while the portrait slides in).
+        menu.textappear = [0.0; 4];
+        world.insert_resource(menu);
+        let rows = menu_gui_texts_vw(crate::MenuOverlay::Title, &mut world, 426.0);
+        let skills: Vec<&MenuGuiText> = rows
+            .iter()
+            .filter(|r| r.gx == 8.0 && (r.gy == 212.0 || r.gy == 220.0))
+            .collect();
+        assert_eq!(skills.len(), 2, "passive + active rows: {rows:?}");
+        assert!(rows.iter().all(|r| !r.text.contains('\n')));
+    }
+
+    /// GML centered-`draw_text_nt` law: the row centers on its own `gx`
+    /// (symmetric box around `gx`), so stats column headers sit on
+    /// their column — not dragged to the view center — while
+    /// view-centered rows still span the full width.
+    #[test]
+    fn centered_rows_center_on_gx() {
+        let dp = gui_texts_dp(
+            [1280.0, 720.0],
+            vec![
+                MenuGuiText {
+                    text: "TOTAL".to_string(),
+                    gx: 110.0,
+                    gy: 40.0,
+                    color: [255, 255, 255, 255],
+                    px: 7.0,
+                    centered: true,
+                    middle_y: true,
+                    right: false,
+                },
+                MenuGuiText {
+                    text: "PLAY".to_string(),
+                    gx: 213.0,
+                    gy: 72.0,
+                    color: [255, 255, 255, 255],
+                    px: 12.0,
+                    centered: true,
+                    middle_y: true,
+                    right: false,
+                },
+            ],
+        );
+        // TOTAL box centers on gx=110 (330 dp at k=3).
+        let (total_left, total_w) = (dp[0].1[0], dp[0].4);
+        assert!((total_left + total_w * 0.5 - 330.0).abs() < 1.0, "{dp:?}");
+        // PLAY box centers on the view center (639 dp).
+        let (play_left, play_w) = (dp[1].1[0], dp[1].4);
+        assert!((play_left + play_w * 0.5 - 639.0).abs() < 1.0, "{dp:?}");
+    }
+
+    /// GML `draw_stat` law: the name right-aligns on `statx - 1`, so
+    /// the row's box right edge lands on `gx` — short names sit
+    /// against the value column instead of floating left.
+    #[test]
+    fn stat_names_right_align_on_gx() {
+        let dp = gui_texts_dp(
+            [1280.0, 720.0],
+            vec![MenuGuiText {
+                text: "kills".to_string(),
+                gx: 109.0,
+                gy: 40.0,
+                color: [153, 153, 153, 255],
+                px: 7.0,
+                centered: false,
+                middle_y: true,
+                right: true,
+            }],
+        );
+        assert!((dp[0].1[0] + dp[0].4 - 109.0 * 3.0).abs() < 1.0, "{dp:?}");
     }
 }
