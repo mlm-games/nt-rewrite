@@ -480,6 +480,31 @@ impl App {
         self.spiral.ticks
     }
 
+    /// Live GUI view width the spiral simulates in (headless diagnostics).
+    pub fn spiral_view_w(&self) -> f32 {
+        self.spiral.view_w
+    }
+
+    /// Spiral emitter angle in degrees (headless motion diagnostics).
+    pub fn spiral_angle(&self) -> f32 {
+        self.spiral.angle
+    }
+
+    /// Bolt-visible wisp count in the current snapshot (headless
+    /// lightning diagnostics: GML `lanim in (0, 6)` per wisp).
+    pub fn spiral_bolts(&self) -> usize {
+        self.spiral
+            .streams
+            .iter()
+            .filter(|s| s.bolt_visible())
+            .count()
+    }
+
+    /// Live debris motes in the current ring (headless cull diagnostics).
+    pub fn spiral_debris_live(&self) -> usize {
+        self.spiral.debris.iter().filter(|d| d.alive).count()
+    }
+
     /// Advance wall-clock time into fixed steps. Returns steps run.
     ///
     /// Each step: `Sim::tick` (clock + heartbeat), frame-counter mirror,
@@ -584,13 +609,18 @@ impl App {
         if state == AppState::MainMenu && self.adv_state != AppState::MainMenu {
             self.spiral = SpiralCtl::warmed_up_for_area_seeded(AreaId::Campfire, seed);
         }
-        // NOTE: no kill on InGame -> Title. GML destroys the whole
-        // session (`BackButton`: `with all instance_destroy`) and the
-        // campfire `Menu` draws its OWN fresh spiral (`Menu/Draw_0`
-        // `scrDrawSpiral()` with no `draw_clear`); the port Title state
-        // reuses `setup_title_campfire` the same way. Killing here would
-        // leave a stale drain behind — the old stale-background comment
-        // below had it backwards (bevy-black is not GML).
+        // GML `PlayButton/Other_10:108` verbatim: entering the campfire
+        // char-select DESTROYS the `SpiralCont` (`instance_destroy`) while
+        // the leftover `Spiral/SpiralDebris/SpiralStar` motes drain out
+        // (no cont: wisp kill-plane 3.0, debris/drain growth 1.5x, no new
+        // births). The `Menu/Draw_0` `scrDrawSpiral` call draws that
+        // draining remnant transparently (no `draw_clear`) over the
+        // campfire camp — fading to the flat camp in ~a second, NOT a
+        // live vortex. Killing (not re-warming) here reproduces it: the
+        // 26-tick drain plays out, then the layer unmounts.
+        if state == AppState::Title && self.adv_state != AppState::Title {
+            self.spiral.kill();
+        }
         let cover = state == AppState::InGame
             && (self
                 .sim
@@ -1588,12 +1618,12 @@ impl App {
             // Spiral CPU layer (GML `scrDrawSpiral` center figures):
             // crown orbit + player hurt figures ride every spiral
             // caller — `GenCont`, `LevCont`, `NothingSpiral` and the
-            // logo/title spirals alike. NOT the campfire `Menu`
-            // (figures need a live `SpiralCont`, which `PlayButton`
-            // destroys on entry) and NOT GameOver (the dead run's
-            // cont died at generation end). Gated on the mounted
-            // vortex layer so figures never float over the flat
-            // campfire camp or the game-over dim.
+            // logo spirals alike. NOT the campfire `Menu`
+            // (`PlayButton` destroys the `SpiralCont` on entry, so the
+            // `with SpiralCont` figure block has no instance) and NOT
+            // GameOver (the dead run's cont died at generation end).
+            // Gated on the mounted vortex layer so figures never float
+            // over the flat campfire camp or the game-over dim.
             // NOTE: `center` is the vortex look point (GUI view
             // center), not the world camera — GML draws figures at
             // `view + cont.x/y` (view-local coords), independent of
@@ -1605,27 +1635,37 @@ impl App {
                 && (self.spiral.alive || !self.spiral.is_done());
             if vortex_mounted_later {
                 let gui_view = gml_view_size(viewport_dp);
-                let figs_center = Vec2::new(
-                    view[0] + gui_view[0] * 0.5,
-                    view[1] + gui_view[1] * 0.5,
-                );
-                let mut figs = spiral_figures(
-                    &mut self.sim.world,
-                    assets,
-                    figs_center,
-                    self.spiral.angle,
-                );
+                let figs_center =
+                    Vec2::new(view[0] + gui_view[0] * 0.5, view[1] + gui_view[1] * 0.5);
+                let mut figs =
+                    spiral_figures(&mut self.sim.world, assets, figs_center, self.spiral.angle);
                 stamp_z(&mut figs, Z_SPIRAL_FIGURES);
                 s.extend(figs);
             }
             // View-anchored HUD bars (Draw-GUI-64: above all world-space
             // layers). GML `GenCont/Draw_0` draws ONLY spiral +
             // GENERATING + roadmap — no PlayerHUD/MiscHUD — and the
-            // Loading room starts empty (`goto_state` teardown), so the
-            // HUD stays off while Loading like GML (TopCont draws the
-            // HUD only once the run's actors exist).
+            // Loading room's run is pre-`setup_run` (no live run actors
+            // yet), so the HUD stays off while Loading like GML (TopCont
+            // draws the HUD only once the run's actors exist).
             let hud_view = view_rect_world(viewport_dp, world_size, &self.cam);
-            let mut h = if state == AppState::Loading {
+            let loading_cover = state == AppState::Loading
+                || self
+                    .sim
+                    .world
+                    .get_resource::<crate::comps_b::FloorTransition>()
+                    .is_some_and(|f| f.active)
+                || self
+                    .sim
+                    .world
+                    .get_resource::<crate::comps_a::PendingMutation>()
+                    .is_some()
+                || self
+                    .sim
+                    .world
+                    .get_resource::<crate::comps_a::PendingUltra>()
+                    .is_some();
+            let mut h = if loading_cover {
                 Vec::new()
             } else {
                 hud_sprites(&mut self.sim.world, assets, hud_view, hud_dt)
@@ -1729,8 +1769,11 @@ impl App {
         let vortex_layer = if self.assets.is_some()
             && !self.vortex_tex.is_empty()
             && !matches!(menu_kind, Some(MenuOverlay::Splash))
-            // (caller list documented at the figure gate above)
-            && !matches!(menu_kind, Some(MenuOverlay::Title))
+            // Title mounts while its entry drain plays out (GML
+            // `Menu/Draw_0` draws the leftover motes transparently over
+            // the camp; once done the flat camp shows). Every other
+            // caller in the list mounts unconditionally (caller list
+            // documented at the figure gate above).
             && (self.spiral.alive || !self.spiral.is_done())
         {
             let mut pass = VortexPass::new(snap);
@@ -1777,7 +1820,7 @@ impl App {
         );
         let overlay_color = crate::effects::flash_rgba(&self.sim.world);
 
-        let hud_rows = if state == AppState::InGame {
+        let hud_rows = if state == AppState::InGame && menu_kind.is_none() {
             hud_overlay_lines(&mut self.sim.world, viewport_dp)
         } else {
             Vec::new()
@@ -1891,10 +1934,7 @@ impl App {
             // moves are skipped (sticks own those; `TouchMove` covers
             // them).
             .on_pointer_move(move |ev: PointerEvent| {
-                if matches!(
-                    ev.kind,
-                    repose_core::input::PointerKind::Mouse
-                ) {
+                if matches!(ev.kind, repose_core::input::PointerKind::Mouse) {
                     // SAFETY: synchronous compose-time dispatch only.
                     let app = unsafe { &mut *cursor_ptr };
                     let p = ev.position_in_window();

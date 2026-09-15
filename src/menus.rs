@@ -738,6 +738,8 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             world.resource_mut::<crate::state::Paused>().0 = false;
             emit_cue(world, &UiAction::QuitToTitle);
             goto_state(world, AppState::MainMenu);
+            // Same fresh-`SpiralCont` law as the ConfirmPause(0) arm.
+            crate::vortex::rewarm_view_spiral(world);
         }
         UiAction::QuitApp => {
             world.init_resource::<QuitRequested>();
@@ -883,6 +885,14 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 world.resource_mut::<crate::state::Paused>().0 = false;
                 emit_cue(world, &UiAction::ConfirmPause(kind));
                 goto_state(world, AppState::MainMenu);
+                // GML `Vlambeer/Create_0` quit branch verbatim: the logo
+                // room rebuilds with a FRESH live `SpiralCont` — never the
+                // previous run's leftover drain. `setup_logo_room` owns the
+                // world half; the view spiral re-warms here (same call the
+                // MainMenu-entry lifecycle makes, kept explicit so direct
+                // `goto_state(MainMenu)` shells like tests stay covered).
+                // Seed 0: GML builds the cont fresh at room start.
+                crate::vortex::rewarm_view_spiral(world);
             } else {
                 // Restart via loading (fresh run: drop stale highlight).
                 world.init_resource::<crate::state::Paused>();

@@ -1271,7 +1271,12 @@ pub fn world_camera(center: Vec2, scale: f32) -> Camera2d {
 /// in world px for a dp viewport (portrait floors the width at 320).
 pub fn gml_view_size(viewport_dp: [f32; 2]) -> [f32; 2] {
     let (w, h) = (viewport_dp[0].max(1.0), viewport_dp[1].max(1.0));
-    let vw = (240.0 * w / h).max(320.0).floor();
+    let mut vw = (240.0 * w / h).max(320.0).floor();
+    // GML `scrSetViewSize` verbatim: odd widths bump +1 (the camera and
+    // GUI both run on the even width).
+    if vw % 2.0 != 0.0 {
+        vw += 1.0;
+    }
     [vw, 240.0]
 }
 
@@ -2734,6 +2739,13 @@ pub fn hud_gui_to_world(map: HudGuiMap, view: [f32; 4], gx: f32, gy: f32) -> Vec
 /// Place a strip by its art top-left in GUI px (bevy `gm_sprite`
 /// origin law for zero-origin art): quad top-left lands on the mapped
 /// GUI point, size = native * `mul` * map scale.
+///
+/// GML `draw_sprite` (NOT `_ext`) honors the strip origin: the DRAW POINT
+/// is `pos - origin`, i.e. art top-left lands on `pos - origin`. Callers
+/// pass the GML draw position verbatim for ALL strips — this helper reads
+/// the catalog origin and offsets the quad top-left by `-origin * mul *
+/// map.s`, so pixels land exactly where GML puts them regardless of the
+/// strip's origin (`sprUltraLevel` origin (4,5), Rogue pips (1,1), etc.).
 pub fn hud_gui_place(
     assets: &RenderAssets,
     path: &str,
@@ -2748,7 +2760,14 @@ pub fn hud_gui_place(
     let (uv, def) = assets.uv(path, frame)?;
     let anchor = def.anchor();
     let size = Vec2::new(def.w as f32 * mul * map.s, def.h as f32 * mul * map.s);
-    let top_left = hud_gui_to_world(map, view, gx, gy);
+    // GML draw point minus the origin: `draw_sprite(spr, sub, x, y)` puts
+    // the art top-left at `(x - xorigin, y - yorigin)`.
+    let top_left = hud_gui_to_world(
+        map,
+        view,
+        gx - def.xorigin * mul,
+        gy - def.yorigin * mul,
+    );
     Some(SpriteInstance {
         center: top_left + Vec2::new(anchor[0] * size.x, anchor[1] * size.y),
         rotation: 0.0,
@@ -3693,9 +3712,14 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             out.push(gui_center(format!("@s{tip}"), cx, 144.0, GUI_GRAY));
             if let Some(run) = world.get_resource::<crate::comps_a::Run>() {
                 if run.world != 0 || run.floor != 0 {
+                    // GML `GenCont/Draw_0` roadmap at `(_cx, _cy)` FULL
+                    // width (unlike GameOver's `_x - 48`): the strings
+                    // ride `(drawx-60, drawy-14)` / `(drawx+23, drawy-14)`
+                    // with `drawx = cx`, i.e. `(cx-60, cy-14)` /
+                    // `(cx+23, cy-14)` = `(cx-60, 106)` / `(cx+23, 106)`.
                     out.push(MenuGuiText {
                         text: crate::hud::run_area_string(run),
-                        gx: cx - 108.0,
+                        gx: cx - 60.0,
                         gy: 106.0,
                         color: GUI_WHITE,
                         px: 7.0,
@@ -3705,7 +3729,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     });
                     out.push(MenuGuiText {
                         text: run.total_kills.to_string(),
-                        gx: cx - 25.0,
+                        gx: cx + 23.0,
                         gy: 106.0,
                         color: GUI_WHITE,
                         px: 7.0,
@@ -8134,5 +8158,70 @@ mod verbatim_ui_layers {
         let retry = texts.iter().find(|t| t.text == "RETRY").expect("RETRY row");
         assert!((menu.gy - 178.0).abs() < 1.0, "MENU gy {}", menu.gy);
         assert!((retry.gy - 210.0).abs() < 1.0, "RETRY gy {}", retry.gy);
+    }
+}
+
+#[cfg(test)]
+mod ui_parity_regression {
+    use super::*;
+
+    /// GML `draw_sprite` honors the strip origin: the draw point is
+    /// `pos - origin`. `sprUltraLevel` (origin 4,5) drawn at GML (11,16)
+    /// must land pixels at (7,11), not (11,16).
+    #[test]
+    fn hud_gui_place_uses_strip_origin() {
+        let dir = crate::resolve_assets_dir().expect("assets for parity test");
+        let assets = RenderAssets::load(&dir).expect("catalog loads");
+        let view = [0.0, 0.0, 426.0, 240.0];
+        let gm = hud_gui_map(view);
+        let s = hud_gui_place(
+            &assets,
+            "images/sprUltraLevel.png",
+            0,
+            11.0,
+            16.0,
+            1.0,
+            [1.0; 4],
+            gm,
+            view,
+        )
+        .expect("ultra level art present");
+        // Top-left = pos - origin = (11-4, 16-5). (Recovered via the
+        // anchor law `center - anchor * size` since the strip's anchor
+        // is (4/8, 5/8), not the quad middle.)
+        let top_left = s.center - Vec2::new(s.anchor.x * s.size.x, s.anchor.y * s.size.y);
+        assert!((top_left.x - 7.0).abs() < 1e-4, "x {top_left:?}");
+        assert!((top_left.y - 11.0).abs() < 1e-4, "y {top_left:?}");
+        // The origin itself lands on the GML draw point (11,16).
+        assert!((s.center.x - 11.0).abs() < 1e-4, "cx {:?}", s.center);
+        assert!((s.center.y - 16.0).abs() < 1e-4, "cy {:?}", s.center);
+        // Zero-origin art is unaffected: health bar still at (20,4).
+        let b = hud_gui_place(
+            &assets,
+            "images/sprHealthBar.png",
+            2,
+            20.0,
+            4.0,
+            1.0,
+            [1.0; 4],
+            gm,
+            view,
+        )
+        .expect("health bar art present");
+        let btl = b.center - Vec2::new(b.anchor.x * b.size.x, b.anchor.y * b.size.y);
+        assert!((btl.x - 20.0).abs() < 1e-4, "x {btl:?}");
+        assert!((btl.y - 4.0).abs() < 1e-4, "y {btl:?}");
+    }
+
+    /// GML `scrSetViewSize` verbatim: odd view widths bump +1.
+    #[test]
+    fn gml_view_size_bumps_odd_widths() {
+        // 426.666… floors to 426 (even, unchanged).
+        assert_eq!(gml_view_size([1280.0, 720.0]), [426.0, 240.0]);
+        // A width flooring to an odd value bumps +1 (e.g. 321 -> 322).
+        // 240 * 321/240 = 321 exactly.
+        assert_eq!(gml_view_size([321.0, 240.0]), [322.0, 240.0]);
+        // Portrait still floors at 320.
+        assert_eq!(gml_view_size([200.0, 400.0]), [320.0, 240.0]);
     }
 }

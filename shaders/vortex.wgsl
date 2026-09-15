@@ -4,8 +4,9 @@
 // real spiral art; growth/alpha/lightning follow the GameMaker laws.
 // Bevy-isms removed: no `#import`, no material bind-group macro. Uniforms
 // arrive in one globals block; the seven art textures share one Nearest
-// sampler (GML parity: `interpolate_pixels=false` on desktop — point
-// sampling, crisp 1px debris; GML makes no filter calls at all).
+// sampler (GML parity — `options/*/options_*.yy` set
+// `interpolate_pixels: false` on every desktop target, so
+// `draw_sprite_ext` samples NEAREST; Linear blurred the 8px debris).
 // `view` maps screen uv to wisp coord space: the live GUI view rect
 // `(view_w/2, 120, view_w, 240)` — GML `display_set_gui_size(view)`
 // makes GUI px == view px 1:1, so uv spans the GUI exactly and wisps
@@ -158,7 +159,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let rot = abs(d.w);
         let c = cos(rot);
         let sn = sin(rot);
-        // Inverse-map into the frame (GML CCW-positive, y-down storage).
         var rel = gui - d.xy;
         rel = vec2<f32>(c * rel.x + sn * rel.y, -sn * rel.x + c * rel.y);
 

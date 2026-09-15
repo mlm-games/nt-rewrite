@@ -17,9 +17,9 @@
 //! [`SpiralKind::for_gml_area`]; `AreaId::Loop` maps to GML area 1, i.e.
 //! `Normal` — there is no loop-count branch in the reference.
 
+use crate::vortex_pass::{VORTEX_DEBRIS, VORTEX_WISPS, VortexSnapshot};
 use bevy_ecs::prelude::*;
 use repame_sim::SimTime;
-use crate::vortex_pass::{VORTEX_DEBRIS, VORTEX_WISPS, VortexSnapshot};
 
 use crate::data::AreaId;
 
@@ -111,6 +111,26 @@ pub fn gml_area_for_area(area: AreaId) -> u8 {
 /// hence `Normal`, exactly like the reference).
 pub fn kind_for_area(area: AreaId) -> SpiralKind {
     SpiralKind::for_gml_area(gml_area_for_area(area))
+}
+
+/// Re-warm the view spiral for a fresh campfire-logo room (GML
+/// `Vlambeer/Create_0` quit branch / `BackButton/Other_10` Menu branch:
+/// `instance_create(0, 0, SpiralCont)` builds a LIVE cont with the
+/// `repeat 150` warmup, never the previous run's leftover drain).
+/// Called from the quit-to-menu action arms (the state-entry lifecycle in
+/// `lib.rs` only fires on `AppState` edges, which the actions already
+/// consumed). Prefers the `Run`'s seed when present so the menu vortex
+/// stays in the run's deterministic stream; seed 0 when no run exists.
+pub fn rewarm_view_spiral(world: &mut World) {
+    let seed = world
+        .get_resource::<crate::comps_a::Run>()
+        .map(|r| r.gen_seed)
+        .unwrap_or(0);
+    // The logo room is campfire (`setup_logo_room` resets the run there);
+    // GML reads `GameCont.area` at cont creation, which is campfire here.
+    let mut ctl = SpiralCtl::warmed_up_for_area_seeded(AreaId::Campfire, seed);
+    ctl.view_w = GUI_W;
+    world.insert_resource(ctl);
 }
 
 /// Area-flavoured debris sprite pick (bevy `variant_debris_for_gml_area`,
@@ -417,6 +437,20 @@ impl SpiralCtl {
         }
     }
 
+    /// GML `Spiral/Step_0` growth law verbatim (shared by the shader's
+    /// `SCALE_TABLE`): `grow += 0.0002` (+0.0003 on the proto strip),
+    /// `xscale += grow`, `grow = (grow+1)*(1+0.0005*xscale)-1`, drain
+    /// `grow *= 1.5`. Headless mirror of one wisp tick for tests.
+    pub fn step_wisp_grow(grow: f32, xscale: f32, proto: bool, drain: bool) -> (f32, f32) {
+        let mut grow = grow + 0.0002 + if proto { 0.0003 } else { 0.0 };
+        let xscale = xscale + grow;
+        grow = (grow + 1.0) * (1.0 + 0.0005 * xscale) - 1.0;
+        if drain {
+            grow *= 1.5;
+        }
+        (grow, xscale)
+    }
+
     fn tick_once(&mut self) {
         self.ticks += 1.0;
         // GML `Spiral/Step_0` bolt clock first: live wisps advance
@@ -427,8 +461,8 @@ impl SpiralCtl {
                 continue;
             }
             let birth = self.ring[slot][2] as u32;
-            self.streams[slot].lanim += 0.2
-                + stream_hash01(self.seed, birth, self.ticks as u32, STREAM_RATE_SALT) * 0.3;
+            self.streams[slot].lanim +=
+                0.2 + stream_hash01(self.seed, birth, self.ticks as u32, STREAM_RATE_SALT) * 0.3;
         }
         if self.alive {
             let kind = self.kind;
@@ -490,8 +524,17 @@ impl SpiralCtl {
                     {
                         self.push_vard(x, y, path, frame);
                     } else {
-                        let d = &mut self.debris[self.dhead];
-                        *d = Debris {
+                        // GML `SpiralDebris/Create_0` runs at birth, then
+                        // the SAME tick's `Step_0` integrates once before
+                        // the first draw (`repeat 150` warmup steps self
+                        // then motes, and live ticks create-then-step in
+                        // order). A mote stored with xscale 0 and drawn
+                        // next frame would pop full-size through the
+                        // `frame + xscale/32` packing (see the ring write
+                        // below); integrate once here so the birth frame
+                        // already carries the first growth step.
+                        let slot = self.dhead;
+                        self.debris[slot] = Debris {
                             alive: true,
                             xstart: x,
                             ystart: y,
@@ -502,13 +545,20 @@ impl SpiralCtl {
                             xscale: 0.0,
                             grow: 0.0,
                             image_angle: 0.0,
-                            // GML `sprDebrisN` default arm: the strip
-                            // frame is `random(image_number)`; only the
-                            // rare area-flavoured vard pins frame 1.
-                            frame: rand::random::<f32>() * 4.0,
+                            // GML `sprDebrisN` default arm: `image_index =
+                            // random(image_number)` is float, but the
+                            // ring packs `frame + xscale/32` and the
+                            // shader splits with `floor`/`fract` — so
+                            // the frame MUST be integral (bevy floors
+                            // + clamps to 0..3 verbatim), else the
+                            // frame fraction leaks into `fract` and
+                            // newborns decode at xscale up to 32
+                            // (the "debris spawns massive" bug).
+                            frame: (rand::random::<f32>() * 4.0).floor().min(3.0),
                             sound_played: false,
                         };
-                        self.dhead = (self.dhead + 1) % MAX_DEBRIS;
+                        self.step_debris_slot(slot, false);
+                        self.dhead = (slot + 1) % MAX_DEBRIS;
                     }
                 }
             }
@@ -522,39 +572,17 @@ impl SpiralCtl {
         }
 
         let drain = !self.alive;
-        for (i, d) in self.debris.iter_mut().enumerate() {
-            if !d.alive {
+        for i in 0..MAX_DEBRIS {
+            if !self.debris[i].alive {
                 continue;
             }
-            let (rad, dir) = (d.dist * d.xscale, d.angle.to_radians());
-            let dx = rad * dir.cos();
-            let dy = -rad * dir.sin();
-            d.angle += d.turnspeed;
-            d.dist += d.grow;
-            d.grow += 0.0005;
-            d.xscale += d.grow / 1.5;
-            d.grow = (d.grow + 1.0) * (1.0 + 0.001 * d.xscale) - 1.0;
-            if drain {
-                d.grow *= 1.5;
-            }
-            d.grow *= d.xscale * 0.05 + 1.0;
-            d.image_angle += d.rotspeed;
-            if dx + d.xstart < -16.0
-                || dx + d.xstart > GUI_W + 16.0
-                || dy + d.ystart < -16.0
-                || dy + d.ystart > GUI_H + 16.0
-            {
-                d.alive = false;
-                self.debris_ring[i] = [-1000.0; 4];
+            // Newborns already integrated at birth (see the birth site
+            // above); skip the pre-growth mote so it advances once per
+            // tick like GML, not twice.
+            if self.debris[i].xscale == 0.0 && self.debris[i].grow == 0.0 {
                 continue;
             }
-
-            self.debris_ring[i] = [
-                d.xstart + dx,
-                d.ystart + dy,
-                d.image_angle.to_radians(),
-                d.frame + d.xscale / 32.0,
-            ];
+            self.step_debris_slot(i, drain);
         }
 
         for s in self.stars.iter_mut() {
@@ -591,8 +619,9 @@ impl SpiralCtl {
             }
             v.grow *= v.xscale * 0.05 + 1.0;
             v.image_angle += v.rotspeed;
+            // Live-width cull like debris above (GML `view_width`).
             if dx + v.xstart < -16.0
-                || dx + v.xstart > GUI_W + 16.0
+                || dx + v.xstart > self.view_w + 16.0
                 || dy + v.ystart < -16.0
                 || dy + v.ystart > GUI_H + 16.0
             {
@@ -644,6 +673,62 @@ impl SpiralCtl {
         } else {
             self.vards.push(vard);
         }
+    }
+
+    /// One GML `SpiralDebris/Step_0` integration over mote `i`
+    /// (verbatim order: pos from current angle/radius, then
+    /// angle/dist/grow/xscale advance, cull at view ± 16, ring write
+    /// with the `frame + xscale/32` pack). Shared by the birth site
+    /// (newborns step once in their birth tick, exactly like GML's
+    /// Create-then-Step order) and the per-tick loop.
+    fn step_debris_slot(&mut self, i: usize, drain: bool) {
+        // Split borrow: the mote mutably, the ring slot mutably.
+        let (dx, dy, rot_rad, packed, culled) = {
+            let d = &mut self.debris[i];
+            // GML `lengthdir_x(r, a) = r*cos(a)`, `lengthdir_y(r, a) =
+            // -r*sin(a)` (y-down, 90 = south).
+            let (rad, dir) = (d.dist * d.xscale, d.angle.to_radians());
+            let dx = rad * dir.cos();
+            let dy = -rad * dir.sin();
+            d.angle += d.turnspeed;
+            d.dist += d.grow;
+            d.grow += 0.0005;
+            d.xscale += d.grow / 1.5;
+            d.grow = (d.grow + 1.0) * (1.0 + 0.001 * d.xscale) - 1.0;
+            if drain {
+                d.grow *= 1.5;
+            }
+            d.grow *= d.xscale * 0.05 + 1.0;
+            d.image_angle += d.rotspeed;
+            // GML `Step_0` cull verbatim: view rect ± 16 — but against
+            // the LIVE view width (`view_width`, 426 at 16:9), not the
+            // 320 base. The old `GUI_W` bound killed side-drifting motes
+            // up to 106px before they left the screen.
+            let culled = dx + d.xstart < -16.0
+                || dx + d.xstart > self.view_w + 16.0
+                || dy + d.ystart < -16.0
+                || dy + d.ystart > GUI_H + 16.0;
+            if culled {
+                d.alive = false;
+            }
+            (
+                d.xstart + dx,
+                d.ystart + dy,
+                d.image_angle.to_radians(),
+                d.frame + d.xscale / 32.0,
+                culled,
+            )
+        };
+        self.debris_ring[i] = if culled {
+            // Parked sentinel: x < -100 (the ONLY component the shader
+            // tests). Must be `[-1000, 0, 0, 0]` — `[-1000; 4]`
+            // smuggles `frame=0, xscale=32` into slot 3, which the
+            // shader unpacks as a FULL-SIZE rock (the "debris spawns
+            // massive" bug).
+            [-1000.0, 0.0, 0.0, 0.0]
+        } else {
+            [dx, dy, rot_rad, packed]
+        };
     }
 
     /// Advance the accumulator by `dt_ticks` 30 Hz ticks (bevy `step`,
@@ -779,4 +864,74 @@ pub fn tick_spiral(time: Res<SimTime>, ctl: Option<ResMut<SpiralCtl>>) {
         return;
     };
     ctl.step(time.delta_secs * 30.0);
+}
+
+#[cfg(test)]
+mod vortex_ui_parity {
+    use super::*;
+
+    /// GML `Spiral/Step_0` growth recurrence verbatim: iterating
+    /// `step_wisp_grow` 119 times from 0 must reproduce the shader's
+    /// `SCALE_TABLE[119]` (2.539587) — the table the fullscreen pass
+    /// sizes every wisp from.
+    #[test]
+    fn wisp_growth_matches_shader_table_tail() {
+        let (mut grow, mut xs) = (0.0f32, 0.0f32);
+        for _ in 0..119 {
+            (grow, xs) = SpiralCtl::step_wisp_grow(grow, xs, false, false);
+        }
+        assert!(
+            (xs - 2.539_587).abs() < 1e-3,
+            "wisp xscale at age 119 diverged from SCALE_TABLE[119]: {xs}"
+        );
+    }
+
+    /// The view-width cull law: motes past the LIVE width + 16 die, motes
+    /// inside the wide margin (beyond the 320 base) survive. GML
+    /// `view_width` (426 at 16:9), not the 320 base.
+    #[test]
+    fn debris_cull_uses_live_view_width() {
+        let mut ctl = SpiralCtl::warmed_up_for_gml_area(1);
+        ctl.view_w = 426.0;
+        let idx = 0;
+        // Mote drawn at x = 400 (inside 426+16, outside 320+16).
+        ctl.debris[idx] = Debris {
+            alive: true,
+            xstart: 400.0,
+            ystart: 120.0,
+            dist: 0.0,
+            angle: 0.0,
+            turnspeed: 0.0,
+            rotspeed: 0.0,
+            xscale: 1.0,
+            grow: 0.0,
+            image_angle: 0.0,
+            frame: 0.0,
+            sound_played: true,
+        };
+        ctl.step_debris_slot(idx, false);
+        assert!(
+            ctl.debris[idx].alive,
+            "mote at x=400 culled under a 426-wide view (320-base law)"
+        );
+    }
+
+    /// Quit-to-menu builds a LIVE campfire cont (GML `Vlambeer/Create_0`
+    /// quit branch / `BackButton` Menu branch): births resume, never a
+    /// stale drain from the dead run.
+    #[test]
+    fn rewarm_view_spiral_is_live_campfire() {
+        let mut world = World::new();
+        world.insert_resource(crate::comps_a::Run::default());
+        let mut dead = SpiralCtl::warmed_up_for_gml_area(1);
+        dead.kill();
+        dead.ticks += DRAIN_TICKS + 1.0;
+        assert!(dead.is_done());
+        world.insert_resource(dead);
+        rewarm_view_spiral(&mut world);
+        let ctl = world.resource::<SpiralCtl>();
+        assert!(ctl.alive, "menu spiral must be live (fresh SpiralCont)");
+        assert!(!ctl.is_done());
+        assert_eq!(ctl.kind, SpiralKind::Normal);
+    }
 }

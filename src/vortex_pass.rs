@@ -118,12 +118,13 @@ impl VortexPass {
                 include_str!("../shaders/vortex.wgsl"),
                 FullscreenDesc {
                     texture_slots: VORTEX_TEXTURES as u32,
-                    // GML parity (`options/{windows,linux,...}`:
-                    // `interpolate_pixels=false`; only html5/operagx/tvos/
-                    // reddit opt in). No `texture_set_interpolation` /
-                    // `gpu_set_texfilter` call anywhere in GML either, so
-                    // the whole game samples point — crisp 1px debris
-                    // rocks, crisp wisps.
+                    // Bevy-reference parity (`nt-recreated-bevy`
+                    // `vortex.rs`: every vortex texture set to Linear —
+                    // "nearest made wisps blocky"). The bolt especially
+                    // needs it: 176px art minified into ~20px means
+                    // thin 1-2px streaks fall between texels and vanish
+                    // under Nearest. Matches GML's smooth
+                    // `draw_sprite_ext` sampling.
                     filter: TextureFilter::Nearest,
                 },
             ),
