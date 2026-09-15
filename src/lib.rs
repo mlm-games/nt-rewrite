@@ -503,16 +503,6 @@ impl App {
         self.spiral.is_done()
     }
 
-    /// Probe: spiral stream seed + area (drift-rewarm tracing).
-    pub fn spiral_seed(&self) -> u64 {
-        self.spiral.seed
-    }
-
-    /// Probe: spiral area (drift-rewarm tracing).
-    pub fn spiral_gml_area(&self) -> u8 {
-        self.spiral.gml_area
-    }
-
     /// Spiral clock (headless freeze assertion).
     pub fn spiral_ticks(&self) -> f32 {
         self.spiral.ticks
@@ -647,6 +637,14 @@ impl App {
         let (area, seed) = run
             .map(|r| (r.area, r.gen_seed))
             .unwrap_or((AreaId::Desert, 0));
+        // Bevy `mark_vortex_dead` is a one-way latch per tick: a kill
+        // and a rewarm must NEVER both fire in one call. On the
+        // `setup_run` tick the fresh seed arms the entry kill below AND
+        // a pending pick raises the cover edge further down — without
+        // the latch the cover rewarm rebuilds a live 150-tick spiral in
+        // the same tick the kill just drained (the load-end double
+        // start, ticks 185→150 over live play).
+        let mut killed_this_tick = false;
         if state == AppState::Loading && self.adv_state != AppState::Loading {
             self.spiral = SpiralCtl::warmed_up_for_area_seeded(area, seed);
             self.adv_seed = seed;
@@ -664,6 +662,7 @@ impl App {
             self.spiral.kill();
             self.adv_seed = seed;
             self.adv_area = gml_area_for_area(area);
+            killed_this_tick = true;
         }
         // GML `Vlambeer/Create_0` `want_quit_to_menu` branch verbatim:
         // quitting to the logo menu builds a FRESH live `SpiralCont`
@@ -698,6 +697,7 @@ impl App {
         // remnant, exactly like GML).
         if state == AppState::Title && self.adv_state != AppState::Title {
             self.spiral.kill();
+            killed_this_tick = true;
         }
         let cover = state == AppState::InGame
             && (self
@@ -715,7 +715,13 @@ impl App {
                     .world
                     .get_resource::<crate::comps_a::PendingUltra>()
                     .is_some());
-        if cover && !self.adv_cover {
+        // Latch: a tick that killed never rewarms. The cover edge still
+        // records so the NEXT tick rewarms if the cover is genuinely
+        // held (one tick of delay, invisible); the falling edge still
+        // kills (already dead — no-op).
+        if killed_this_tick {
+            // no rewarm this tick
+        } else if cover && !self.adv_cover {
             self.spiral = SpiralCtl::warmed_up_for_area_seeded(area, seed);
         } else if !cover && self.adv_cover {
             self.spiral.kill();
