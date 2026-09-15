@@ -1831,6 +1831,19 @@ impl App {
         } else {
             (placeholder_instances(&mut self.sim.world), Vec::new())
         };
+        // Cover flag for the chrome below: same generation-screen law
+        // as the sprite composer above (its `playing` is block-local).
+        // Canvas text rides above the opaque vortex pass, so the HUD
+        // rows need the same gate or HP/level/ammo/FLOOR paints over
+        // the spiral mid-transition.
+        let cover_chrome_off = matches!(
+            menu_kind,
+            Some(MenuOverlay::Loading) | Some(MenuOverlay::Mutation)
+        ) || self
+            .sim
+            .world
+            .get_resource::<crate::comps_b::FloorTransition>()
+            .is_some_and(|f| f.active);
         let _ = &mut sprites;
         let mut batch = SpriteBatch::new(
             self.assets
@@ -1950,7 +1963,13 @@ impl App {
         );
         let overlay_color = crate::effects::flash_rgba(&self.sim.world);
 
-        let hud_rows = if state == AppState::InGame && menu_kind.is_none() {
+        // GML `scrGameIsGenerationScreen` verbatim: no PlayerHUD text
+        // while a generation screen owns the frame (`GenCont` behind
+        // Loading, `LevCont` behind the offer, mid-run `FloorTransition`
+        // covers). The canvas text layer rides ABOVE the opaque vortex
+        // pass, so an ungated `hud_rows` paints HP/level/ammo/FLOOR
+        // straight over the spiral (the cover-text leak).
+        let hud_rows = if state == AppState::InGame && menu_kind.is_none() && !cover_chrome_off {
             hud_overlay_lines(&mut self.sim.world, viewport_dp)
         } else {
             Vec::new()
