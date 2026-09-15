@@ -1620,27 +1620,65 @@ impl App {
             // lets atlas page lottery HUD bars under floor tiles. Push
             // order matches rung order, so the canvas path (push-ordered)
             // and the GPU path (z-sorted) agree.
-            let mut s = shadow_sprites(&mut self.sim.world, assets);
+            // GML `scrGameIsGenerationScreen` verbatim: while a
+            // generation screen owns the draw (`GenCont`, `LevCont` in
+            // the port's overlay, `MenuGen` behind the campfire title)
+            // the room draws NOTHING — spiral + cover text only. The
+            // old world floor sits under an opaque vortex backdrop on
+            // Loading/covers and would paint straight through the
+            // fullscreen pass (the "tiles over the vortex" bug); on
+            // Title the camp draws but every HUD/chrome layer above the
+            // world stays off (no crosshair, bars, arrows, HUD sprites,
+            // menu art, sideart, or damage numbers — GML's `Menu`
+            // draw scripts own that chrome, not `TopCont`).
+            let generation_screen = matches!(
+                menu_kind,
+                Some(MenuOverlay::Loading)
+                    | Some(MenuOverlay::Mutation)
+                    | Some(MenuOverlay::Title)
+            );
+            let playing = !generation_screen;
+            let mut s = if playing {
+                shadow_sprites(&mut self.sim.world, assets)
+            } else {
+                Vec::new()
+            };
             stamp_z(&mut s, Z_SHADOW);
-            let mut w = world_instances(&mut self.sim.world, assets);
+            let mut w = if playing {
+                world_instances(&mut self.sim.world, assets)
+            } else {
+                Vec::new()
+            };
             stamp_z(&mut w, crate::render::Z_WORLD);
             s.extend(w);
-            let mut f = fx_instances(&mut self.sim.world, assets);
+            let mut f = if playing {
+                fx_instances(&mut self.sim.world, assets)
+            } else {
+                Vec::new()
+            };
             stamp_z(&mut f, Z_FX);
             s.extend(f);
             // Additive bloom over the world (GML `scrDrawBloom`, gated
             // on `opt_bloom` inside).
-            let mut b = bloom_sprites(&mut self.sim.world, assets);
+            let mut b = if playing {
+                bloom_sprites(&mut self.sim.world, assets)
+            } else {
+                Vec::new()
+            };
             stamp_z(&mut b, Z_BLOOM);
             s.extend(b);
             // Area fog over the room (GML TopCont/Draw_0, sewers only).
-            let mut fog = fog_sprites(
-                &mut self.sim.world,
-                assets,
-                viewport_dp,
-                world_size,
-                &self.cam,
-            );
+            let mut fog = if playing {
+                fog_sprites(
+                    &mut self.sim.world,
+                    assets,
+                    viewport_dp,
+                    world_size,
+                    &self.cam,
+                )
+            } else {
+                Vec::new()
+            };
             stamp_z(&mut fog, Z_FOG);
             s.extend(fog);
             let view = view_rect_world(viewport_dp, world_size, &self.cam);
@@ -1656,20 +1694,32 @@ impl App {
             // `room_restart`), so they self-suppress there exactly
             // like GML (and stay off on Title/menus via their own
             // live-run gates).
-            let mut cross = crosshair_sprites(&mut self.sim.world, assets, hud_dt);
+            let mut cross = if playing {
+                crosshair_sprites(&mut self.sim.world, assets, hud_dt)
+            } else {
+                Vec::new()
+            };
             stamp_z(&mut cross, Z_CROSSHAIR);
             s.extend(cross);
-            let mut faint = fainted_bar_sprites(&mut self.sim.world, assets, view);
+            let mut faint = if playing {
+                fainted_bar_sprites(&mut self.sim.world, assets, view)
+            } else {
+                Vec::new()
+            };
             stamp_z(&mut faint, Z_FAINTED);
             s.extend(faint);
             // Offscreen portal arrow (GML `TopCont/Draw_0` tail).
-            let mut portal = portal_indicator_sprites(
-                &mut self.sim.world,
-                assets,
-                viewport_dp,
-                world_size,
-                &self.cam,
-            );
+            let mut portal = if playing {
+                portal_indicator_sprites(
+                    &mut self.sim.world,
+                    assets,
+                    viewport_dp,
+                    world_size,
+                    &self.cam,
+                )
+            } else {
+                Vec::new()
+            };
             stamp_z(&mut portal, Z_PORTAL_INDICATOR);
             s.extend(portal);
             // Spiral CPU layer (GML `scrDrawSpiral` center figures):
@@ -1722,7 +1772,7 @@ impl App {
                     .world
                     .get_resource::<crate::comps_a::PendingUltra>()
                     .is_some();
-            let mut h = if loading_cover {
+            let mut h = if loading_cover || generation_screen {
                 Vec::new()
             } else {
                 hud_sprites(&mut self.sim.world, assets, hud_view, hud_dt)
@@ -1736,30 +1786,43 @@ impl App {
                 s.extend(splash);
             }
             // Menu art sprites (char pods, portrait, loadout, splats).
-            if let Some(kind) = menu_kind {
-                let mut menu = menu_sprites(
-                    kind,
+            // Gated on `playing` too: the generation screens own their
+            // chrome (`GenCont`/`LevCont` text + roadmap, `Menu` pods +
+            // portraits) and must not inherit the HUD/menu chrome of
+            // whatever overlay the menu state happens to carry.
+            if playing {
+                if let Some(kind) = menu_kind {
+                    let mut menu = menu_sprites(
+                        kind,
+                        &mut self.sim.world,
+                        assets,
+                        viewport_dp,
+                        world_size,
+                        &self.cam,
+                    );
+                    stamp_z(&mut menu, Z_MENU);
+                    s.extend(menu);
+                }
+            }
+            // Sideart chrome around the view (GML `UberCont/Draw_74`:
+            // over everything, game and menus alike — but never over a
+            // generation screen, whose draw scripts own the full frame).
+            if playing {
+                let mut side = sideart_sprites(
                     &mut self.sim.world,
                     assets,
                     viewport_dp,
                     world_size,
                     &self.cam,
                 );
-                stamp_z(&mut menu, Z_MENU);
-                s.extend(menu);
+                stamp_z(&mut side, Z_SIDEART);
+                s.extend(side);
             }
-            // Sideart chrome around the view (GML `UberCont/Draw_74`:
-            // over everything, game and menus alike).
-            let mut side = sideart_sprites(
-                &mut self.sim.world,
-                assets,
-                viewport_dp,
-                world_size,
-                &self.cam,
-            );
-            stamp_z(&mut side, Z_SIDEART);
-            s.extend(side);
-            let texts = fx_texts(&mut self.sim.world);
+            let texts = if playing {
+                fx_texts(&mut self.sim.world)
+            } else {
+                Vec::new()
+            };
             (s, texts)
         } else {
             (placeholder_instances(&mut self.sim.world), Vec::new())
