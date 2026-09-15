@@ -172,8 +172,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 let ls = sin(rot - 0.7853982 + langle);
                 var lrel = gui - d.xy;
                 lrel = vec2<f32>(lc * lrel.x + ls * lrel.y, -ls * lrel.x + lc * lrel.y);
+                // GML origin (180, 88): the bolt art's ink sits LEFT of
+                // the draw point (opaque x 19..89 of the 176px cell, i.e.
+                // ~-92 GUI px), so recenter by the origin, not the cell
+                // half-extent.
                 let lbolt_half = vec2<f32>(88.0, 88.0) * s;
-                let buv = (lrel + vec2<f32>(180.0 - 88.0, 0.0) * s) / (lbolt_half * 2.0) + vec2<f32>(0.5, 0.5);
+                let buv = (lrel + vec2<f32>(92.0, 0.0) * s) / (lbolt_half * 2.0) + vec2<f32>(0.5, 0.5);
                 if (all(buv > vec2<f32>(0.0)) & all(buv < vec2<f32>(1.0))) {
                     let bolt_uv_x = (frame * 176.0 + 0.5 + buv.x * 175.0) / 1056.0;
                     let bolt_uv_y = (0.5 + buv.y * 175.0) / 176.0;

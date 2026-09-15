@@ -20,9 +20,10 @@ pub const PLAYER_FRICTION: f32 = 0.45;
 /// shows 426x240 world px (GML `macros_general`: base 320x240 GUI/view,
 /// `scrSetViewSize` widens to `view_width_max = 240 * aspect` when
 /// `opt_resolution`, which defaults on — so the visible height is always
-/// 240 world px). The live frame derives the exact scale per window via
-/// [`crate::render::gml_view_scale`] (`max(240/h, 320/w)` in dp); this
-/// const is the 720p reference (`240/720 = 1/3`) for boot/tests.
+/// 240 world px). Superseded scale reference (`240/720 = 1/3`): kept
+/// for boot/tests only. The live frame passes the GML view as the world
+/// extent with `units_per_pixel = 1` (see `view` in `lib.rs`) — feeding
+/// this into the camera double-applies the framing zoom.
 pub const NT_CAM_SCALE: f32 = 1.0 / 3.0;
 
 // Friction is subtractive per tick.
