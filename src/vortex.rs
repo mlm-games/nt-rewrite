@@ -439,11 +439,10 @@ impl SpiralCtl {
             if w[2] < 0.0 {
                 return false;
             }
-            let age = self.ticks - w[2];
-            if age < 0.0 {
+            if self.ticks - w[2] < 0.0 {
                 return true;
             }
-            self.wisp_scale_at(age) <= self.thresh()
+            self.wisp_scale_at(w[2]) <= self.thresh()
         });
         if wisps_live {
             return false;
@@ -460,16 +459,29 @@ impl SpiralCtl {
         true
     }
 
-    /// Current xscale of a wisp born `age` ticks ago under the drain
-    /// growth law (GML `Spiral/Step_0` with `!instance_exists(SpiralCont)`:
-    /// base update then `grow *= 1.5` every tick — matches the shader's
-    /// `drain_bias` fast-forward, so `is_done` unmounts the layer when the
-    /// visuals actually empty, ~20 ticks after the kill like GML).
-    fn wisp_scale_at(&self, age: f32) -> f32 {
+    /// Current xscale of a wisp born at `birth` under the GML
+    /// `Spiral/Step_0` two-phase law: the live recurrence (no 1.5x)
+    /// while the cont lives, the drain recurrence (`grow *= 1.5` every
+    /// tick) after `death_tick`. Unborn (`birth < 0`) reads 0; a wisp
+    /// born after the kill (impossible in GML — births freeze with the
+    /// cont) drains from birth. Matches the shader's `drain_bias`
+    /// fast-forward, so `is_done` unmounts the layer when the visuals
+    /// actually empty, ~19 ticks after the kill like GML.
+    fn wisp_scale_at(&self, birth: f32) -> f32 {
+        if birth < 0.0 {
+            return 0.0;
+        }
+        let age = self.ticks - birth;
         if age <= 0.0 {
             return 0.0;
         }
         let male = self.kind == SpiralKind::Proto;
+        // Ticks the wisp lived under a live cont: births before the
+        // kill lived until `death_tick`; anything else drains from birth.
+        let live_ticks = match self.death_tick {
+            Some(d) => (d - birth).clamp(0.0, age),
+            None => age,
+        };
         let mut grow = 0.0f32;
         let mut xs = if male { 0.0055 } else { 0.0 };
         let mut t = 0.0f32;
@@ -478,7 +490,9 @@ impl SpiralCtl {
             grow += (0.0002 + if male { 0.0003 } else { 0.0 }) * step;
             xs += grow * step;
             grow = (grow + 1.0) * (1.0 + 0.0005 * xs) - 1.0;
-            grow *= 1.5f32.powf(step);
+            if t >= live_ticks {
+                grow *= 1.5f32.powf(step);
+            }
             t += step;
         }
         xs
@@ -1005,5 +1019,33 @@ mod vortex_ui_parity {
         let snap = ctl.snapshot(0.0);
         let live_wisps = snap.wisps.iter().filter(|w| w[2] >= 0.0).count();
         assert!(live_wisps > 64, "warmup must leave a full ring behind");
+    }
+
+    /// GML `Spiral/Step_0` two-phase drain verbatim: a wisp born 1 tick
+    /// before the kill crosses the 3.0 kill plane after ~19 drain ticks
+    /// (not ~110 — the old law applied the 1.5x drain factor from
+    /// birth), and a mid-ring wisp stays visibly live mid-drain.
+    #[test]
+    fn drain_kill_plane_matches_gml_two_phase_law() {
+        let mut ctl = SpiralCtl::warmed_up_for_gml_area_seeded(0, 1234);
+        ctl.view_w = 426.0;
+        ctl.kill();
+        let death = ctl.ticks;
+        // Youngest wisp: born 1 tick before the kill.
+        let young = death - 1.0;
+        // 10 drain ticks in: GML grows it to ~0.3, still swirling.
+        ctl.ticks = death + 10.0;
+        let s = ctl.wisp_scale_at(young);
+        assert!(
+            s < 3.0,
+            "young wisp must still swirl 10 ticks after kill, got {s}"
+        );
+        // 25 drain ticks in: GML blows it past the plane (~42).
+        ctl.ticks = death + 25.0;
+        let s = ctl.wisp_scale_at(young);
+        assert!(
+            s > 3.0,
+            "young wisp must be culled 25 ticks after kill, got {s}"
+        );
     }
 }

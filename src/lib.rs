@@ -520,6 +520,21 @@ impl App {
         self.spiral.debris.iter().filter(|d| d.alive).count()
     }
 
+    /// Drain fast-forward bias (headless drain diagnostics).
+    pub fn spiral_drain_bias(&self) -> f32 {
+        self.spiral.drain_bias
+    }
+
+    /// Live star motes (headless drain diagnostics).
+    pub fn spiral_stars_live(&self) -> usize {
+        self.spiral.stars.iter().filter(|s| s.alive).count()
+    }
+
+    /// Live variant-debris motes (headless drain diagnostics).
+    pub fn spiral_vards_live(&self) -> usize {
+        self.spiral.vards.iter().filter(|v| v.alive).count()
+    }
+
     /// Advance wall-clock time into fixed steps. Returns steps run.
     ///
     /// Each step: `Sim::tick` (clock + heartbeat), frame-counter mirror,
@@ -614,14 +629,24 @@ impl App {
         if state == AppState::InGame && self.adv_state != AppState::InGame {
             self.spiral.kill();
         }
-        // GML `room_restart` parity (`Vlambeer/Create_0`
-        // `want_quit_to_menu` branch + `BackButton/Other_10` Menu branch):
-        // quitting to the logo menu builds a FRESH live `SpiralCont`, so
-        // the title shows a live vortex over black — never the previous
-        // run's leftover drain. Entering MainMenu re-warms campfire
-        // (GML `area_campfire`), exactly like the fresh cont's
-        // `repeat 150` warmup.
-        if state == AppState::MainMenu && self.adv_state != AppState::MainMenu {
+        // GML `Vlambeer/Create_0` `want_quit_to_menu` branch verbatim:
+        // quitting to the logo menu builds a FRESH live `SpiralCont`
+        // (`instance_create(x, y, SpiralCont)` with its `repeat 150`
+        // warmup) — never the previous run's leftover drain. That fresh
+        // cont is already built by the quit ACTION arms
+        // (`ConfirmPause(0)` / `QuitToTitle` call `rewarm_view_spiral`
+        // before `goto_state`); the lifecycle only covers direct
+        // `goto_state(MainMenu)` shells like tests. It must NOT fire on
+        // the boot Splash→MainMenu edge: the boot spiral has stepped
+        // since launch and GML's logo-room cont (created once in
+        // `Vlambeer/Alarm_0`) is the same object still swirling — a
+        // rewarm here restarts the vortex under the PLAY rows (the
+        // "vortex starts twice" bug).
+        if state == AppState::MainMenu
+            && self.adv_state != AppState::MainMenu
+            && self.adv_state != AppState::Splash
+            && !self.spiral.alive
+        {
             self.spiral = SpiralCtl::warmed_up_for_area_seeded(AreaId::Campfire, seed);
         }
         // GML `PlayButton/Other_10:108` verbatim: entering the campfire
@@ -763,24 +788,26 @@ impl App {
     }
 
     fn maybe_rewarm_spiral(&mut self) {
-        // GML `room_restart` parity: any gameplay area/seed change
-        // (portal, new run, quit-to-menu campfire reset) re-warms the
-        // spiral for the new room — `Vlambeer/Create_0` builds a fresh
-        // `SpiralCont` on every restart, and `PlayButton/Other_10`
-        // destroys it when entering the campfire `MenuGen` (no spiral
-        // over the char-select camp; the Title state mounts no vortex
-        // layer). The lifecycle step above owns the menu transitions;
-        // this only tracks live area/seed drift.
+        // GML `room_restart` parity: a LIVE gameplay area/seed change
+        // (portal, new run) re-warms the spiral for the new room —
+        // `Vlambeer/Create_0` builds a fresh `SpiralCont` on every
+        // gameplay restart. Menu rooms never restart the vortex: the
+        // logo-room cont is created once (`Vlambeer/Alarm_0`) and the
+        // campfire room inherits the drain (`PlayButton/Other_10`
+        // destroys the cont; `Menu/Draw_0` draws the leftovers). So a
+        // menu-room resource reset (`setup_logo_room` on the
+        // Splash→MainMenu edge rewriting Desert/seed into
+        // Campfire/seed-0) must NOT read as area/seed drift — that
+        // restarted the vortex under the PLAY rows (the "vortex starts
+        // twice" bug). The lifecycle step owns the menu transitions;
+        // this only tracks live gameplay drift.
         let state = self
             .sim
             .world
             .get_resource::<AppState>()
             .copied()
             .unwrap_or_default();
-        if !matches!(
-            state,
-            AppState::Loading | AppState::InGame | AppState::MainMenu
-        ) {
+        if !matches!(state, AppState::Loading | AppState::InGame) {
             return;
         }
         let run = self.sim.world.get_resource::<crate::comps_a::Run>();
