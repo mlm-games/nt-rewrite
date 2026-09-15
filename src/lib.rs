@@ -1635,7 +1635,11 @@ impl App {
             let generation_screen = matches!(
                 menu_kind,
                 Some(MenuOverlay::Loading) | Some(MenuOverlay::Mutation)
-            );
+            ) || self
+                .sim
+                .world
+                .get_resource::<crate::comps_b::FloorTransition>()
+                .is_some_and(|f| f.active);
             let playing = !generation_screen;
             let mut s = if playing {
                 shadow_sprites(&mut self.sim.world, assets)
