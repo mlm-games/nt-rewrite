@@ -213,6 +213,17 @@ pub struct App {
     /// (`GenCont`/`LevCont` build a fresh `SpiralCont`); falling edge
     /// kills it (`GenCont/Destroy` destroys it at generation end).
     adv_cover: bool,
+    /// Run seed the spiral was last warmed/killed for. `setup_run`
+    /// writes `AppState::InGame` directly mid-schedule (not via an
+    /// edge the lifecycle can see), so the InGame-entry kill keys off
+    /// a seed change here instead of `adv_state`.
+    adv_seed: u64,
+    /// GML area the spiral was last warmed/killed for. The drift area
+    /// arm compares against this stamp (not the live spiral's area):
+    /// the Loading warmup carries the menu-room area, and without the
+    /// stamp the first InGame tick reads area drift and rewarms right
+    /// after the entry kill (the load-end double start).
+    adv_area: u8,
     spiral: SpiralCtl,
     assets: Option<RenderAssets>,
     /// Art dir the catalog loaded from (vortex background textures
@@ -348,6 +359,8 @@ impl App {
             was_state: AppState::default(),
             adv_state: AppState::default(),
             adv_cover: false,
+            adv_seed: 0,
+            adv_area: 0,
             spiral,
             assets: None,
             assets_dir: None,
@@ -490,6 +503,16 @@ impl App {
         self.spiral.is_done()
     }
 
+    /// Probe: spiral stream seed + area (drift-rewarm tracing).
+    pub fn spiral_seed(&self) -> u64 {
+        self.spiral.seed
+    }
+
+    /// Probe: spiral area (drift-rewarm tracing).
+    pub fn spiral_gml_area(&self) -> u8 {
+        self.spiral.gml_area
+    }
+
     /// Spiral clock (headless freeze assertion).
     pub fn spiral_ticks(&self) -> f32 {
         self.spiral.ticks
@@ -586,12 +609,11 @@ impl App {
             // per debris mote at `xscale > 1.3` (any caller). Drain here,
             // right after the step, so each fires exactly once.
             self.drain_spiral_sounds();
-            // Lifecycle FIRST, drift second: `setup_run` deals a fresh
-            // seed at load end, and a drift rewarm before the
-            // InGame-entry kill would build a full fresh spiral just to
-            // kill it the same step (ticks 185→150: the "starts twice"
-            // restart). The lifecycle owns entries; drift only tracks a
-            // settled state.
+            // Lifecycle FIRST, drift second: the drift rewarm skips the
+            // InGame-entry tick itself (see maybe_rewarm_spiral), so the
+            // entry kill lands on the post-transition spiral while
+            // settled-state drift still re-warms on real portal/new-run
+            // area/seed changes.
             self.step_spiral_lifecycle();
             self.maybe_rewarm_spiral();
             ran += 1;
@@ -627,9 +649,21 @@ impl App {
             .unwrap_or((AreaId::Desert, 0));
         if state == AppState::Loading && self.adv_state != AppState::Loading {
             self.spiral = SpiralCtl::warmed_up_for_area_seeded(area, seed);
+            self.adv_seed = seed;
+            self.adv_area = gml_area_for_area(area);
         }
-        if state == AppState::InGame && self.adv_state != AppState::InGame {
+        // `setup_run` writes InGame directly mid-schedule (no observable
+        // edge: `tick_loading` → `setup_run` runs inside the same fixed
+        // step, so `adv_state` is already InGame here). Key the entry
+        // kill off the run-seed change instead: a fresh seed in InGame
+        // means a new run just landed (`GenCont/Destroy` destroys the
+        // cont at generation end). The drift rewarm below runs after
+        // and only tracks settled states, so it cannot resurrect this
+        // kill on later ticks (seed matches by then).
+        if state == AppState::InGame && seed != self.adv_seed {
             self.spiral.kill();
+            self.adv_seed = seed;
+            self.adv_area = gml_area_for_area(area);
         }
         // GML `Vlambeer/Create_0` `want_quit_to_menu` branch verbatim:
         // quitting to the logo menu builds a FRESH live `SpiralCont`
@@ -812,12 +846,36 @@ impl App {
         if !matches!(state, AppState::Loading | AppState::InGame) {
             return;
         }
+        // The lifecycle owns the InGame-entry kill above (it stamps
+        // `adv_seed` on the kill tick), so drift here only fires on a
+        // LATER seed change — a real portal/new-run area/seed change in
+        // settled play. Comparing against the lifecycle's stamp (not
+        // the spiral's own seed) is what stops the load-end double
+        // start: on the entry tick both read the fresh seed and the
+        // rewarm stays quiet.
         let run = self.sim.world.get_resource::<crate::comps_a::Run>();
         let (area, seed) = run
             .map(|r| (r.area, r.gen_seed))
             .unwrap_or((AreaId::Desert, 0));
-        if gml_area_for_area(area) != self.spiral.gml_area || self.spiral.seed != seed {
+        if seed != self.adv_seed {
+            // Fresh seed in InGame = a new run just landed: GML
+            // `GenCont/Destroy` destroys the cont at generation end, so
+            // kill (drain), never rewarm. The mid-run floor swap does
+            // NOT change the seed (`tick_floor_transition` keeps it;
+            // only secret/loop routing re-derives it and those ride a
+            // cover rewarm below), so this arm cannot fire in settled
+            // play.
+            self.spiral.kill();
+            self.adv_seed = seed;
+        } else if gml_area_for_area(area) != self.adv_area {
+            // Same run, new area art (portal kept the seed): re-warm so
+            // the debris strip follows the GML area. Compares against
+            // the lifecycle stamp, NOT the live spiral: the Loading
+            // warmup carries the menu-room area, so the first InGame
+            // tick would otherwise read area drift and rewarm right
+            // after the entry kill (the load-end double start).
             self.spiral = SpiralCtl::warmed_up_for_area_seeded(area, seed);
+            self.adv_area = gml_area_for_area(area);
         }
     }
 

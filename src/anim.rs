@@ -200,17 +200,8 @@ pub fn hurt_on_damage(
     mut last_enemy_hp: Local<std::collections::HashMap<Entity, i32>>,
     mut last_player_hp: Local<std::collections::HashMap<Entity, i32>>,
     mut damaged: Query<
-        (
-            Entity,
-            &Health,
-            &EnemySprites,
-            &mut SpriteAnim,
-        ),
-        (
-            With<Enemy>,
-            Without<HurtAnim>,
-            Without<Player>,
-        ),
+        (Entity, &Health, &EnemySprites, &mut SpriteAnim),
+        (With<Enemy>, Without<HurtAnim>, Without<Player>),
     >,
     mut player_damaged: Query<
         (Entity, &Health, &PlayerAnim, &mut SpriteAnim),
@@ -429,4 +420,3 @@ pub fn tick_player_dying(
         }
     }
 }
-
