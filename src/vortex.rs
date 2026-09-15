@@ -1021,6 +1021,18 @@ mod vortex_ui_parity {
         assert!(live_wisps > 64, "warmup must leave a full ring behind");
     }
 
+    /// GML `Vlambeer/Alarm_0` parity: the boot spiral is LIVE from
+    /// construction (warmed cont, births on), so the logo screen can
+    /// mount the vortex layer under the `Logo` — a dead-on-arrival
+    /// spiral would leave the reel black (the "no vortex on the logo
+    /// screen" bug).
+    #[test]
+    fn boot_spiral_is_live_for_logo_mount() {
+        let ctl = SpiralCtl::warmed_up_for_gml_area_seeded(0, 1234);
+        assert!(ctl.alive, "boot spiral must be live (fresh SpiralCont)");
+        assert!(!ctl.is_done());
+    }
+
     /// GML `Spiral/Step_0` two-phase drain verbatim: a wisp born 1 tick
     /// before the kill crosses the 3.0 kill plane after ~19 drain ticks
     /// (not ~110 — the old law applied the 1.5x drain factor from

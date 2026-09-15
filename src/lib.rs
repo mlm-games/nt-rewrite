@@ -586,12 +586,14 @@ impl App {
             // per debris mote at `xscale > 1.3` (any caller). Drain here,
             // right after the step, so each fires exactly once.
             self.drain_spiral_sounds();
-            // Area/seed-change rewarm first so the lifecycle below sees
-            // the post-transition seed (in particular: `setup_run` deals
-            // a fresh seed at load end, which must NOT resurrect the
-            // spiral the InGame-entry kill just put down).
-            self.maybe_rewarm_spiral();
+            // Lifecycle FIRST, drift second: `setup_run` deals a fresh
+            // seed at load end, and a drift rewarm before the
+            // InGame-entry kill would build a full fresh spiral just to
+            // kill it the same step (ticks 185→150: the "starts twice"
+            // restart). The lifecycle owns entries; drift only tracks a
+            // settled state.
             self.step_spiral_lifecycle();
+            self.maybe_rewarm_spiral();
             ran += 1;
         }
         ran
@@ -1674,7 +1676,6 @@ impl App {
             // the room camera.
             let vortex_mounted_later = self.assets.is_some()
                 && !self.vortex_tex.is_empty()
-                && !matches!(menu_kind, Some(MenuOverlay::Splash))
                 && !matches!(menu_kind, Some(MenuOverlay::Title))
                 && (self.spiral.alive || !self.spiral.is_done());
             if vortex_mounted_later {
@@ -1767,11 +1768,10 @@ impl App {
         // Vortex snapshot -> mounted background pass. `bg_alpha` is
         // GML `scrDrawSpiral` verbatim: `draw_clear(c_black)` runs in
         // every caller EXCEPT `Menu` — i.e. opaque black behind the
-        // spiral on Logo/MainMenu/Loading/covers, transparent over the
-        // campfire camp on Title. InGame mounts the pass only while a
-        // floor transition or mutation/ultra cover runs (the only
-        // spiral callers in a run); Splash mounts nothing (black
-        // clear behind the reel).
+        // spiral on Logo/Splash/MainMenu/Loading/covers, transparent
+        // over the campfire camp on Title. InGame mounts the pass only
+        // while a floor transition or mutation/ultra cover runs (the
+        // only spiral callers in a run).
         let ft_active = self
             .sim
             .world
@@ -1789,7 +1789,7 @@ impl App {
                 .is_some();
         let bg_alpha = match state {
             AppState::Title => 0.0,
-            AppState::Loading => 1.0,
+            AppState::Splash | AppState::MainMenu | AppState::Loading => 1.0,
             AppState::InGame => {
                 if ft_active || pending_pick {
                     1.0
@@ -1797,7 +1797,6 @@ impl App {
                     0.0
                 }
             }
-            AppState::Splash | AppState::MainMenu => 0.0,
         };
         let snap = self.spiral.snapshot(bg_alpha);
         self.last_bg_alpha = snap.bg_alpha;
@@ -1810,14 +1809,16 @@ impl App {
                 self.vortex_tex_area = Some(gml_area);
             }
         }
+        // Logo/Splash mounts while the boot spiral is live (GML
+        // `Vlambeer/Alarm_0` creates a live `SpiralCont` under the
+        // `Logo`; `SpiralCont/Draw_0` paints it opaque). Title mounts
+        // while its entry drain plays out (GML `Menu/Draw_0` draws the
+        // leftover motes transparently over the camp; once done the
+        // flat camp shows). Every other caller in the list mounts
+        // unconditionally (caller list documented at the figure gate
+        // above).
         let vortex_layer = if self.assets.is_some()
             && !self.vortex_tex.is_empty()
-            && !matches!(menu_kind, Some(MenuOverlay::Splash))
-            // Title mounts while its entry drain plays out (GML
-            // `Menu/Draw_0` draws the leftover motes transparently over
-            // the camp; once done the flat camp shows). Every other
-            // caller in the list mounts unconditionally (caller list
-            // documented at the figure gate above).
             && (self.spiral.alive || !self.spiral.is_done())
         {
             let mut pass = VortexPass::new(snap);
