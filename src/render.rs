@@ -3112,13 +3112,25 @@ pub struct MenuGuiText {
     /// Right-aligned row: the box right edge lands on `gx`
     /// (`scrDrawMiscHUD` clock/area at `view_width - 2`).
     pub right: bool,
+    /// Bigname-sourced row (GML `draw_text_bigname`): rendered with
+    /// fill+stroke faux-bold to approximate the heavy fntBig glyphs.
+    pub bold: bool,
 }
 
 /// Overlay row: (segments, dp top-left, font px, centered, box width,
-/// right-aligned). `segments` are `(text, sRGB color 0..1)` runs from the
-/// GML `draw_text_nt` `@`-tag parser ([`nt_text_segments`]); the shell
-/// draws each run in its color with the standard 1px black shadow.
-pub type GuiRow = (Vec<(String, [f32; 4])>, [f32; 2], f32, bool, f32, bool);
+/// right-aligned, bold). `segments` are `(text, sRGB color 0..1)` runs
+/// from the GML `draw_text_nt` `@`-tag parser ([`nt_text_segments`]);
+/// the shell draws each run in its color with the standard 1px black
+/// shadow. `bold` selects fill+stroke faux-bold (bigname rows).
+pub type GuiRow = (
+    Vec<(String, [f32; 4])>,
+    [f32; 2],
+    f32,
+    bool,
+    f32,
+    bool,
+    bool,
+);
 
 /// GML `draw_text_nt` `@`-tag colors verbatim
 /// (`scripts/draw_text_nt/draw_text_nt.gml:215-222`): `@s` silver
@@ -3211,7 +3223,12 @@ pub fn nt_text_segments(text: &str, base: [u8; 4]) -> Vec<(String, [u8; 4])> {
 /// right texts right-align their `2*(vw-gx)` box `vw-gx` px from the
 /// canvas right edge (`scrDrawMiscHUD` clock/area at `view_width - 2`
 /// verbatim); `middle_y` centers the line on `gy`. `k` is dp per GUI
-/// px (`canvas_h / 240`).
+/// px: contain-fit (`min(h/240, w/320)`), so on narrow windows the
+/// 320-floored GUI scales to fit width exactly like the sprite
+/// viewport (`effective_fit`) does — height-fit alone blew the text
+/// layer up in portrait while sprites stayed fitted. `(ox, oy)`
+/// centers the fitted GUI rect on the canvas (landscape: `oy` is 0,
+/// `ox` absorbs the sub-px `vw`-flooring crumbs).
 /// Silkscreen-vs-bitmap top bias in GUI px. GML HUD/menu fonts
 /// (`fntM1`) are bitmaps whose ink starts exactly at the draw y
 /// (digits `h:7, offset:0`); Silkscreen through parley puts the
@@ -3224,7 +3241,10 @@ pub const FONT_TOP_BIAS_GUI: f32 = 2.0;
 pub fn gui_texts_dp(canvas_dp: [f32; 2], items: Vec<MenuGuiText>) -> Vec<GuiRow> {
     let vw = gml_view_size(canvas_dp)[0];
     let w = canvas_dp[0].max(1.0);
-    let k = (canvas_dp[1].max(1.0) / 240.0).max(1e-6);
+    let h = canvas_dp[1].max(1.0);
+    let k = (h / 240.0).min(w / 320.0).max(1e-6);
+    let ox = (w - vw * k) * 0.5;
+    let oy = (h - 240.0 * k) * 0.5;
     items
         .into_iter()
         .map(|t| {
@@ -3240,7 +3260,7 @@ pub fn gui_texts_dp(canvas_dp: [f32; 2], items: Vec<MenuGuiText>) -> Vec<GuiRow>
                 // symmetric fit without centering clipped wide rows.
                 let half = t.gx.min(vw - t.gx).max(1.0);
                 let bw = (2.0 * half * k).max(font_px);
-                (t.gx * k - bw * 0.5, bw, true)
+                (ox + t.gx * k - bw * 0.5, bw, true)
             } else if t.right {
                 // GML right-aligns on `gx`: the row's box right edge
                 // lands exactly on `gx * k`, content right-aligned
@@ -3248,7 +3268,7 @@ pub fn gui_texts_dp(canvas_dp: [f32; 2], items: Vec<MenuGuiText>) -> Vec<GuiRow>
                 // left of their anchor (the "left-shortened stats"
                 // bug); HUD clock/area rows need a wide-enough box to
                 // reach `vw - 2`, stats names only need their column.
-                let right = t.gx * k;
+                let right = ox + t.gx * k;
                 let bw = if t.gx >= vw - 3.0 {
                     (120.0 * k).max(font_px)
                 } else {
@@ -3256,17 +3276,19 @@ pub fn gui_texts_dp(canvas_dp: [f32; 2], items: Vec<MenuGuiText>) -> Vec<GuiRow>
                 };
                 (right - bw, bw, false)
             } else {
-                let left = t.gx * k;
-                let bw = (200.0 * k).max(font_px).min((w - left).max(font_px));
+                let left = ox + t.gx * k;
+                let bw = (200.0 * k)
+                    .max(font_px)
+                    .min((ox + vw * k - left).max(font_px));
                 (left, bw, false)
             };
             let top = if t.middle_y {
-                t.gy * k - font_px * 0.5
+                oy + t.gy * k - font_px * 0.5
             } else {
                 // Ink-top parity with the GML bitmap fonts (see
                 // `FONT_TOP_BIAS_GUI`): the box top sits 2 GUI px above
                 // the authored y so Silkscreen ink starts on it.
-                t.gy * k - FONT_TOP_BIAS_GUI * k
+                oy + t.gy * k - FONT_TOP_BIAS_GUI * k
             };
             let segs = nt_text_segments(&t.text, t.color)
                 .into_iter()
@@ -3289,6 +3311,7 @@ pub fn gui_texts_dp(canvas_dp: [f32; 2], items: Vec<MenuGuiText>) -> Vec<GuiRow>
                 centered,
                 box_w,
                 t.right,
+                t.bold,
             )
         })
         .collect()
@@ -3321,6 +3344,7 @@ pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
             centered: t.centered,
             middle_y: t.middle_y,
             right: t.right,
+            bold: false,
         })
         .collect();
     let hud: HudState = sync_hud_state(world);
@@ -3341,6 +3365,7 @@ pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
             centered: true,
             middle_y: true,
             right: false,
+                    bold: false,
         });
     }
     if hud.boss_max > 0 {
@@ -3353,6 +3378,7 @@ pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
             centered: true,
             middle_y: false,
             right: false,
+                    bold: false,
         });
     }
     if hud.idpd_warning {
@@ -3365,6 +3391,7 @@ pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
             centered: true,
             middle_y: false,
             right: false,
+                    bold: false,
         });
     }
     gui_texts_dp(canvas_dp, items)
@@ -3399,6 +3426,7 @@ fn gui_body(text: impl Into<String>, gx: f32, gy: f32, color: [u8; 4]) -> MenuGu
         centered: false,
         middle_y: false,
         right: false,
+                    bold: false,
     }
 }
 
@@ -3412,6 +3440,7 @@ fn gui_center(text: impl Into<String>, gx: f32, gy: f32, color: [u8; 4]) -> Menu
         centered: true,
         middle_y: false,
         right: false,
+                    bold: false,
     }
 }
 
@@ -3421,7 +3450,8 @@ fn gui_button(text: impl Into<String>, gx: f32, gy: f32, color: [u8; 4]) -> Menu
     // 18px tall, so the surface is `ceil(18 * 0.65) = 12` tall and
     // the 7px-equivalent ink spans roughly `gy - 4 .. gy + 4`. A
     // 10px Silkscreen row centers its ~8px ink on `gy` the same way —
-    // the old 12px row overshot both width and height.
+    // the old 12px row overshot both width and height. Bigname source:
+    // fill+stroke faux-bold for the heavy fntBig glyphs.
     MenuGuiText {
         text: text.into(),
         gx,
@@ -3431,6 +3461,7 @@ fn gui_button(text: impl Into<String>, gx: f32, gy: f32, color: [u8; 4]) -> Menu
         centered: true,
         middle_y: true,
         right: false,
+        bold: true,
     }
 }
 
@@ -3459,6 +3490,7 @@ fn gui_pause_button(
         centered: true,
         middle_y: true,
         right: false,
+        bold: true,
     }
 }
 
@@ -3696,6 +3728,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         centered: true,
                         middle_y: true,
                         right: false,
+                    bold: false,
                     },
                     MenuGuiText {
                         text: "WHILE THIS SAVING ICON IS DISPLAYED.".to_string(),
@@ -3706,6 +3739,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         centered: true,
                         middle_y: true,
                         right: false,
+                    bold: false,
                     },
                 ],
                 1 => vec![MenuGuiText {
@@ -3717,6 +3751,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     centered: true,
                     middle_y: true,
                     right: false,
+                    bold: false,
                 }],
                 3 => [
                     ("@yVLAMBEER", 80.0),
@@ -3737,6 +3772,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     centered: true,
                     middle_y: true,
                     right: false,
+                    bold: false,
                 })
                 .collect(),
                 _ => Vec::new(),
@@ -3812,6 +3848,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         centered: false,
                         middle_y: true,
                         right: false,
+                    bold: false,
                     });
                     out.push(MenuGuiText {
                         text: run.total_kills.to_string(),
@@ -3822,6 +3859,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         centered: false,
                         middle_y: true,
                         right: false,
+                    bold: false,
                     });
                 }
             }
@@ -3871,6 +3909,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                             centered: true,
                             middle_y: true,
                             right: false,
+                            bold: true,
                         }
                     })
                     .collect();
@@ -3883,6 +3922,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     centered: true,
                     middle_y: false,
                     right: false,
+                    bold: false,
                 });
                 return out;
             }
@@ -3907,6 +3947,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         centered: true,
                         middle_y: true,
                         right: false,
+                        bold: true,
                     }
                 })
                 .collect()
@@ -3950,6 +3991,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     centered: false,
                     middle_y: false,
                     right: true,
+                    bold: false,
                 });
             };
             let stat_val = |out: &mut Vec<MenuGuiText>, col: f32, line: &mut f32, val: String| {
@@ -3962,6 +4004,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     centered: false,
                     middle_y: false,
                     right: false,
+                    bold: false,
                 });
                 *line += 1.0;
             };
@@ -3985,6 +4028,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     centered: true,
                     middle_y: false,
                     right: false,
+                    bold: false,
                 });
                 *line += 1.0;
             };
@@ -4000,6 +4044,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 centered: true,
                 middle_y: true,
                 right: false,
+                bold: true,
             }];
             let (lx, rx) = (110.0, vw - 70.0);
             let mut l = 0.0;
@@ -4119,6 +4164,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 // letterbox. The 12px row is top-anchored, so its top is
                 // `172 - 12 = 160` (the mapper's Silkscreen top bias
                 // lands the ink where the bigname surface sat).
+                // Bigname source (scale 1): fill+stroke faux-bold.
                 rows.push(MenuGuiText {
                     text: def.name.to_ascii_uppercase().to_string(),
                     gx: 0.0,
@@ -4128,6 +4174,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     centered: false,
                     middle_y: false,
                     right: false,
+                    bold: true,
                 });
                 // Skills block: ONE two-line `draw_text_nt`,
                 // `fa_middle`, block middle at
@@ -4146,6 +4193,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     centered: false,
                     middle_y: false,
                     right: false,
+                    bold: false,
                 });
                 rows.push(MenuGuiText {
                     text: race_active_text(race).to_string(),
@@ -4156,6 +4204,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     centered: false,
                     middle_y: false,
                     right: false,
+                    bold: false,
                 });
             }
             {
@@ -4172,6 +4221,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         centered: true,
                         middle_y: true,
                         right: false,
+                    bold: false,
                     });
                 }
             }
@@ -4214,6 +4264,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                                 centered: true,
                                 middle_y: true,
                                 right: false,
+                    bold: false,
                             });
                         }
                     }
@@ -4235,6 +4286,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                             centered: true,
                             middle_y: true,
                             right: false,
+                    bold: false,
                         });
                     }
                 }
@@ -4374,6 +4426,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                                 centered: true,
                                 middle_y: true,
                                 right: false,
+                    bold: false,
                             });
                         }
                         return out;
@@ -4411,6 +4464,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         centered: true,
                         middle_y: true,
                         right: false,
+                    bold: false,
                     });
                 }
             }
@@ -4462,6 +4516,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     // `view_yview + 48` (top-anchored, not middle).
                     middle_y: false,
                     right: false,
+                    bold: false,
                 });
                 // GML `scrDrawRoadmap:23-24` verbatim: the area/kill
                 // strings ride the roadmap at `(drawx-60, drawy-14)` /
@@ -4475,6 +4530,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     centered: false,
                     middle_y: true,
                     right: false,
+                    bold: false,
                 });
                 out.push(MenuGuiText {
                     text: run.total_kills.to_string(),
@@ -4485,6 +4541,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     centered: false,
                     middle_y: true,
                     right: false,
+                    bold: false,
                 });
                 if run.won {
                     out.push(MenuGuiText {
@@ -4496,6 +4553,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         centered: true,
                         middle_y: true,
                         right: false,
+                    bold: false,
                     });
                     out.push(MenuGuiText {
                         text: run_timer_string(run.tottimer),
@@ -4506,6 +4564,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         centered: true,
                         middle_y: true,
                         right: false,
+                    bold: false,
                     });
                 } else {
                     out.push(MenuGuiText {
@@ -4517,6 +4576,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         centered: true,
                         middle_y: true,
                         right: false,
+                    bold: false,
                     });
                 }
             } else {
@@ -4593,6 +4653,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         centered: true,
                         middle_y: true,
                         right: false,
+                    bold: false,
                     },
                     gui_pause_button("MENU", 45.0, 176.0, true, GUI_MID),
                     gui_pause_button("RETRY", 60.0, 208.0, true, GUI_MID),
@@ -4646,6 +4707,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     centered: true,
                     middle_y: true,
                     right: false,
+                    bold: false,
                 })
                 .collect()
         }
@@ -5227,6 +5289,7 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
                     centered: true,
                     middle_y: false,
                     right: false,
+                    bold: false,
                 });
                 y += 20.0;
             }
@@ -8584,6 +8647,7 @@ mod ui_parity_regression {
                     centered: true,
                     middle_y: true,
                     right: false,
+                    bold: false,
                 },
                 MenuGuiText {
                     text: "PLAY".to_string(),
@@ -8594,15 +8658,17 @@ mod ui_parity_regression {
                     centered: true,
                     middle_y: true,
                     right: false,
+                    bold: false,
                 },
             ],
         );
-        // TOTAL box centers on gx=110 (330 dp at k=3).
+        // TOTAL box centers on gx=110 (fitted: ox + 330 dp at k=3;
+        // the 426-wide GUI letterboxes 1px on a 1280 canvas).
         let (total_left, total_w) = (dp[0].1[0], dp[0].4);
-        assert!((total_left + total_w * 0.5 - 330.0).abs() < 1.0, "{dp:?}");
-        // PLAY box centers on the view center (639 dp).
+        assert!((total_left + total_w * 0.5 - 331.0).abs() < 1.0, "{dp:?}");
+        // PLAY box centers on the fitted view center (ox + 639 dp).
         let (play_left, play_w) = (dp[1].1[0], dp[1].4);
-        assert!((play_left + play_w * 0.5 - 639.0).abs() < 1.0, "{dp:?}");
+        assert!((play_left + play_w * 0.5 - 640.0).abs() < 1.0, "{dp:?}");
     }
 
     /// GML `draw_stat` law: the name right-aligns on `statx - 1`, so
@@ -8621,8 +8687,37 @@ mod ui_parity_regression {
                 centered: false,
                 middle_y: true,
                 right: true,
+                    bold: false,
             }],
         );
-        assert!((dp[0].1[0] + dp[0].4 - 109.0 * 3.0).abs() < 1.0, "{dp:?}");
+        assert!((dp[0].1[0] + dp[0].4 - (1.0 + 109.0 * 3.0)).abs() < 1.0, "{dp:?}");
+    }
+
+    /// Narrow-window contain-fit: on a 600x800 portrait canvas the
+    /// 320-floored GUI scales to fit width (k = 600/320 = 1.875), and
+    /// the fitted rect centers on the canvas — view-centered rows land
+    /// on the canvas center, not off-screen right.
+    #[test]
+    fn portrait_rows_fit_width_and_center() {
+        let dp = gui_texts_dp(
+            [600.0, 800.0],
+            vec![MenuGuiText {
+                text: "STATS".to_string(),
+                gx: 160.0,
+                gy: 24.0,
+                color: [255, 255, 255, 255],
+                px: 10.0,
+                centered: true,
+                middle_y: true,
+                right: false,
+                bold: false,
+            }],
+        );
+        let k = 600.0 / 320.0;
+        let (left, top, _px, _c, bw, _r) = (dp[0].1[0], dp[0].1[1], dp[0].2, dp[0].3, dp[0].4, dp[0].5);
+        assert!((left + bw * 0.5 - 300.0).abs() < 1.0, "{dp:?}");
+        assert!((bw - 320.0 * k).abs() < 1.0, "{dp:?}");
+        let oy = (800.0 - 240.0 * k) * 0.5;
+        assert!((top - (oy + 24.0 * k - (10.0 * k).round() * 0.5)).abs() < 1.0, "{dp:?}");
     }
 }

@@ -2640,7 +2640,7 @@ pub fn hud_overlay_lines(world: &mut World, canvas_dp: [f32; 2]) -> Vec<crate::r
         .unwrap_or(true);
     hud_gui_texts_dp(world, canvas_dp)
         .into_iter()
-        .filter(|(segs, _, _, _, _, _)| {
+        .filter(|(segs, _, _, _, _, _, _)| {
             if segs.len() != 1 {
                 return true;
             }
@@ -2719,6 +2719,11 @@ fn gui_text_layer(row: &crate::render::GuiRow) -> View {
         text = text.text_align(repose_core::text::TextAlign::Center);
     } else if row.5 {
         text = text.text_align(repose_core::text::TextAlign::Right);
+    }
+    // Bigname rows (GML `draw_text_bigname`): fill+stroke faux-bold
+    // approximates the heavy fntBig glyphs with Silkscreen.
+    if row.6 {
+        text = text.fill_and_stroke(0.04);
     }
     Column(
         Modifier::new()
