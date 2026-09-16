@@ -1409,11 +1409,20 @@ impl App {
         self.cursor_px = Some(phys_px);
     }
 
-    /// Stage one viewport hover (world point + order stamp; see
-    /// `cursor_seq` — the viewport sees the free moves the root's
-    /// `on_pointer_move` never gets).
-    fn stage_hover(&mut self, world: Vec2) {
+    /// Stage one viewport hover: world point plus raw window-physical
+    /// px. The viewport sees the free moves the root's `on_pointer_move`
+    /// never gets (repose dispatches free moves only to the topmost
+    /// region), so the hover handler owns the screen-anchored cursor
+    /// here: `screen` refreshes `cursor_px` (unprojected through the
+    /// live camera each frame — GML `mouse_x/mouse_y` parity, the aim
+    /// stays glued to the on-screen pointer while the player walks
+    /// instead of sliding on the ground), and `world` refreshes the
+    /// baked point as fallback for touch/pen (which never stage raw
+    /// cursor moves).
+    fn stage_hover(&mut self, world: Vec2, screen: [f32; 2]) {
         self.input_seq += 1;
+        self.cursor_seq = self.input_seq;
+        self.cursor_px = Some(Vec2::new(screen[0], screen[1]));
         self.hover_seq = self.input_seq;
         self.hover = Some(world);
     }
@@ -2321,9 +2330,14 @@ impl App {
             }
             // Menu crosshair (GML `UberCont/Draw_75` verbatim): on every
             // non-play screen in keyboard mode (splash reel, main menu,
-            // campfire title, loading cover) the OS cursor is hidden and
-            // the game draws `sprCrosshair[opt_crosshair]` at the raw
-            // cursor position — no player entity, no lerp, alpha 1.
+            // campfire title, loading cover, game-over screen) the OS
+            // cursor is hidden and the game draws
+            // `sprCrosshair[opt_crosshair]` at the raw cursor position —
+            // no player entity, no lerp, alpha 1. (Game-over needs this
+            // path, not the gameplay crosshair: the player husk
+            // despawns 0.85s after death, so `crosshair_sprites` has no
+            // anchor — GML never needed one, it draws at the raw GUI
+            // mouse point.)
             // In GML this runs at Draw_75, above the Menu chrome, so it
             // rides at menu z here (pushed after, stable-sorted on top).
             // Skipped while paused/an overlay owns the pointer (those
@@ -2335,6 +2349,7 @@ impl App {
                         | MenuOverlay::MainMenu
                         | MenuOverlay::Title
                         | MenuOverlay::Loading
+                        | MenuOverlay::GameOver
                 )
             ) && !paused
                 && overlay == OverlayMenu::None
@@ -2569,7 +2584,7 @@ impl App {
                         app.lmb_down();
                         app.stage_click(world, screen)
                     }
-                    PickEvent::Hover { world } => app.stage_hover(world),
+                    PickEvent::Hover { world, screen } => app.stage_hover(world, screen),
                     // Touch contacts (screen px, y-down) feed bevy's
                     // touch zones; taps still land as clicks above.
                     PickEvent::TouchDown { id, screen } => {
@@ -2591,7 +2606,7 @@ impl App {
                         app.lmb_down();
                         app.stage_click(world, screen)
                     }
-                    PickEvent::Hover { world } => app.stage_hover(world),
+                    PickEvent::Hover { world, screen } => app.stage_hover(world, screen),
                     PickEvent::TouchDown { id, screen } => {
                         app.touch_down(id, Vec2::new(screen[0], screen[1]))
                     }
@@ -3473,27 +3488,32 @@ mod cursor_staging_tests {
     /// Reported bug verbatim: after any click-drag, free mouse moves
     /// stopped moving the crosshair — it only followed while dragging.
     /// Root cause: repose dispatches free moves ONLY to the topmost
-    /// region, so the root's `cursor_move` (the `cursor_px` source)
-    /// runs almost exclusively on capture-path (button-held) moves,
-    /// while viewport `Hover` fires on free moves. Aim preferred the
-    /// stale `cursor_px` via `.or()` and shadowed live hovers.
-    /// `live_cursor_world` uses whichever staged last.
+    /// region, so the root's `cursor_move` (the old `cursor_px` source)
+    /// ran almost exclusively on capture-path (button-held) moves,
+    /// while viewport `Hover` fired on free moves carrying no screen
+    /// px. Aim preferred the stale `cursor_px` via `.or()` and
+    /// shadowed live hovers. Hover now carries raw screen px and
+    /// refreshes `cursor_px` itself, so aim stays glued to the
+    /// on-screen pointer (GML `mouse_x/mouse_y` parity) instead of
+    /// sliding on the ground while the player walks.
     #[test]
-    fn stale_drag_point_does_not_shadow_live_hover() {
+    fn hover_refreshes_screen_anchored_cursor() {
         let mut app = App::new_with_seed(4242);
-        // Drag-era staging: cursor first, then a newer hover.
+        // Drag-era staging through the root path.
         app.cursor_move(Vec2::new(100.0, 100.0));
-        app.stage_hover(Vec2::new(10.0, 10.0));
-        // Hover staged last → hover wins even though cursor_px exists.
-        assert_eq!(app.live_cursor_world(), Some(Vec2::new(10.0, 10.0)));
-        // A fresh drag move retakes the lead (unprojects through the
-        // live camera instead of the baked hover point).
-        app.cursor_move(Vec2::new(100.0, 100.0));
+        // A free move arrives via viewport Hover with fresh screen px.
+        app.stage_hover(Vec2::new(10.0, 10.0), [300.0, 200.0]);
+        // cursor_px follows the hover's screen px (not the stale drag
+        // point), so the next unprojection tracks the on-screen pointer.
+        assert_eq!(app.cursor_px, Some(Vec2::new(300.0, 200.0)));
         let live = app.live_cursor_world().expect("cursor staged");
         assert!(
             (live - Vec2::new(10.0, 10.0)).length() > 1.0,
-            "fresh cursor_px must win over older hover, got {live:?}"
+            "aim must unproject fresh screen px, got {live:?}"
         );
+        // A fresh root-path move still works.
+        app.cursor_move(Vec2::new(100.0, 100.0));
+        assert!(app.live_cursor_world().is_some());
     }
 
     #[test]
