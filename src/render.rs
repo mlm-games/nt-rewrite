@@ -3212,6 +3212,15 @@ pub fn nt_text_segments(text: &str, base: [u8; 4]) -> Vec<(String, [u8; 4])> {
 /// canvas right edge (`scrDrawMiscHUD` clock/area at `view_width - 2`
 /// verbatim); `middle_y` centers the line on `gy`. `k` is dp per GUI
 /// px (`canvas_h / 240`).
+/// Silkscreen-vs-bitmap top bias in GUI px. GML HUD/menu fonts
+/// (`fntM1`) are bitmaps whose ink starts exactly at the draw y
+/// (digits `h:7, offset:0`); Silkscreen through parley puts the
+/// baseline at `round(1.03em)` with digit ink topping out at
+/// 0.625em, so ink starts ~2 GUI px below the box top. Top-anchored
+/// rows subtract this so ink lands on the GML y. `middle_y` rows are
+/// symmetric in both backends and need no nudge.
+pub const FONT_TOP_BIAS_GUI: f32 = 2.0;
+
 pub fn gui_texts_dp(canvas_dp: [f32; 2], items: Vec<MenuGuiText>) -> Vec<GuiRow> {
     let vw = gml_view_size(canvas_dp)[0];
     let w = canvas_dp[0].max(1.0);
@@ -3254,7 +3263,10 @@ pub fn gui_texts_dp(canvas_dp: [f32; 2], items: Vec<MenuGuiText>) -> Vec<GuiRow>
             let top = if t.middle_y {
                 t.gy * k - font_px * 0.5
             } else {
-                t.gy * k
+                // Ink-top parity with the GML bitmap fonts (see
+                // `FONT_TOP_BIAS_GUI`): the box top sits 2 GUI px above
+                // the authored y so Silkscreen ink starts on it.
+                t.gy * k - FONT_TOP_BIAS_GUI * k
             };
             let segs = nt_text_segments(&t.text, t.color)
                 .into_iter()
@@ -3312,22 +3324,18 @@ pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
         })
         .collect();
     let hud: HudState = sync_hud_state(world);
-    // GML `SkillText` verbatim (`scrLevelUpScreenSubmit` spawn at the
-    // level-up spot + `TopCont/Draw_75` / `LevCont/Draw_64` draw
-    // `"@d" + loc(txt)` AT THE SkillText INSTANCE POS — i.e. the
-    // offer Carlson position (view center-ish, NOT a fixed y=200) —
-    // centered-middle, blinking while `disappear % 2` (the blink gate
-    // lives in `hud_overlay_lines`, like LOW HP). The port has no
-    // SkillText entity, so the toast rides the offer textbox anchor
-    // `(cx, 179)` while an offer is open, else the legacy top-center
-    // fallback. (The old fixed `gy: 200.0` matched neither.)
+    // GML `SkillText` verbatim: `scrLevelUpScreenSubmit` spawns at
+    // `_ypos = view_yview + view_height - textheight - 76` (= 156 for
+    // one 8px fntM1 line) and `TopCont/Draw_75` / `LevCont/Draw_64`
+    // draw `"@d" + loc(txt)` centered-middle AT THE INSTANCE POS.
+    // The port has no SkillText entity, so the toast rides the same
+    // view-fixed anchor (middle-anchored, like GML's `fa_middle`
+    // draw) — never the view center, which is where the player is.
     if !hud.toast.is_empty() {
-        let offer_open = world.get_resource::<PendingMutation>().is_some()
-            || world.get_resource::<PendingUltra>().is_some();
         items.push(MenuGuiText {
             text: format!("@d{}", hud.toast),
             gx: cx,
-            gy: if offer_open { 179.0 } else { 120.0 },
+            gy: 156.0,
             color: [255, 255, 255, 255],
             px: 7.0,
             centered: true,
@@ -4062,20 +4070,35 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 .unwrap_or(0.0);
             let mut rows = Vec::new();
             if textappear != 2.0 {
+                // GML `scrCampfireMenuDrawCharText` law (single-player
+                // `fa_left/fa_bottom`): `_bigname_y = 36 + 32 = 68`, then
+                // `_bigname_y = h - 68 = 172` — the NAME's bottom edge
+                // lands at y=172 via `draw_text_bigname`, above the 36px
+                // letterbox. The 12px row is top-anchored, so its top is
+                // `172 - 12 = 160` (the mapper's Silkscreen top bias
+                // lands the ink where the bigname surface sat).
                 rows.push(MenuGuiText {
                     text: def.name.to_ascii_uppercase().to_string(),
                     gx: 0.0,
-                    gy: 204.0,
+                    gy: 160.0,
                     color: GUI_WHITE,
                     px: 12.0,
                     centered: false,
                     middle_y: false,
                     right: false,
                 });
+                // Skills block: ONE two-line `draw_text_nt`,
+                // `fa_middle`, block middle at
+                // `_bigname_y + (height div 2) + appear + 8` = `188 +
+                // appear` (block height 16 = 2x8px fntM1 lines). Line
+                // tops are `180 + appear` / `188 + appear`; the mapper
+                // applies the Silkscreen top bias so ink lands on the
+                // GML tops. x is `_x + 8`.
+                let appear = textappear.max(0.0);
                 rows.push(MenuGuiText {
                     text: race_passive_text(race).to_string(),
                     gx: 8.0,
-                    gy: 212.0,
+                    gy: 180.0 + appear,
                     color: GUI_WHITE,
                     px: 7.0,
                     centered: false,
@@ -4085,7 +4108,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 rows.push(MenuGuiText {
                     text: race_active_text(race).to_string(),
                     gx: 8.0,
-                    gy: 220.0,
+                    gy: 188.0 + appear,
                     color: GUI_WHITE,
                     px: 7.0,
                     centered: false,
@@ -5796,10 +5819,14 @@ pub fn hud_sprites(
 /// One GML `draw_sprite_part_ext` weapon window: source rect
 /// `(xoffset, yoffset-8, ww, 14)` of strip frame 1 (steady
 /// `swapanim = 0`), drawn with its top-left at GUI `(dx, dy)`.
-/// UVs lerp inside the frame cell (the atlas packs whole frames, so a
-/// sub-rect is a straight sub-range); the quad size is the window in
-/// GUI px with a centered anchor (GML draws with the sprite's own
-/// origin, i.e. centered on the window middle here).
+/// The window routinely starts OUTSIDE the cell (negative xorigin,
+/// `yoffset - 8 < 0`) and overruns it (14-tall window over a shorter
+/// cell): GML clamps those samples to transparent edge texels, so
+/// only the in-bounds part of the window draws — offset inside the
+/// window by the out-of-bounds lead (`max(0,-sx)`, `max(0,-sy)`).
+/// Drawing the clamped cell at `(dx, dy)` instead shifts every gun
+/// up-left (revolver 2x5 px). UVs lerp over the in-bounds sub-rect
+/// (the atlas packs whole frames); the quad keeps a centered anchor.
 fn hud_weapon_part(
     assets: &RenderAssets,
     path: &str,
@@ -5815,18 +5842,23 @@ fn hud_weapon_part(
     if sw <= 0.0 || sh <= 0.0 {
         return None;
     }
-    // Source window in strip px, clamped to the cell (short cells show
-    // what exists; GML would sample edge texels past short art).
-    let sx = (def.xorigin as f32).clamp(0.0, sw);
-    let sy = (def.yorigin as f32 - 8.0).clamp(0.0, sh);
-    let ww = ww.min((sw - sx).max(1.0));
-    let wh = 14.0_f32.min((sh - sy).max(1.0));
-    // Frame cell spans uv.min..uv.max; the window is the matching
-    // fraction of it (atlas Y is down, same as the strip).
-    let fx0 = sx / sw;
-    let fy0 = sy / sh;
-    let fx1 = (sx + ww) / sw;
-    let fy1 = (sy + wh) / sh;
+    let wx = def.xorigin as f32;
+    let wy = def.yorigin as f32 - 8.0;
+    let ix0 = wx.max(0.0);
+    let iy0 = wy.max(0.0);
+    let ix1 = (wx + ww).min(sw);
+    let iy1 = (wy + 14.0).min(sh);
+    if ix1 <= ix0 || iy1 <= iy0 {
+        return None;
+    }
+    let iw = ix1 - ix0;
+    let ih = iy1 - iy0;
+    // Frame cell spans uv.min..uv.max; the in-bounds window is the
+    // matching fraction of it (atlas Y is down, same as the strip).
+    let fx0 = ix0 / sw;
+    let fy0 = iy0 / sh;
+    let fx1 = ix1 / sw;
+    let fy1 = iy1 / sh;
     let uv_min = Vec2::new(
         uv.min[0] + (uv.max[0] - uv.min[0]) * fx0,
         uv.min[1] + (uv.max[1] - uv.min[1]) * fy0,
@@ -5835,8 +5867,8 @@ fn hud_weapon_part(
         uv.min[0] + (uv.max[0] - uv.min[0]) * fx1,
         uv.min[1] + (uv.max[1] - uv.min[1]) * fy1,
     );
-    let size = Vec2::new(ww * map.s, wh * map.s);
-    let top_left = hud_gui_to_world(map, view, dx, dy);
+    let size = Vec2::new(iw * map.s, ih * map.s);
+    let top_left = hud_gui_to_world(map, view, dx + (-wx).max(0.0), dy + (-wy).max(0.0));
     Some(SpriteInstance {
         center: top_left + size * 0.5,
         rotation: 0.0,
@@ -8375,6 +8407,35 @@ mod verbatim_ui_layers {
 mod ui_parity_regression {
     use super::*;
 
+    /// GML `draw_sprite_part_ext` windows start outside the cell
+    /// (`sprRevolver` xorigin −2, `yorigin − 8 = −5`): the in-bounds
+    /// pixels draw offset inside the window, not at its top-left.
+    /// Revolver art (11x9) lands at window (dx+2, dy+5) with size
+    /// 11x9 — the old clamp drew it at (dx,dy), 2x5 px up-left.
+    #[test]
+    fn hud_weapon_part_keeps_window_padding() {
+        let dir = crate::resolve_assets_dir().expect("assets for parity test");
+        let assets = RenderAssets::load(&dir).expect("catalog loads");
+        let view = [0.0, 0.0, 426.0, 240.0];
+        let gm = hud_gui_map(view);
+        let s = hud_weapon_part(
+            &assets,
+            "images/sprRevolver.png",
+            24.0,
+            16.0,
+            16.0,
+            [1.0; 4],
+            gm,
+            view,
+        )
+        .expect("revolver art present");
+        let top_left = s.center - Vec2::new(s.anchor.x * s.size.x, s.anchor.y * s.size.y);
+        assert!((top_left.x - 26.0).abs() < 1e-4, "x {top_left:?}");
+        assert!((top_left.y - 21.0).abs() < 1e-4, "y {top_left:?}");
+        assert!((s.size.x - 11.0).abs() < 1e-4, "w {:?}", s.size);
+        assert!((s.size.y - 9.0).abs() < 1e-4, "h {:?}", s.size);
+    }
+
     /// GML `draw_sprite` honors the strip origin: the draw point is
     /// `pos - origin`. `sprUltraLevel` (origin 4,5) drawn at GML (11,16)
     /// must land pixels at (7,11), not (11,16).
@@ -8437,7 +8498,9 @@ mod ui_parity_regression {
 
     /// GML `draw_text_nt` block law: one row per visual line (the shell
     /// renders `.single_line()`), so multi-line producers pre-split.
-    /// The Title passive/active pair arrives as two rows at gy/gy+8,
+    /// The Title passive/active pair arrives as two rows at `180 +
+    /// appear` / `188 + appear` (GML `scrCampfireMenuDrawCharText`:
+    /// `fa_middle` block centered on `172 + height/2 + appear + 8`),
     /// never one `\n` row (the literal-`\n` overlap bug).
     #[test]
     fn title_skill_rows_are_two_rows() {
@@ -8451,7 +8514,7 @@ mod ui_parity_regression {
         let rows = menu_gui_texts_vw(crate::MenuOverlay::Title, &mut world, 426.0);
         let skills: Vec<&MenuGuiText> = rows
             .iter()
-            .filter(|r| r.gx == 8.0 && (r.gy == 212.0 || r.gy == 220.0))
+            .filter(|r| r.gx == 8.0 && (r.gy == 180.0 || r.gy == 188.0))
             .collect();
         assert_eq!(skills.len(), 2, "passive + active rows: {rows:?}");
         assert!(rows.iter().all(|r| !r.text.contains('\n')));
