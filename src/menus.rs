@@ -515,7 +515,7 @@ pub fn tick_mutation_mirror(
 /// Pure mirror law shared by [`tick_mutation_mirror`] and the InGame tick
 /// below (single source; the InGame call site can only take owned lens
 /// because of the `World` borrow checker).
-fn apply_mutation_mirror(menu: &mut MenuState, count: usize, is_ultra: bool) {
+pub(crate) fn apply_mutation_mirror(menu: &mut MenuState, count: usize, is_ultra: bool) {
     if count != menu.mutation_count {
         menu.mutation_selected = None;
     }

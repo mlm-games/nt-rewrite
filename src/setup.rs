@@ -2437,6 +2437,109 @@ mod verbatim_title_to_first_level {
         assert_eq!(world.resource::<Run>().area, crate::data::AreaId::Campfire);
     }
 
+    /// Transition guard table (checked against GML per screen).
+    /// GML law per cover screen:
+    /// - Loading (`GenCont/Draw_0`): `scrDrawSpiral()` (opaque clear) +
+    ///   GENERATING + tip + roadmap. No world, no HUD, no menu chrome.
+    /// - Mutation/ultra offer (`LevCont/Draw_0`): `scrDrawSpiral()`
+    ///   (opaque clear) + offer title/subtitle + icons. No world, no
+    ///   HUD; the offer chrome is `LevCont`'s own (the port's Mutation
+    ///   overlay), not the campfire `Menu` chrome.
+    /// - Mid-run floor transition (same `GenCont` room, `room_restart`
+    ///   already destroyed the old room): spiral + text only.
+    /// - Title (`Menu/Draw_0`): spiral remnant transparently (no clear)
+    ///   UNDER camp + pods + portraits. World ON, menu chrome ON, HUD
+    ///   bars off (TopCont draws no HUD in the `MenuGen` room).
+    /// The composer expresses this as three gates in `App::view`
+    /// (`generation_screen`, `loading_cover`/`cover_chrome_off`,
+    /// `bg_alpha`) — this test pins the gate inputs per screen so a
+    /// future gate edit must keep all four screens exact.
+    #[test]
+    fn transition_cover_law_matches_gml_per_screen() {
+        use crate::state::AppState;
+        use crate::{MenuOverlay, menu_overlay_kind};
+        use crate::comps_a::{PendingMutation, PendingUltra};
+        use crate::comps_b::FloorTransition;
+        use crate::state::OverlayMenu;
+        use crate::state::menus::MenuState;
+        let menu = MenuState::default();
+        let overlay = OverlayMenu::None;
+        let cover_of = |state: AppState,
+                        overlay: OverlayMenu,
+                        menu: &MenuState,
+                        world: &World|
+         -> (bool, bool, Option<MenuOverlay>) {
+            let kind = menu_overlay_kind(state, overlay, menu, false);
+            let ft = world
+                .get_resource::<FloorTransition>()
+                .is_some_and(|f| f.active);
+            let pending = world.get_resource::<PendingMutation>().is_some()
+                || world.get_resource::<PendingUltra>().is_some();
+            let generation_screen = matches!(
+                kind,
+                Some(MenuOverlay::Loading) | Some(MenuOverlay::Mutation)
+            ) || ft;
+            let cover_chrome_off = matches!(
+                kind,
+                Some(MenuOverlay::Loading) | Some(MenuOverlay::Mutation)
+            ) || ft;
+            let bg_opaque = match state {
+                AppState::Title => false,
+                AppState::Splash | AppState::MainMenu | AppState::Loading => true,
+                AppState::InGame => ft || pending,
+            };
+            assert_eq!(
+                generation_screen, cover_chrome_off,
+                "sprite gate and text gate must agree"
+            );
+            (generation_screen, bg_opaque, kind)
+        };
+        let fresh = World::new();
+        let (is_cover, opaque, kind) =
+            cover_of(AppState::Loading, overlay, &menu, &fresh);
+        assert!(is_cover && opaque && kind == Some(MenuOverlay::Loading));
+        // Offer path: `menu_overlay_kind` reads the `mutation_count`
+        // mirror, which `tick_ingame_menu` syncs from `Pending*` at the
+        // head of the same schedule tick — so a freshly inserted offer
+        // reads live play until the mirror runs. Mirror it here the way
+        // the schedule does, then the cover must hold.
+        let mut offer = World::new();
+        offer.insert_resource(PendingMutation {
+            choices: vec![crate::ids_part::MutationId::RhinoSkin],
+        });
+        offer.insert_resource(crate::state::menus::MenuState::default());
+        {
+            let (count, is_ultra) =
+                if let Some(ultra) = offer.get_resource::<PendingUltra>() {
+                    (ultra.choices.len(), true)
+                } else if let Some(pending) = offer.get_resource::<PendingMutation>() {
+                    (pending.choices.len(), false)
+                } else {
+                    (0, false)
+                };
+            if let Some(mut m) = offer.get_resource_mut::<crate::state::menus::MenuState>() {
+                crate::state::menus::apply_mutation_mirror(&mut m, count, is_ultra);
+            }
+        }
+        let offer_menu = offer.resource::<crate::state::menus::MenuState>().clone();
+        let (is_cover, opaque, kind) =
+            cover_of(AppState::InGame, OverlayMenu::None, &offer_menu, &offer);
+        assert!(is_cover, "mirrored offer must read as a generation cover");
+        assert!(opaque, "pending offer is an opaque cover");
+        assert_eq!(kind, Some(MenuOverlay::Mutation));
+        let mut ft = World::new();
+        ft.insert_resource(FloorTransition {
+            active: true,
+            ..Default::default()
+        });
+        let (is_cover, opaque, _) =
+            cover_of(AppState::InGame, OverlayMenu::None, &menu, &ft);
+        assert!(is_cover && opaque);
+        let (is_cover, opaque, kind) =
+            cover_of(AppState::Title, OverlayMenu::None, &menu, &fresh);
+        assert!(!is_cover && !opaque && kind == Some(MenuOverlay::Title));
+    }
+
     /// Reported bug verbatim: the loading screen must show the vortex,
     /// not the previous room. GML `room_restart` hands `GenCont` a fresh
     /// room, so GENERATING draws over spiral + black only. Entering
