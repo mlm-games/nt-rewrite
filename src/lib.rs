@@ -1972,7 +1972,7 @@ impl App {
         // caller in the list mounts unconditionally (caller list
         // documented at the figure gate above).
         let splash_gated = !logo_live;
-        let vortex_layer = if self.assets.is_some()
+        let mut vortex_layer = if self.assets.is_some()
             && !self.vortex_tex.is_empty()
             && !splash_gated
             && (self.spiral.alive || !self.spiral.is_done())
@@ -2182,13 +2182,31 @@ impl App {
         // HUD overlay (GML `scrDrawPlayerHUD` + `scrDrawMiscHUD`
         // verbatim): Silkscreen rows at 320x240 GUI positions over the
         // viewport.
-        // Bottom-up: vortex portal first, then the sprite viewport,
-        // then HUD/menu chrome.
+        // Bottom-up: transparent drain passes sit ABOVE the sprite
+        // viewport, opaque covers sit BELOW it. GML draws the spiral
+        // inside the caller's draw event, i.e. over the room actors
+        // behind it: `TopCont/Draw_0` redraws leftover `Spiral` wisps
+        // at depth -15 (in front of `Floor` 8) during the live-game
+        // drain, and `Menu/Draw_0` calls `scrDrawSpiral()` before its
+        // own chrome. `bg_alpha` tells the two apart: 0 means a
+        // transparent drain (Title remnant, live InGame drain) whose
+        // wisps must paint over tiles/player/HUD bars; 1 means an
+        // opaque cover (Splash logo, MainMenu, Loading, offers, floor
+        // transition) whose chrome (logo, buttons, roadmap, cards)
+        // lives in the viewport and must stay over the black.
         let mut layers = Vec::new();
-        if let Some(vortex) = vortex_layer {
-            layers.push(vortex);
+        let vortex_above = vortex_layer.is_some() && self.last_bg_alpha < 0.5;
+        if !vortex_above {
+            if let Some(vortex) = vortex_layer.take() {
+                layers.push(vortex);
+            }
         }
         layers.push(viewport);
+        if vortex_above {
+            if let Some(vortex) = vortex_layer.take() {
+                layers.push(vortex);
+            }
+        }
         if !hud_rows.is_empty() {
             layers.push(
                 ZStack(Modifier::new().fill_max_size().hit_passthrough())

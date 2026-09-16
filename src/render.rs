@@ -7812,6 +7812,96 @@ pub fn menu_sprites(
                 ));
             }
         }
+        // GML `LevCont/Draw_0` calls `scrDrawSpiral()` (opaque clear)
+        // then draws ONLY the offer chrome: title/subtitle text plus
+        // the SkillIcon/UltraIcon/CrownIcon cards. No camp pods, no
+        // roadmap, no PlayerHUD — those rooms never had them. The text
+        // half lives in `menu_gui_texts(Mutation)`; the cards compose
+        // here so they sit under the opaque cover pass with the rest of
+        // the viewport.
+        crate::MenuOverlay::Mutation => {
+            let cx = vw * 0.5;
+            let selected = world
+                .get_resource::<MenuState>()
+                .and_then(|m| m.mutation_selected);
+            let ultra = world.get_resource::<PendingUltra>();
+            let skill = world.get_resource::<PendingMutation>();
+            let is_ultra = ultra.is_some() && skill.is_none();
+            let title_path = if is_ultra {
+                "images/sprLevelUltraText.png"
+            } else {
+                "images/sprLevelUpText.png"
+            };
+            if let Some(s) = assets.sprite_for(
+                title_path,
+                2,
+                gui_to_world(cx, 48.0),
+                false,
+                0.0,
+                [1.0; 4],
+            ) {
+                out.push(s);
+            }
+            if let Some(s) = assets.sprite_for(
+                "images/sprMutationSplat.png",
+                0,
+                gui_to_world(cx, 240.0 - 31.0),
+                false,
+                0.0,
+                [1.0; 4],
+            ) {
+                out.push(s);
+            }
+            let selected_race = world
+                .get_resource::<SelectedCharacter>()
+                .map(|s| s.0)
+                .unwrap_or(crate::data::RaceId::Fish);
+            let ids: Vec<i32> = if is_ultra {
+                ultra
+                    .map(|u| {
+                        u.choices.iter().map(|c| ultra_hud_frame(selected_race, *c)).collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                skill
+                    .map(|p| {
+                        p.choices.iter().map(|c| mutation_hud_frame(*c)).collect()
+                    })
+                    .unwrap_or_default()
+            };
+            let icon_path = "images/sprSkillIcon.png";
+            // GML `LevCont/Other_10` icon row: `y = view_yview +
+            // view_height - 21`, `step = min(32, floor(view_w / (n+1)))`,
+            // centered on the view (`-12` nudge at 10+). Scale holds at
+            // `max(0.65, step/32)`; the port draws native (steady-state
+            // rows never exceed ~6 cards, so step is 32).
+            let n = ids.len();
+            let step = if n == 0 {
+                32.0
+            } else {
+                (32.0f32).min((vw / (n as f32 + 1.0)).floor())
+            };
+            for (i, frame) in ids.iter().enumerate() {
+                let half = step / 2.0;
+                let xoff = if n >= 10 { -12.0 } else { 0.0 };
+                let x = cx + xoff - (n as f32 - 1.0) * half + i as f32 * step;
+                let tint = if Some(i) == selected {
+                    [1.0; 4]
+                } else {
+                    [0.5, 0.5, 0.5, 1.0]
+                };
+                if let Some(s) = assets.sprite_for(
+                    icon_path,
+                    *frame,
+                    gui_to_world(x, 240.0 - 21.0),
+                    false,
+                    0.0,
+                    tint,
+                ) {
+                    out.push(s);
+                }
+            }
+        }
         crate::MenuOverlay::Pause => {
             // GML `UberCont/Draw_0` paused branch sprite layer verbatim:
             // frozen `pausespr` screenshot (shell-owned surface, not
