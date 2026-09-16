@@ -3416,6 +3416,12 @@ fn gui_center(text: impl Into<String>, gx: f32, gy: f32, color: [u8; 4]) -> Menu
 }
 
 fn gui_button(text: impl Into<String>, gx: f32, gy: f32, color: [u8; 4]) -> MenuGuiText {
+    // GML `MainMenuButton/Draw_0` law: `draw_text_bigname(x, y, name)`
+    // at the DEFAULT scale 0.65, centered-middle. fntBig glyphs are
+    // 18px tall, so the surface is `ceil(18 * 0.65) = 12` tall and
+    // the 7px-equivalent ink spans roughly `gy - 4 .. gy + 4`. A
+    // 10px Silkscreen row centers its ~8px ink on `gy` the same way —
+    // the old 12px row overshot both width and height.
     MenuGuiText {
         text: text.into(),
         gx,
@@ -3423,7 +3429,35 @@ fn gui_button(text: impl Into<String>, gx: f32, gy: f32, color: [u8; 4]) -> Menu
         color,
         px: 10.0,
         centered: true,
-        middle_y: false,
+        middle_y: true,
+        right: false,
+    }
+}
+
+/// GML `PauseButton/Draw_0` label law (steady state, `appear = 0`):
+/// `draw_text_bigname(_dx, _dy - 8, name, color, 1, 0.65)` with the
+/// image 0/1/4/7 `fa_left` branch (`_dx = x - half_w`, so the padded
+/// surface centers ~x + 2) or the 2/3/5/6 `fa_right` branch (mirrored,
+/// ~x - 2). The surface is 12 tall drawn at `y - 8 - 6 = y - 14`,
+/// so ink spans roughly `y - 8 .. y`. A 10px middle-anchored row
+/// centers ink on `gy`; passing `gy = button_y - 4` reproduces the
+/// footprint. `left` selects the branch (MENU/RETRY style vs
+/// mirrored); center-x keeps the ~2px surface-pad shift.
+fn gui_pause_button(
+    text: impl Into<String>,
+    button_x: f32,
+    button_y: f32,
+    left: bool,
+    color: [u8; 4],
+) -> MenuGuiText {
+    MenuGuiText {
+        text: text.into(),
+        gx: button_x + if left { 2.0 } else { -2.0 },
+        gy: button_y - 4.0,
+        color,
+        px: 10.0,
+        centered: true,
+        middle_y: true,
         right: false,
     }
 }
@@ -3901,7 +3935,12 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             let stat_name = |out: &mut Vec<MenuGuiText>, col: f32, line: &mut f32, name: &str| {
                 // GML `draw_stat` verbatim: the NAME right-aligns on
                 // `statx - 1` (right edge = `col - 1`), so the row's box
-                // right edge sits at `col - 1`, not `col`.
+                // right edge sits at `col - 1`, not `col`. Top-anchored
+                // (`fa_top` persists from the Draw-GUI reset): the row
+                // top lands on `staty + line * 8` and the
+                // `FONT_TOP_BIAS_GUI` nudge puts Silkscreen ink where
+                // the 8px fntM1 glyphs sat — NOT middle-anchored, which
+                // dropped every row ~6px.
                 out.push(MenuGuiText {
                     text: name.to_string(),
                     gx: col - 1.0,
@@ -3909,7 +3948,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     color: GUI_MID,
                     px: 7.0,
                     centered: false,
-                    middle_y: true,
+                    middle_y: false,
                     right: true,
                 });
             };
@@ -3921,7 +3960,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     color: GUI_WHITE,
                     px: 7.0,
                     centered: false,
-                    middle_y: true,
+                    middle_y: false,
                     right: false,
                 });
                 *line += 1.0;
@@ -3944,17 +3983,20 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     color: GUI_WHITE,
                     px: 7.0,
                     centered: true,
-                    middle_y: true,
+                    middle_y: false,
                     right: false,
                 });
                 *line += 1.0;
             };
             let mut out = vec![MenuGuiText {
+                // GML `DrawStats/Draw_0` law: `draw_text_bigname(cx,
+                // top+24, gray)` at the default scale 0.65,
+                // centered-middle — same footprint as `gui_button`.
                 text: "STATS".to_string(),
                 gx: cx,
                 gy: 24.0,
                 color: GUI_MID,
-                px: 12.0,
+                px: 10.0,
                 centered: true,
                 middle_y: true,
                 right: false,
@@ -4493,16 +4535,18 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 .get_resource::<MenuState>()
                 .map(|m| m.go_appear.max(0.0))
                 .unwrap_or(0.0);
-            out.push(gui_button(
+            out.push(gui_pause_button(
                 "MENU",
                 cx,
                 120.0 + 58.0 + offsety + appear,
+                true,
                 GUI_MID,
             ));
-            out.push(gui_button(
+            out.push(gui_pause_button(
                 "RETRY",
                 cx,
                 120.0 + 90.0 + offsety + appear,
+                true,
                 GUI_MID,
             ));
             out
@@ -4550,10 +4594,10 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         middle_y: true,
                         right: false,
                     },
-                    gui_button("MENU", 45.0, 176.0, GUI_MID),
-                    gui_button("RETRY", 60.0, 208.0, GUI_MID),
-                    gui_button("SETTINGS", vw - 68.0, 176.0, GUI_MID),
-                    gui_button("CONTINUE", vw - 78.0, 208.0, GUI_MID),
+                    gui_pause_button("MENU", 45.0, 176.0, true, GUI_MID),
+                    gui_pause_button("RETRY", 60.0, 208.0, true, GUI_MID),
+                    gui_pause_button("SETTINGS", vw - 68.0, 176.0, false, GUI_MID),
+                    gui_pause_button("CONTINUE", vw - 78.0, 208.0, false, GUI_MID),
                 ]
             }
         }
@@ -8387,9 +8431,11 @@ mod verbatim_ui_layers {
         let texts = menu_gui_texts_vw(crate::MenuOverlay::GameOver, &mut world, 426.0);
         let menu = texts.iter().find(|t| t.text == "MENU").expect("MENU row");
         let retry = texts.iter().find(|t| t.text == "RETRY").expect("RETRY row");
-        // ystart + offsety + appear: 178+128+4 / 210+128+4.
-        assert!((menu.gy - 310.0).abs() < 1.0, "MENU gy {}", menu.gy);
-        assert!((retry.gy - 342.0).abs() < 1.0, "RETRY gy {}", retry.gy);
+        // ystart + offsety + appear, minus the 4px bigname-label lift
+        // (`gui_pause_button` centers the 10px ink on `button_y - 4`):
+        // 178+128+4-4 / 210+128+4-4.
+        assert!((menu.gy - 306.0).abs() < 1.0, "MENU gy {}", menu.gy);
+        assert!((retry.gy - 338.0).abs() < 1.0, "RETRY gy {}", retry.gy);
         // Settle the anim: buttons land exactly on the GML ystarts.
         if let Some(mut menu_state) = world.get_resource_mut::<MenuState>() {
             menu_state.go_offsety = 0.0;
@@ -8398,8 +8444,8 @@ mod verbatim_ui_layers {
         let texts = menu_gui_texts_vw(crate::MenuOverlay::GameOver, &mut world, 426.0);
         let menu = texts.iter().find(|t| t.text == "MENU").expect("MENU row");
         let retry = texts.iter().find(|t| t.text == "RETRY").expect("RETRY row");
-        assert!((menu.gy - 178.0).abs() < 1.0, "MENU gy {}", menu.gy);
-        assert!((retry.gy - 210.0).abs() < 1.0, "RETRY gy {}", retry.gy);
+        assert!((menu.gy - 174.0).abs() < 1.0, "MENU gy {}", menu.gy);
+        assert!((retry.gy - 206.0).abs() < 1.0, "RETRY gy {}", retry.gy);
     }
 }
 
