@@ -12,6 +12,7 @@ repame-anim = { path = "../Repos/repame/crates/repame-anim", version = "0.2" }
 repame-sprite = { path = "../Repos/repame/crates/repame-sprite", version = "0.2" }
 repame-atlas = { path = "../Repos/repame/crates/repame-atlas", version = "0.2" }
 repame-fx = { path = "../Repos/repame/crates/repame-fx", version = "0.2" }
+repame-input = { path = "../Repos/repame/crates/repame-input", version = "0.2" }
 # PNG decode for atlas uploads (repame ships no image dep; games decode
 # their own pixels per repame-atlas docs). Pinned to the cached 0.25 line.
 image = "0.25"

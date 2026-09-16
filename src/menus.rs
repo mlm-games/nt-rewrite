@@ -668,6 +668,33 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             }
             emit_cue(world, &UiAction::AdvanceCredits);
         }
+        UiAction::RemapControl(ref name) => {
+            // GML `element_functions["keybind"]` verbatim: arm
+            // `await_input` for this control; the next pressed input
+            // resolves it (see `App::capture_*` in the view layer).
+            world.init_resource::<crate::keymap::InputMapState>();
+            if let Some(action) = crate::keymap::NtAction::from_name(name) {
+                world
+                    .resource_mut::<crate::keymap::InputMapState>()
+                    .begin_capture(action, repame_input::KeymapDevice::KeyboardMouse);
+            }
+            emit_cue(world, &UiAction::RemapControl(name.clone()));
+        }
+        UiAction::RemapReset => {
+            // GML DEFAULT PRESET verbatim: `scrKeymapsSetup` +
+            // `scrOptionsSaveKeymaps` + `scrSave`.
+            world.init_resource::<crate::keymap::InputMapState>();
+            world.init_resource::<SaveData>();
+            let rows = {
+                let mut state = world.resource_mut::<crate::keymap::InputMapState>();
+                state.map = crate::keymap::default_keymap();
+                state.capture = None;
+                crate::keymap::KeyBindings::from_keymap(&state.map)
+            };
+            world.resource_mut::<SaveData>().key_bindings = rows;
+            mark_dirty(world);
+            emit_cue(world, &UiAction::RemapReset);
+        }
         UiAction::OpenSettings => {
             if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
                 menu.settings_page = 0;

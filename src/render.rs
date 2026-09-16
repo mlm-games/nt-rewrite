@@ -931,6 +931,12 @@ fn strip_frames(assets: &RenderAssets, path: &str) -> u32 {
     assets.uv(path, 0).map(|(_, def)| def.frames).unwrap_or(0)
 }
 
+/// [`strip_frames`] for view-layer callers outside this module
+/// (campfire/game-over crosshair frame clamp in `lib.rs`).
+pub fn strip_frames_pub(assets: &RenderAssets, path: &str) -> u32 {
+    strip_frames(assets, path)
+}
+
 /// Bevy `wall_body_frame` verbatim (Bot variant).
 fn wall_body_frame(seed: u64, wx: i32, wy: i32, frames: u32) -> i32 {
     let raw = if wall_hash(seed, wx, wy, 0x11) % 150 == 0 {
@@ -4765,6 +4771,12 @@ pub enum SettingHotOp {
     ColorCycle,
     ResetOptions,
     EraseProgress,
+    /// REMAP row: arm a rebind capture for the named GML control
+    /// (`fire`, `spec`, `swap`, `pick`, `north`, `south`, `west`,
+    /// `east`). The next pressed key/mouse button resolves it.
+    Remap(&'static str),
+    /// REMAP page: restore GML `scrKeymapsSetup` defaults.
+    RemapReset,
 }
 
 /// Actionable rows for a settings page in visual order (headers and
@@ -4867,7 +4879,36 @@ pub fn settings_hot_rows(page: u8, vw: f32) -> Vec<SettingHotRow> {
             btn(192.0, SettingHotOp::Category(16)),
             btn(228.0, SettingHotOp::Back),
         ],
-        13 => vec![btn(200.0, SettingHotOp::Back)],
+        13 => {
+            // GML `Controls_Remapping_Keys` verbatim: one `keybind` row
+            // per keyboard control (fire/spec/swap/pick + walk keys),
+            // then DEFAULT PRESET. Rows arm a capture; the row text
+            // shows the live binding (or PRESS KEY while armed).
+            let mut rows: Vec<SettingHotRow> = [
+                "fire", "spec", "swap", "pick", "north", "south", "west", "east",
+            ]
+            .iter()
+            .enumerate()
+            .map(|(i, key)| SettingHotRow {
+                gy: 56.0 + i as f32 * 16.0,
+                cx,
+                hw: 100.0,
+                op: SettingHotOp::Remap(match *key {
+                    "fire" => "fire",
+                    "spec" => "spec",
+                    "swap" => "swap",
+                    "pick" => "pick",
+                    "north" => "north",
+                    "south" => "south",
+                    "west" => "west",
+                    _ => "east",
+                }),
+            })
+            .collect();
+            rows.push(btn(196.0, SettingHotOp::RemapReset));
+            rows.push(btn(212.0, SettingHotOp::Back));
+            rows
+        }
         15 => {
             let mut rows: Vec<SettingHotRow> = (0..8)
                 .map(|i| {
@@ -4966,6 +5007,8 @@ pub fn settings_hot_action(world: &mut World, page: u8, idx: usize, dir: i8) -> 
         }
         SettingHotOp::ResetOptions => Some(UiAction::SettingResetOptions),
         SettingHotOp::EraseProgress => Some(UiAction::SettingEraseProgress),
+        SettingHotOp::Remap(key) => Some(UiAction::RemapControl(key.to_string())),
+        SettingHotOp::RemapReset => Some(UiAction::RemapReset),
     }
 }
 
@@ -5240,13 +5283,27 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
         }
         13 => {
             out.push(gui_center("REMAP", cx, 24.0, GUI_MID));
-            let mut y = 60.0;
-            for label in ["FIRE", "ACTIVE", "SWAP", "PICK"] {
-                out.push(gui_center(label, cx, y, GUI_CREAM));
-                y += 18.0;
+            let keymap = world
+                .get_resource::<crate::keymap::InputMapState>()
+                .map(|s| s.map.clone())
+                .unwrap_or_else(crate::keymap::default_keymap);
+            let capturing = world
+                .get_resource::<crate::keymap::InputMapState>()
+                .and_then(|s| s.capture.clone());
+            let mut y = 56.0;
+            for action in crate::keymap::NtAction::ALL {
+                let entry = keymap.active(&action, false);
+                let text = if capturing.as_ref().is_some_and(|c| c.action == action) {
+                    "PRESS KEY...".to_string()
+                } else {
+                    repame_input::encode_keymap_entry(&entry)
+                };
+                out.push(gui_body(action.label(), 80.0, y, GUI_CREAM));
+                out.push(gui_body(text, 200.0, y, GUI_GRAY));
+                y += 16.0;
             }
-            out.push(gui_center("PRESS ANY KEY - WIP", cx, y, GUI_GRAY));
-            out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
+            out.push(gui_button("DEFAULT PRESET", cx, 196.0, GUI_CREAM));
+            out.push(gui_button("BACK", cx, 212.0, GUI_GRAY));
         }
         15 => {
             out.push(gui_center("CHAR PREFS", cx, 24.0, GUI_MID));
@@ -6094,9 +6151,12 @@ pub fn crosshair_sprites(
     dt_secs: f32,
 ) -> Vec<SpriteInstance> {
     let mut out = Vec::new();
-    // Live gameplay only: paused/menus/offers/game-over keep the last
-    // aim but hide the cursor (previously it drew over game-over/title
-    // from stale sim entities once `Paused` was forced false on death).
+    // Live gameplay only: paused/menus/offers keep the last aim but
+    // hide the cursor. Game-over is NOT gated out: GML keeps drawing
+    // the crosshair over the GameOver screen (`UberCont/Draw_75` only
+    // needs `window_get_cursor() == cr_none`, which holds through
+    // death since `opt_keyboard` stays true) — the MENU/RETRY buttons
+    // are aimed with the crosshair, not the OS arrow.
     let live = world
         .get_resource::<crate::state::AppState>()
         .is_some_and(|s| *s == crate::state::AppState::InGame)
@@ -6106,9 +6166,6 @@ pub fn crosshair_sprites(
         && world
             .get_resource::<crate::state::OverlayMenu>()
             .is_none_or(|o| *o == crate::state::OverlayMenu::None)
-        && !world
-            .get_resource::<crate::comps_a::Run>()
-            .is_some_and(|r| r.game_over)
         && world
             .get_resource::<crate::comps_a::PendingMutation>()
             .is_none()
@@ -8719,5 +8776,111 @@ mod ui_parity_regression {
         assert!((bw - 320.0 * k).abs() < 1.0, "{dp:?}");
         let oy = (800.0 - 240.0 * k) * 0.5;
         assert!((top - (oy + 24.0 * k - (10.0 * k).round() * 0.5)).abs() < 1.0, "{dp:?}");
+    }
+}
+
+#[cfg(test)]
+mod crosshair_gate_tests {
+    use super::*;
+    use crate::comps_a::{Player, Run};
+    use crate::spatial::Pos;
+
+    fn world_with_player(game_over: bool) -> World {
+        let mut world = World::new();
+        world.insert_resource(crate::state::AppState::InGame);
+        world.init_resource::<crate::state::Paused>();
+        world.init_resource::<crate::state::OverlayMenu>();
+        world.insert_resource(Run {
+            game_over,
+            ..Default::default()
+        });
+        world.spawn((
+            Player::default(),
+            Pos(Vec2::new(100.0, 100.0)),
+            crate::comps_a::AimDir(Vec2::X),
+        ));
+        world.insert_resource(HoverWorld(Some(Vec2::new(200.0, 100.0))));
+        world.init_resource::<crate::savedata_part::SaveData>();
+        world
+    }
+
+    /// GML `UberCont/Draw_75` parity: the crosshair keeps drawing over
+    /// the GameOver screen (MENU/RETRY are aimed with it, not the OS
+    /// arrow). Needs several frames: alpha lerps from 0.
+    #[test]
+    fn crosshair_draws_over_game_over() {
+        let dir = crate::resolve_assets_dir().expect("assets for parity test");
+        let assets = RenderAssets::load(&dir).expect("catalog loads");
+        for game_over in [false, true] {
+            let mut world = world_with_player(game_over);
+            let mut drawn = false;
+            for _ in 0..60 {
+                let out = crosshair_sprites(&mut world, &assets, 1.0 / 30.0);
+                if !out.is_empty() {
+                    drawn = true;
+                    break;
+                }
+            }
+            assert!(drawn, "crosshair must draw (game_over={game_over})");
+        }
+    }
+
+    /// Paused and overlay states still hide it (GML `PauseImage` gate).
+    #[test]
+    fn crosshair_hidden_when_paused() {
+        let dir = crate::resolve_assets_dir().expect("assets for parity test");
+        let assets = RenderAssets::load(&dir).expect("catalog loads");
+        let mut world = world_with_player(false);
+        world.resource_mut::<crate::state::Paused>().0 = true;
+        for _ in 0..60 {
+            assert!(
+                crosshair_sprites(&mut world, &assets, 1.0 / 30.0).is_empty(),
+                "paused must hide the crosshair"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod remap_page_tests {
+    use super::*;
+
+    /// Page 13 text rows and hot rows must share y positions: the
+    /// keyboard cursor highlight matches text to hot rows within
+    /// 0.5px, and click hit-testing uses a ±7px band. A drift between
+    /// the two leaves nav blind or clicks landing on the wrong row.
+    #[test]
+    fn remap_text_and_hot_rows_align() {
+        let mut world = World::new();
+        world.insert_resource(crate::savedata_part::SaveData::default());
+        world.init_resource::<crate::state::menus::MenuState>();
+        world.init_resource::<crate::keymap::InputMapState>();
+        world.resource_mut::<crate::state::menus::MenuState>().settings_page = 13;
+        let texts = settings_gui_texts(&mut world, 320.0);
+        let rows = settings_hot_rows(13, 320.0);
+        assert_eq!(rows.len(), 10, "8 rebind rows + reset + back");
+        for (i, row) in rows.iter().enumerate() {
+            let hit = texts
+                .iter()
+                .any(|t| (t.gy - row.gy).abs() < 0.5);
+            assert!(hit, "hot row {i} at gy={} has no text row", row.gy);
+        }
+        // Rebind rows keep a 16px pitch clear of the ±7px click band;
+        // the DEFAULT PRESET / BACK buttons sit lower with a gap.
+        for w in rows[..8].windows(2) {
+            assert!(
+                (w[1].gy - w[0].gy - 16.0).abs() < 0.5,
+                "hot pitch {:?}",
+                rows.iter().map(|r| r.gy).collect::<Vec<_>>()
+            );
+        }
+        // Every rebind row resolves to a capture action.
+        for (i, row) in rows.iter().enumerate().take(8) {
+            let action = settings_hot_action(&mut world, 13, i, 0);
+            assert!(
+                matches!(action, Some(UiAction::RemapControl(_))),
+                "row {i} must arm a remap capture, got {action:?}"
+            );
+        }
     }
 }

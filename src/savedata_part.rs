@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::comps_a::{Health, Inventory, Player, RaceState, Run};
 use crate::data::{AreaId, CrownKind, MutationId, RaceId, SkinLetter, WeaponId};
+use crate::keymap::KeyBindings;
 
 pub const SAVE_VERSION: u32 = 5;
 
@@ -124,6 +125,8 @@ pub struct SaveData {
     pub unlocked_cheats: bool,
     #[serde(default)]
     pub settings: SettingsData,
+    #[serde(default)]
+    pub key_bindings: KeyBindings,
 }
 
 /// GML `scripts/scrAchievements` registry: 59 entries (0-58) as
@@ -600,6 +603,7 @@ impl Default for SaveData {
             unlocked_cheats: false,
             hardmode_unlocked: false,
             settings: SettingsData::default(),
+            key_bindings: KeyBindings::default(),
         }
     }
 }

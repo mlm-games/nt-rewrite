@@ -1439,6 +1439,12 @@ pub enum UiAction {
     ClosePlaySubmenu,
     /// Advance the credits section (GML `Credits` click `_force`).
     AdvanceCredits,
+    /// Arm a REMAP capture for the named control (`fire`, `spec`,
+    /// `swap`, `pick`, `north`, `south`, `west`, `east`). The next
+    /// pressed key/mouse button becomes the keyboard-side binding.
+    RemapControl(String),
+    /// Restore GML `scrKeymapsSetup` defaults on both sides.
+    RemapReset,
 }
 
 /// Bridged menu action (bevy `UiBridgeAction` message -> [`Queue`]).
@@ -1487,7 +1493,9 @@ pub fn ui_action_to_cue(action: &UiAction) -> Option<ReactiveCue> {
         | UiAction::ConfirmPause(_)
         |         UiAction::PlaySubmenu(_)
         | UiAction::ClosePlaySubmenu
-        | UiAction::AdvanceCredits => Some(ReactiveCue::UiClick),
+        | UiAction::AdvanceCredits
+        | UiAction::RemapControl(_)
+        | UiAction::RemapReset => Some(ReactiveCue::UiClick),
         UiAction::SettingToggle(_)
         | UiAction::SettingCycle { .. }
         | UiAction::SettingInput { .. }
@@ -1542,6 +1550,14 @@ pub fn ui_action_sfx(action: &UiAction) -> Vec<AudioCue> {
         UiAction::AdvanceCredits => {
             // GML `Credits/Step_0` advances on click with no named sting
             // (the section change itself is the feedback).
+        }
+        UiAction::RemapControl(_) => {
+            // GML `keybind` click arms `await_input` silently; the
+            // resolve sting (`sndSliderLetGo`) fires on capture.
+            push("sndClick", 0.6);
+        }
+        UiAction::RemapReset => {
+            push("sndRestart", 0.7);
         }
         UiAction::QuitToTitle | UiAction::QuitApp => {
             push("sndClickBack", 0.6);

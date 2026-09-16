@@ -90,8 +90,7 @@ use crate::comps_a::{NT_CAM_SCALE, Player, Projectile, WallCell, WallTile};
 use crate::comps_b::{Enemy, Pickup, Prop};
 use crate::data::AreaId;
 use crate::input::{
-    GamepadState, KeyCode, MouseState, NtInput, TouchContact, sample_gamepads, sample_keyboard,
-    sample_touch,
+    GamepadState, KeyCode, MouseState, NtInput, TouchContact, sample_gamepads, sample_touch,
 };
 use crate::render::{
     ATLAS_PAGES, ATLAS_SIZE, CamPoi, CamStepInput, GmlCamera, RenderAssets, Z_BLOOM, Z_CROSSHAIR,
@@ -108,6 +107,7 @@ use crate::setup::setup_run_with_seed;
 use crate::spatial::Pos;
 use crate::state::menus::{MenuEdge, MenuState, apply_menu_action};
 use crate::state::{AppState, OverlayMenu};
+use crate::keymap::{InputMapState, KeyBindings};
 use crate::vortex::{SpiralCtl, gml_area_for_area};
 
 pub mod anim;
@@ -128,6 +128,8 @@ pub mod hud;
 pub mod idpd;
 mod ids_part;
 pub mod input;
+pub mod keymap;
+
 pub mod loop_transition;
 pub mod msg;
 pub mod pickups;
@@ -234,8 +236,23 @@ pub struct App {
     vortex_tex: Vec<VortexTexture>,
     vortex_tex_area: Option<u8>,
     // -- staged shell input (drained into `NtInput`/`MenuEdge` per frame) --
+    // `held` is the polled physical-key set: every `KeyboardInput`
+    // press/release reports its winit `KeyCode` name here through
+    // `stage_physical_key`, so held keys survive focus moves and never
+    // depend on a focused widget (GML `keyboard_check` parity). Layout
+    // independent: AZERTY reports the same `KeyW` position GML's
+    // `ord("W")` binds. Cleared on window focus loss.
     held: HashSet<KeyCode>,
     edges: Vec<KeyCode>,
+    /// Physical key names currently down (`KeyW`, `Digit1`, `Space`,
+    /// ...), mirrored from the runtime's polled set each frame
+    /// (`feed_polled_keys`). Reconciled against `held` so a swallowed
+    /// key-up (alt-tab, overlay) cannot stick movement on.
+    polled_keys: HashSet<String>,
+    /// Whether the window currently has focus. `false` (set by the
+    /// shell's focus handler) drops `held` + `polled_keys` outright —
+    /// winit delivers no key-ups across an alt-tab.
+    window_focused: bool,
     clicks: Vec<StagedClick>,
     /// Latest cursor world position (viewport `Hover`, single slot: only
     /// the newest position matters). Steers `aim_axis` every frame in
@@ -250,6 +267,18 @@ pub struct App {
     /// player therefore keeps aiming at the on-screen cursor while
     /// walking, instead of at a stale world point behind them.
     cursor_px: Option<Vec2>,
+    /// Staging order stamps. Repose dispatches free moves ONLY to the
+    /// topmost region (proven: parent/root handlers get 0 calls), so
+    /// the root's `cursor_move` runs almost exclusively while a button
+    /// is held (capture-path dispatch reaches ancestors), while the
+    /// viewport's `Hover` fires on free moves. Without order tracking,
+    /// a stale `cursor_px` from the last drag shadows live `hover`
+    /// through `.or()` and the crosshair freezes everywhere except
+    /// while dragging — exactly the reported symptom. Aim/crosshair
+    /// therefore use whichever staged LAST (see `live_cursor_world`).
+    cursor_seq: u64,
+    hover_seq: u64,
+    input_seq: u64,
     pause_edge: bool,
     restart_edge: bool,
     interact_edge: bool,
@@ -368,9 +397,14 @@ impl App {
             vortex_tex_area: None,
             held: HashSet::new(),
             edges: Vec::new(),
+            polled_keys: HashSet::new(),
+            window_focused: true,
             clicks: Vec::new(),
             hover: None,
             cursor_px: None,
+            cursor_seq: 0,
+            hover_seq: 0,
+            input_seq: 0,
             pause_edge: false,
             restart_edge: false,
             interact_edge: false,
@@ -476,6 +510,22 @@ impl App {
 
     pub fn has_assets(&self) -> bool {
         self.assets.is_some()
+    }
+
+    /// Load the save file into the sim (`SaveData` resource) and sync
+    /// the editable keymap from its rows (GML `scrOptionsLoadKeymaps`
+    /// on boot). Disk shells call this once after `App::new`; missing
+    /// files keep defaults. Returns the save used.
+    pub fn load_save(&mut self, path: &Path) -> crate::savedata_part::SaveData {
+        let save = crate::savedata_part::load_or_default(path);
+        let map = save.key_bindings.to_keymap();
+        self.sim.world.insert_resource(save);
+        self.sim.world.init_resource::<InputMapState>();
+        self.sim.world.resource_mut::<InputMapState>().map = map;
+        self.sim
+            .world
+            .resource::<crate::savedata_part::SaveData>()
+            .clone()
     }
 
     pub fn last_sprite_count(&self) -> usize {
@@ -763,7 +813,7 @@ impl App {
         let rest = self.cam.center;
         // (`cursor_to_world` borrows `self.cam` only, so resolve the
         // live cursor before the `world` borrow below.)
-        let live_hover = self.cursor_to_world().or(self.hover);
+        let live_hover = self.live_cursor_world();
         let world = &mut self.sim.world;
         let player = player_pos(world).unwrap_or(rest);
         // Current weapon drives the aim-lean divisor (melee 8, bolts
@@ -955,7 +1005,11 @@ impl App {
     }
 
     /// Stage one shell key event (called from the root `on_key_event`
-    /// handler; see the module docs for the mapping table).
+    /// handler; see the module docs for the mapping table). Character
+    /// keys are matched by physical position (`KeyW`, not `'w'`), so
+    /// non-US layouts move the same way GML's `ord("W")` does on a US
+    /// board. Edges still come from here; `held` levels are reconciled
+    /// against the polled physical set in `feed_input`.
     fn handle_key(&mut self, ke: &KeyEvent) {
         let down = matches!(ke.event_type, KeyEventType::Down);
         // Shift has no `Key` variant, but every `KeyEvent` carries
@@ -992,6 +1046,22 @@ impl App {
             Key::ArrowLeft => self.stage_code(KeyCode::ArrowLeft, down, ke.is_repeat),
             Key::ArrowRight => self.stage_code(KeyCode::ArrowRight, down, ke.is_repeat),
             Key::Character(c) => {
+                // Physical position first: the winit `KeyCode` name
+                // (`KeyW`, not `'w'`) owns `held` levels + letter/digit
+                // edges, so non-US layouts move the same way GML's
+                // `ord("W")` does on a US board. The glyph below is
+                // only the fallback for synthetic events (tests) and
+                // the `R` restart shortcut.
+                if let Some(name) = ke.physical.as_deref() {
+                    self.stage_physical(name, down, ke.is_repeat);
+                    if name == "KeyR" && down && !ke.is_repeat {
+                        self.restart_edge = true;
+                    }
+                    if down && !ke.is_repeat {
+                        self.capture_physical_press(name);
+                    }
+                    return;
+                }
                 let c = c.to_ascii_lowercase();
                 if c == ' ' {
                     self.stage_code(KeyCode::Space, down, ke.is_repeat);
@@ -999,11 +1069,127 @@ impl App {
                     if down && !ke.is_repeat {
                         self.restart_edge = true;
                     }
-                } else if let Some(code) = keycode_for_char(c) {
-                    self.stage_code(code, down, ke.is_repeat);
+                    self.stage_physical("KeyR", down, ke.is_repeat);
+                } else {
+                    let _ = c;
+                    if down && !ke.is_repeat {
+                        self.capture_key_press(&ke.key);
+                    }
+                }
+            }
+            Key::Backspace => {
+                // GML REMAP cancel key (Backspace clears the pending
+                // rebind). Position-staged so layouts agree.
+                if down && !ke.is_repeat {
+                    self.cancel_remap_capture();
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Stage one physical key transition by winit `KeyCode` debug name
+    /// (`KeyW`, `Digit1`, `Space`, `Backquote`, ...). Called by shells
+    /// that forward the raw `KeyboardInput` physical key alongside the
+    /// focus-routed `KeyEvent`. Down transitions also push press edges
+    /// (deduped against `held` so event+physical double delivery does
+    /// not double-fire); releases only clear `held`. `R`/`Escape`/
+    /// `Enter` edges stay on the `handle_key` path so menu shortcuts
+    /// keep single ownership.
+    pub fn stage_physical_key(&mut self, name: &str, down: bool) {
+        if down {
+            self.polled_keys.insert(name.to_string());
+        } else {
+            self.polled_keys.remove(name);
+        }
+        self.stage_physical(name, down, false);
+    }
+
+    fn stage_physical(&mut self, name: &str, down: bool, is_repeat: bool) {
+        let Some(code) = crate::input::keycode_for_physical(name) else {
+            return;
+        };
+        // `R` restart + arrows/Tab/Space/Escape/Enter edges are owned
+        // by `handle_key`; the physical path only maintains `held`
+        // levels for them so a focus-routed release can never stick
+        // movement while the key is physically up (and vice versa).
+        let edge_owned_elsewhere = matches!(
+            code,
+            KeyCode::ArrowUp
+                | KeyCode::ArrowDown
+                | KeyCode::ArrowLeft
+                | KeyCode::ArrowRight
+                | KeyCode::Space
+                | KeyCode::Tab
+        );
+        if down {
+            let fresh = self.held.insert(code);
+            if fresh && !is_repeat && !edge_owned_elsewhere {
+                self.edges.push(code);
+            }
+            if !is_repeat {
+                self.capture_physical_press(name);
+            }
+        } else {
+            self.held.remove(&code);
+        }
+    }
+
+    /// Window focus changed (shell forwards winit `Focused`). Losing
+    /// focus drops every held key + edge: no key-ups arrive across an
+    /// alt-tab, and GML's `keyboard_check` reads all-up there too.
+    pub fn set_window_focused(&mut self, focused: bool) {
+        self.window_focused = focused;
+        if !focused {
+            self.held.clear();
+            self.edges.clear();
+            self.polled_keys.clear();
+            self.shift_held = false;
+            self.lmb_held = false;
+            self.rmb_held = false;
+        }
+    }
+
+    /// Reconcile event-staged `held` against the polled physical set.
+    /// Runs at the top of `feed_input`: any `KeyCode` whose physical
+    /// names are all up is dropped (swallowed key-up repair), and any
+    /// polled-down name missing from `held` is re-added (swallowed
+    /// key-down repair). Shift/RMB latches are outside this (modifier
+    /// + button state, not physical keys).
+    fn reconcile_held_with_polled(&mut self) {
+        if !self.window_focused {
+            return;
+        }
+        const PHYSICAL_NAMES: [(&str, KeyCode); 20] = [
+            ("KeyW", KeyCode::KeyW),
+            ("KeyA", KeyCode::KeyA),
+            ("KeyS", KeyCode::KeyS),
+            ("KeyD", KeyCode::KeyD),
+            ("KeyE", KeyCode::KeyE),
+            ("KeyF", KeyCode::KeyF),
+            ("KeyQ", KeyCode::KeyQ),
+            ("KeyG", KeyCode::KeyG),
+            ("KeyB", KeyCode::KeyB),
+            ("KeyT", KeyCode::KeyT),
+            ("ArrowUp", KeyCode::ArrowUp),
+            ("ArrowDown", KeyCode::ArrowDown),
+            ("ArrowLeft", KeyCode::ArrowLeft),
+            ("ArrowRight", KeyCode::ArrowRight),
+            ("Space", KeyCode::Space),
+            ("Tab", KeyCode::Tab),
+            ("Backquote", KeyCode::Backquote),
+            ("Digit1", KeyCode::Digit1),
+            ("Digit2", KeyCode::Digit2),
+            ("Digit3", KeyCode::Digit3),
+        ];
+        const PHYSICAL_NAMES_2: [(&str, KeyCode); 2] =
+            [("Digit4", KeyCode::Digit4), ("Digit5", KeyCode::Digit5)];
+        for (name, code) in PHYSICAL_NAMES.into_iter().chain(PHYSICAL_NAMES_2) {
+            if self.polled_keys.contains(name) {
+                self.held.insert(code);
+            } else if !matches!(code, KeyCode::ShiftLeft | KeyCode::ShiftRight) {
+                self.held.remove(&code);
+            }
         }
     }
 
@@ -1018,12 +1204,166 @@ impl App {
         }
     }
 
+    /// REMAP capture: the next pressed input resolves the pending
+    /// rebind (`Key[$ key][type] = k`, `Other_10:374-404`). Mouse
+    /// buttons capture from the viewport press path (`lmb_down` /
+    /// `rmb_down`); keys capture here and in `stage_physical`.
+    /// Returns `true` while a capture is armed (callers skip normal
+    /// staging so the capture key does not fire gameplay).
+    fn capture_armed(&self) -> bool {
+        self.sim
+            .world
+            .get_resource::<InputMapState>()
+            .is_some_and(|s| s.capture.is_some())
+    }
+
+    /// Resolve the pending capture with a mouse button (viewport press
+    /// path). GML only captures `mb_left`/`mb_right` for the keyboard
+    /// side; gamepad-side captures resolve from pad edges in
+    /// `feed_input`.
+    fn capture_mouse_press(&mut self, left: bool) {
+        use repame_input::KeymapEntry;
+        self.sim.world.init_resource::<InputMapState>();
+        let entry = if left {
+            KeymapEntry::Mouse(repose_core::input::PointerButton::Primary)
+        } else {
+            KeymapEntry::Mouse(repose_core::input::PointerButton::Secondary)
+        };
+        let mut state = self.sim.world.resource_mut::<InputMapState>();
+        let Some(capture) = state.capture.clone() else {
+            return;
+        };
+        if capture.device == repame_input::KeymapDevice::KeyboardMouse {
+            state.map.resolve_capture(&capture, Some(entry));
+            state.capture = None;
+            self.persist_keymap();
+        }
+    }
+
+    fn capture_key_press(&mut self, key: &repose_core::input::Key) {
+        use repame_input::KeymapEntry;
+        self.sim.world.init_resource::<InputMapState>();
+        let chord = match key {
+            repose_core::input::Key::Space => repose_core::shortcuts::KeyChord::new(
+                repose_core::input::Key::Space,
+                repose_core::input::Modifiers::default(),
+            ),
+            repose_core::input::Key::Tab => repose_core::shortcuts::KeyChord::new(
+                repose_core::input::Key::Tab,
+                repose_core::input::Modifiers::default(),
+            ),
+            repose_core::input::Key::Enter => repose_core::shortcuts::KeyChord::new(
+                repose_core::input::Key::Enter,
+                repose_core::input::Modifiers::default(),
+            ),
+            repose_core::input::Key::Escape => repose_core::shortcuts::KeyChord::new(
+                repose_core::input::Key::Escape,
+                repose_core::input::Modifiers::default(),
+            ),
+            _ => return,
+        };
+        let mut state = self.sim.world.resource_mut::<InputMapState>();
+        let Some(capture) = state.capture.clone() else {
+            return;
+        };
+        if capture.device == repame_input::KeymapDevice::KeyboardMouse {
+            state
+                .map
+                .resolve_capture(&capture, Some(KeymapEntry::Key(chord)));
+            state.capture = None;
+            self.persist_keymap();
+        }
+    }
+
+    fn capture_physical_press(&mut self, name: &str) {
+        use repame_input::KeymapEntry;
+        self.sim.world.init_resource::<InputMapState>();
+        if !self.capture_armed() {
+            return;
+        }
+        // Physical name -> KeyChord: letters by position, digits,
+        // arrows, space, tab, backquote (console). Shift synthesizes
+        // from modifiers, not a chord of its own.
+        let key = match name {
+            "KeyW" => repose_core::input::Key::Character('w'),
+            "KeyA" => repose_core::input::Key::Character('a'),
+            "KeyS" => repose_core::input::Key::Character('s'),
+            "KeyD" => repose_core::input::Key::Character('d'),
+            "KeyE" => repose_core::input::Key::Character('e'),
+            "KeyF" => repose_core::input::Key::Character('f'),
+            "KeyQ" => repose_core::input::Key::Character('q'),
+            "KeyG" => repose_core::input::Key::Character('g'),
+            "KeyB" => repose_core::input::Key::Character('b'),
+            "KeyT" => repose_core::input::Key::Character('t'),
+            "Digit1" => repose_core::input::Key::Character('1'),
+            "Digit2" => repose_core::input::Key::Character('2'),
+            "Digit3" => repose_core::input::Key::Character('3'),
+            "Digit4" => repose_core::input::Key::Character('4'),
+            "Digit5" => repose_core::input::Key::Character('5'),
+            "Space" => repose_core::input::Key::Space,
+            "Tab" => repose_core::input::Key::Tab,
+            "Backquote" => repose_core::input::Key::Character('`'),
+            "ArrowUp" => repose_core::input::Key::ArrowUp,
+            "ArrowDown" => repose_core::input::Key::ArrowDown,
+            "ArrowLeft" => repose_core::input::Key::ArrowLeft,
+            "ArrowRight" => repose_core::input::Key::ArrowRight,
+            _ => return,
+        };
+        let chord = repose_core::shortcuts::KeyChord::new(key, repose_core::input::Modifiers::default());
+        let mut state = self.sim.world.resource_mut::<InputMapState>();
+        let Some(capture) = state.capture.clone() else {
+            return;
+        };
+        if capture.device == repame_input::KeymapDevice::KeyboardMouse {
+            state
+                .map
+                .resolve_capture(&capture, Some(KeymapEntry::Key(chord)));
+            state.capture = None;
+            self.persist_keymap();
+        }
+    }
+
+    fn cancel_remap_capture(&mut self) {
+        self.sim.world.init_resource::<InputMapState>();
+        let mut state = self.sim.world.resource_mut::<InputMapState>();
+        // GML Backspace clears the entry (`Key[$ key][type]` stays but
+        // reads unbound); Escape cancels the gesture.
+        if state.capture.is_some() {
+            let capture = state.capture.clone().expect("checked");
+            state.map.resolve_capture(&capture, None);
+            state.capture = None;
+            self.persist_keymap();
+        }
+    }
+
+    /// Write the live keymap back into the save resource + dirty flag
+    /// (GML `scrOptionsSaveKeymaps` + `scrSave` on every rebind).
+    fn persist_keymap(&mut self) {
+        let rows = self
+            .sim
+            .world
+            .get_resource::<InputMapState>()
+            .map(|s| KeyBindings::from_keymap(&s.map))
+            .unwrap_or_default();
+        self.sim.world.init_resource::<crate::savedata_part::SaveData>();
+        self.sim
+            .world
+            .resource_mut::<crate::savedata_part::SaveData>()
+            .key_bindings = rows;
+        self.sim.world.init_resource::<crate::comps_a::SaveDirty>();
+        self.sim.world.resource_mut::<crate::comps_a::SaveDirty>().0 = true;
+    }
+
     /// Right mouse button down (root pointer handler, `Secondary` only):
     /// GML `spec` on `mb_right` shares the synthesized [`KeyCode::ShiftLeft`]
     /// channel so `sample_keyboard` raises spec/ability through the bevy
     /// path. The viewport also stages a buttonless pick for the press;
     /// [`App::feed_input`] drops it via [`App::rmb_down_edge`].
     fn rmb_down(&mut self) {
+        if self.capture_armed() {
+            self.capture_mouse_press(false);
+            return;
+        }
         if !self.held.contains(&KeyCode::ShiftLeft) {
             self.held.insert(KeyCode::ShiftLeft);
             self.edges.push(KeyCode::ShiftLeft);
@@ -1045,7 +1385,13 @@ impl App {
     /// Left mouse button down (root pointer handler, `Primary` only):
     /// latches [`App::lmb_held`] so automatic weapons keep firing while
     /// held. The viewport `Press` still stages the aim/fire click edge.
+    /// A pending REMAP capture eats the press instead (GML captures
+    /// `mb_left` as the new binding).
     fn lmb_down(&mut self) {
+        if self.capture_armed() {
+            self.capture_mouse_press(true);
+            return;
+        }
         self.lmb_held = true;
     }
 
@@ -1058,7 +1404,34 @@ impl App {
     /// `on_pointer_move`, y-down). Stored raw — [`App::cursor_to_world`]
     /// unprojects it through the live camera each frame.
     fn cursor_move(&mut self, phys_px: Vec2) {
+        self.input_seq += 1;
+        self.cursor_seq = self.input_seq;
         self.cursor_px = Some(phys_px);
+    }
+
+    /// Stage one viewport hover (world point + order stamp; see
+    /// `cursor_seq` — the viewport sees the free moves the root's
+    /// `on_pointer_move` never gets).
+    fn stage_hover(&mut self, world: Vec2) {
+        self.input_seq += 1;
+        self.hover_seq = self.input_seq;
+        self.hover = Some(world);
+    }
+
+    /// Live cursor in world coords, last-writer-wins: the root's
+    /// `cursor_px` (unprojected through the current camera, valid
+    /// while walking) when it staged after the last viewport hover,
+    /// else the hover world point. Falls back to hover when there is
+    /// no cursor yet (touch/pen never stage cursor moves).
+    /// (`Camera2d::dp_to_world_pt` over the dp viewport extent — bevy
+    /// `player_aim` (`window.cursor_position()` + `viewport_to_world_2d`)
+    /// parity). `None` until the first pointer move of either kind.
+    fn live_cursor_world(&self) -> Option<Vec2> {
+        if self.cursor_seq >= self.hover_seq {
+            self.cursor_to_world().or(self.hover)
+        } else {
+            self.hover.or_else(|| self.cursor_to_world())
+        }
     }
 
     /// Live cursor in world coords: the staged window-physical px point
@@ -1123,6 +1496,35 @@ impl App {
         self.touch_new.remove(&id);
     }
 
+    /// Reconcile the event-staged sets against the platform's polled
+    /// hardware snapshot (`Scheduler::held_keys` + mouse levels,
+    /// maintained from raw winit events without passing through focus
+    /// dispatch — see `runner_common::on_keyboard_input`). Without this
+    /// a key whose release was swallowed (focus move, overlay,
+    /// alt-tab) sticks in `held` until pressed again; with it the
+    /// polled level wins and movement matches GML's `keyboard_check`
+    /// every frame.
+    pub fn feed_polled(&mut self, sched: &Scheduler) {
+        if !sched.window_focused {
+            self.set_window_focused(false);
+            return;
+        }
+        self.window_focused = true;
+        self.polled_keys = sched.held_keys.iter().cloned().collect();
+        // Mouse levels: the root pointer handlers own the latches; the
+        // polled set repairs a missed up (release outside the window)
+        // but never forces a down the handlers missed.
+        if !sched.mouse_primary {
+            self.lmb_held = false;
+        }
+        if !sched.mouse_secondary {
+            self.rmb_held = false;
+            if !self.shift_held {
+                self.held.remove(&KeyCode::ShiftLeft);
+            }
+        }
+    }
+
     /// Drain staged shell input into sim resources (runs before
     /// [`App::advance`] each frame; pulses are take-once downstream).
     fn feed_input(&mut self) {
@@ -1132,6 +1534,11 @@ impl App {
         for action in self.menu_actions.drain(..) {
             apply_menu_action(&mut self.sim.world, action);
         }
+        // Reconcile event-staged levels against the polled physical
+        // set before sampling: a swallowed key-up (alt-tab, overlay)
+        // cannot stick movement on, and a polled-down key missing
+        // from `held` is re-added.
+        self.reconcile_held_with_polled();
 
         let just: HashSet<KeyCode> = self.edges.drain(..).collect();
         let state = self
@@ -1273,8 +1680,10 @@ impl App {
             ..MouseState::default()
         };
         {
+            self.sim.world.init_resource::<InputMapState>();
+            let keymap = self.sim.world.resource::<InputMapState>().clone();
             let mut input = self.sim.world.resource_mut::<NtInput>();
-            sample_keyboard(&self.held, &just, &mouse, &mut input);
+            crate::input::sample_keyboard_mapped(&self.held, &just, &mouse, Some(&keymap), &mut input);
             // Bevy `sample_input` layering verbatim: gamepads in query
             // order, then touch. Sticks overwrite nonzero axes; pulses
             // OR-accumulate; slots replace; cycle saturating-adds.
@@ -1373,7 +1782,7 @@ impl App {
                 // Live cursor, unprojected through this frame's camera
                 // (see `cursor_px`): valid even when the pointer hasn't
                 // moved since the camera did.
-                let aim_hover = self.cursor_to_world().or(self.hover);
+                let aim_hover = self.live_cursor_world();
                 if let Some(hover) = aim_hover {
                     let mut input = self.sim.world.resource_mut::<NtInput>();
                     if input.aim_axis == Vec2::ZERO {
@@ -1559,8 +1968,46 @@ impl App {
         if sched.size.0 > 0 {
             self.view_width = sched.size.0 as f32;
         }
+        self.feed_polled(sched);
         self.feed_input();
         self.advance(dt);
+        // GML `UberCont/Step_0:175-183` cursor law, computed from the
+        // post-tick sim state: keyboard mode hides the OS cursor (the
+        // game draws its own crosshair at the live cursor position),
+        // menus/mouse mode shows it. Touch-driven (no keyboard, no
+        // pad) always shows it — fingers need no cursor and the GML
+        // `opt_keyboard` branch draws nothing on touch either.
+        let keyboard_mode = {
+            let gamepad = self
+                .sim
+                .world
+                .get_resource::<crate::savedata_part::SaveData>()
+                .is_some_and(|s| s.settings.gamepad_enabled)
+                && !self.pads.is_empty();
+            !gamepad && self.touch_active.is_empty()
+        };
+        let overlay_now = self
+            .sim
+            .world
+            .get_resource::<OverlayMenu>()
+            .copied()
+            .unwrap_or_default();
+        let paused_now = self
+            .sim
+            .world
+            .get_resource::<crate::state::Paused>()
+            .is_some_and(|p| p.0);
+        // GML `UberCont/Step_0:175-183` has no state carve-outs at
+        // all: from the first splash frame, desktop keyboard mode
+        // hides the OS cursor (`opt_keyboard` defaults true on
+        // desktop and nothing in boot/menus/death clears it), and the
+        // game crosshair (`UberCont/Draw_75`, gated only on
+        // `window_get_cursor() == cr_none` + `show_crosshair`) draws
+        // over everything — splash reel, menus, campfire, death
+        // screen alike. Pause/overlay are the only hides (GML
+        // `PauseImage` / `MenuOptions` take over the pointer there).
+        let hide_os_cursor =
+            keyboard_mode && !paused_now && overlay_now == OverlayMenu::None;
         // GML `game_end` parity for the QUIT row (bevy `AppExit` has no
         // headless window service; the desktop shell exits here).
         if self
@@ -1675,7 +2122,7 @@ impl App {
             // crosshair tracks the on-screen cursor as the camera moves
             // (same source as aim; falls back to the last Hover).
             self.sim.world.insert_resource(crate::render::HoverWorld(
-                self.cursor_to_world().or(self.hover),
+                self.live_cursor_world(),
             ));
             // Blob shadows first (GML `shad` surface: under the actors).
             // Every layer stamps its z-ladder rung (render.rs `Z_*`,
@@ -1871,6 +2318,51 @@ impl App {
                 );
                 stamp_z(&mut menu, Z_MENU);
                 s.extend(menu);
+            }
+            // Menu crosshair (GML `UberCont/Draw_75` verbatim): on every
+            // non-play screen in keyboard mode (splash reel, main menu,
+            // campfire title, loading cover) the OS cursor is hidden and
+            // the game draws `sprCrosshair[opt_crosshair]` at the raw
+            // cursor position — no player entity, no lerp, alpha 1.
+            // In GML this runs at Draw_75, above the Menu chrome, so it
+            // rides at menu z here (pushed after, stable-sorted on top).
+            // Skipped while paused/an overlay owns the pointer (those
+            // show the OS cursor) and on touch input (no cursor at all).
+            let menu_crosshair = matches!(
+                menu_kind,
+                Some(
+                    MenuOverlay::Splash
+                        | MenuOverlay::MainMenu
+                        | MenuOverlay::Title
+                        | MenuOverlay::Loading
+                )
+            ) && !paused
+                && overlay == OverlayMenu::None
+                && self.touch_active.is_empty();
+            if menu_crosshair
+                && let Some(pos) = self.live_cursor_world()
+            {
+                let frame = self
+                    .sim
+                    .world
+                    .get_resource::<crate::savedata_part::SaveData>()
+                    .map(|sv| sv.settings.crosshair as i32)
+                    .unwrap_or(0);
+                let frames =
+                    crate::render::strip_frames_pub(assets, "images/sprCrosshair.png").max(1)
+                        as i32;
+                if let Some(sp) = assets.sprite_for(
+                    "images/sprCrosshair.png",
+                    frame.clamp(0, frames - 1),
+                    pos,
+                    false,
+                    0.0,
+                    [1.0, 1.0, 1.0, 1.0],
+                ) {
+                    let mut title_cross = vec![sp];
+                    stamp_z(&mut title_cross, Z_MENU);
+                    s.extend(title_cross);
+                }
             }
             // Sideart chrome around the view (GML `UberCont/Draw_74`:
             // over everything, game and menus alike — but never over a
@@ -2077,7 +2569,7 @@ impl App {
                         app.lmb_down();
                         app.stage_click(world, screen)
                     }
-                    PickEvent::Hover { world } => app.hover = Some(world),
+                    PickEvent::Hover { world } => app.stage_hover(world),
                     // Touch contacts (screen px, y-down) feed bevy's
                     // touch zones; taps still land as clicks above.
                     PickEvent::TouchDown { id, screen } => {
@@ -2099,7 +2591,7 @@ impl App {
                         app.lmb_down();
                         app.stage_click(world, screen)
                     }
-                    PickEvent::Hover { world } => app.hover = Some(world),
+                    PickEvent::Hover { world } => app.stage_hover(world),
                     PickEvent::TouchDown { id, screen } => {
                         app.touch_down(id, Vec2::new(screen[0], screen[1]))
                     }
@@ -2112,16 +2604,34 @@ impl App {
         };
 
         // Focusable root so hardware keys reach the staging feed (same
-        // shape as the rozvp pilot root).
+        // shape as the rozvp pilot root). `on_focus_changed(false)` is
+        // the focus-loss hook: winit delivers no key-ups across an
+        // alt-tab, so held keys + edges drop here (GML's
+        // `keyboard_check` reads all-up while unfocused).
+        // Cursor: the scheduler override wins over hover (hover would
+        // always report Default over the viewport and un-hide the
+        // pointer). GML `UberCont/Step_0:175-183`: keyboard mode hides
+        // the OS cursor, menus/mouse mode shows it.
+        sched.cursor_override = Some(if hide_os_cursor {
+            repose_core::CursorIcon::Hidden
+        } else {
+            repose_core::CursorIcon::Default
+        });
         let app_ptr = self as *mut App;
         let focus = remember(FocusRequester::new);
         let fr_positioned = (*focus).clone();
+        let focus_ptr = self as *mut App;
         let root_mod = Modifier::new()
             .fill_max_size()
             .focusable(true)
             .focus_requester((*focus).clone())
             .on_globally_positioned(move |_| {
                 fr_positioned.request_focus();
+            })
+            .on_focus_changed(move |focused| {
+                // SAFETY: synchronous compose-time dispatch only.
+                let app = unsafe { &mut *focus_ptr };
+                app.set_window_focused(focused);
             })
             .on_key_event(move |ke: KeyEvent| {
                 // SAFETY: synchronous compose-time dispatch only.
@@ -2423,6 +2933,11 @@ fn init_schedule_resources(world: &mut World) {
     world.init_resource::<Queue<crate::audio::UiBridgeAction>>();
     world.init_resource::<Queue<crate::audio::ReactiveAudioRequest>>();
     world.init_resource::<repame_anim::AnimCatalog>();
+    // Editable controls: default map, then overlay the save file's
+    // rows when present (GML `scrOptionsLoadKeymaps` on boot). The
+    // disk shell calls `App::load_save` after boot; headless/tests
+    // keep GML defaults.
+    world.init_resource::<crate::keymap::InputMapState>();
 }
 
 /// Resolve the art dir: `$NT_ASSETS` -> exe-dir `assets` -> cwd `assets` ->
@@ -2542,26 +3057,6 @@ fn nearest_poi(world: &mut World, player: Vec2) -> Option<CamPoi> {
         return best.map(|(_, poi)| poi);
     }
     best.map(|(_, poi)| poi)
-}
-
-/// Backend-neutral char -> [`KeyCode`] (letters lowered by the caller).
-fn keycode_for_char(c: char) -> Option<KeyCode> {
-    match c {
-        'w' => Some(KeyCode::KeyW),
-        'a' => Some(KeyCode::KeyA),
-        's' => Some(KeyCode::KeyS),
-        'd' => Some(KeyCode::KeyD),
-        'e' => Some(KeyCode::KeyE),
-        'f' => Some(KeyCode::KeyF),
-        'q' => Some(KeyCode::KeyQ),
-        'g' => Some(KeyCode::KeyG),
-        '1' => Some(KeyCode::Digit1),
-        '2' => Some(KeyCode::Digit2),
-        '3' => Some(KeyCode::Digit3),
-        '4' => Some(KeyCode::Digit4),
-        '5' => Some(KeyCode::Digit5),
-        _ => None,
-    }
 }
 
 /// Placeholder sprite layer (no-assets path): colored quads from sim truth
@@ -2968,4 +3463,42 @@ pub fn menu_overlay_lines(kind: MenuOverlay, world: &mut World) -> Vec<String> {
 /// Thin wrapper over [`App::view`] so `main.rs` stays trivial.
 pub fn root_view(sched: &mut Scheduler, ctx: &RenderContext, app: &mut App, dt: Duration) -> View {
     app.view(sched, ctx, dt)
+}
+
+
+#[cfg(test)]
+mod cursor_staging_tests {
+    use super::*;
+
+    /// Reported bug verbatim: after any click-drag, free mouse moves
+    /// stopped moving the crosshair — it only followed while dragging.
+    /// Root cause: repose dispatches free moves ONLY to the topmost
+    /// region, so the root's `cursor_move` (the `cursor_px` source)
+    /// runs almost exclusively on capture-path (button-held) moves,
+    /// while viewport `Hover` fires on free moves. Aim preferred the
+    /// stale `cursor_px` via `.or()` and shadowed live hovers.
+    /// `live_cursor_world` uses whichever staged last.
+    #[test]
+    fn stale_drag_point_does_not_shadow_live_hover() {
+        let mut app = App::new_with_seed(4242);
+        // Drag-era staging: cursor first, then a newer hover.
+        app.cursor_move(Vec2::new(100.0, 100.0));
+        app.stage_hover(Vec2::new(10.0, 10.0));
+        // Hover staged last → hover wins even though cursor_px exists.
+        assert_eq!(app.live_cursor_world(), Some(Vec2::new(10.0, 10.0)));
+        // A fresh drag move retakes the lead (unprojects through the
+        // live camera instead of the baked hover point).
+        app.cursor_move(Vec2::new(100.0, 100.0));
+        let live = app.live_cursor_world().expect("cursor staged");
+        assert!(
+            (live - Vec2::new(10.0, 10.0)).length() > 1.0,
+            "fresh cursor_px must win over older hover, got {live:?}"
+        );
+    }
+
+    #[test]
+    fn no_staging_yet_is_none() {
+        let app = App::new_with_seed(4242);
+        assert_eq!(app.live_cursor_world(), None);
+    }
 }

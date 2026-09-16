@@ -2496,6 +2496,7 @@ dependencies = [
  "repame-anim",
  "repame-atlas",
  "repame-fx",
+ "repame-input",
  "repame-shell",
  "repame-sim",
  "repame-sprite",
@@ -3605,6 +3606,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "repame-input"
+version = "0.2.0"
+dependencies = [
+ "bevy_ecs",
+ "repame-sim",
+ "repose-core",
+ "serde",
+]
+
+[[package]]
 name = "repame-shell"
 version = "0.2.0"
 dependencies = [
@@ -3665,7 +3676,7 @@ dependencies = [
 
 [[package]]
 name = "repose-app"
-version = "0.30.8"
+version = "0.30.9"
 dependencies = [
  "log",
  "repose-core",
@@ -3676,15 +3687,17 @@ dependencies = [
 
 [[package]]
 name = "repose-canvas"
-version = "0.30.8"
+version = "0.30.9"
 dependencies = [
+ "lyon_path",
+ "lyon_tessellation",
  "repose-core",
  "repose-ui",
 ]
 
 [[package]]
 name = "repose-core"
-version = "0.30.8"
+version = "0.30.9"
 dependencies = [
  "accesskit",
  "log",
@@ -3698,7 +3711,7 @@ dependencies = [
 
 [[package]]
 name = "repose-devtools"
-version = "0.30.8"
+version = "0.30.9"
 dependencies = [
  "repose-core",
  "web-time",
@@ -3706,7 +3719,7 @@ dependencies = [
 
 [[package]]
 name = "repose-macros"
-version = "0.30.8"
+version = "0.30.9"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3715,7 +3728,7 @@ dependencies = [
 
 [[package]]
 name = "repose-navigation"
-version = "0.30.8"
+version = "0.30.9"
 dependencies = [
  "log",
  "repose-core",
@@ -3726,7 +3739,7 @@ dependencies = [
 
 [[package]]
 name = "repose-platform"
-version = "0.30.8"
+version = "0.30.9"
 dependencies = [
  "accesskit",
  "accesskit_winit",
@@ -3756,7 +3769,7 @@ dependencies = [
 
 [[package]]
 name = "repose-render-wgpu"
-version = "0.30.8"
+version = "0.30.9"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -3774,7 +3787,7 @@ dependencies = [
 
 [[package]]
 name = "repose-text"
-version = "0.30.8"
+version = "0.30.9"
 dependencies = [
  "font-awl",
  "js-sys",
@@ -3791,7 +3804,7 @@ dependencies = [
 
 [[package]]
 name = "repose-tree"
-version = "0.30.8"
+version = "0.30.9"
 dependencies = [
  "log",
  "rapidhash",
@@ -3804,7 +3817,7 @@ dependencies = [
 
 [[package]]
 name = "repose-ui"
-version = "0.30.8"
+version = "0.30.9"
 dependencies = [
  "log",
  "repose-core",

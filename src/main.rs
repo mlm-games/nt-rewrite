@@ -120,6 +120,13 @@ fn main() -> anyhow::Result<()> {
         Ok(dir) => eprintln!("nt: assets loaded from {}", dir.display()),
         Err(e) => eprintln!("nt: running without assets ({e}); placeholder renderer"),
     }
+    let save_path = nt_rewrite::savedata_part::save_file_path();
+    let save = app.load_save(&save_path);
+    eprintln!(
+        "nt: save loaded from {} (version {})",
+        save_path.display(),
+        save.version
+    );
     let mut poller = GamepadPoller::new();
     let mut pads: HashMap<GamepadId, PadBridge> = HashMap::new();
     let mut last = Instant::now();
