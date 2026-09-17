@@ -1193,22 +1193,12 @@ impl App {
         let Some(code) = crate::input::keycode_for_physical(name) else {
             return;
         };
-        // `R` restart + arrows/Tab/Space/Escape/Enter edges are owned
-        // by `handle_key`; the physical path only maintains `held`
-        // levels for them so a focus-routed release can never stick
-        // movement while the key is physically up (and vice versa).
-        let edge_owned_elsewhere = matches!(
-            code,
-            KeyCode::ArrowUp
-                | KeyCode::ArrowDown
-                | KeyCode::ArrowLeft
-                | KeyCode::ArrowRight
-                | KeyCode::Space
-                | KeyCode::Tab
-        );
+        // All edges stage here: focus-routed `handle_key` and this
+        // polled path both land fresh presses in `edges`; `held`-insert
+        // dedups double delivery, so one landing pushes one edge.
         if down {
             let fresh = self.held.insert(code);
-            if fresh && !is_repeat && !edge_owned_elsewhere {
+            if fresh && !is_repeat {
                 self.edges.push(code);
             }
         } else {
@@ -1775,6 +1765,12 @@ impl App {
         let menu_open =
             state == AppState::InGame && (paused || overlay != OverlayMenu::None) && !game_over;
 
+        // Context switch (Godot `_gui_input`-before-`_unhandled_input`
+        // parity): one screen owns Space/arrows per frame. Menus consume
+        // them as nav/confirm; live gameplay derives action pulses from
+        // them; never both. `just` still fans out to every rebound
+        // action inside the active context, so shared bindings all fire.
+        let in_menu = !live_play;
         // Keyboard cursor nav where the sim protocol speaks slots/cycle:
         // title pods (Left/Right) and mutation highlight (Left/Right).
         // `cycle_weapon` pulses are taken by `tick_menus` the same step.
@@ -1864,7 +1860,23 @@ impl App {
             self.sim.world.init_resource::<InputMapState>();
             let keymap = self.sim.world.resource::<InputMapState>().clone();
             let mut input = self.sim.world.resource_mut::<NtInput>();
-            crate::input::sample_keyboard_mapped(&self.held, &just, &mouse, Some(&keymap), &mut input);
+            // Menu screens own Space/arrows: strip their edges before the
+            // gameplay sampler so one press can't both confirm a menu
+            // row and pulse a gameplay action (fire/swap).
+            let (held, just) = if in_menu {
+                let held: HashSet<KeyCode> = self
+                    .held
+                    .iter()
+                    .copied()
+                    .filter(|c| !menu_owned_key(*c))
+                    .collect();
+                let sampled: HashSet<KeyCode> =
+                    just.iter().copied().filter(|c| !menu_owned_key(*c)).collect();
+                (held, sampled)
+            } else {
+                (self.held.clone(), just.clone())
+            };
+            crate::input::sample_keyboard_mapped(&held, &just, &mouse, Some(&keymap), &mut input);
             // Bevy `sample_input` layering verbatim: gamepads in query
             // order, then touch. Sticks overwrite nonzero axes; pulses
             // OR-accumulate; slots replace; cycle saturating-adds.
@@ -3528,6 +3540,23 @@ fn menu_button_action(
     }
 }
 
+/// Menu-owned keys (Godot `_gui_input`-before-`_unhandled_input`
+/// parity): while a menu owns the screen, Space/arrows/Tab drive nav
+/// and confirm only — `feed_input` strips them before the gameplay
+/// sampler so one press can't both confirm a row and pulse a gameplay
+/// action. Gameplay keeps them via `held`/`just` on `live_play`.
+fn menu_owned_key(code: KeyCode) -> bool {
+    matches!(
+        code,
+        KeyCode::Space
+            | KeyCode::Tab
+            | KeyCode::ArrowUp
+            | KeyCode::ArrowDown
+            | KeyCode::ArrowLeft
+            | KeyCode::ArrowRight
+    )
+}
+
 /// Menu click router: canvas-dp click position -> [`UiAction`].
 /// Hit-tests the screen-anchored overlay buttons in live GML GUI space
 /// (GUI height 240, width [`gml_view_size`]; dp per GUI px `k =
@@ -3879,6 +3908,125 @@ mod cursor_staging_tests {
             "rebound Z must steer north, got {:?}",
             out.move_axis
         );
+    }
+
+    /// Sharing law: one landing must push one edge per action bound to
+    /// it, so every rebound action sharing Space fires (fire AND walk
+    /// AND swap from one Space press). Regression: `stage_physical`
+    /// suppressed Space edges as "owned elsewhere", which starved all
+    /// but one sharing action of its edge.
+    #[test]
+    fn shared_space_fires_every_bound_action() {
+        use crate::input::{KeyCode, MouseState, NtInput};
+        use crate::keymap::NtAction;
+        use repame_input::{Keymap, KeymapDevice, KeymapEntry};
+        use repose_core::input::{Key, Modifiers};
+        use repose_core::shortcuts::KeyChord;
+        use std::collections::HashSet;
+        let space = || KeymapEntry::Key(KeyChord::new(Key::Space, Modifiers::default()));
+        let mut map = Keymap::new();
+        map.set_keyboard(NtAction::Fire, space());
+        map.set_keyboard(NtAction::North, space());
+        map.set_keyboard(NtAction::Swap, space());
+        let state = InputMapState {
+            map,
+            capture: None,
+        };
+        let held: HashSet<KeyCode> = [KeyCode::Space].into_iter().collect();
+        let just: HashSet<KeyCode> = [KeyCode::Space].into_iter().collect();
+        let mut out = NtInput::default();
+        crate::input::sample_keyboard_mapped(
+            &held,
+            &just,
+            &MouseState::default(),
+            Some(&state),
+            &mut out,
+        );
+        assert!(out.fire_held, "shared Space must hold fire");
+        assert!(
+            out.take_fire_pressed(),
+            "shared Space must pulse fire_pressed"
+        );
+        assert!(
+            out.move_axis.y < -0.5,
+            "shared Space must steer north, got {:?}",
+            out.move_axis
+        );
+        assert!(
+            out.take_cycle_weapon() == 1,
+            "shared Space must pulse swap cycle"
+        );
+        let _ = KeymapDevice::KeyboardMouse;
+    }
+
+    /// Context switch: Space on a menu screen must not pulse gameplay
+    /// actions. One Space press over Title toggles the loadout path
+    /// exactly once with zero `fire_pressed`.
+    #[test]
+    fn menu_space_never_pulses_gameplay_fire() {
+        use crate::input::{KeyCode, MouseState, NtInput};
+        use crate::keymap::{InputMapState, NtAction};
+        use repame_input::{Keymap, KeymapEntry};
+        use repose_core::input::{Key, Modifiers};
+        use repose_core::shortcuts::KeyChord;
+        use std::collections::HashSet;
+        let space = || KeymapEntry::Key(KeyChord::new(Key::Space, Modifiers::default()));
+        let mut map = Keymap::new();
+        map.set_keyboard(NtAction::Fire, space());
+        map.set_keyboard(NtAction::North, space());
+        let state = InputMapState {
+            map,
+            capture: None,
+        };
+        let held: HashSet<KeyCode> = [KeyCode::Space].into_iter().collect();
+        let just: HashSet<KeyCode> = [KeyCode::Space].into_iter().collect();
+        let strip = |c: KeyCode| !menu_owned_key(c);
+        let held: HashSet<KeyCode> = held.into_iter().filter(|c| strip(*c)).collect();
+        let just: HashSet<KeyCode> = just.into_iter().filter(|c| strip(*c)).collect();
+        let mut out = NtInput::default();
+        crate::input::sample_keyboard_mapped(
+            &held,
+            &just,
+            &MouseState::default(),
+            Some(&state),
+            &mut out,
+        );
+        assert!(
+            !out.take_fire_pressed(),
+            "menu-owned Space must not pulse fire"
+        );
+        assert!(
+            !out.fire_held,
+            "menu-owned Space must not hold fire"
+        );
+    }
+
+    /// Context switch: arrows via the polled-only path (no `handle_key`,
+    /// i.e. no focus) must still drive menu nav on MainMenu and on an
+    /// open Settings overlay.
+    #[test]
+    fn polled_arrows_drive_menu_nav_without_focus() {
+        use repose_core::runtime::Scheduler;
+        for (state, overlay) in [
+            (AppState::MainMenu, OverlayMenu::None),
+            (AppState::InGame, OverlayMenu::Settings),
+        ] {
+            let mut app = App::new_with_seed(4242);
+            app.sim.world.insert_resource(state);
+            app.sim.world.insert_resource(overlay);
+            app.sim.world.init_resource::<NtInput>();
+            let mut sched = Scheduler::default();
+            sched.window_focused = true;
+            sched.held_keys = vec!["ArrowDown".to_string()];
+            app.feed_polled(&sched);
+            app.feed_input();
+            let (dv, dh) = app.sim.world.resource_mut::<NtInput>().take_menu_nav();
+            assert_eq!(
+                (dv, dh),
+                (1, 0),
+                "ArrowDown must step menu nav on {state:?}/{overlay:?}"
+            );
+        }
     }
     /// Live click-to-arm chain: a click on the REMAP page's first row
     /// (through `route_menu_click` → `settings_click_action` → hot
