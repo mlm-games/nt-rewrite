@@ -51,7 +51,7 @@ use crate::comps_b::{
     Beam, BossBrain, BossPhase, ChestKind, Corpse, Enemy, EnemyBrain, FxAngle, GroundDecalTint,
     HazardCloud, OpenedChest, Pickup, PickupKind, PickupLifetime, Portal, PortalClear, PortalShock,
     PortalStrike, Prop, PropSprites, StaticFx, SwingFx, Telekinesis, ThroneCarpet, ThroneSit,
-    WeaponVisual, YvCouch,
+    TitleCampChar, TitleCampfire, WeaponVisual, YvCouch,
 };
 use crate::data::{
     AreaId, CrownKind, EnemyKind, HazardKind, MutationId, RaceId, UltraMutationId, WeaponId,
@@ -1055,9 +1055,6 @@ pub const Z_FX: f32 = 1.0;
 pub const Z_BLOOM: f32 = 2.0;
 pub const Z_FOG: f32 = 3.0;
 pub const Z_CROSSHAIR: f32 = 4.0;
-/// Game-over dim quad rung: above the room, below the crosshair (GML
-/// `GameOver/Draw_0` dims before `UberCont/Draw_75` draws the cursor).
-pub const Z_GAMEOVER_DIM: f32 = 3.5;
 pub const Z_FAINTED: f32 = 5.0;
 pub const Z_PORTAL_INDICATOR: f32 = 6.0;
 pub const Z_SPIRAL_FIGURES: f32 = 7.0;
@@ -1280,6 +1277,49 @@ pub fn gml_camera_step(cam: &mut GmlCamera, vw: f32, vh: f32, s: &CamStepInput, 
     } else if cam.shake > 0.0 {
         cam.shake = (cam.shake - s.timescale).max(0.0);
     }
+}
+
+/// Title view focus (GML `Menu/Create_0:104-110` + `Menu/Step_1`
+/// verbatim): the view centers on the selected race's camper
+/// (`Menu.char[race]`); Random centers on `char[0]`, the Campfire
+/// itself (`with (Menu) char[0] = other.id` — the Campfire entity,
+/// not a CampChar). Returns the focus point in world px, `None` when
+/// the camp actors are absent (falls back to the campfire spawn).
+pub fn title_cam_focus(world: &mut World) -> Option<Vec2> {
+    let selected = world
+        .get_resource::<SelectedCharacter>()
+        .map(|s| s.0 as usize)
+        .unwrap_or(0);
+    if selected != 0 {
+        let mut campers = world.query::<(&Pos, &TitleCampChar)>();
+        for (pos, camp) in campers.iter(world) {
+            if camp.race_gml == selected {
+                return Some(pos.0);
+            }
+        }
+    }
+    world
+        .query::<(&Pos, &TitleCampfire)>()
+        .iter(world)
+        .next()
+        .map(|(p, _)| p.0)
+}
+
+/// One GML `Menu/Step_1` title camera step: `t_lerp` toward centering
+/// on the [`title_cam_focus`] point (`view_xview = x - vw/2`,
+/// `view_yview = y - vh/2` at rate 0.1; `Create_0:104-110` snaps with
+/// `m = 1` on entry). `t_lerp(a, b, 0.1) = lerp(b, a, 0.9^timescale)`,
+/// i.e. close 10% of the gap per step at timescale 1 — no `round()`
+/// (unlike `BackCont`). `cam.snap` forces the snap and clears.
+pub fn title_camera_step(cam: &mut GmlCamera, vw: f32, vh: f32, focus: Vec2, dt: f32, snap: bool) {
+    let m = if snap || cam.snap {
+        1.0
+    } else {
+        1.0 - 0.9f32.powf(dt.max(0.0) * 30.0)
+    };
+    cam.x = cam.x + (focus.x - vw * 0.5 - cam.x) * m;
+    cam.y = cam.y + (focus.y - vh * 0.5 - cam.y) * m;
+    cam.snap = false;
 }
 
 /// GPU camera for a look point: `units_per_pixel` carries the GML
@@ -6147,23 +6187,20 @@ pub const CROSSHAIR_DEADZONE: f32 = 32.0 * 0.4125;
 /// `player + (16 + dis)` along the aim heading (0.8 active / 0.1 idle),
 /// alpha lerped toward 5/0 at 0.4 (drawn as `min(1, alpha)`), active
 /// past the attack deadzone. Skipped while paused (GML `PauseImage`
-/// gate) and until the first hover stages a cursor. On game over the
-/// player entity is gone (despawned 0.85s after death), so the anchor
-/// is the corpse `Pos` — GML's `TopCont` keeps drawing at the death
-/// spot and `UberCont/Draw_75` keeps the cursor alive over the
-/// GameOver screen, whose MENU/RETRY buttons are aimed with the
-/// crosshair, not the OS arrow.
+/// gate) and until the first hover stages a cursor. GML `with Player`:
+/// no player entity, no crosshair — death removes it outright.
 pub fn crosshair_sprites(
     world: &mut World,
     assets: &RenderAssets,
     dt_secs: f32,
 ) -> Vec<SpriteInstance> {
     let mut out = Vec::new();
-    // Live gameplay + game over: paused/menus/offers keep the last aim
-    // but hide the cursor. Game-over is NOT gated out: GML keeps
-    // drawing the crosshair over the GameOver screen
-    // (`UberCont/Draw_75` only needs `window_get_cursor() == cr_none`,
-    // which holds through death since `opt_keyboard` stays true).
+    // Live gameplay only: paused/menus/offers keep the last aim but
+    // hide the cursor, and game over draws nothing here (GML
+    // `TopCont/Draw_0` is `with Player` — the entity is gone after
+    // death, so the lerped crosshair is gone too; the cursor over the
+    // GameOver screen is `UberCont/Draw_75`'s raw mouse sprite, owned
+    // by the menu-crosshair path in lib.rs).
     let live = world
         .get_resource::<crate::state::AppState>()
         .is_some_and(|s| *s == crate::state::AppState::InGame)
@@ -6187,18 +6224,7 @@ pub fn crosshair_sprites(
         .iter(world)
         .next()
         .map(|(p, _, a)| (p.0, a.0));
-    let anchor: Option<(Vec2, Vec2)> = match player {
-        Some(anchor) => Some(anchor),
-        // Dead: anchor on the player husk so the crosshair keeps
-        // aiming from the death spot (`Corpse.pos` is the same point).
-        // The husk outlives the screen (12s), so this never blinks.
-        None => world
-            .query::<(&Pos, &Corpse)>()
-            .iter(world)
-            .next()
-            .map(|(p, _)| (p.0, Vec2::X)),
-    };
-    let Some((pp, aim)) = anchor else {
+    let Some((pp, aim)) = player else {
         return out;
     };
     let hover = world.get_resource::<HoverWorld>().and_then(|h| h.0);
@@ -6242,38 +6268,6 @@ pub fn crosshair_sprites(
         0.0,
         [1.0, 1.0, 1.0, alpha],
     ) {
-        out.push(s);
-    }
-    out
-}
-
-/// Game-over dim quad (GML `GameOver/Draw_0:7-13` verbatim): the 0.7
-/// black rectangle over the view. It lives IN the sprite batch at a
-/// rung below the crosshair — never as a canvas scrim above the
-/// viewport, which would dim the `UberCont/Draw_75` crosshair too (in
-/// GML Draw_75 runs after Draw_0, so the cursor stays full-bright
-/// over the dim). Fullscreen `sprPixel` stretched over the live view
-/// rect at alpha 178/255; stable-sorts before the crosshair via
-/// `Z_GAMEOVER_DIM`.
-pub fn game_over_dim_sprites(
-    viewport_dp: [f32; 2],
-    world_size: [f32; 2],
-    cam: &Camera2d,
-    assets: &RenderAssets,
-) -> Vec<SpriteInstance> {
-    let view = view_rect_world(viewport_dp, world_size, cam);
-    let center = Vec2::new(view[0] + view[2] * 0.5, view[1] + view[3] * 0.5);
-    let mut out = Vec::new();
-    if let Some(mut s) = assets.sprite_stretched(
-        "images/sprPixel.png",
-        0,
-        center,
-        Vec2::new(view[2].max(1.0), view[3].max(1.0)),
-        0.0,
-        [0.0, 0.0, 0.0, 178.0 / 255.0],
-    ) {
-        s.anchor = Vec2::new(0.5, 0.5);
-        s.z = Z_GAMEOVER_DIM;
         out.push(s);
     }
     out
@@ -8844,19 +8838,11 @@ mod crosshair_gate_tests {
             game_over,
             ..Default::default()
         });
-        if game_over {
-            // Dead: no Player entity (despawned 0.85s after death) —
-            // only the husk the crosshair anchors on.
-            world.spawn((
-                Pos(Vec2::new(100.0, 100.0)),
-                Corpse {
-                    kind: crate::data::EnemyKind::Bandit,
-                    life: crate::time::GTimer::from_seconds(12.0, crate::time::TimerMode::Once),
-                    pos: Vec2::new(100.0, 100.0),
-                    flip_x: false,
-                },
-            ));
-        } else {
+        // GML `TopCont/Draw_0` is `with Player`: the entity is gone
+        // after death, so the lerped crosshair draws nothing on game
+        // over — the GameOver cursor is `UberCont/Draw_75`'s raw mouse
+        // sprite, not this path.
+        if !game_over {
             world.spawn((
                 Player::default(),
                 Pos(Vec2::new(100.0, 100.0)),
@@ -8868,24 +8854,29 @@ mod crosshair_gate_tests {
         world
     }
 
-    /// GML `UberCont/Draw_75` parity: the crosshair keeps drawing over
-    /// the GameOver screen (MENU/RETRY are aimed with it, not the OS
-    /// arrow). Needs several frames: alpha lerps from 0.
+    /// GML `TopCont/Draw_0` parity: `with Player` — the lerped
+    /// crosshair draws during the run and vanishes with the player at
+    /// death. Needs several frames: alpha lerps from 0.
     #[test]
-    fn crosshair_draws_over_game_over() {
+    fn crosshair_draws_during_play_not_game_over() {
         let dir = crate::resolve_assets_dir().expect("assets for parity test");
         let assets = RenderAssets::load(&dir).expect("catalog loads");
-        for game_over in [false, true] {
-            let mut world = world_with_player(game_over);
-            let mut drawn = false;
-            for _ in 0..60 {
-                let out = crosshair_sprites(&mut world, &assets, 1.0 / 30.0);
-                if !out.is_empty() {
-                    drawn = true;
-                    break;
-                }
+        let mut world = world_with_player(false);
+        let mut drawn = false;
+        for _ in 0..60 {
+            let out = crosshair_sprites(&mut world, &assets, 1.0 / 30.0);
+            if !out.is_empty() {
+                drawn = true;
+                break;
             }
-            assert!(drawn, "crosshair must draw (game_over={game_over})");
+        }
+        assert!(drawn, "crosshair must draw during play");
+        let mut dead = world_with_player(true);
+        for _ in 0..60 {
+            assert!(
+                crosshair_sprites(&mut dead, &assets, 1.0 / 30.0).is_empty(),
+                "no lerped crosshair without a player (GML `with Player`)"
+            );
         }
     }
 
@@ -8902,6 +8893,46 @@ mod crosshair_gate_tests {
                 "paused must hide the crosshair"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod title_cam_tests {
+    use super::*;
+
+    /// GML `Menu/Create_0:104-110` + `Menu/Step_1` parity: the title
+    /// view centers on the selected race's camper (`char[race]`);
+    /// Random centers on `char[0]` (the Campfire at 64,64). The old
+    /// code parked the view top-left at (64,64), shifting the camp
+    /// left with background filling the right.
+    #[test]
+    fn title_cam_centers_on_selected_camper() {
+        let mut world = World::new();
+        world.insert_resource(crate::savedata_part::SaveData::default());
+        crate::setup::setup_title_campfire(&mut world);
+        // Fish (1) fixed starter sits at (64,32).
+        world.insert_resource(SelectedCharacter(RaceId::Fish));
+        let focus = title_cam_focus(&mut world).expect("camp actors spawn");
+        assert_eq!(focus, Vec2::new(64.0, 32.0));
+        // Crystal (2) fixed starter sits at (64,96).
+        world.insert_resource(SelectedCharacter(RaceId::Crystal));
+        let focus = title_cam_focus(&mut world).expect("crystal camper");
+        assert_eq!(focus, Vec2::new(64.0, 96.0));
+        // Random (0) has no camper: focuses the Campfire itself.
+        world.insert_resource(SelectedCharacter(RaceId::Random));
+        let focus = title_cam_focus(&mut world).expect("campfire fallback");
+        assert_eq!(focus, Vec2::new(64.0, 64.0));
+        // Entry snap centers exactly (m = 1 like Create_0).
+        let mut cam = GmlCamera::default();
+        title_camera_step(&mut cam, 426.0, 240.0, Vec2::new(64.0, 32.0), 1.0 / 30.0, true);
+        assert_eq!((cam.x, cam.y), (64.0 - 213.0, 32.0 - 120.0));
+        // Step_1 lerp converges toward the centered point.
+        let mut cam = GmlCamera::default();
+        for _ in 0..60 {
+            title_camera_step(&mut cam, 426.0, 240.0, Vec2::new(64.0, 32.0), 1.0 / 30.0, false);
+        }
+        assert!((cam.x - (64.0 - 213.0)).abs() < 1.0, "x={}", cam.x);
+        assert!((cam.y - (32.0 - 120.0)).abs() < 1.0, "y={}", cam.y);
     }
 }
 

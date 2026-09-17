@@ -97,10 +97,10 @@ use crate::render::{
     Z_FAINTED, Z_FOG, Z_FX, Z_HUD, Z_MENU, Z_PORTAL_INDICATOR, Z_SHADOW, Z_SIDEART,
     Z_SPIRAL_FIGURES, Z_SPLASH, background_color, bloom_sprites, cam_viewdist_for,
     crosshair_sprites, decode_png, fainted_bar_sprites, fog_sprites, fx_instances, fx_texts,
-    gml_camera_step, gml_view_scale, gml_view_size, game_over_dim_sprites, hud_gui_texts_dp,
-    hud_sprites, menu_gui_texts,
+    gml_camera_step, gml_view_scale, gml_view_size, hud_gui_texts_dp, hud_sprites, menu_gui_texts,
     menu_gui_texts_dp, menu_gui_texts_vw, menu_sprites, portal_indicator_sprites, shadow_sprites,
-    sideart_sprites, spiral_figures, splash_sprites, stamp_z, view_rect_world, world_camera,
+    sideart_sprites, spiral_figures, splash_sprites, stamp_z, title_cam_focus, title_camera_step,
+    view_rect_world, world_camera,
     world_instances,
 };
 use crate::schedule::build_sim_schedule;
@@ -2225,15 +2225,6 @@ impl App {
             } else {
                 Vec::new()
             };
-            // Game-over dim INSIDE the batch (GML `GameOver/Draw_0`
-            // dims the room before `UberCont/Draw_75` draws the
-            // cursor): a canvas scrim above the viewport would dim
-            // the crosshair too. Pushed BEFORE the crosshair so the
-            // push-ordered canvas path agrees with the z-sorted GPU
-            // path (`Z_GAMEOVER_DIM` below `Z_CROSSHAIR`).
-            if menu_kind == Some(MenuOverlay::GameOver) {
-                s.extend(game_over_dim_sprites(viewport_dp, world_size, &self.cam, assets));
-            }
             stamp_z(&mut cross, Z_CROSSHAIR);
             s.extend(cross);
             let mut faint = if playing {
@@ -2342,14 +2333,13 @@ impl App {
             }
             // Menu crosshair (GML `UberCont/Draw_75` verbatim): on every
             // non-play screen in keyboard mode (splash reel, main menu,
-            // campfire title, loading cover) the OS cursor is hidden and
-            // the game draws `sprCrosshair[opt_crosshair]` at the raw
-            // cursor position — no player entity, no lerp, alpha 1.
-            // Game-over is NOT covered here: its crosshair is the
-            // gameplay one (lerped, aimed from the corpse — see
-            // `crosshair_sprites`), drawn above the canvas dim via the
-            // in-viewport dim quad (`game_over_dim_sprites`), GML
-            // `Draw_0`-then-`Draw_75` order parity.
+            // campfire title, loading cover, game-over screen) the OS
+            // cursor is hidden and the game draws
+            // `sprCrosshair[opt_crosshair]` at the raw cursor position —
+            // no lerp, alpha 1, `opt_cursorcol`. Game-over belongs here:
+            // `TopCont/Draw_0` is `with Player` (no lerped crosshair
+            // once the entity is gone) and Draw_75 draws the raw GUI
+            // mouse point over everything.
             // In GML this runs at Draw_75, above the Menu chrome, so it
             // rides at menu z here (pushed after, stable-sorted on top).
             // Skipped while paused/an overlay owns the pointer (those
@@ -2361,6 +2351,7 @@ impl App {
                         | MenuOverlay::MainMenu
                         | MenuOverlay::Title
                         | MenuOverlay::Loading
+                        | MenuOverlay::GameOver
                 )
             ) && !paused
                 && overlay == OverlayMenu::None
@@ -2534,15 +2525,13 @@ impl App {
         // Fullscreen overlays: hit flashes (white). Menu dimming is
         // the scrim `UiBox` above (bevy parity: one 230-black layer
         // over everything, background included), never the viewport
-        // tint (that would double-dim the sprites). Game-over is the
-        // exception: its dim is the in-viewport `game_over_dim_sprites`
-        // quad (GML Draw_0, below the Draw_75 crosshair), so no canvas
-        // scrim here or the cursor darkens too.
+        // tint (that would double-dim the sprites).
         let dim_menu = matches!(
             menu_kind,
             Some(MenuOverlay::Pause)
                 | Some(MenuOverlay::Settings)
                 | Some(MenuOverlay::Credits)
+                | Some(MenuOverlay::GameOver)
                 | Some(MenuOverlay::Stats)
         );
         let overlay_color = crate::effects::flash_rgba(&self.sim.world);
@@ -2784,16 +2773,33 @@ impl App {
         {
             self.gml_cam.snap = true;
         }
-        // GML `Menu/Create_0` verbatim: `with Campfire
-        // scr_camera_set_position(x, y)` — the campfire actor sits at
-        // world (64,64), so the view top-left snaps to (64,64) and the
-        // camp + spiral center stay framed. (The fixed-step camera only
-        // runs InGame, and only InGame consumes `snap`, so menus must
-        // place the view camera directly here.)
+        // GML `Menu/Create_0:104-110` + `Menu/Step_1` verbatim: the
+        // title view centers on the selected race's camper
+        // (`Menu.char[race]`; Random centers on `char[0]`, the
+        // Campfire at (64,64)) via `t_lerp` at 0.1 per step. The old
+        // code parked the view top-left at (64,64) — half a screen
+        // right/down of GML — leaving the camp left with background
+        // filling the right. (The fixed-step camera only runs InGame,
+        // and only InGame consumes `snap`, so menus step + place the
+        // view camera directly here.)
         if matches!(state, AppState::Title) {
             let vw_vh = self.view_world_size;
+            let focus =
+                title_cam_focus(&mut self.sim.world).unwrap_or(Vec2::new(64.0, 64.0));
+            let snap = !matches!(self.was_state, AppState::Title);
+            title_camera_step(
+                &mut self.gml_cam,
+                vw_vh[0],
+                vw_vh[1],
+                focus,
+                dt.as_secs_f32().clamp(0.0, 0.1),
+                snap,
+            );
             self.cam = world_camera(
-                Vec2::new(64.0 + vw_vh[0] * 0.5, 64.0 + vw_vh[1] * 0.5),
+                Vec2::new(
+                    self.gml_cam.x + vw_vh[0] * 0.5,
+                    self.gml_cam.y + vw_vh[1] * 0.5,
+                ),
                 gml_view_scale(self.view_viewport_dp),
             );
             self.cam.offset = Vec2::ZERO;
@@ -2836,14 +2842,20 @@ impl App {
             );
         }
         if let Some(rows) = menu_rows {
-            // Pause/settings/credits/stats sit on the near-opaque bevy
-            // `scrim` (230/255). Game-over has no canvas scrim: its dim
-            // is the in-viewport quad below the crosshair.
+            // GML `GameOver/Draw_0:7-10` dims with `draw_set_alpha(0.7)`
+            // (178/255); pause/settings/credits/stats sit on the
+            // near-opaque bevy `scrim` (230/255). The Draw_75 cursor
+            // draws after, so it stays full-bright over the dim.
+            let scrim_alpha = if menu_kind == Some(MenuOverlay::GameOver) {
+                178
+            } else {
+                230
+            };
             if dim_menu {
                 layers.push(UiBox(
                     Modifier::new()
                         .fill_max_size()
-                        .background(Color::from_rgba(0, 0, 0, 230))
+                        .background(Color::from_rgba(0, 0, 0, scrim_alpha))
                         .hit_passthrough(),
                 ));
             }
