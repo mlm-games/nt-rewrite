@@ -476,3 +476,26 @@ pub fn build_sim_schedule() -> Schedule {
     sched
 }
 
+#[cfg(test)]
+mod schedule_tests {
+    use super::*;
+
+    /// Regression: menu rooms must survive full schedule ticks. Batch 1
+    /// once removed `LoopTransition` in `reset_menu_room_resources`,
+    /// and ungated `Always`-set systems (`tick_campfire` et al take it
+    /// as a bare `ResMut`) panicked the schedule every frame on menu
+    /// rooms — the remap-screen panic loop + stutter. Drives a real
+    /// `App` boot into the Title campfire, then ticks the sim schedule
+    /// the way `advance` does.
+    #[test]
+    fn menu_rooms_survive_schedule_tick() {
+        let mut app = crate::App::new_with_seed(4242);
+        app.sim.world.insert_resource(crate::state::AppState::Title);
+        crate::setup::setup_title_campfire(&mut app.sim.world);
+        let mut sched = build_sim_schedule();
+        // Would panic before the fix (missing LoopTransition).
+        sched.run(&mut app.sim.world);
+        sched.run(&mut app.sim.world);
+    }
+}
+

@@ -1702,7 +1702,13 @@ fn reset_menu_room_resources(world: &mut World) {
     world.resource_mut::<crate::comps_a::OpenMind>().0 = false;
     world.init_resource::<crate::comps_a::HeavyHeart>();
     world.resource_mut::<crate::comps_a::HeavyHeart>().0 = false;
-    world.remove_resource::<crate::comps_b::LoopTransition>();
+    // `LoopTransition` stays present but defaulted: bevy systems take
+    // it as a bare `Res`/`ResMut` param (ungated `Always` set), so
+    // removing it panics the schedule every tick on menu rooms. Stale
+    // loop-portal flags must still not leak, hence the default write.
+    world.init_resource::<crate::comps_b::LoopTransition>();
+    *world.resource_mut::<crate::comps_b::LoopTransition>() =
+        crate::comps_b::LoopTransition::default();
     world.remove_resource::<crate::hud::HudBars>();
 }
 

@@ -1109,6 +1109,13 @@ impl App {
     }
 
     fn stage_physical(&mut self, name: &str, down: bool, is_repeat: bool) {
+        // Capture first: the remap gesture accepts ANY physical key,
+        // including names with no gameplay `KeyCode` (KeyX etc. never
+        // reach the table below). GML captures any pressed input.
+        if down && !is_repeat && self.capture_armed() {
+            self.capture_physical_press(name);
+            return;
+        }
         let Some(code) = crate::input::keycode_for_physical(name) else {
             return;
         };
@@ -1129,9 +1136,6 @@ impl App {
             let fresh = self.held.insert(code);
             if fresh && !is_repeat && !edge_owned_elsewhere {
                 self.edges.push(code);
-            }
-            if !is_repeat {
-                self.capture_physical_press(name);
             }
         } else {
             self.held.remove(&code);
@@ -1246,6 +1250,9 @@ impl App {
     fn capture_key_press(&mut self, key: &repose_core::input::Key) {
         use repame_input::KeymapEntry;
         self.sim.world.init_resource::<InputMapState>();
+        // Glyph path: Space/Tab/Enter/Escape map explicitly; any other
+        // glyph resolves as its lowercase char (same swallow bug as the
+        // physical path had — GML captures any pressed input).
         let chord = match key {
             repose_core::input::Key::Space => repose_core::shortcuts::KeyChord::new(
                 repose_core::input::Key::Space,
@@ -1261,6 +1268,10 @@ impl App {
             ),
             repose_core::input::Key::Escape => repose_core::shortcuts::KeyChord::new(
                 repose_core::input::Key::Escape,
+                repose_core::input::Modifiers::default(),
+            ),
+            repose_core::input::Key::Character(c) => repose_core::shortcuts::KeyChord::new(
+                repose_core::input::Key::Character(c.to_ascii_lowercase()),
                 repose_core::input::Modifiers::default(),
             ),
             _ => return,
@@ -1284,33 +1295,36 @@ impl App {
         if !self.capture_armed() {
             return;
         }
-        // Physical name -> KeyChord: letters by position, digits,
-        // arrows, space, tab, backquote (console). Shift synthesizes
-        // from modifiers, not a chord of its own.
+        // Physical name -> KeyChord: explicit special keys first,
+        // then the generic `KeyX`/`DigitN` derivation so EVERY key is
+        // capturable (GML captures any pressed input; the old table
+        // silently swallowed two-thirds of the keyboard).
         let key = match name {
-            "KeyW" => repose_core::input::Key::Character('w'),
-            "KeyA" => repose_core::input::Key::Character('a'),
-            "KeyS" => repose_core::input::Key::Character('s'),
-            "KeyD" => repose_core::input::Key::Character('d'),
-            "KeyE" => repose_core::input::Key::Character('e'),
-            "KeyF" => repose_core::input::Key::Character('f'),
-            "KeyQ" => repose_core::input::Key::Character('q'),
-            "KeyG" => repose_core::input::Key::Character('g'),
-            "KeyB" => repose_core::input::Key::Character('b'),
-            "KeyT" => repose_core::input::Key::Character('t'),
-            "Digit1" => repose_core::input::Key::Character('1'),
-            "Digit2" => repose_core::input::Key::Character('2'),
-            "Digit3" => repose_core::input::Key::Character('3'),
-            "Digit4" => repose_core::input::Key::Character('4'),
-            "Digit5" => repose_core::input::Key::Character('5'),
             "Space" => repose_core::input::Key::Space,
             "Tab" => repose_core::input::Key::Tab,
-            "Backquote" => repose_core::input::Key::Character('`'),
             "ArrowUp" => repose_core::input::Key::ArrowUp,
             "ArrowDown" => repose_core::input::Key::ArrowDown,
             "ArrowLeft" => repose_core::input::Key::ArrowLeft,
             "ArrowRight" => repose_core::input::Key::ArrowRight,
-            _ => return,
+            _ => {
+                let tail = name
+                    .strip_prefix("Key")
+                    .or_else(|| name.strip_prefix("Digit"))
+                    .unwrap_or("");
+                let mut chars = tail.chars();
+                match (chars.next(), chars.next()) {
+                    (Some(c), None) => {
+                        repose_core::input::Key::Character(c.to_ascii_lowercase())
+                    }
+                    _ => {
+                        if name == "Backquote" {
+                            repose_core::input::Key::Character('`')
+                        } else {
+                            return;
+                        }
+                    }
+                }
+            }
         };
         let chord = repose_core::shortcuts::KeyChord::new(key, repose_core::input::Modifiers::default());
         let mut state = self.sim.world.resource_mut::<InputMapState>();
@@ -3528,5 +3542,27 @@ mod cursor_staging_tests {
     fn no_staging_yet_is_none() {
         let app = App::new_with_seed(4242);
         assert_eq!(app.live_cursor_world(), None);
+    }
+
+    /// Reported bug verbatim: on the REMAP page, pressing most keys
+    /// did nothing — the physical capture table only mapped ~20 names
+    /// (WASD/arrows/digits/space/tab) and silently swallowed the rest.
+    /// GML captures any pressed input, so the table now derives every
+    /// `KeyX`/`DigitN` name generically.
+    #[test]
+    fn remap_capture_accepts_any_key() {
+        for key in ["KeyX", "KeyC", "KeyV", "KeyZ", "KeyH", "KeyM", "Digit6", "ArrowUp"] {
+            let mut app = App::new_with_seed(4242);
+            crate::state::menus::apply_menu_action(
+                &mut app.sim.world,
+                crate::audio::UiAction::RemapControl("north".to_string()),
+            );
+            assert!(app.capture_armed(), "capture must arm for {key}");
+            app.stage_physical_key(key, true);
+            assert!(
+                !app.capture_armed(),
+                "pressing {key} must resolve the capture"
+            );
+        }
     }
 }
