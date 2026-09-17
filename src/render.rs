@@ -6256,6 +6256,11 @@ pub const PLAYER_LEVEL_MAX: u32 = 10;
 /// past the attack deadzone. Skipped while paused (GML `PauseImage`
 /// gate) and until the first hover stages a cursor. GML `with Player`:
 /// no player entity, no crosshair — death removes it outright.
+/// Runs for keyboard AND pad players alike (GML draws the lerped
+/// crosshair unless the player is a keyboard-mode LOCAL — see the gate
+/// below); the raw `Draw_75` cursor draws over it in keyboard mode
+/// (owned by the menu-crosshair path in lib.rs) and replaces it on
+/// touch.
 pub fn crosshair_sprites(
     world: &mut World,
     assets: &RenderAssets,
@@ -6286,16 +6291,24 @@ pub fn crosshair_sprites(
     if !live {
         return out;
     }
-    // GML `TopCont/Draw_0:43` verbatim: `if !UberCont.opt_keyboard ||
-    // index != global.index || is_gamepad(index)` — a keyboard-mode
-    // local player draws NO lerped world crosshair (the raw
-    // `Draw_75`/OS cursor covers aim). The port is single-player, so
-    // the gate is the gamepad setting: keyboard mode (gamepad
-    // disabled) skips, gamepad mode draws.
-    let gamepad_mode = world
+    // GML `TopCont/Draw_0:43` + `scrHandleInputsGeneral` verbatim:
+    // `if !UberCont.opt_keyboard || index != global.index ||
+    // is_gamepad(index)` — the lerped world crosshair is skipped ONLY
+    // for a keyboard-driven local player (the raw `Draw_75` cursor
+    // covers their aim). Device facts: `keyboard[index] = opt_keyboard
+    // && !opt_gamepad`, `gamepad[index] = opt_gamepad`. So a local
+    // player draws the lerped crosshair UNLESS keyboard mode is on and
+    // gamepad mode is off (`opt_keyboard && !opt_gamepad`). Gamepad
+    // enabled (either flag combo) draws — including keyboard+pad
+    // hybrids, where `is_gamepad(index)` is true. The old
+    // gamepad-setting-only gate hid the fading lerped crosshair from
+    // every default keyboard user; the menu-crosshair path in lib.rs
+    // stays keyboard-only and draws the raw cursor over it.
+    let keyboard_local = world
         .get_resource::<crate::savedata_part::SaveData>()
-        .is_some_and(|s| s.settings.gamepad_enabled);
-    if !gamepad_mode {
+        .map(|s| !s.settings.gamepad_enabled)
+        .unwrap_or(true);
+    if keyboard_local {
         return out;
     }
     let player = world

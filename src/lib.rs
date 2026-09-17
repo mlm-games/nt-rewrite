@@ -256,31 +256,51 @@ pub struct App {
     window_focused: bool,
     clicks: Vec<StagedClick>,
     /// Latest cursor world position (viewport `Hover`, single slot: only
-    /// the newest position matters). Steers `aim_axis` every frame in
-    /// game, bevy `player_aim` mouse-path parity.
+    /// the newest position matters). Fallback only: screen-anchored
+    /// sources below re-unproject every frame, so this baked point is
+    /// used solely when no screen px was ever staged (touch/pen never
+    /// stage cursor moves... see `hover_px`).
     hover: Option<Vec2>,
-    /// Latest cursor position in window-physical px (root
-    /// `on_pointer_move`, y-down). Unlike [`App::hover`] (a world point
-    /// baked through the camera at event time), this stays valid as the
-    /// camera moves: [`App::feed_input`] unprojects it through the
-    /// *current* camera each frame — bevy `player_aim`
-    /// (`window.cursor_position()` + `viewport_to_world_2d`) parity. The
-    /// player therefore keeps aiming at the on-screen cursor while
-    /// walking, instead of at a stale world point behind them.
+    /// Latest viewport-hover position in window-physical px (the
+    /// `Hover.screen` the engine documents as "stage this raw and
+    /// unproject through the live camera each frame"). Unlike
+    /// [`App::hover`] (a world point baked through the camera at event
+    /// time), this stays valid as the camera moves: [`App::feed_input`]
+    /// unprojects it through the *current* camera each frame — bevy
+    /// `player_aim` (`window.cursor_position()` + `viewport_to_world_2d`)
+    /// parity. The player therefore keeps aiming at the on-screen
+    /// cursor while walking, instead of at a stale world point behind
+    /// them. Fires on every free mouse move (the viewport's
+    /// `on_pointer_move` reaches it; the root's `cursor_move` almost
+    /// never does — free moves dispatch only to the topmost region).
+    hover_px: Option<Vec2>,
+    /// Root-staged cursor position in window-physical px (root
+    /// `on_pointer_move`, y-down). Same space as [`App::hover_px`]
+    /// (both are `position_in_window()` physical px); both unproject
+    /// through the live camera each frame in `live_cursor_world` —
+    /// bevy `player_aim` (`window.cursor_position()` +
+    /// `viewport_to_world_2d`) parity. The root handler runs almost
+    /// exclusively while a button is held (capture-path dispatch
+    /// reaches ancestors), so this goes stale on free moves and the
+    /// always-fresh viewport hover px owns aim the rest of the time.
     cursor_px: Option<Vec2>,
     /// Staging order stamps. Repose dispatches free moves ONLY to the
     /// topmost region (proven: parent/root handlers get 0 calls), so
     /// the root's `cursor_move` runs almost exclusively while a button
-    /// is held (capture-path dispatch reaches ancestors), while the
-    /// viewport's `Hover` fires on free moves. Without staleness
-    /// tracking, a stale `cursor_px` from the last drag shadows live
-    /// `hover` through `.or()` and the crosshair freezes everywhere
-    /// except while dragging — exactly the reported symptom. The px
-    /// source therefore wins only while fresh (see
-    /// `live_cursor_world`); the baked hover point is always live, so
-    /// it owns aim the rest of the time.
+    /// is held (capture-path dispatch reaches ancestors). The viewport
+    /// `Hover` DOES fire on free moves — but through `stage_hover`,
+    /// which stages both the baked point and the raw px, so order
+    /// tracking still needs the shared `input_seq` clock. Without
+    /// staleness tracking, a stale px from the last drag shadows live
+    /// hovers through `.or()` and the crosshair freezes everywhere
+    /// except while dragging — exactly the reported symptom. Both px
+    /// sources therefore win only while fresh (see
+    /// `live_cursor_world`); the baked hover point is the last-resort
+    /// fallback (touch/pen never stage any px), so the cursor never
+    /// freezes on an old camera.
     cursor_seq: u64,
     hover_seq: u64,
+    hover_px_seq: u64,
     input_seq: u64,
     pause_edge: bool,
     restart_edge: bool,
@@ -305,6 +325,11 @@ pub struct App {
     /// `gamepads` query order verbatim: keyboard, then pads in order,
     /// then touch).
     pads: Vec<GamepadState>,
+    /// Latched gamepad presence: set while any staged snapshot shows a
+    /// connected pad, cleared when a frame stages none. `pads` drains
+    /// every frame so it can't answer "is a pad in use" outside
+    /// `feed_input`; this carries that fact to the cursor gate.
+    pad_live: bool,
     /// Live touch/pen contacts by pointer id: (touchdown, current),
     /// screen-px y-down (bevy `Touches` parity — `feed_input`
     /// synthesizes the per-frame contact list from this map, so held
@@ -404,9 +429,11 @@ impl App {
             window_focused: true,
             clicks: Vec::new(),
             hover: None,
+            hover_px: None,
             cursor_px: None,
             cursor_seq: 0,
             hover_seq: 0,
+            hover_px_seq: 0,
             input_seq: 0,
             pause_edge: false,
             restart_edge: false,
@@ -417,6 +444,7 @@ impl App {
             rmb_down_edge: false,
             rmb_up_edge: false,
             pads: Vec::new(),
+            pad_live: false,
             touch_active: HashMap::new(),
             touch_new: HashSet::new(),
             view_width: 1280.0,
@@ -1167,17 +1195,35 @@ impl App {
         if !self.window_focused {
             return;
         }
-        const PHYSICAL_NAMES: [(&str, KeyCode); 20] = [
-            ("KeyW", KeyCode::KeyW),
+        const PHYSICAL_NAMES: [(&str, KeyCode); 26] = [
             ("KeyA", KeyCode::KeyA),
-            ("KeyS", KeyCode::KeyS),
+            ("KeyB", KeyCode::KeyB),
+            ("KeyC", KeyCode::KeyC),
             ("KeyD", KeyCode::KeyD),
             ("KeyE", KeyCode::KeyE),
             ("KeyF", KeyCode::KeyF),
-            ("KeyQ", KeyCode::KeyQ),
             ("KeyG", KeyCode::KeyG),
-            ("KeyB", KeyCode::KeyB),
+            ("KeyH", KeyCode::KeyH),
+            ("KeyI", KeyCode::KeyI),
+            ("KeyJ", KeyCode::KeyJ),
+            ("KeyK", KeyCode::KeyK),
+            ("KeyL", KeyCode::KeyL),
+            ("KeyM", KeyCode::KeyM),
+            ("KeyN", KeyCode::KeyN),
+            ("KeyO", KeyCode::KeyO),
+            ("KeyP", KeyCode::KeyP),
+            ("KeyQ", KeyCode::KeyQ),
+            ("KeyR", KeyCode::KeyR),
+            ("KeyS", KeyCode::KeyS),
             ("KeyT", KeyCode::KeyT),
+            ("KeyU", KeyCode::KeyU),
+            ("KeyV", KeyCode::KeyV),
+            ("KeyW", KeyCode::KeyW),
+            ("KeyX", KeyCode::KeyX),
+            ("KeyY", KeyCode::KeyY),
+            ("KeyZ", KeyCode::KeyZ),
+        ];
+        const PHYSICAL_NAMES_2: [(&str, KeyCode); 17] = [
             ("ArrowUp", KeyCode::ArrowUp),
             ("ArrowDown", KeyCode::ArrowDown),
             ("ArrowLeft", KeyCode::ArrowLeft),
@@ -1185,12 +1231,17 @@ impl App {
             ("Space", KeyCode::Space),
             ("Tab", KeyCode::Tab),
             ("Backquote", KeyCode::Backquote),
+            ("Digit0", KeyCode::Digit0),
             ("Digit1", KeyCode::Digit1),
             ("Digit2", KeyCode::Digit2),
             ("Digit3", KeyCode::Digit3),
+            ("Digit4", KeyCode::Digit4),
+            ("Digit5", KeyCode::Digit5),
+            ("Digit6", KeyCode::Digit6),
+            ("Digit7", KeyCode::Digit7),
+            ("Digit8", KeyCode::Digit8),
+            ("Digit9", KeyCode::Digit9),
         ];
-        const PHYSICAL_NAMES_2: [(&str, KeyCode); 2] =
-            [("Digit4", KeyCode::Digit4), ("Digit5", KeyCode::Digit5)];
         for (name, code) in PHYSICAL_NAMES.into_iter().chain(PHYSICAL_NAMES_2) {
             if self.polled_keys.contains(name) {
                 self.held.insert(code);
@@ -1418,41 +1469,57 @@ impl App {
     }
 
     /// Stage the cursor's window-physical px position (root
-    /// `on_pointer_move`, y-down). Stored raw — [`App::cursor_to_world`]
-    /// unprojects it through the live camera each frame.
+    /// `on_pointer_move`, y-down: `position_in_window()`, the same
+    /// space [`App::stage_hover`] stages from the viewport). Stored raw
+    /// — [`App::px_to_world`] unprojects it through the live camera
+    /// each frame.
     fn cursor_move(&mut self, phys_px: Vec2) {
         self.input_seq += 1;
         self.cursor_seq = self.input_seq;
         self.cursor_px = Some(phys_px);
     }
 
-    /// Stage one viewport hover: the baked world point only. Screen
-    /// anchoring lives in `cursor_px` (root `on_pointer_move`, raw
-    /// window-physical px unprojected through the live camera each
-    /// frame — GML `mouse_x/mouse_y` parity). The hover `screen` px
-    /// must NOT feed `cursor_px`: it arrives as region-local px while
-    /// `cursor_move` stages window px, and mixing the two spaces
-    /// offsets the aim as the camera moves. Touch/pen never stage
-    /// cursor moves, so the baked point is their only cursor.
-    fn stage_hover(&mut self, world: Vec2, _screen: [f32; 2]) {
+    /// Stage one viewport hover: the baked world point AND the raw
+    /// window-physical `screen` px. The engine contract on
+    /// `PickEvent::Hover.screen` is explicit: "Games stage this raw and
+    /// unproject through the live camera each frame (screen-anchored
+    /// aim)". The baked point is the stale fallback (touch/pen never
+    /// stage cursor moves, so theirs is the only cursor); the px is
+    /// the live source `live_cursor_world` prefers. `cursor_move`
+    /// (root `on_pointer_move`) stages window px in the same space and
+    /// refreshes the same way — the viewport hover px arrives on every
+    /// free move, which is exactly when the root handler stays silent
+    /// (free moves dispatch only to the topmost region).
+    fn stage_hover(&mut self, world: Vec2, screen: [f32; 2]) {
         self.input_seq += 1;
         self.hover_seq = self.input_seq;
         self.hover = Some(world);
+        self.hover_px_seq = self.input_seq;
+        self.hover_px = Some(Vec2::new(screen[0], screen[1]));
     }
 
-    /// Live cursor in world coords: the staged window-physical px point
+    /// Live cursor in world coords: staged window-physical px
     /// unprojected through this frame's camera (`Camera2d::dp_to_world_pt`
     /// over the dp viewport extent — bevy `player_aim`
     /// `viewport_to_world_2d` parity). `None` until the first pointer
     /// move; callers fall back to the last viewport `Hover` world point
     /// (touch/pen never stage cursor moves).
-    /// The px source wins outright while fresh (it re-unprojects every
+    /// The px sources win outright while fresh (they re-unproject every
     /// frame, so aim stays glued to the on-screen pointer instead of
-    /// sliding on the ground as the camera moves); once it goes stale
-    /// — no root move for a while, e.g. touch input — the baked hover
-    /// point takes over so the cursor never freezes on an old camera.
+    /// sliding on the ground as the camera moves); once both go stale
+    /// the baked hover point takes over so the cursor never freezes on
+    /// an old camera. `hover_px` is the primary source — the viewport
+    /// `Hover` fires on every free move, while root `cursor_move` runs
+    /// almost exclusively while a button is held (capture-path
+    /// dispatch reaches ancestors) and its px goes stale ~30 frames
+    /// after the last drag.
     fn live_cursor_world(&self) -> Option<Vec2> {
         const STALE_AFTER: u64 = 30;
+        if self.hover_px_seq > 0
+            && self.input_seq.wrapping_sub(self.hover_px_seq) <= STALE_AFTER
+        {
+            return self.px_to_world(self.hover_px).or(self.hover);
+        }
         if self.cursor_seq > 0 && self.input_seq.wrapping_sub(self.cursor_seq) <= STALE_AFTER {
             self.cursor_to_world().or(self.hover)
         } else {
@@ -1467,7 +1534,15 @@ impl App {
     /// move; callers fall back to the last viewport `Hover` world point
     /// (touch/pen never stage cursor moves).
     fn cursor_to_world(&self) -> Option<Vec2> {
-        let px = self.cursor_px?;
+        self.px_to_world(self.cursor_px)
+    }
+
+    /// Unproject one window-physical px point through this frame's
+    /// camera (shared by the root `cursor_move` source and the
+    /// viewport-hover px source; both arrive as
+    /// `position_in_window()` physical px per the engine contract).
+    fn px_to_world(&self, px: Option<Vec2>) -> Option<Vec2> {
+        let px = px?;
         let d = self.view_density.max(1e-6);
         let dp = [px.x / d, px.y / d];
         let extent = camera_fit_extent(self.view_viewport_dp, self.view_density);
@@ -1479,8 +1554,11 @@ impl App {
     /// Stage one gamepad snapshot for this tick (shells map
     /// `repame-shell` `GamepadEvent`s / platform pad state onto
     /// [`GamepadState`]; drained by [`App::feed_input`] in stage order).
+    /// Also latches [`App::pad_live`]: shells stage only live pads, so
+    /// any snapshot means a pad is in use this frame.
     pub fn stage_gamepad(&mut self, pad: GamepadState) {
         self.pads.push(pad);
+        self.pad_live = true;
     }
 
     /// Stage one menu button action (pause/settings/credits `on_click`
@@ -1714,6 +1792,9 @@ impl App {
             // order, then touch. Sticks overwrite nonzero axes; pulses
             // OR-accumulate; slots replace; cycle saturating-adds.
             let pads = self.pads.drain(..).collect::<Vec<_>>();
+            // No snapshots staged this frame = no live pad: unlatch so
+            // the cursor gate falls back to keyboard mode.
+            self.pad_live = !pads.is_empty();
             sample_gamepads(&pads, &mut input);
             // Touch contacts synthesize fresh every tick from the live
             // map (bevy `touches.iter()` yields all pressed contacts;
@@ -2009,7 +2090,7 @@ impl App {
                 .world
                 .get_resource::<crate::savedata_part::SaveData>()
                 .is_some_and(|s| s.settings.gamepad_enabled)
-                && !self.pads.is_empty();
+                && self.pad_live;
             !gamepad && self.touch_active.is_empty()
         };
         let overlay_now = self
@@ -2234,6 +2315,13 @@ impl App {
             // `room_restart`), so they self-suppress there exactly
             // like GML (and stay off on Title/menus via their own
             // live-run gates).
+            // GML `TopCont/Draw_0:43` device gate lives inside
+            // `crosshair_sprites` (skip only for a keyboard-driven
+            // local: keyboard mode on, gamepad mode off). No live-pad
+            // half here: GML's `is_gamepad(index)` is the sticky
+            // `opt_gamepad` setting (`scrHandleInputsGeneral`), not
+            // per-frame pad activity — an idle-but-enabled pad still
+            // draws the lerped crosshair.
             let mut cross = if playing {
                 crosshair_sprites(&mut self.sim.world, assets, hud_dt)
             } else {
@@ -2350,15 +2438,26 @@ impl App {
             // `sprCrosshair[opt_crosshair]` at the raw cursor position —
             // no lerp, alpha 1, `opt_cursorcol` — on EVERY screen
             // (gameplay included; the lerped `TopCont` crosshair is the
-            // gamepad-mode counterpart). GML gates only on
+            // gamepad-mode counterpart and replaces this there — never
+            // both, else a double cursor). GML gates only on
             // `window_get_cursor() == cr_none` + `scrCanDrawCursor()`
             // (`show_crosshair`, desktop/keyboard, no spawner); the
-            // port's `keyboard_mode` (gamepad off/unused, no touch)
-            // carries the cursor-hidden half. No per-screen kind list:
+            // port's `keyboard_mode` (gamepad off, no touch) carries
+            // the cursor-hidden half. No per-screen kind list:
             // the old 5-kind gate left keyboard gameplay cursorless.
             // Skipped while paused/an overlay owns the pointer (those
             // show the OS cursor) and on touch input (no cursor at all).
-            let menu_crosshair = keyboard_mode && !paused && overlay == OverlayMenu::None;
+            // Keyboard-driven local (`opt_keyboard && !opt_gamepad`,
+            // the same `keyboard_local` law as `crosshair_sprites`):
+            // gamepad mode draws the lerped crosshair instead.
+            let keyboard_local = self
+                .sim
+                .world
+                .get_resource::<crate::savedata_part::SaveData>()
+                .map(|s| !s.settings.gamepad_enabled)
+                .unwrap_or(true);
+            let menu_crosshair =
+                keyboard_mode && keyboard_local && !paused && overlay == OverlayMenu::None;
             if menu_crosshair
                 && let Some(pos) = self.live_cursor_world()
             {
@@ -3513,15 +3612,18 @@ mod cursor_staging_tests {
     /// Root cause: repose dispatches free moves ONLY to the topmost
     /// region, so the root's `cursor_move` (the `cursor_px` source)
     /// runs almost exclusively on capture-path (button-held) moves,
-    /// while viewport `Hover` fires on free moves. Aim preferred the
-    /// stale `cursor_px` via `.or()` and shadowed live hovers. The px
-    /// source now wins only while fresh (re-unprojected every frame,
-    /// so aim stays glued to the pointer instead of sliding on the
-    /// ground); once it goes stale the baked hover point takes over.
+    /// while viewport `Hover` fires on free moves. The viewport hover
+    /// px now feeds the same live unprojection, so a stale drag-era
+    /// root px can never shadow it. The px sources win only while fresh
+    /// (re-unprojected every frame, so aim stays glued to the pointer
+    /// instead of sliding on the ground); once stale the baked hover
+    /// point takes over.
     #[test]
     fn fresh_px_wins_stale_px_yields_to_hover() {
         let mut app = App::new_with_seed(4242);
-        // Hover stages the baked point; the drag-era px is fresh.
+        // Hover stages the baked point AND its raw px; the drag-era
+        // root px is fresh too. Unprojection through the live camera
+        // must not return the stale baked point.
         app.stage_hover(Vec2::new(10.0, 10.0), [0.0, 0.0]);
         app.cursor_move(Vec2::new(100.0, 100.0));
         let live = app.live_cursor_world().expect("cursor staged");
@@ -3529,13 +3631,42 @@ mod cursor_staging_tests {
             (live - Vec2::new(10.0, 10.0)).length() > 1.0,
             "fresh px must unproject through the live camera, got {live:?}"
         );
-        // Many hover-only frames later the px source is stale: the
-        // baked hover point (always live) owns aim again, so the
-        // cursor never freezes on an old camera.
+        // Root px goes stale (no root moves for a while, e.g. free
+        // mouse play): the viewport hover px stays fresh and keeps
+        // owning aim — the cursor never freezes on an old camera.
         for _ in 0..40 {
-            app.stage_hover(Vec2::new(10.0, 10.0), [0.0, 0.0]);
+            app.stage_hover(Vec2::new(10.0, 10.0), [50.0, 50.0]);
         }
-        assert_eq!(app.live_cursor_world(), Some(Vec2::new(10.0, 10.0)));
+        let live = app.live_cursor_world().expect("hover staged");
+        assert!(
+            (live - Vec2::new(10.0, 10.0)).length() > 1.0,
+            "fresh hover px must keep unprojecting, got {live:?}"
+        );
+    }
+
+    /// Reported bug verbatim: the crosshair drifted across the screen
+    /// as the camera moved even with the pointer still — the world
+    /// point was baked through an old camera and the hover screen px
+    /// was dropped (`_screen`). GML draws the raw cursor at GUI mouse
+    /// coords (screen-anchored, never camera-following). Regression:
+    /// same screen px under a moved camera must unproject to the new
+    /// camera-relative point (i.e. track the camera 1:1), not stick to
+    /// the old world point.
+    #[test]
+    fn hover_px_tracks_moved_camera() {
+        let mut app = App::new_with_seed(4242);
+        app.stage_hover(Vec2::new(10.0, 10.0), [640.0, 360.0]);
+        let before = app.live_cursor_world().expect("cursor staged");
+        // Pan the camera 100 world units right; the pointer hasn't
+        // moved (same screen px, fresh hover).
+        app.cam.center += Vec2::new(100.0, 0.0);
+        app.stage_hover(Vec2::new(10.0, 10.0), [640.0, 360.0]);
+        let after = app.live_cursor_world().expect("cursor staged");
+        let shift = (after - before).length();
+        assert!(
+            (shift - 100.0).abs() < 1.0,
+            "screen-anchored cursor must track the camera 1:1, shifted {shift} for a 100-unit pan (before {before:?}, after {after:?})"
+        );
     }
 
     #[test]
@@ -3551,6 +3682,7 @@ mod cursor_staging_tests {
     /// `KeyX`/`DigitN` name generically.
     #[test]
     fn remap_capture_accepts_any_key() {
+        use repose_core::input::{Key, KeyEvent, KeyEventType, Modifiers};
         for key in ["KeyX", "KeyC", "KeyV", "KeyZ", "KeyH", "KeyM", "Digit6", "ArrowUp"] {
             let mut app = App::new_with_seed(4242);
             crate::state::menus::apply_menu_action(
@@ -3558,11 +3690,56 @@ mod cursor_staging_tests {
                 crate::audio::UiAction::RemapControl("north".to_string()),
             );
             assert!(app.capture_armed(), "capture must arm for {key}");
-            app.stage_physical_key(key, true);
+            // Live shell path: focus-routed KeyEvent with physical name.
+            app.handle_key(&KeyEvent {
+                key: Key::Character('x'),
+                modifiers: Modifiers::default(),
+                is_repeat: false,
+                event_type: KeyEventType::Down,
+                utf16_code_point: 0,
+                physical: Some(key.to_string()),
+            });
             assert!(
                 !app.capture_armed(),
                 "pressing {key} must resolve the capture"
             );
         }
+    }
+
+    /// Live click-to-arm chain: a click on the REMAP page's first row
+    /// (through `route_menu_click` → `settings_click_action` → hot
+    /// row → `RemapControl` → `begin_capture`) must arm the capture —
+    /// the link between the drawn rows and the key handler above. The
+    /// click dp comes from the row's own GUI box (as the viewport
+    /// stages it), so this also proves the drawn rows and the hot
+    /// rows agree.
+    #[test]
+    fn remap_row_click_arms_capture() {
+        let mut app = App::new_with_seed(4242);
+        app.sim.world.insert_resource(AppState::MainMenu);
+        app.sim.world.insert_resource(OverlayMenu::Settings);
+        app.sim
+            .world
+            .resource_mut::<MenuState>()
+            .settings_page = 13;
+        let rows = crate::render::settings_hot_rows(13, 320.0);
+        let row = rows[0];
+        // `route_menu_click` takes canvas dp + viewport dp: GUI px
+        // scale with k = h/240 (720p → 3.0).
+        let k = 3.0f32;
+        let viewport_dp = [1280.0f32, 720.0];
+        let dp = [row.cx * k, row.gy * k];
+        let action = route_menu_click(
+            &mut app.sim.world,
+            MenuOverlay::Settings,
+            dp,
+            viewport_dp,
+        );
+        assert!(
+            matches!(action, Some(crate::audio::UiAction::RemapControl(_))),
+            "click on row 0 must arm a remap, got {action:?}"
+        );
+        crate::state::menus::apply_menu_action(&mut app.sim.world, action.unwrap());
+        assert!(app.capture_armed(), "capture must arm after the row click");
     }
 }
