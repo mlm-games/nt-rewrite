@@ -24,7 +24,7 @@ use crate::comps_b::{
     Telekinesis, WepPickupAmmo,
 };
 use crate::data::{
-    AbilityKind, AmmoKind, CrownKind, MutationId, UltraMutationId, WeaponId, ammo_max,
+    AbilityKind, AmmoKind, CrownKind, MutationId, RaceId, UltraMutationId, WeaponId, ammo_max,
     ammo_pickup_amount,
 };
 use crate::effects::{
@@ -302,6 +302,27 @@ pub fn idpd_chest_destroy(
     true
 }
 
+/// Build the `DecideCtx` for drop/chest rolls around one player
+/// (GML `instance_nearest(x, y, Player)` + `GameCont.hard`).
+pub fn decide_ctx_for(
+    run: &Run,
+    player: &Player,
+    race: RaceId,
+    inv: &Inventory,
+    robots: u32,
+) -> crate::decide_wep::DecideCtx {
+    crate::decide_wep::DecideCtx {
+        hard: run.floor as i32 + run.loop_count as i32 * 16 + if run.hardmode { 13 } else { 0 },
+        hardmode: run.hardmode,
+        robots,
+        refined_taste: player.ultra == Some(UltraMutationId::RobotRefinedTaste),
+        crown_guns: player.crown == CrownKind::Guns,
+        tutorial: run.tutorial,
+        target_race: race,
+        owned: inv.weapons.iter().copied().collect(),
+    }
+}
+
 pub fn maybe_spawn_drop(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
@@ -312,6 +333,7 @@ pub fn maybe_spawn_drop(
     inv: &Inventory,
     health: &Health,
     loops: u32,
+    decide: Option<&crate::decide_wep::DecideCtx>,
 ) {
     let mut rng = rand::rng();
 
@@ -354,7 +376,10 @@ pub fn maybe_spawn_drop(
             }
         }
     } else if weapon_chance > 0 && rng.random_range(0.0..100.0) < weapon_chance as f32 {
-        let weapon = random_weapon(&mut rng);
+        let weapon = match decide {
+            Some(ctx) => crate::decide_wep::decide_wep(&mut rng, ctx, 0, false),
+            None => random_weapon(&mut rng),
+        };
         spawn_pickup(commands, catalog, PickupKind::Weapon(weapon), pos, 0, false);
     }
 }
@@ -713,7 +738,18 @@ pub fn collect_pickups(
                             1
                         };
                     for _ in 0..count {
-                        let weapon = random_weapon(&mut rng);
+                        // GML `WeaponChest`: `scrDecideWep(1 + curse*2,
+                        // curse)`; the one roll fills every drop.
+                        let extra = 1 + if cursed { 2 } else { 0 };
+                        let ctx = decide_ctx_for(
+                            &run,
+                            &player,
+                            race_opt.map(|r| r.race).unwrap_or(RaceId::Fish),
+                            &inv,
+                            u32::from(race_opt.is_some_and(|r| r.race == RaceId::Robot)),
+                        );
+                        let weapon =
+                            crate::decide_wep::decide_wep(&mut rng, &ctx, extra, cursed);
                         let e = spawn_pickup(
                             &mut commands,
                             &catalog,
@@ -809,7 +845,17 @@ pub fn collect_pickups(
                             3
                         };
                     for _ in 0..count {
-                        let weapon = random_weapon(&mut rng);
+                        // GML `CursedBigChest`: `scrDecideWep(1 + curse*2,
+                        // false)` per drop (chest is cursed instead).
+                        let ctx = decide_ctx_for(
+                            &run,
+                            &player,
+                            race_opt.map(|r| r.race).unwrap_or(RaceId::Fish),
+                            &inv,
+                            u32::from(race_opt.is_some_and(|r| r.race == RaceId::Robot)),
+                        );
+                        let weapon =
+                            crate::decide_wep::decide_wep(&mut rng, &ctx, 1, false);
                         let e = spawn_pickup(
                             &mut commands,
                             &catalog,
@@ -864,11 +910,14 @@ pub fn collect_pickups(
                     audio.play_pickup(&mut cues);
                 }
                 ChestKind::Proto => {
-                    // GML `ProtoChest`: the vault prototype weapon (port
-                    // has no vault-proto run artifact, so a random
-                    // weapon); Hatred burns 1 HP and bursts 16 rads.
-                    let weapon = random_weapon(&mut rand::rng());
-                    spawn_pickup(
+                    // GML `ProtoChest`: drops the run's `protowep`
+                    // artifact (`UberCont.protowep/protocurse`, default
+                    // rusty revolver); Hatred burns 1 HP + 16 rads.
+                    // GML `ProtoChest/Other_5` writes the opened `wep`
+                    // back on floor exit — the carry lands there.
+                    let weapon = run.protowep;
+                    let cursed = run.protocurse;
+                    let e = spawn_pickup(
                         &mut commands,
                         &catalog,
                         PickupKind::Weapon(weapon),
@@ -876,6 +925,9 @@ pub fn collect_pickups(
                         0,
                         false,
                     );
+                    if cursed {
+                        commands.entity(e).insert(PickupCurse);
+                    }
                     if player.crown == CrownKind::Hatred && health.hp > 1 {
                         health.hp -= 1;
                         let mut rng = rand::rng();
@@ -908,7 +960,17 @@ pub fn collect_pickups(
                             3
                         };
                     for _ in 0..count {
-                        let weapon = random_weapon(&mut rng);
+                        // GML `BigWeaponChest`: `scrDecideWep(1, false)`
+                        // per drop (its own call each iteration).
+                        let ctx = decide_ctx_for(
+                            &run,
+                            &player,
+                            race_opt.map(|r| r.race).unwrap_or(RaceId::Fish),
+                            &inv,
+                            u32::from(race_opt.is_some_and(|r| r.race == RaceId::Robot)),
+                        );
+                        let weapon =
+                            crate::decide_wep::decide_wep(&mut rng, &ctx, 1, false);
                         spawn_pickup(
                             &mut commands,
                             &catalog,

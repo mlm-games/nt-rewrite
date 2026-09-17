@@ -37,7 +37,7 @@ use crate::enemy_data::enemy_def;
 use crate::environment::{PropDeathEffect, spawn_prop_corpse, spawn_prop_death_effect};
 use crate::msg::Queue;
 use crate::pickups::{
-    give_ammo, maybe_spawn_drop, random_gold_weapon_fallback, random_offset, spawn_chest,
+    give_ammo, maybe_spawn_drop, random_offset, spawn_chest,
     spawn_pickup, spawn_rad, spawn_rad_burst,
 };
 use crate::projectile_math::{    arena_wall_normal, bounce_velocity, circle_aabb_normal, record_hit, should_despawn_after_hit,
@@ -324,7 +324,7 @@ pub fn resolve_enemy_deaths(
     mut save: ResMut<SaveData>,
     mut dirty: ResMut<SaveDirty>,
     mut toast: ResMut<Toast>,
-    player_q: Query<(Entity, &Pos, &Player, &RaceState), (With<Player>, Without<Enemy>)>,
+    player_q: Query<(Entity, &Pos, &Player, &RaceState, &Inventory), (With<Player>, Without<Enemy>)>,
     mut enemy_shots: Query<(Entity, &Team), With<Projectile>>,
     mut q: Query<
         (
@@ -343,10 +343,12 @@ pub fn resolve_enemy_deaths(
         return;
     }
 
-    let Ok((player_e, player_pos, player, race_state)) = player_q.single() else {
+    let Ok((player_e, player_pos, player, race_state, pinv0)) = player_q.single() else {
         return;
     };
     let _ = player_e;
+    let decide_owned: Vec<WeaponId> = pinv0.weapons.iter().copied().collect();
+    let decide_steroids = race_state.race == RaceId::Steroids;
 
     let enemy_total = q
         .iter()
@@ -487,7 +489,12 @@ pub fn resolve_enemy_deaths(
                 // GML `YVBoss/Destroy_0`: 3 golden-weapon pickups.
                 let mut rng = rand::rng();
                 for _ in 0..3 {
-                    let weapon = crate::pickups::random_gold_weapon_fallback(&mut rng);
+                    let weapon = crate::decide_wep::decide_wep_gold(
+                        &mut rng,
+                        run.loop_count,
+                        &decide_owned,
+                        decide_steroids,
+                    );
                     crate::pickups::spawn_pickup(
                         &mut commands,
                         &catalog,
@@ -915,6 +922,13 @@ pub fn resolve_death_drops(
     // Bevy passes the live player position (not the death spot) to the
     // Throne campfire.
     let player_pos_now = player_pos.0;
+    let decide = crate::pickups::decide_ctx_for(
+        &run,
+        player,
+        race_state.race,
+        &pinv,
+        u32::from(race_state.race == crate::data::RaceId::Robot),
+    );
     for event in deaths.0.drain(..) {
         match event.kind {
             EnemyKind::Throne => {
@@ -937,21 +951,24 @@ pub fn resolve_death_drops(
             EnemyKind::ThroneII => {
                 loop_transition.throne_ii_defeated();
                 crate::loop_transition::mark_throne_ii_defeated(&mut toast, &mut trauma);
-                // GML `Nothing2/Destroy_0`: 2 weapon caches.
-                let mut rng = rand::rng();
+                // GML `Nothing2/Destroy_0`: `repeat (2) scrDrop(100, 0)`
+                // (chest-or-ammo spawns, not bare weapon caches).
                 for _ in 0..2 {
-                    let weapon = crate::pickups::random_weapon(&mut rng);
-                    crate::pickups::spawn_pickup(
+                    crate::pickups::maybe_spawn_drop(
                         &mut commands,
                         &catalog,
-                        crate::comps_b::PickupKind::Weapon(weapon),
                         event.pos
                             + glam::Vec2::new(
-                                rng.random_range(-16.0..16.0),
-                                rng.random_range(-16.0..16.0),
+                                rand::rng().random_range(-16.0..16.0),
+                                rand::rng().random_range(-16.0..16.0),
                             ),
+                        100,
                         0,
-                        false,
+                        &player,
+                        &pinv,
+                        &phealth,
+                        run.loop_count,
+                        Some(&decide),
                     );
                 }
             }
@@ -1057,6 +1074,7 @@ pub fn resolve_death_drops(
                     &pinv,
                     &phealth,
                     run.loop_count,
+                    Some(&decide),
                 );
             }
         } else {
@@ -1102,8 +1120,11 @@ pub fn resolve_death_drops(
                 &pinv,
                 &phealth,
                 run.loop_count,
+                Some(&decide),
             );
-            if matches!(enemy.kind, EnemyKind::DogGuardian | EnemyKind::WepMimic) {
+            // GML `DogGuardian/Destroy_0`: double `scrDrop(60, 0)` —
+            // the second table roll just above covers it.
+            if matches!(enemy.kind, EnemyKind::DogGuardian) {
                 maybe_spawn_drop(
                     &mut commands,
                     &catalog,
@@ -1114,6 +1135,21 @@ pub fn resolve_death_drops(
                     &pinv,
                     &phealth,
                     run.loop_count,
+                    Some(&decide),
+                );
+            }
+            if enemy.kind == EnemyKind::WepMimic {
+                // GML `WepMimic/Destroy_0`: a bare `scrDecideWep(1)`
+                // cache on top of the normal double `scrDrop(200, 0)`.
+                let mut rng = rand::rng();
+                let weapon = crate::decide_wep::decide_wep(&mut rng, &decide, 1, false);
+                crate::pickups::spawn_pickup(
+                    &mut commands,
+                    &catalog,
+                    crate::comps_b::PickupKind::Weapon(weapon),
+                    pos,
+                    0,
+                    false,
                 );
             }
         }
@@ -1181,8 +1217,18 @@ pub fn move_projectiles(
     mut secrets: ResMut<SecretTriggers>,
     audio: Res<GameAudio>,
     mut cues: ResMut<Queue<AudioCue>>,
+    player_inv_q: Query<(&Player, &Inventory, &RaceState), (With<Player>, Without<Prop>)>,
 ) {
     let dt = time.delta_secs;
+    let gun_decide = player_inv_q.single().ok().map(|(p, inv, race)| {
+        crate::pickups::decide_ctx_for(
+            &run,
+            p,
+            race.race,
+            inv,
+            u32::from(race.race == RaceId::Steroids),
+        )
+    });
 
     for (
         e,
@@ -1242,6 +1288,7 @@ pub fn move_projectiles(
                         custom_explosion.copied(),
                         deploys_sentry.copied(),
                         spawn_pickup_spec.copied(),
+                        gun_decide.as_ref(),
                         plasma_burst.copied(),
                         fade,
                         already_faded,
@@ -1269,7 +1316,8 @@ pub fn move_projectiles(
                 custom_explosion.copied(),
                 deploys_sentry.copied(),
                 spawn_pickup_spec.copied(),
-                plasma_burst.copied(),
+                        gun_decide.as_ref(),
+                        plasma_burst.copied(),
                 fade,
                 already_faded,
             );
@@ -1296,7 +1344,8 @@ pub fn move_projectiles(
                 custom_explosion.copied(),
                 deploys_sentry.copied(),
                 spawn_pickup_spec.copied(),
-                plasma_burst.copied(),
+                        gun_decide.as_ref(),
+                        plasma_burst.copied(),
                 fade,
                 already_faded,
             );
@@ -1377,6 +1426,7 @@ pub fn move_projectiles(
                         custom_explosion.copied(),
                         deploys_sentry.copied(),
                         spawn_pickup_spec.copied(),
+                        gun_decide.as_ref(),
                         plasma_burst.copied(),
                         fade,
                         already_faded,
@@ -1442,6 +1492,7 @@ pub fn move_projectiles(
                         custom_explosion.copied(),
                         deploys_sentry.copied(),
                         spawn_pickup_spec.copied(),
+                        gun_decide.as_ref(),
                         plasma_burst.copied(),
                         fade,
                         already_faded,
@@ -1649,7 +1700,8 @@ pub fn move_projectiles(
                 custom_explosion.copied(),
                 deploys_sentry.copied(),
                 spawn_pickup_spec.copied(),
-                plasma_burst.copied(),
+                        gun_decide.as_ref(),
+                        plasma_burst.copied(),
                 fade,
                 already_faded,
             );
@@ -2147,6 +2199,7 @@ pub fn projectile_hits(
                 custom_explosion.copied(),
                 deploys_sentry.copied(),
                 spawn_pickup_spec.copied(),
+                None,
                 plasma_burst.copied(),
                 proj_fade,
                 proj_already_faded,
@@ -3204,11 +3257,21 @@ pub fn apply_explosions(
     walls: Query<(Entity, &WallCell, &Pos), With<WallTile>>,
     mut lingering_q: Query<&mut LingeringBlast>,
     mut last_damage: ResMut<LastDamageTaken>,
+    player_inv_q: Query<(&Inventory, &RaceState), (With<Player>, Without<Enemy>)>,
 ) {
     let death_crown = player_q
         .single()
         .map(|(_, _, _, p, _)| p.crown == CrownKind::Death)
         .unwrap_or(false);
+    let (gold_owned, gold_steroids) = player_inv_q
+        .single()
+        .map(|(inv, race)| {
+            (
+                inv.weapons.iter().copied().collect(),
+                race.race == RaceId::Steroids,
+            )
+        })
+        .unwrap_or((Vec::new(), false));
     for (e, mut boom, pos) in &mut q {
         boom.timer.tick(time.delta_secs);
         let fused = boom.timer.just_finished();
@@ -3371,7 +3434,12 @@ pub fn apply_explosions(
                 }
 
                 if is_gold {
-                    let weapon = random_gold_weapon_fallback(&mut rand::rng());
+                    let weapon = crate::decide_wep::decide_wep_gold(
+                        &mut rand::rng(),
+                        run.loop_count,
+                        &gold_owned,
+                        gold_steroids,
+                    );
                     spawn_pickup(
                         &mut commands,
                         &catalog,

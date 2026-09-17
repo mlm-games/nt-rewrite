@@ -233,7 +233,10 @@ fn projectile_arch(id: WeaponId) -> FireArch {
             ..FireArch::default()
         },
         "GUN GUN" => FireArch {
-            pickup: Some(SpawnsWeaponPickup { weapon: None }),
+            pickup: Some(SpawnsWeaponPickup {
+                weapon: None,
+                decide_extra: 10,
+            }),
             ..FireArch::default()
         },
         "LIGHTNING PISTOL" | "LIGHTNING SMG" => FireArch {
@@ -655,18 +658,47 @@ fn fire_one_gun(
         return;
     }
 
+    // GML `NadeBurst` ammo is `3 + Death-crown` at fire time; the
+    // grenade-shotgun pellet count is `(3|4) + Death-crown`. Both
+    // resolve here (burst volleys + immediate arms share this path).
+    let mut def = shot.def;
+    if shot.weapon_id == WeaponId(80) && def.burst_shots > 1 {
+        def.burst_shots += usize::from(player.crown == CrownKind::Death);
+    }
+    // GML grenade shotguns roll `(3|4) + Death-crown` pellets per
+    // trigger pull; the crown bonus rides the def so burst-less dups
+    // and volleys agree.
+    if shot.weapon_id == WeaponId(79) || shot.weapon_id == WeaponId(85) {
+        def.pellets += usize::from(player.crown == CrownKind::Death);
+    }
+    let shot = GunShot { def, ..*shot };
+    let shot = &shot;
+
     if def.melee.is_none() {
-        match pay_fire_cost(inv, health, def.ammo, def.ammo_cost, archetype.blood, player.free_ammo) {
-            AmmoPayment::Paid => {}
-            AmmoPayment::Blood(cost) => {
+        // GML `scrPlayerFiring`: blood weapons consume ammo normally;
+        // on empty (and only via the press path, not bursts/dups) the
+        // click refills cost-worth of ammo for 1 HP (`scrBloodAmmoRefill`)
+        // and fires this same click. The sim models that as: ammo
+        // shortfall on a blood weapon with hp > 1 prepays 1 HP for
+        // `ammo_cost` ammo, then the normal deduction below fires.
+        if archetype.blood.is_some() && !player.free_ammo {
+            let slot = inv.ammo_mut(def.ammo);
+            if *slot < def.ammo_cost && health.hp > 1 {
+                health.hp -= 1;
+                *slot += def.ammo_cost;
                 repame_fx::spawn_number(
                     commands,
                     shot.pos.x,
                     shot.pos.y,
-                    cost.to_string(),
+                    "1".to_string(),
                     [1.0, 0.35, 0.35, 1.0],
                 );
+                cue(fx.cues, "sndBloodHurt", 0.8, 0.2);
+                fx.hitstop.trigger(0.35, 0.08);
             }
+        }
+        match pay_fire_cost(inv, health, def.ammo, def.ammo_cost, None, player.free_ammo) {
+            AmmoPayment::Paid => {}
             AmmoPayment::Failed => {
                 if inv.ammo_of(def.ammo) > 0 {
                     fx.toast.show("NOT ENOUGH AMMO");
@@ -741,8 +773,8 @@ fn fire_one_gun(
         charges.0 -= 1;
         let mut can_dup = true;
         if def.melee.is_none() && def.ammo != AmmoKind::None && def.ammo_cost > 0 {
-            match pay_fire_cost(inv, health, def.ammo, def.ammo_cost, archetype.blood, player.free_ammo) {
-                AmmoPayment::Paid | AmmoPayment::Blood(_) => {}
+            match pay_fire_cost(inv, health, def.ammo, def.ammo_cost, None, player.free_ammo) {
+                AmmoPayment::Paid => {}
                 AmmoPayment::Failed => {
                     can_dup = false;
                 }
@@ -925,6 +957,9 @@ fn spawn_pellets(commands: &mut Commands, fx: &mut FireFx, shot: &GunShot, playe
     } else {
         def.pierce
     };
+    // GML grenade shotguns roll speed 10-15 px/frame per pellet
+    // (SmallGrenade); Death-crown pellets resolved at the `fire_one_gun`
+    // gate above ride `def.pellets` here.
     for _ in 0..def.pellets {
         let base_angle = shot.aim.y.atan2(shot.aim.x);
         let angle = base_angle + rng.random_range(-spread..spread);
@@ -1091,16 +1126,15 @@ fn melee_attack(
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AmmoPayment {
     Paid,
-    Blood(i32),
     Failed,
 }
 
 pub fn pay_fire_cost(
     inv: &mut Inventory,
-    health: &mut Health,
+    _health: &mut Health,
     ammo: AmmoKind,
     amount: i32,
-    blood: Option<BloodAmmo>,
+    _blood: Option<BloodAmmo>,
     free: bool,
 ) -> AmmoPayment {
     if amount <= 0 || free {
@@ -1111,13 +1145,6 @@ pub fn pay_fire_cost(
     if *slot >= amount {
         *slot -= amount;
         return AmmoPayment::Paid;
-    }
-
-    if let Some(blood) = blood
-        && health.hp > blood.hp_cost
-    {
-        health.hp -= blood.hp_cost;
-        return AmmoPayment::Blood(blood.hp_cost);
     }
 
     AmmoPayment::Failed

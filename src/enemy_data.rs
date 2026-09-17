@@ -850,8 +850,10 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             boss: true,
         },
         EnemyKind::Captain => EnemyDef {
+            // No GML `Captain` object exists (hitid-only: `Last` uses
+            // `HitId.Captain`); base 1100 mirrors `Last` (`Last/Create_0`).
             name: "Captain",
-            hp: 420,
+            hp: 1100,
             speed: 110.0,
             accel: 1400.0,
             radius: 16.0,

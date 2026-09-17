@@ -119,6 +119,7 @@ pub mod comps_a;
 pub mod comps_b;
 pub mod crown;
 pub mod data;
+pub mod decide_wep;
 mod dead_path_part;
 pub mod deaths;
 pub mod effects;

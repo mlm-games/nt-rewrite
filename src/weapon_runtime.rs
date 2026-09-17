@@ -888,7 +888,7 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
         }
 
         "ASSAULT RIFLE" => {
-            set_ranged(def, 3, 1, 650.0, 0.78, 0.06, 4.0, 4.0, 65.0,
+            set_ranged(def, 3, 1, 480.0, 0.78, 0.035, 4.0, 4.0, 65.0,
                 [1.0, 0.88, 0.47], Vec2::new(12.0, 3.0));
 
             def.burst_shots = 3;
@@ -943,7 +943,7 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
         }
 
         "ASSAULT SLUGGER" => {
-            set_ranged(def, 22, 1, 520.0, 0.62, 0.08, 8.0, 6.0, 150.0,
+            set_ranged(def, 22, 1, 540.0, 0.62, 0.07, 8.0, 6.0, 150.0,
                 [0.96, 0.81, 0.4], Vec2::new(14.0, 5.0));
 
             def.burst_shots = 3;
@@ -960,8 +960,11 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
         }
 
         "HYPER RIFLE" => {
-            set_ranged(def, 3, 1, 880.0, 0.55, 0.045, 2.0, 3.0, 40.0,
+            set_ranged(def, 3, 1, 600.0, 0.55, 0.033, 2.0, 3.0, 40.0,
                 [1.0, 0.95, 0.6], Vec2::new(16.0, 3.0));
+
+            def.burst_shots = 6;
+            def.burst_interval = 1.0 / 30.0;
         }
 
         "SCREWDRIVER" => {
@@ -1174,7 +1177,7 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
         }
 
         "SMART GUN" => {
-            set_ranged(def, 3, 1, 650.0, 0.78, 0.025, 2.0, 4.0, 60.0,
+            set_ranged(def, 3, 1, 480.0, 0.78, 0.087, 2.0, 4.0, 60.0,
                 [0.45, 0.85, 1.0], Vec2::new(12.0, 3.0));
         }
 
@@ -1263,23 +1266,25 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
         }
 
         "GRENADE RIFLE" => {
-            set_explosive(def, 5, 1, 410.0, 0.65, 0.08, 6.0, 5.0, 85.0,
+            set_explosive(def, 5, 1, 405.0, 0.65, 0.07, 5.0, 5.0, 85.0,
                 [1.0, 0.61, 0.2], Vec2::splat(9.0));
 
+            // GML `NadeBurst`: 3 volleys (+Death-crown, resolved in the
+            // fire path) at 2-tick intervals.
             def.burst_shots = 3;
             def.burst_interval = 2.0 / 30.0;
         }
 
         "ROGUE RIFLE" => {
-            set_ranged(def, 4, 1, 700.0, 0.75, 0.04, 4.0, 4.0, 70.0,
+            set_ranged(def, 3, 1, 480.0, 0.75, 0.033, 4.0, 4.0, 70.0,
                 [0.45, 0.8, 1.0], Vec2::new(14.0, 3.0));
 
-            def.burst_shots = 3;
+            def.burst_shots = 2;
             def.burst_interval = 2.0 / 30.0;
         }
 
         "PARTY GUN" => {
-            set_ranged(def, 4, 5, 480.0, 0.7, 0.4, 3.0, 4.0, 35.0,
+            set_ranged(def, 4, 1, 240.0, 0.7, 0.14, 3.0, 4.0, 35.0,
                 [1.0, 0.38, 0.86], Vec2::splat(8.0));
         }
 
@@ -1305,6 +1310,24 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
                 [1.0, 0.55, 0.85], Vec2::new(11.0, 4.0));
 
             def.pierce = 1;
+        }
+
+        "FROG PISTOL" | "GOLDEN FROG PISTOL" => {
+            set_ranged(def, 2, 3, 360.0, 1.0, 0.105, 4.0, 4.0, 60.0,
+                [0.5, 0.9, 0.4], Vec2::new(8.0, 4.0));
+        }
+
+        "HYPER SLUGGER" => {
+            set_ranged(def, 26, 1, 360.0, 0.7, 0.035, 16.0, 11.0, 260.0,
+                [1.0, 0.85, 0.4], Vec2::new(16.0, 6.0));
+        }
+
+        "HEAVY ASSAULT RIFLE" => {
+            set_ranged(def, 7, 1, 480.0, 0.85, 0.018, 7.0, 4.5, 140.0,
+                [1.0, 0.88, 0.35], Vec2::new(12.0, 3.5));
+
+            def.burst_shots = 3;
+            def.burst_interval = 2.0 / 30.0;
         }
 
         "ERASER" => {

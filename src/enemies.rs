@@ -67,6 +67,15 @@ pub fn difficulty_multiplier(floor: u32) -> f32 {
 /// GML spawn-HP law verbatim (`enemy/Create_0`: every enemy scales
 /// `max_hp *= 1 + loops/20`; bosses override with their own formulas,
 /// single-player values). `base_hp` is the table (loop-0) value.
+///
+/// Boss laws (all `1 + loops/3` except ScrapBoss `/1.2` and
+/// ProtoStatue flat 120): BigBandit, Throne, ThroneII, Hyper+Technomancer
+/// (coop `((pc/2)+0.5)` factor is 1.0 solo — GML `/` is float division,
+/// so `(1/2)+0.5 = 1.0`), LilHunter, FrogQueen, Last (`Last`: base 1100).
+/// Single-player-only bosses with no loop term stay flat: YV (700 +
+/// coop-only scaling). `Mom`/`Captain`/`OldGuardian`/`PalaceGuardian`
+/// have no GML object (spawn-table-only kinds); they ride the default
+/// `/20` law like every other non-boss.
 pub fn spawn_hp(kind: EnemyKind, base_hp: i32, loops: u32) -> i32 {
     let l = loops as f32;
     let hp = match kind {
@@ -77,7 +86,9 @@ pub fn spawn_hp(kind: EnemyKind, base_hp: i32, loops: u32) -> i32 {
         EnemyKind::Hyper => 550.0 * (1.0 + l / 3.0),
         EnemyKind::Technomancer => 350.0 * (1.0 + l / 3.0),
         EnemyKind::LilHunter | EnemyKind::LilHunterLoop => 140.0 * (1.0 + l / 3.0),
-        EnemyKind::ProtoStatue => 120.0 * (1.0 + l / 10.0),
+        EnemyKind::FrogQueen => (490.0 * (1.0 + l / 3.0)).ceil(),
+        EnemyKind::Captain => (1100.0 * (1.0 + l / 3.0)).ceil(),
+        EnemyKind::ProtoStatue => 120.0,
         _ => (base_hp as f32 * (1.0 + l / 20.0)).ceil(),
     };
     hp.round().max(1.0) as i32
@@ -3304,3 +3315,43 @@ pub fn tick_corpses(
     }
 }
 
+
+#[cfg(test)]
+mod spawn_hp_tests {
+    use super::*;
+    use crate::enemy_data::enemy_def;
+
+    #[test]
+    fn loop0_matches_table() {
+        for kind in [
+            EnemyKind::Bandit,
+            EnemyKind::FrogQueen,
+            EnemyKind::Captain,
+            EnemyKind::YvBoss,
+            EnemyKind::ProtoStatue,
+            EnemyKind::Scorpion,
+        ] {
+            assert_eq!(spawn_hp(kind, enemy_def(kind).hp, 0), enemy_def(kind).hp);
+        }
+    }
+
+    #[test]
+    fn boss_third_law() {
+        assert_eq!(spawn_hp(EnemyKind::BigBandit, 100, 3), 200);
+        assert_eq!(spawn_hp(EnemyKind::FrogQueen, 490, 3), 980);
+        assert_eq!(spawn_hp(EnemyKind::Captain, 1100, 3), 2200);
+        assert_eq!(spawn_hp(EnemyKind::Throne, 1500, 3), 3000);
+        assert_eq!(spawn_hp(EnemyKind::LilHunter, 140, 3), 280);
+    }
+
+    #[test]
+    fn flat_and_default_laws() {
+        assert_eq!(spawn_hp(EnemyKind::ProtoStatue, 120, 5), 120);
+        assert_eq!(spawn_hp(EnemyKind::YvBoss, 700, 4), 841);
+        assert_eq!(spawn_hp(EnemyKind::Scorpion, 16, 20), 32);
+        assert_eq!(
+            spawn_hp(EnemyKind::BigDog, 300, 6),
+            (300.0_f32 * (1.0 + 6.0 / 1.2)).ceil() as i32
+        );
+    }
+}

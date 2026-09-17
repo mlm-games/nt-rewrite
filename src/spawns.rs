@@ -25,7 +25,7 @@ use crate::comps_b::{
 use crate::data::{EnemyKind, HazardDef, HazardKind, SplitDef};
 use crate::environment::PropDeathEffect;
 use crate::msg::Queue;
-use crate::pickups::{random_gold_weapon_fallback, random_weapon, spawn_pickup, spawn_rad};
+use crate::pickups::{random_weapon, spawn_pickup, spawn_rad};
 use crate::projectile_math::split_directions;
 use crate::secrets::SecretTriggers;
 use crate::spatial::Pos;
@@ -194,6 +194,7 @@ pub fn spawn_weapon_pickup_from_projectile(
     catalog: &AnimCatalog,
     pos: glam::Vec2,
     spec: SpawnsWeaponPickup,
+    decide: Option<&crate::decide_wep::DecideCtx>,
 ) {
     if pos.x.abs() > crate::comps_a::ARENA_W / 2.0 + 32.0
         || pos.y.abs() > crate::comps_a::ARENA_H / 2.0 + 32.0
@@ -201,9 +202,11 @@ pub fn spawn_weapon_pickup_from_projectile(
         return;
     }
 
-    let weapon = spec
-        .weapon
-        .unwrap_or_else(|| random_weapon(&mut rand::rng()));
+    let weapon = spec.weapon.unwrap_or_else(|| match decide {
+        // GML `wep_gun_gun`: `scrDecideWep(10)` at the muzzle.
+        Some(ctx) => crate::decide_wep::decide_wep(&mut rand::rng(), ctx, spec.decide_extra, false),
+        None => random_weapon(&mut rand::rng()),
+    });
     spawn_pickup(
         commands,
         catalog,
@@ -266,6 +269,7 @@ pub fn on_projectile_removed(
     custom_explosion: Option<CustomExplosion>,
     deploys_sentry: Option<DeploysSentry>,
     spawn_pickup_spec: Option<SpawnsWeaponPickup>,
+    decide: Option<&crate::decide_wep::DecideCtx>,
     plasma_burst: Option<PlasmaBurst>,
     fade: Option<ProjectileFade>,
     already_faded: bool,
@@ -333,7 +337,7 @@ pub fn on_projectile_removed(
     }
 
     if let Some(spec) = spawn_pickup_spec {
-        spawn_weapon_pickup_from_projectile(commands, catalog, pos, spec);
+        spawn_weapon_pickup_from_projectile(commands, catalog, pos, spec, decide);
     }
 
     if let Some(plasma) = plasma_burst {
@@ -459,7 +463,11 @@ pub fn damage_destructible_prop(
         }
     }
     if gold_barrels.get(prop_e).is_ok() {
-        let weapon = random_gold_weapon_fallback(&mut rand::rng());
+        // GML `GoldBarrel` drops no weapon (`scrDecideWepGold` callers
+        // are GoldChest + YV only); the port keeps the pre-loop gold
+        // pool here for the loot feel. Owned-reject needs a player
+        // query the helper lacks, so plain pool roll.
+        let weapon = crate::decide_wep::decide_wep_gold(&mut rand::rng(), 0, &[], true);
         spawn_pickup(
             commands,
             catalog,

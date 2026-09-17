@@ -247,6 +247,12 @@ pub struct Run {
     pub won: bool,
     /// GML `UberCont.hardmode`: +13 hard and +1 loop from the start.
     pub hardmode: bool,
+    /// GML `UberCont.protowep` / `protocurse`: the vault prototype
+    /// weapon, carried across floors (`ProtoChest/Other_5` writes the
+    /// opened chest's `wep` back; run start loads `etc.protowep`,
+    /// default rusty revolver).
+    pub protowep: WeaponId,
+    pub protocurse: bool,
     /// Tutorial level flag (GML `GenCont/Create_0`: `save game.tutorial`
     /// forces `goal = 5` + `TutCont` + safespawn; the port sets it at run
     /// setup for first-ever runs and clears it on floor advance — the
@@ -285,6 +291,8 @@ impl Default for Run {
             weapons_picked: 0,
             won: false,
             hardmode: false,
+            protowep: WeaponId(56),
+            protocurse: false,
             tutorial: false,
             blood_crown: false,
             waypoints: Vec::new(),

@@ -40,6 +40,9 @@ pub struct BloodAmmo {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct SpawnsWeaponPickup {
     pub weapon: Option<WeaponId>,
+    /// GML `scrDecideWep` tier extra when `weapon` is `None` (GUN GUN
+    /// fires `scrDecideWep(10)`); ignored for fixed weapons.
+    pub decide_extra: i32,
 }
 
 #[derive(Component, Clone, Copy, Debug)]

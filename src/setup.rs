@@ -45,7 +45,8 @@ use crate::comps_b::{
 use crate::crown::{apply_crown_to_spawn, crown_name_for_toast};
 use crate::data::{
     AmmoKind, AreaId, CrownKind, EnemyKind, RaceId, SecretTarget, SkinLetter, WEAPON_REVOLVER,
-    WeaponId, ammo_max, area_for_floor, race_starter_weapon, resolve_start_weapon,
+    WEAPON_RUSTY_REVOLVER, WeaponId, ammo_max, area_for_floor, race_starter_weapon,
+    resolve_start_weapon,
 };
 use crate::enemies::{difficulty_multiplier, spawn_enemy_at};
 use crate::enemy_data::enemy_def;
@@ -574,6 +575,12 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
         run.won = false;
         run.tutorial = tutorial;
         run.blood_crown = false;
+        // GML `PlayButton/Other_10` + `scrInit`: `protowep` loads
+        // `etc.protowep` (default rusty revolver); custom runs force
+        // it. The port has no custom runs and no etc store, so the
+        // default rides every run.
+        run.protowep = WEAPON_RUSTY_REVOLVER;
+        run.protocurse = false;
         run.waypoints.clear();
         run.push_waypoint();
         world.resource_mut::<crate::state::Paused>().0 = false;
