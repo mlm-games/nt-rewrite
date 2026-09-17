@@ -95,6 +95,102 @@ pub struct PendingUnpause(pub Option<GTimer>);
 /// pause overlay, Escape out of pause).
 pub const UNPAUSE_DELAY_SECS: f32 = 0.2;
 
+/// Tutorial steps (GML `TutCont/Create_0` `TutorialStep` verbatim:
+/// Walking=1, PickingUp, Shooting, Swapping, Power, Fin, NUM).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TutorialStep {
+    #[default]
+    Walking = 1,
+    PickingUp = 2,
+    Shooting = 3,
+    Swapping = 4,
+    Power = 5,
+    Fin = 6,
+}
+
+impl TutorialStep {
+    pub fn next(self) -> Self {
+        match self {
+            TutorialStep::Walking => TutorialStep::PickingUp,
+            TutorialStep::PickingUp => TutorialStep::Shooting,
+            TutorialStep::Shooting => TutorialStep::Swapping,
+            TutorialStep::Swapping => TutorialStep::Power,
+            TutorialStep::Power => TutorialStep::Fin,
+            TutorialStep::Fin => TutorialStep::Fin,
+        }
+    }
+}
+
+/// Tutorial controller state (GML `objects/TutCont` verbatim, minus
+/// visuals): the scripted first-floor walkthrough. `step` is the
+/// current step, `complete` latches the 30-step advance (`Alarm_0`),
+/// `timer` counts it down, `portal_open` latches the Fin exit (GML
+/// spawns the `Portal` past `Fin`; that portal runs `game_restart()`,
+/// not a floor advance).
+#[derive(Debug, Clone, Resource)]
+pub struct TutorialState {
+    pub step: TutorialStep,
+    pub complete: bool,
+    pub timer: GTimer,
+    pub portal_open: bool,
+}
+
+impl Default for TutorialState {
+    fn default() -> Self {
+        Self {
+            step: TutorialStep::Walking,
+            complete: false,
+            timer: GTimer::from_seconds(0.0, TimerMode::Once),
+            portal_open: false,
+        }
+    }
+}
+
+impl TutorialState {
+    /// GML `complete_step` verbatim: only the current step latches,
+    /// once (`alarm[0] = 30`).
+    pub fn complete_step(&mut self, step: TutorialStep) {
+        if self.step == step && !self.complete {
+            self.complete = true;
+            self.timer = GTimer::from_seconds(30.0 / 30.0, TimerMode::Once);
+        }
+    }
+}
+
+/// Marker requesting a tutorial-exit run restart (GML
+/// `Portal/Alarm_1` `game_restart()` arm). `tick_menus` consumes it
+/// into the `Loading` path (same as death RETRY); the flag lives on
+/// the player so no new resource threads the 16-param system cap.
+#[derive(Debug, Clone, Copy, Default, bevy_ecs::prelude::Component)]
+pub struct TutorialRestart;
+
+/// Tutorial advance tick (GML `TutCont/Alarm_0` verbatim, minus the
+/// scripted `WeaponChest` spawn which rides worldgen): on timer expiry
+/// clear the latch, step forward, re-arm 45 steps on `Fin`, and past
+/// `Fin` latch the exit portal open (once). Clamps at `Fin` (GML
+/// `NUM - 1`).
+pub fn tick_tutorial(world: &mut World, dt: f32) {
+    let run_tutorial = world
+        .get_resource::<crate::comps_a::Run>()
+        .is_some_and(|r| r.tutorial);
+    if !run_tutorial {
+        return;
+    }
+    world.init_resource::<TutorialState>();
+    world.init_resource::<crate::comps_a::Toast>();
+    let mut tut = world.resource_mut::<TutorialState>();
+    tut.timer.tick(dt);
+    if tut.complete && tut.timer.just_finished() {
+        tut.complete = false;
+        tut.step = tut.step.next();
+        if tut.step == TutorialStep::Fin {
+            tut.timer = GTimer::from_seconds(45.0 / 30.0, TimerMode::Once);
+            tut.portal_open = true;
+            world.resource_mut::<crate::comps_a::Toast>().show("COOL, WE'RE DONE HERE!");
+        }
+    }
+}
+
 /// Boot-intro state (bevy `BootState` mode/timer half in
 /// `game/ui_art.rs`; entities/sprites/audio deferred to render).
 #[derive(Debug, Clone, Resource)]

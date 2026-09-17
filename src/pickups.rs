@@ -575,6 +575,7 @@ pub fn collect_pickups(
         Without<Player>,
     >,
     mut toast: ResMut<Toast>,
+    mut tut: Option<ResMut<crate::state::TutorialState>>,
 ) {
     let Ok((_player_e, player_pos, mut player, mut health, mut inv, telek, race_opt)) =
         player_q.single_mut()
@@ -1182,6 +1183,12 @@ pub fn collect_pickups(
                 run.same_weapons_for = 0;
                 // GML `GameCont.haspickedweps` (Steroids-C gate).
                 run.weapons_picked += 1;
+
+                // GML `Player/Collision_WepPickup:37` verbatim: a
+                // successful pickup latches the tutorial PickingUp step.
+                if let Some(tut) = tut.as_deref_mut() {
+                    tut.complete_step(crate::state::TutorialStep::PickingUp);
+                }
 
                 audio.play_chest(&mut cues);
                 toast.show(&format!("Picked up {}", weapon_id_name(weapon)));

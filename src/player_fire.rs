@@ -420,6 +420,7 @@ pub fn player_fire(
     mut vis_q: Query<&mut WeaponVisual>,
     mut pop_q: Query<&mut PopPopCharges>,
     catalog: Res<repame_anim::AnimCatalog>,
+    mut tut: Option<ResMut<crate::state::TutorialState>>,
 ) {
     let Ok((player_ent, pos, aim, mut player, mut health, race_state, sucking)) =
         player_q.single_mut()
@@ -552,6 +553,11 @@ pub fn player_fire(
         };
         if primary_def.melee.is_none() {
             run.shots_fired += 1;
+        }
+        // GML `scrPlayerFiring:45` verbatim: a fired shot latches the
+        // tutorial Shooting step.
+        if let Some(tut) = tut.as_deref_mut() {
+            tut.complete_step(crate::state::TutorialStep::Shooting);
         }
         fire_one_gun(
             &mut commands,
@@ -1971,6 +1977,7 @@ pub fn player_ability(
     mut save: ResMut<SaveData>,
     mut dirty: ResMut<SaveDirty>,
     catalog: Res<repame_anim::AnimCatalog>,
+    mut tut: Option<ResMut<crate::state::TutorialState>>,
     mut player_q: Query<
         (
             Entity,
@@ -2010,6 +2017,12 @@ pub fn player_ability(
     }
     if !fire {
         return;
+    }
+
+    // GML `scrPowers:460` verbatim: any spec press latches the tutorial
+    // Power step, regardless of the race effect below.
+    if let Some(tut) = tut.as_deref_mut() {
+        tut.complete_step(crate::state::TutorialStep::Power);
     }
 
     let pos = ppos.0;

@@ -1439,6 +1439,9 @@ pub enum UiAction {
     ClosePlaySubmenu,
     /// Advance the credits section (GML `Credits` click `_force`).
     AdvanceCredits,
+    /// Dismiss the head of the unlock queue (GML `UnlockScreen`
+    /// `Mouse_56` click once `can_continue` fires).
+    DismissUnlock,
     /// Arm a REMAP capture for the named control (`fire`, `spec`,
     /// `swap`, `pick`, `north`, `south`, `west`, `east`). The next
     /// pressed key/mouse button becomes the keyboard-side binding.
@@ -1494,6 +1497,7 @@ pub fn ui_action_to_cue(action: &UiAction) -> Option<ReactiveCue> {
         |         UiAction::PlaySubmenu(_)
         | UiAction::ClosePlaySubmenu
         | UiAction::AdvanceCredits
+        | UiAction::DismissUnlock
         | UiAction::RemapControl(_)
         | UiAction::RemapReset => Some(ReactiveCue::UiClick),
         UiAction::SettingToggle(_)
@@ -1550,6 +1554,10 @@ pub fn ui_action_sfx(action: &UiAction) -> Vec<AudioCue> {
         UiAction::AdvanceCredits => {
             // GML `Credits/Step_0` advances on click with no named sting
             // (the section change itself is the feedback).
+        }
+        UiAction::DismissUnlock => {
+            // GML `UnlockScreen` dismisses on click with no named sting
+            // (the FIFO chain advancing is the feedback).
         }
         UiAction::RemapControl(_) => {
             // GML `keybind` click arms `await_input` silently; the

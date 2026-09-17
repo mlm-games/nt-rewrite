@@ -33,6 +33,7 @@ pub fn player_move(
     mut commands: Commands,
     input: Res<NtInput>,
     mask: Res<FloorMask>,
+    mut tut: Option<ResMut<crate::state::TutorialState>>,
     mut q: Query<
         (
             Entity,
@@ -74,6 +75,12 @@ pub fn player_move(
             vel.0 += dir * player.accel * dt;
             if vel.0.length() > max_speed {
                 vel.0 = vel.0.normalize_or_zero() * max_speed;
+            }
+            // GML `Player/Step_0:134` verbatim: any walk accel latches
+            // the tutorial Walking step (`TutCont` only exists on the
+            // scripted first floor; the state no-ops elsewhere).
+            if let Some(tut) = tut.as_deref_mut() {
+                tut.complete_step(crate::state::TutorialStep::Walking);
             }
         }
 
@@ -134,6 +141,7 @@ pub fn weapon_switch(
     mut input: ResMut<NtInput>,
     mut q: Query<&mut Inventory, With<Player>>,
     mut cues: ResMut<Queue<AudioCue>>,
+    mut tut: Option<ResMut<crate::state::TutorialState>>,
 ) {
     let Ok(mut inv) = q.single_mut() else {
         return;
@@ -165,6 +173,12 @@ pub fn weapon_switch(
 
     if switched {
         // GML `Step_0:30`: swap pops `swapanim`.
+        inv.swapanim = 1.0;
+        // GML `scrSwapWeps:43` verbatim: any swap latches the tutorial
+        // Swapping step.
+        if let Some(tut) = tut.as_deref_mut() {
+            tut.complete_step(crate::state::TutorialStep::Swapping);
+        }
         inv.swapanim = 1.0;
         cues.push(AudioCue {
             name: "sndAmmoPickup",

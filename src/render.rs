@@ -3773,9 +3773,146 @@ pub const CREDIT_SECTIONS: &[&[&str]] = &[
     &["@wNUCLEAR THRONE"],
 ];
 
+/// GML `TutCont/Draw_64` instruction bar verbatim (keyboard lines;
+/// gamepad/touch variants live in the loc table the port does not
+/// ship): one bottom-letterbox row per step until the exit portal
+/// exists. Key names resolve from the live keymap (`move` quartet on
+/// Walking, the step action otherwise), GML `keymap_get` parity.
+pub fn tutorial_texts(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
+    let step = world
+        .get_resource::<crate::state::TutorialState>()
+        .map(|t| t.step)
+        .unwrap_or(crate::state::TutorialStep::Walking);
+    if world
+        .get_resource::<crate::state::TutorialState>()
+        .is_some_and(|t| t.portal_open)
+    {
+        return Vec::new();
+    }
+    let vw = gml_view_size(canvas_dp)[0];
+    let key_name = |action: &str| {
+        world
+            .get_resource::<crate::keymap::InputMapState>()
+            .and_then(|m| {
+                crate::keymap::NtAction::from_name(action).map(|a| format!("{:?}", m.map.keyboard(&a)))
+            })
+            .unwrap_or_else(|| action.to_ascii_uppercase())
+    };
+    let text = match step {
+        crate::state::TutorialStep::Walking => "WALK WITH @wWASD@s OR THE @wARROW KEYS".to_string(),
+        crate::state::TutorialStep::PickingUp => {
+            format!("PICK UP A NEW WEAPON WITH @w{}@s", key_name("pick"))
+        }
+        crate::state::TutorialStep::Shooting => "AIM WITH THE MOUSE, @wLEFT BUTTON@s FIRES".to_string(),
+        crate::state::TutorialStep::Swapping => {
+            format!("SWAP WEAPONS WITH @w{}@s#TRY IT A FEW TIMES!", key_name("swap"))
+        }
+        crate::state::TutorialStep::Power => {
+            "@wRIGHT MOUSE BUTTON@s USES YOUR ABILITY#GIVE IT A GO!".to_string()
+        }
+        crate::state::TutorialStep::Fin => "COOL, WE'RE DONE HERE!".to_string(),
+    };
+    gui_texts_dp(
+        canvas_dp,
+        vec![MenuGuiText {
+            text,
+            gx: vw * 0.5,
+            gy: 240.0 - 18.0,
+            color: GUI_WHITE,
+            px: 7.0,
+            centered: true,
+            middle_y: true,
+            right: false,
+            bold: false,
+        }],
+    )
+}
+
 /// Section count for the credits cycler ([`MenuState::credits_section`]).
 pub fn credit_section_count() -> usize {
     CREDIT_SECTIONS.len().max(1)
+}
+
+/// GML `UnlockScreen/Other_10` text layer verbatim (head of the queue
+/// only — GML draws the queued head while `visible`; the FIFO chain
+/// advances on dismiss): dim note, race name via the big-name row (or
+/// the skin letter for skins), `UNLOCKED!`, `CONTINUE` prompt. Rows
+/// are GUI-space like the rest of `menu_gui_texts_vw`.
+pub fn unlock_popup_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
+    use crate::state::menus::UnlockPopup;
+    let cx = vw * 0.5;
+    let popup = world
+        .get_resource::<MenuState>()
+        .and_then(|m| m.unlock_queue.first().copied());
+    let Some(popup) = popup else {
+        return Vec::new();
+    };
+    let (name, sub) = match popup {
+        UnlockPopup::Race(race) => (
+            crate::savedata_part::character_def(race)
+                .name
+                .to_ascii_uppercase(),
+            String::new(),
+        ),
+        UnlockPopup::Skin(race, skin) => (
+            crate::savedata_part::character_def(race)
+                .name
+                .to_ascii_uppercase(),
+            format!("SKIN {}", (b'A' + skin.min(3)) as char),
+        ),
+    };
+    let mut out = vec![
+        MenuGuiText {
+            text: name,
+            gx: cx,
+            gy: 100.0,
+            color: GUI_WHITE,
+            px: 14.0,
+            centered: true,
+            middle_y: true,
+            right: false,
+            bold: true,
+        },
+        MenuGuiText {
+            text: "UNLOCKED!".to_string(),
+            gx: cx,
+            gy: 120.0,
+            color: GUI_WHITE,
+            px: 10.0,
+            centered: true,
+            middle_y: true,
+            right: false,
+            bold: true,
+        },
+        MenuGuiText {
+            text: "CONTINUE".to_string(),
+            gx: cx,
+            gy: 220.0,
+            color: GUI_MID,
+            px: 10.0,
+            centered: true,
+            middle_y: true,
+            right: false,
+            bold: true,
+        },
+    ];
+    if !sub.is_empty() {
+        out.insert(
+            1,
+            MenuGuiText {
+                text: sub,
+                gx: cx,
+                gy: 112.0,
+                color: GUI_MID,
+                px: 7.0,
+                centered: true,
+                middle_y: true,
+                right: false,
+                bold: false,
+            },
+        );
+    }
+    out
 }
 
 /// Menu overlay texts for one [`crate::MenuOverlay`] (bevy
@@ -4042,6 +4179,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 })
                 .collect()
         }
+        crate::MenuOverlay::Unlock => unlock_popup_texts(world, vw),
         crate::MenuOverlay::Stats => {
             use crate::hud::{gml_area_map_name, scr_time, scr_time_speedrun};
             use crate::savedata_part::{SaveData, unlock_progress};
@@ -8292,6 +8430,47 @@ pub fn menu_sprites(
                     &wps,
                     1000,
                 ));
+            }
+        }
+        crate::MenuOverlay::Unlock => {
+            // GML `UnlockScreen/Other_10` sprite layer verbatim: the
+            // queued head's `sprBigPortrait[skin_subimage]` rising
+            // `addy 0 -> 2` (headless: settled at 2) over the dimmed
+            // game, plus the `sprMutationSplat[splatimg]` settling at
+            // 3. Portrait art resolves from the race/skin ids.
+            use crate::state::menus::{UnlockPopup, race_skin_subimage};
+            let popup = world
+                .get_resource::<MenuState>()
+                .and_then(|m| m.unlock_queue.first().copied());
+            if let Some(popup) = popup {
+                let (race_gml, skin) = match popup {
+                    UnlockPopup::Race(race) => (race as usize, 0u8),
+                    UnlockPopup::Skin(race, skin) => (race as usize, skin),
+                };
+                let sub = race_skin_subimage(race_gml, skin);
+                if sub >= 0 {
+                    let path = format!("images/sprBigPortrait{}.png", sub);
+                    if let Some(s) = assets.sprite_for(
+                        Box::leak(path.into_boxed_str()) as &str,
+                        0,
+                        gui_to_world(vw * 0.5, 120.0 - 2.0),
+                        false,
+                        0.0,
+                        [1.0; 4],
+                    ) {
+                        out.push(s);
+                    }
+                }
+                if let Some(s) = assets.sprite_for(
+                    "images/sprMutationSplat.png",
+                    3,
+                    gui_to_world(vw * 0.5, 120.0),
+                    false,
+                    0.0,
+                    [1.0; 4],
+                ) {
+                    out.push(s);
+                }
             }
         }
         _ => {}

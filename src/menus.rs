@@ -188,8 +188,12 @@ pub fn crown_short_name(id: u8) -> &'static str {
     }
 }
 
-/// Unlock notification (toast-bridge producer lands later; queue +
-/// dismiss laws live here).
+/// Unlock notification: GML `scrUnlockScreenCreate` dedup queue
+/// (`objects/UnlockScreen` FIFO: one visible at a time, destroy chains
+/// the next via `Destroy_0`; dismiss needs `can_continue` from
+/// `Alarm_1`). Race unlocks and skin unlocks queue here; crown/gold/
+/// cheat unlocks surface as `draw_unlock` toasts (GML
+/// `scrShowUnlockPopup`), which the port renders as `Toast`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnlockPopup {
     Race(RaceId),
@@ -436,9 +440,24 @@ pub struct MenuEdge {
     pub restart_pressed: bool,
 }
 
-/// Push an unlock notification (producer wiring deferred).
+/// Push an unlock notification. GML `scrUnlockScreenCreate` verbatim:
+/// dedups on `(race, skin)` — a queued or visible matching popup
+/// returns the existing one instead of queueing a duplicate.
 pub fn push_unlock(menu: &mut MenuState, popup: UnlockPopup) {
-    menu.unlock_queue.push(popup);
+    if !menu.unlock_queue.contains(&popup) {
+        menu.unlock_queue.push(popup);
+    }
+}
+
+/// Queue a race unlock popup (GML `scrRaceUnlock` half: the unlock
+/// itself lives in `savedata_part`; the panel queues here).
+pub fn push_race_unlock(menu: &mut MenuState, race: RaceId) {
+    push_unlock(menu, UnlockPopup::Race(race));
+}
+
+/// Queue a skin unlock popup (GML `scrRaceUnlockSkin` half).
+pub fn push_skin_unlock(menu: &mut MenuState, race: RaceId, skin: u8) {
+    push_unlock(menu, UnlockPopup::Skin(race, skin));
 }
 
 /// Dismiss the oldest unlock notification; `true` when one was shown.
@@ -679,6 +698,12 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 menu.credits_scroll = 0.0;
             }
             emit_cue(world, &UiAction::AdvanceCredits);
+        }
+        UiAction::DismissUnlock => {
+            if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+                dismiss_unlock(&mut menu);
+            }
+            emit_cue(world, &UiAction::DismissUnlock);
         }
         UiAction::RemapControl(ref name) => {
             // GML `element_functions["keybind"]` verbatim: arm
@@ -1881,6 +1906,23 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
     }
 
     let game_over = world.get_resource::<Run>().is_some_and(|run| run.game_over);
+
+    // GML `Portal/Alarm_1` tutorial arm verbatim: the tutorial exit
+    // portal restarts the run (`game_restart()` — same path as the
+    // death RETRY: immediate restart through Loading). Consumed here
+    // (not in the portal system: the state transition lives with the
+    // other `goto_state(Loading)` paths).
+    {
+        let mut restart = world.query_filtered::<Entity, With<crate::state::TutorialRestart>>();
+        let pending: Vec<Entity> = restart.iter(world).collect();
+        if !pending.is_empty() {
+            for e in pending {
+                world.entity_mut(e).remove::<crate::state::TutorialRestart>();
+            }
+            goto_state(world, AppState::Loading);
+            return;
+        }
+    }
 
     // Escape toggles pause (bevy `handle_pause_input`; transitions never
     // block headless — no `Transition` resource exists here). GML

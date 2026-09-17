@@ -1805,7 +1805,9 @@ pub fn portal_enter(
 /// level (loop / secret / normal advance), drains pending mutation
 /// picks (deferring floor-gen while the pick UI owns the pause), and
 /// otherwise kicks the loading transition. Rotation/shrink visuals
-/// from the bevy build are omitted (render phase).
+/// from the bevy build are omitted (render phase). GML
+/// `Portal/Alarm_1` verbatim: a tutorial exit portal restarts the run
+/// (`game_restart()`) instead of advancing the floor.
 pub fn tick_portal_suck(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -1854,6 +1856,17 @@ pub fn tick_portal_suck(
     let portal_e = suck.portal;
     let race = race_state.race;
     commands.entity(player_e).remove::<PortalSucking>();
+
+    // GML `Portal/Alarm_1` verbatim: the tutorial exit portal restarts
+    // the run (`game_restart()`) instead of advancing the floor. The
+    // port reboots run state in place (same `Loading` path as death
+    // RETRY) and clears the tutorial flag, so the fresh run lands on
+    // the real first floor.
+    if run.tutorial {
+        run.tutorial = false;
+        commands.entity(player_e).insert(crate::state::TutorialRestart);
+        return;
+    }
 
     // GML `Portal/Alarm_1`: ground `WepPickup` only — visible and
     // non-persistent (portal-vacuumed `carried` guns are already

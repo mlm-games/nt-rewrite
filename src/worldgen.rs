@@ -2201,13 +2201,21 @@ fn populate(
     trim_chests(&mut plan.chests);
 
     // GML `GenCont/Alarm_0` tutorial arm verbatim: the `TutCont` level
-    // holds no roaming enemies, no chests and no boss wants (its weapon
-    // chest and portal are scripted later by `TutCont` itself, which the
-    // port does not model yet).
+    // holds no roaming enemies and no boss wants. The scripted
+    // `WeaponChest` (GML `TutCont/Alarm_0` on entering PickingUp) ships
+    // in the plan so the walkthrough has a gun to pick up; the exit
+    // portal is scripted by the `TutorialState` Fin latch, not here.
     if run.tutorial {
         plan.enemies.clear();
         plan.chests.clear();
         plan.boss = None;
+        if let Some(&(fx, fy)) = plan
+            .floor_cells
+            .iter()
+            .max_by_key(|c| c.0.abs() + c.1.abs())
+        {
+            plan.chests.push(ChestSpawn::Weapon(cell_center_px(fx, fy)));
+        }
     }
 }
 

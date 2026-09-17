@@ -1533,10 +1533,11 @@ pub fn spawn_level(
     // GML `scrPopulate` bandit camps: a Bandit on every free chest spot,
     // except Crown-Vault-style finale floors (which hold no chests anyway)
     // and the Mansion/HQ secret slots. GML area ints: city 5, vault 100,
-    // mansion 103, hq 106.
+    // mansion 103, hq 106. The tutorial level camps nothing (GML
+    // `GenCont/Alarm_0` kills the camp pass with the roamers).
     {
         let g = crate::worldgen::gml_area_from_run(run);
-        if (g < 5 || g > 100) && g != 103 && g != 106 {
+        if !run.tutorial && (g < 5 || g > 100) && g != 103 && g != 106 {
             for spot in bandit_spots {
                 if !mask.is_walkable(spot) {
                     continue;
@@ -2215,6 +2216,15 @@ mod verbatim_title_to_first_level {
         let run = world.resource::<Run>();
         assert!(run.tutorial);
         assert!(world.query::<&Enemy>().iter(&world).next().is_none());
+        // GML `TutCont/Alarm_0` scripts one `WeaponChest` on entering
+        // the PickingUp step; the plan ships it so the walkthrough has
+        // a gun to pick up.
+        let chests: Vec<_> = world
+            .query::<&crate::comps_b::Pickup>()
+            .iter(&world)
+            .filter(|p| matches!(p.kind, crate::comps_b::PickupKind::Chest(_)))
+            .collect();
+        assert_eq!(chests.len(), 1);
         let mask = world.resource::<FloorMask>();
         assert!(!mask.cells.is_empty() && mask.cells.len() < 40);
     }

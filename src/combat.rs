@@ -415,10 +415,10 @@ pub fn resolve_enemy_deaths(
             dirty.0 = true;
         }
 
-        let newly = check_kill_unlocks(&mut save, enemy.kind, race_state.race);
-        if !newly.is_empty() {
+        let unlocks = check_kill_unlocks(&mut save, enemy.kind, race_state.race, None);
+        if !unlocks.races.is_empty() {
             dirty.0 = true;
-            for r in newly {
+            for r in unlocks.races {
                 toast.show(&format!(
                     "{} UNLOCKED",
                     crate::savedata_part::character_def(r)

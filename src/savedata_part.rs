@@ -616,6 +616,18 @@ impl Default for SaveData {
 // TODO(port): try_unlock_race calls is_race_unlocked (src/game/generated/unlocks.rs) and
 // SaveData::race_loadout_mut (src/save.rs); neither is part of this slice. Body kept verbatim.
 pub fn try_unlock_race(save: &mut SaveData, race: crate::data::RaceId) -> bool {
+    try_unlock_race_with_menu(save, race, None)
+}
+
+/// Race unlock with the GML `UnlockScreen` queue half: on a fresh
+/// unlock, queues the race popup (GML `scrRaceUnlock` calls
+/// `scrUnlockScreenCreate`). Pass the live `MenuState` when the caller
+/// owns it; `None` keeps the save-only law (headless save paths).
+pub fn try_unlock_race_with_menu(
+    save: &mut SaveData,
+    race: crate::data::RaceId,
+    menu: Option<&mut crate::state::menus::MenuState>,
+) -> bool {
     if is_race_unlocked(save, race) {
         return false;
     }
@@ -631,6 +643,9 @@ pub fn try_unlock_race(save: &mut SaveData, race: crate::data::RaceId) -> bool {
     if let Some(id) = achievement_for_race(race) {
         unlock_achievement(save, id);
     }
+    if let Some(menu) = menu {
+        crate::state::menus::push_race_unlock(menu, race);
+    }
     true
 }
 
@@ -638,78 +653,111 @@ pub fn check_kill_unlocks(
     save: &mut SaveData,
     kind: crate::data::EnemyKind,
     race: crate::data::RaceId,
-) -> Vec<crate::data::RaceId> {
+    menu: Option<&mut crate::state::menus::MenuState>,
+) -> CheckKillUnlocks {
     use crate::data::EnemyKind;
-    let mut got = Vec::new();
-    let mut award = |save: &mut SaveData, r: crate::data::RaceId| {
-        if try_unlock_race(save, r) {
-            got.push(r);
+    let mut races = Vec::new();
+    let mut skins: Vec<(crate::data::RaceId, u8)> = Vec::new();
+    let mut award = |save: &mut SaveData,
+                     menu: &mut Option<&mut crate::state::menus::MenuState>,
+                     r: crate::data::RaceId| {
+        if try_unlock_race_with_menu(save, r, menu.as_deref_mut()) {
+            races.push(r);
         }
     };
+    let mut award_skin = |save: &mut SaveData,
+                          menu: &mut Option<&mut crate::state::menus::MenuState>,
+                          r: crate::data::RaceId,
+                          s: usize| {
+        if try_unlock_skin_with_menu(save, r, s, menu.as_deref_mut())
+            && let Ok(s) = u8::try_from(s)
+        {
+            skins.push((r, s));
+        }
+    };
+    let mut menu = menu;
 
     match kind {
         EnemyKind::BigDog | EnemyKind::BigDogLoop => {
-            award(save, crate::data::RaceId::BigDog);
+            award(save, &mut menu, crate::data::RaceId::BigDog);
         }
         EnemyKind::Mom => {
-            award(save, crate::data::RaceId::Frog);
+            award(save, &mut menu, crate::data::RaceId::Frog);
         }
         // GML hatches `HostileHorror` from a starved rad chest and
         // unlocks Horror on the encounter (kill-gated here: every
         // spawned horror that dies counts).
         EnemyKind::HostileHorror => {
-            award(save, crate::data::RaceId::Horror);
+            award(save, &mut menu, crate::data::RaceId::Horror);
         }
         _ => {}
     }
 
     match kind {
         EnemyKind::FrogQueen if race == crate::data::RaceId::Rebel => {
-            try_unlock_skin(save, crate::data::RaceId::Rebel, 1);
+            award_skin(save, &mut menu, crate::data::RaceId::Rebel, 1);
         }
         EnemyKind::Hyper if race == crate::data::RaceId::Horror => {
-            try_unlock_skin(save, crate::data::RaceId::Horror, 1);
+            award_skin(save, &mut menu, crate::data::RaceId::Horror, 1);
         }
         EnemyKind::Technomancer if race == crate::data::RaceId::Steroids => {
-            try_unlock_skin(save, crate::data::RaceId::Steroids, 1);
+            award_skin(save, &mut menu, crate::data::RaceId::Steroids, 1);
         }
         EnemyKind::Captain => {
             if race == crate::data::RaceId::Rogue {
-                try_unlock_skin(save, crate::data::RaceId::Rogue, 1);
+                award_skin(save, &mut menu, crate::data::RaceId::Rogue, 1);
             }
             if race == crate::data::RaceId::Cuz {
-                try_unlock_skin(save, crate::data::RaceId::Venuz, 2);
+                award_skin(save, &mut menu, crate::data::RaceId::Venuz, 2);
             }
         }
         EnemyKind::Bandit if race == crate::data::RaceId::Rebel => {
-            try_unlock_skin(save, crate::data::RaceId::Rebel, 2);
+            award_skin(save, &mut menu, crate::data::RaceId::Rebel, 2);
         }
         EnemyKind::LilHunter | EnemyKind::LilHunterLoop if race == crate::data::RaceId::Rogue => {
-            try_unlock_skin(save, crate::data::RaceId::Rogue, 2);
+            award_skin(save, &mut menu, crate::data::RaceId::Rogue, 2);
         }
         EnemyKind::Throne | EnemyKind::ThroneII => {
             if race == crate::data::RaceId::Melting {
-                try_unlock_skin(save, crate::data::RaceId::Melting, 1);
-                try_unlock_skin(save, crate::data::RaceId::Melting, 2);
+                award_skin(save, &mut menu, crate::data::RaceId::Melting, 1);
+                award_skin(save, &mut menu, crate::data::RaceId::Melting, 2);
             }
             if race == crate::data::RaceId::Plant {
-                try_unlock_skin(save, crate::data::RaceId::Plant, 1);
-                try_unlock_skin(save, crate::data::RaceId::Plant, 2);
+                award_skin(save, &mut menu, crate::data::RaceId::Plant, 1);
+                award_skin(save, &mut menu, crate::data::RaceId::Plant, 2);
             }
             if race == crate::data::RaceId::Eyes {
-                try_unlock_skin(save, crate::data::RaceId::Eyes, 2);
+                award_skin(save, &mut menu, crate::data::RaceId::Eyes, 2);
             }
             if race == crate::data::RaceId::Steroids {
-                try_unlock_skin(save, crate::data::RaceId::Steroids, 2);
+                award_skin(save, &mut menu, crate::data::RaceId::Steroids, 2);
             }
         }
         _ => {}
     };
 
-    got
+    CheckKillUnlocks { races, skins }
+}
+
+/// Fresh unlocks from [`check_kill_unlocks`]: newly-unlocked races
+/// (toast + popup) plus newly-unlocked `(race, skin-index)` pairs
+/// (popup only — GML skins surface as `UnlockScreen` panels, and the
+/// port previously dropped them on the floor).
+pub struct CheckKillUnlocks {
+    pub races: Vec<crate::data::RaceId>,
+    pub skins: Vec<(crate::data::RaceId, u8)>,
 }
 
 fn try_unlock_skin(save: &mut SaveData, race: crate::data::RaceId, skin: usize) -> bool {
+    try_unlock_skin_with_menu(save, race, skin, None)
+}
+
+fn try_unlock_skin_with_menu(
+    save: &mut SaveData,
+    race: crate::data::RaceId,
+    skin: usize,
+    menu: Option<&mut crate::state::menus::MenuState>,
+) -> bool {
     let Some(lo) = save.races.get_mut(&race) else {
         return false;
     };
@@ -717,6 +765,11 @@ fn try_unlock_skin(save: &mut SaveData, race: crate::data::RaceId, skin: usize) 
         return false;
     }
     lo.unlocked_skins[skin] = true;
+    if let Some(menu) = menu
+        && let Ok(skin_u8) = u8::try_from(skin)
+    {
+        crate::state::menus::push_skin_unlock(menu, race, skin_u8);
+    }
     true
 }
 
@@ -1440,7 +1493,9 @@ pub fn load_or_default(path: &Path) -> SaveData {
 /// GML `scrUnlocks` area switch verbatim: race unlocks are unconditional
 /// (single-player: the current run's race is the only present player),
 /// Chicken/B needs hardmode (not modeled — stays locked), HQ Horror/C
-/// needs ≤3 mutations held.
+/// needs ≤3 mutations held. Fresh unlocks also queue the GML
+/// `UnlockScreen` popup (race or skin); pass the live menu when the
+/// caller owns it.
 pub fn check_area_skins(
     save: &mut SaveData,
     area: AreaId,
@@ -1448,55 +1503,79 @@ pub fn check_area_skins(
     skills_len: usize,
     race: RaceId,
     hardmode: bool,
+    mut menu: Option<&mut crate::state::menus::MenuState>,
 ) {
     match area {
         AreaId::Sewers => {
-            try_unlock_race(save, RaceId::Eyes);
+            try_unlock_race_with_menu(save, RaceId::Eyes, menu.as_deref_mut());
             // GML `GameCont/Other_5`: Chicken-B needs hardmode.
             if hardmode && race == RaceId::Chicken {
-                try_unlock_letter(save, RaceId::Chicken, SkinLetter::B);
+                try_unlock_letter_with_menu(
+                    save,
+                    RaceId::Chicken,
+                    SkinLetter::B,
+                    menu.as_deref_mut(),
+                );
             }
         }
         AreaId::PizzaSewers => {
-            try_unlock_letter(save, RaceId::Eyes, SkinLetter::B);
+            try_unlock_letter_with_menu(save, RaceId::Eyes, SkinLetter::B, menu.as_deref_mut());
         }
         AreaId::Scrapyards => {
-            try_unlock_race(save, RaceId::Plant);
+            try_unlock_race_with_menu(save, RaceId::Plant, menu.as_deref_mut());
         }
         // Port `City` is YV's Mansion (GML 103): Venuz.
         AreaId::City => {
-            try_unlock_race(save, RaceId::Venuz);
+            try_unlock_race_with_menu(save, RaceId::Venuz, menu.as_deref_mut());
         }
         AreaId::CursedCaves => {
-            try_unlock_letter(save, RaceId::Crystal, SkinLetter::B);
+            try_unlock_letter_with_menu(
+                save,
+                RaceId::Crystal,
+                SkinLetter::B,
+                menu.as_deref_mut(),
+            );
         }
         // Port `FrozenCity` is GML city (route floors 9-11): Robot.
         AreaId::FrozenCity => {
-            try_unlock_race(save, RaceId::Robot);
+            try_unlock_race_with_menu(save, RaceId::Robot, menu.as_deref_mut());
         }
         AreaId::Jungle => {
-            try_unlock_race(save, RaceId::Chicken);
+            try_unlock_race_with_menu(save, RaceId::Chicken, menu.as_deref_mut());
         }
         AreaId::Labs => {
-            try_unlock_race(save, RaceId::Steroids);
+            try_unlock_race_with_menu(save, RaceId::Steroids, menu.as_deref_mut());
         }
         AreaId::Desert if loop_count >= 1 => {
-            try_unlock_race(save, RaceId::Rebel);
+            try_unlock_race_with_menu(save, RaceId::Rebel, menu.as_deref_mut());
         }
         AreaId::HQ if skills_len <= 3 => {
-            try_unlock_letter(save, RaceId::Horror, SkinLetter::C);
+            try_unlock_letter_with_menu(
+                save,
+                RaceId::Horror,
+                SkinLetter::C,
+                menu.as_deref_mut(),
+            );
         }
         _ => {}
     }
 }
 
 fn try_unlock_letter(save: &mut SaveData, race: RaceId, skin: SkinLetter) -> bool {
-    let ok = try_unlock_skin(save, race, skin as usize);
+    try_unlock_letter_with_menu(save, race, skin, None)
+}
+
+fn try_unlock_letter_with_menu(
+    save: &mut SaveData,
+    race: RaceId,
+    skin: SkinLetter,
+    menu: Option<&mut crate::state::menus::MenuState>,
+) -> bool {
+    let ok = try_unlock_skin_with_menu(save, race, skin as usize, menu);
     if ok {
         if let Some(id) = achievement_for_skin(race, skin as usize) {
             unlock_achievement(save, id);
         }
-        // Cuz B/C ride the letter path with no achievement id.
         if race == RaceId::Cuz {
             unlock_achievement(save, if skin == SkinLetter::B { 45 } else { 58 });
         }
@@ -1511,6 +1590,7 @@ pub fn tick_area_skins(
     mut save: ResMut<SaveData>,
     run: Res<Run>,
     player_q: Query<(&Player, &RaceState), With<Player>>,
+    menu: Option<ResMut<crate::state::menus::MenuState>>,
 ) {
     if !run.is_changed() {
         return;
@@ -1520,6 +1600,7 @@ pub fn tick_area_skins(
         .next()
         .map(|(p, r)| (p.mutations.len(), r.race))
         .unwrap_or((0, RaceId::Fish));
+    let mut menu_opt = menu.map(|m| m.into_inner());
     check_area_skins(
         &mut save,
         run.area,
@@ -1527,6 +1608,7 @@ pub fn tick_area_skins(
         skills_len,
         race,
         run.hardmode,
+        menu_opt.as_deref_mut(),
     );
 }
 

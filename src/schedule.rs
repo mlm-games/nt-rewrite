@@ -41,13 +41,17 @@ pub fn gameplay_active(
     pending_mut: Option<Res<PendingMutation>>,
     pending_ultra: Option<Res<PendingUltra>>,
     overlay: Option<Res<crate::state::OverlayMenu>>,
+    menu: Option<Res<crate::state::menus::MenuState>>,
 ) -> bool {
     let loading = ft.map(|f| f.active).unwrap_or(false);
     let picking = pending_mut.is_some() || pending_ultra.is_some();
     let blocked = transition.is_some_and(|t| t.0);
     // Overlay menus (pause/settings/credits) freeze gameplay even on
-    // paths that open them without the `Paused` flag.
+    // paths that open them without the `Paused` flag. GML
+    // `UnlockScreen` panels likewise own the frame while queued (the
+    // run sits behind the panel, same as any other overlay).
     let overlay_open = overlay.is_some_and(|o| *o != crate::state::OverlayMenu::None);
+    let unlock_open = menu.is_some_and(|m| !m.unlock_queue.is_empty());
     *state == AppState::InGame
         && !paused.0
         && !blocked
@@ -55,6 +59,7 @@ pub fn gameplay_active(
         && !loading
         && !picking
         && !overlay_open
+        && !unlock_open
 }
 
 /// In-game gate for the cleanup tail (bevy `in_state(InGame)` parity).

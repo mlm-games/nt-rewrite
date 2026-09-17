@@ -1761,9 +1761,21 @@ impl App {
             && !offer_open
             && !paused
             && !game_over
-            && overlay == OverlayMenu::None;
-        let menu_open =
-            state == AppState::InGame && (paused || overlay != OverlayMenu::None) && !game_over;
+            && overlay == OverlayMenu::None
+            && self
+                .sim
+                .world
+                .get_resource::<MenuState>()
+                .is_none_or(|m| m.unlock_queue.is_empty());
+        let menu_open = state == AppState::InGame
+            && (paused
+                || overlay != OverlayMenu::None
+                || self
+                    .sim
+                    .world
+                    .get_resource::<MenuState>()
+                    .is_some_and(|m| !m.unlock_queue.is_empty()))
+            && !game_over;
 
         // Context switch (Godot `_gui_input`-before-`_unhandled_input`
         // parity): one screen owns Space/arrows per frame. Menus consume
@@ -2728,6 +2740,7 @@ impl App {
                 | Some(MenuOverlay::Credits)
                 | Some(MenuOverlay::GameOver)
                 | Some(MenuOverlay::Stats)
+                | Some(MenuOverlay::Unlock)
         );
         let overlay_color = crate::effects::flash_rgba(&self.sim.world);
 
@@ -2736,13 +2749,36 @@ impl App {
         // Loading, `LevCont` behind the offer, mid-run `FloorTransition`
         // covers). The canvas text layer rides ABOVE the opaque vortex
         // pass, so an ungated `hud_rows` paints HP/level/ammo/FLOOR
-        // straight over the spiral (the cover-text leak).
+        // straight over the spiral (the cover-text leak). The tutorial
+        // letterbox bar rides `menu_rows` instead (see below).
         let hud_rows = if state == AppState::InGame && menu_kind.is_none() && !cover_chrome_off {
             hud_overlay_lines(&mut self.sim.world, viewport_dp)
         } else {
             Vec::new()
         };
-        let menu_rows = menu_kind.map(|k| menu_gui_texts_dp(k, &mut self.sim.world, viewport_dp));
+        let mut menu_rows =
+            menu_kind.map(|k| menu_gui_texts_dp(k, &mut self.sim.world, viewport_dp));
+        // GML `TutCont/Draw_64` verbatim: the step instruction bar draws
+        // at the letterbox bottom until the exit portal exists — over
+        // live HUD, never instead of it.
+        if state == AppState::InGame
+            && self
+                .sim
+                .world
+                .get_resource::<crate::comps_a::Run>()
+                .is_some_and(|r| r.tutorial)
+            && !self
+                .sim
+                .world
+                .get_resource::<crate::state::TutorialState>()
+                .is_some_and(|t| t.portal_open)
+        {
+            let tut_rows = crate::render::tutorial_texts(&mut self.sim.world, viewport_dp);
+            match &mut menu_rows {
+                Some(rows) => rows.extend(tut_rows),
+                None => menu_rows = Some(tut_rows),
+            }
+        }
 
         // Viewport input snapshot (owned from here on; handlers below only
         // touch staged input through the raw pointer).
@@ -3536,6 +3572,14 @@ fn menu_button_action(
             "RETRY" => Some(UiAction::ConfirmPause(1)),
             _ => None,
         },
+        // GML `UnlockScreen/Mouse_56` verbatim: the panel dismisses on
+        // click once `can_continue` fires (`Alarm_1`, 20 steps after
+        // show). Headless has no show timer, so any CONTINUE click
+        // dismisses the head of the queue.
+        MenuOverlay::Unlock => match text {
+            "CONTINUE" => Some(UiAction::DismissUnlock),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -3646,6 +3690,10 @@ pub enum MenuOverlay {
     Mutation,
     GameOver,
     Stats,
+    /// GML `UnlockScreen` panel over live gameplay: the head of
+    /// `MenuState::unlock_queue` (race/skin unlocks queue here; the
+    /// shell dismisses via `dismiss_unlock` once confirmed).
+    Unlock,
 }
 
 pub fn menu_overlay_kind(
@@ -3675,6 +3723,13 @@ pub fn menu_overlay_kind(
         AppState::InGame => {
             if game_over {
                 return Some(MenuOverlay::GameOver);
+            }
+            // GML `UnlockScreen` panels surface over gameplay (TopCont
+            // draws the queued head while a run is live); they take
+            // precedence over pause/settings/credits/mutation so the
+            // unlock is seen before any other overlay.
+            if !menu.unlock_queue.is_empty() {
+                return Some(MenuOverlay::Unlock);
             }
             match overlay {
                 OverlayMenu::Pause => Some(MenuOverlay::Pause),
