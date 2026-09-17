@@ -1055,6 +1055,9 @@ pub const Z_FX: f32 = 1.0;
 pub const Z_BLOOM: f32 = 2.0;
 pub const Z_FOG: f32 = 3.0;
 pub const Z_CROSSHAIR: f32 = 4.0;
+/// Game-over dim quad rung: above the room, below the crosshair (GML
+/// `GameOver/Draw_0` dims before `UberCont/Draw_75` draws the cursor).
+pub const Z_GAMEOVER_DIM: f32 = 3.5;
 pub const Z_FAINTED: f32 = 5.0;
 pub const Z_PORTAL_INDICATOR: f32 = 6.0;
 pub const Z_SPIRAL_FIGURES: f32 = 7.0;
@@ -6144,19 +6147,23 @@ pub const CROSSHAIR_DEADZONE: f32 = 32.0 * 0.4125;
 /// `player + (16 + dis)` along the aim heading (0.8 active / 0.1 idle),
 /// alpha lerped toward 5/0 at 0.4 (drawn as `min(1, alpha)`), active
 /// past the attack deadzone. Skipped while paused (GML `PauseImage`
-/// gate) and until the first hover stages a cursor.
+/// gate) and until the first hover stages a cursor. On game over the
+/// player entity is gone (despawned 0.85s after death), so the anchor
+/// is the corpse `Pos` — GML's `TopCont` keeps drawing at the death
+/// spot and `UberCont/Draw_75` keeps the cursor alive over the
+/// GameOver screen, whose MENU/RETRY buttons are aimed with the
+/// crosshair, not the OS arrow.
 pub fn crosshair_sprites(
     world: &mut World,
     assets: &RenderAssets,
     dt_secs: f32,
 ) -> Vec<SpriteInstance> {
     let mut out = Vec::new();
-    // Live gameplay only: paused/menus/offers keep the last aim but
-    // hide the cursor. Game-over is NOT gated out: GML keeps drawing
-    // the crosshair over the GameOver screen (`UberCont/Draw_75` only
-    // needs `window_get_cursor() == cr_none`, which holds through
-    // death since `opt_keyboard` stays true) — the MENU/RETRY buttons
-    // are aimed with the crosshair, not the OS arrow.
+    // Live gameplay + game over: paused/menus/offers keep the last aim
+    // but hide the cursor. Game-over is NOT gated out: GML keeps
+    // drawing the crosshair over the GameOver screen
+    // (`UberCont/Draw_75` only needs `window_get_cursor() == cr_none`,
+    // which holds through death since `opt_keyboard` stays true).
     let live = world
         .get_resource::<crate::state::AppState>()
         .is_some_and(|s| *s == crate::state::AppState::InGame)
@@ -6180,7 +6187,18 @@ pub fn crosshair_sprites(
         .iter(world)
         .next()
         .map(|(p, _, a)| (p.0, a.0));
-    let Some((pp, aim)) = player else {
+    let anchor: Option<(Vec2, Vec2)> = match player {
+        Some(anchor) => Some(anchor),
+        // Dead: anchor on the player husk so the crosshair keeps
+        // aiming from the death spot (`Corpse.pos` is the same point).
+        // The husk outlives the screen (12s), so this never blinks.
+        None => world
+            .query::<(&Pos, &Corpse)>()
+            .iter(world)
+            .next()
+            .map(|(p, _)| (p.0, Vec2::X)),
+    };
+    let Some((pp, aim)) = anchor else {
         return out;
     };
     let hover = world.get_resource::<HoverWorld>().and_then(|h| h.0);
@@ -6224,6 +6242,38 @@ pub fn crosshair_sprites(
         0.0,
         [1.0, 1.0, 1.0, alpha],
     ) {
+        out.push(s);
+    }
+    out
+}
+
+/// Game-over dim quad (GML `GameOver/Draw_0:7-13` verbatim): the 0.7
+/// black rectangle over the view. It lives IN the sprite batch at a
+/// rung below the crosshair — never as a canvas scrim above the
+/// viewport, which would dim the `UberCont/Draw_75` crosshair too (in
+/// GML Draw_75 runs after Draw_0, so the cursor stays full-bright
+/// over the dim). Fullscreen `sprPixel` stretched over the live view
+/// rect at alpha 178/255; stable-sorts before the crosshair via
+/// `Z_GAMEOVER_DIM`.
+pub fn game_over_dim_sprites(
+    viewport_dp: [f32; 2],
+    world_size: [f32; 2],
+    cam: &Camera2d,
+    assets: &RenderAssets,
+) -> Vec<SpriteInstance> {
+    let view = view_rect_world(viewport_dp, world_size, cam);
+    let center = Vec2::new(view[0] + view[2] * 0.5, view[1] + view[3] * 0.5);
+    let mut out = Vec::new();
+    if let Some(mut s) = assets.sprite_stretched(
+        "images/sprPixel.png",
+        0,
+        center,
+        Vec2::new(view[2].max(1.0), view[3].max(1.0)),
+        0.0,
+        [0.0, 0.0, 0.0, 178.0 / 255.0],
+    ) {
+        s.anchor = Vec2::new(0.5, 0.5);
+        s.z = Z_GAMEOVER_DIM;
         out.push(s);
     }
     out
@@ -8794,11 +8844,25 @@ mod crosshair_gate_tests {
             game_over,
             ..Default::default()
         });
-        world.spawn((
-            Player::default(),
-            Pos(Vec2::new(100.0, 100.0)),
-            crate::comps_a::AimDir(Vec2::X),
-        ));
+        if game_over {
+            // Dead: no Player entity (despawned 0.85s after death) —
+            // only the husk the crosshair anchors on.
+            world.spawn((
+                Pos(Vec2::new(100.0, 100.0)),
+                Corpse {
+                    kind: crate::data::EnemyKind::Bandit,
+                    life: crate::time::GTimer::from_seconds(12.0, crate::time::TimerMode::Once),
+                    pos: Vec2::new(100.0, 100.0),
+                    flip_x: false,
+                },
+            ));
+        } else {
+            world.spawn((
+                Player::default(),
+                Pos(Vec2::new(100.0, 100.0)),
+                crate::comps_a::AimDir(Vec2::X),
+            ));
+        }
         world.insert_resource(HoverWorld(Some(Vec2::new(200.0, 100.0))));
         world.init_resource::<crate::savedata_part::SaveData>();
         world

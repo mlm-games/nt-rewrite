@@ -97,7 +97,8 @@ use crate::render::{
     Z_FAINTED, Z_FOG, Z_FX, Z_HUD, Z_MENU, Z_PORTAL_INDICATOR, Z_SHADOW, Z_SIDEART,
     Z_SPIRAL_FIGURES, Z_SPLASH, background_color, bloom_sprites, cam_viewdist_for,
     crosshair_sprites, decode_png, fainted_bar_sprites, fog_sprites, fx_instances, fx_texts,
-    gml_camera_step, gml_view_scale, gml_view_size, hud_gui_texts_dp, hud_sprites, menu_gui_texts,
+    gml_camera_step, gml_view_scale, gml_view_size, game_over_dim_sprites, hud_gui_texts_dp,
+    hud_sprites, menu_gui_texts,
     menu_gui_texts_dp, menu_gui_texts_vw, menu_sprites, portal_indicator_sprites, shadow_sprites,
     sideart_sprites, spiral_figures, splash_sprites, stamp_z, view_rect_world, world_camera,
     world_instances,
@@ -271,11 +272,13 @@ pub struct App {
     /// topmost region (proven: parent/root handlers get 0 calls), so
     /// the root's `cursor_move` runs almost exclusively while a button
     /// is held (capture-path dispatch reaches ancestors), while the
-    /// viewport's `Hover` fires on free moves. Without order tracking,
-    /// a stale `cursor_px` from the last drag shadows live `hover`
-    /// through `.or()` and the crosshair freezes everywhere except
-    /// while dragging — exactly the reported symptom. Aim/crosshair
-    /// therefore use whichever staged LAST (see `live_cursor_world`).
+    /// viewport's `Hover` fires on free moves. Without staleness
+    /// tracking, a stale `cursor_px` from the last drag shadows live
+    /// `hover` through `.or()` and the crosshair freezes everywhere
+    /// except while dragging — exactly the reported symptom. The px
+    /// source therefore wins only while fresh (see
+    /// `live_cursor_world`); the baked hover point is always live, so
+    /// it owns aim the rest of the time.
     cursor_seq: u64,
     hover_seq: u64,
     input_seq: u64,
@@ -1409,34 +1412,34 @@ impl App {
         self.cursor_px = Some(phys_px);
     }
 
-    /// Stage one viewport hover: world point plus raw window-physical
-    /// px. The viewport sees the free moves the root's `on_pointer_move`
-    /// never gets (repose dispatches free moves only to the topmost
-    /// region), so the hover handler owns the screen-anchored cursor
-    /// here: `screen` refreshes `cursor_px` (unprojected through the
-    /// live camera each frame — GML `mouse_x/mouse_y` parity, the aim
-    /// stays glued to the on-screen pointer while the player walks
-    /// instead of sliding on the ground), and `world` refreshes the
-    /// baked point as fallback for touch/pen (which never stage raw
-    /// cursor moves).
-    fn stage_hover(&mut self, world: Vec2, screen: [f32; 2]) {
+    /// Stage one viewport hover: the baked world point only. Screen
+    /// anchoring lives in `cursor_px` (root `on_pointer_move`, raw
+    /// window-physical px unprojected through the live camera each
+    /// frame — GML `mouse_x/mouse_y` parity). The hover `screen` px
+    /// must NOT feed `cursor_px`: it arrives as region-local px while
+    /// `cursor_move` stages window px, and mixing the two spaces
+    /// offsets the aim as the camera moves. Touch/pen never stage
+    /// cursor moves, so the baked point is their only cursor.
+    fn stage_hover(&mut self, world: Vec2, _screen: [f32; 2]) {
         self.input_seq += 1;
-        self.cursor_seq = self.input_seq;
-        self.cursor_px = Some(Vec2::new(screen[0], screen[1]));
         self.hover_seq = self.input_seq;
         self.hover = Some(world);
     }
 
-    /// Live cursor in world coords, last-writer-wins: the root's
-    /// `cursor_px` (unprojected through the current camera, valid
-    /// while walking) when it staged after the last viewport hover,
-    /// else the hover world point. Falls back to hover when there is
-    /// no cursor yet (touch/pen never stage cursor moves).
-    /// (`Camera2d::dp_to_world_pt` over the dp viewport extent — bevy
-    /// `player_aim` (`window.cursor_position()` + `viewport_to_world_2d`)
-    /// parity). `None` until the first pointer move of either kind.
+    /// Live cursor in world coords: the staged window-physical px point
+    /// unprojected through this frame's camera (`Camera2d::dp_to_world_pt`
+    /// over the dp viewport extent — bevy `player_aim`
+    /// `viewport_to_world_2d` parity). `None` until the first pointer
+    /// move; callers fall back to the last viewport `Hover` world point
+    /// (touch/pen never stage cursor moves).
+    /// The px source wins outright while fresh (it re-unprojects every
+    /// frame, so aim stays glued to the on-screen pointer instead of
+    /// sliding on the ground as the camera moves); once it goes stale
+    /// — no root move for a while, e.g. touch input — the baked hover
+    /// point takes over so the cursor never freezes on an old camera.
     fn live_cursor_world(&self) -> Option<Vec2> {
-        if self.cursor_seq >= self.hover_seq {
+        const STALE_AFTER: u64 = 30;
+        if self.cursor_seq > 0 && self.input_seq.wrapping_sub(self.cursor_seq) <= STALE_AFTER {
             self.cursor_to_world().or(self.hover)
         } else {
             self.hover.or_else(|| self.cursor_to_world())
@@ -2222,6 +2225,15 @@ impl App {
             } else {
                 Vec::new()
             };
+            // Game-over dim INSIDE the batch (GML `GameOver/Draw_0`
+            // dims the room before `UberCont/Draw_75` draws the
+            // cursor): a canvas scrim above the viewport would dim
+            // the crosshair too. Pushed BEFORE the crosshair so the
+            // push-ordered canvas path agrees with the z-sorted GPU
+            // path (`Z_GAMEOVER_DIM` below `Z_CROSSHAIR`).
+            if menu_kind == Some(MenuOverlay::GameOver) {
+                s.extend(game_over_dim_sprites(viewport_dp, world_size, &self.cam, assets));
+            }
             stamp_z(&mut cross, Z_CROSSHAIR);
             s.extend(cross);
             let mut faint = if playing {
@@ -2330,14 +2342,14 @@ impl App {
             }
             // Menu crosshair (GML `UberCont/Draw_75` verbatim): on every
             // non-play screen in keyboard mode (splash reel, main menu,
-            // campfire title, loading cover, game-over screen) the OS
-            // cursor is hidden and the game draws
-            // `sprCrosshair[opt_crosshair]` at the raw cursor position —
-            // no player entity, no lerp, alpha 1. (Game-over needs this
-            // path, not the gameplay crosshair: the player husk
-            // despawns 0.85s after death, so `crosshair_sprites` has no
-            // anchor — GML never needed one, it draws at the raw GUI
-            // mouse point.)
+            // campfire title, loading cover) the OS cursor is hidden and
+            // the game draws `sprCrosshair[opt_crosshair]` at the raw
+            // cursor position — no player entity, no lerp, alpha 1.
+            // Game-over is NOT covered here: its crosshair is the
+            // gameplay one (lerped, aimed from the corpse — see
+            // `crosshair_sprites`), drawn above the canvas dim via the
+            // in-viewport dim quad (`game_over_dim_sprites`), GML
+            // `Draw_0`-then-`Draw_75` order parity.
             // In GML this runs at Draw_75, above the Menu chrome, so it
             // rides at menu z here (pushed after, stable-sorted on top).
             // Skipped while paused/an overlay owns the pointer (those
@@ -2349,7 +2361,6 @@ impl App {
                         | MenuOverlay::MainMenu
                         | MenuOverlay::Title
                         | MenuOverlay::Loading
-                        | MenuOverlay::GameOver
                 )
             ) && !paused
                 && overlay == OverlayMenu::None
@@ -2523,13 +2534,15 @@ impl App {
         // Fullscreen overlays: hit flashes (white). Menu dimming is
         // the scrim `UiBox` above (bevy parity: one 230-black layer
         // over everything, background included), never the viewport
-        // tint (that would double-dim the sprites).
+        // tint (that would double-dim the sprites). Game-over is the
+        // exception: its dim is the in-viewport `game_over_dim_sprites`
+        // quad (GML Draw_0, below the Draw_75 crosshair), so no canvas
+        // scrim here or the cursor darkens too.
         let dim_menu = matches!(
             menu_kind,
             Some(MenuOverlay::Pause)
                 | Some(MenuOverlay::Settings)
                 | Some(MenuOverlay::Credits)
-                | Some(MenuOverlay::GameOver)
                 | Some(MenuOverlay::Stats)
         );
         let overlay_color = crate::effects::flash_rgba(&self.sim.world);
@@ -2823,19 +2836,14 @@ impl App {
             );
         }
         if let Some(rows) = menu_rows {
-            // GML `GameOver/Draw_0:7-10` dims with `draw_set_alpha(0.7)`
-            // (178/255); pause/settings/credits/stats sit on the
-            // near-opaque bevy `scrim` (230/255).
-            let scrim_alpha = if menu_kind == Some(MenuOverlay::GameOver) {
-                178
-            } else {
-                230
-            };
+            // Pause/settings/credits/stats sit on the near-opaque bevy
+            // `scrim` (230/255). Game-over has no canvas scrim: its dim
+            // is the in-viewport quad below the crosshair.
             if dim_menu {
                 layers.push(UiBox(
                     Modifier::new()
                         .fill_max_size()
-                        .background(Color::from_rgba(0, 0, 0, scrim_alpha))
+                        .background(Color::from_rgba(0, 0, 0, 230))
                         .hit_passthrough(),
                 ));
             }
@@ -3488,32 +3496,31 @@ mod cursor_staging_tests {
     /// Reported bug verbatim: after any click-drag, free mouse moves
     /// stopped moving the crosshair — it only followed while dragging.
     /// Root cause: repose dispatches free moves ONLY to the topmost
-    /// region, so the root's `cursor_move` (the old `cursor_px` source)
-    /// ran almost exclusively on capture-path (button-held) moves,
-    /// while viewport `Hover` fired on free moves carrying no screen
-    /// px. Aim preferred the stale `cursor_px` via `.or()` and
-    /// shadowed live hovers. Hover now carries raw screen px and
-    /// refreshes `cursor_px` itself, so aim stays glued to the
-    /// on-screen pointer (GML `mouse_x/mouse_y` parity) instead of
-    /// sliding on the ground while the player walks.
+    /// region, so the root's `cursor_move` (the `cursor_px` source)
+    /// runs almost exclusively on capture-path (button-held) moves,
+    /// while viewport `Hover` fires on free moves. Aim preferred the
+    /// stale `cursor_px` via `.or()` and shadowed live hovers. The px
+    /// source now wins only while fresh (re-unprojected every frame,
+    /// so aim stays glued to the pointer instead of sliding on the
+    /// ground); once it goes stale the baked hover point takes over.
     #[test]
-    fn hover_refreshes_screen_anchored_cursor() {
+    fn fresh_px_wins_stale_px_yields_to_hover() {
         let mut app = App::new_with_seed(4242);
-        // Drag-era staging through the root path.
+        // Hover stages the baked point; the drag-era px is fresh.
+        app.stage_hover(Vec2::new(10.0, 10.0), [0.0, 0.0]);
         app.cursor_move(Vec2::new(100.0, 100.0));
-        // A free move arrives via viewport Hover with fresh screen px.
-        app.stage_hover(Vec2::new(10.0, 10.0), [300.0, 200.0]);
-        // cursor_px follows the hover's screen px (not the stale drag
-        // point), so the next unprojection tracks the on-screen pointer.
-        assert_eq!(app.cursor_px, Some(Vec2::new(300.0, 200.0)));
         let live = app.live_cursor_world().expect("cursor staged");
         assert!(
             (live - Vec2::new(10.0, 10.0)).length() > 1.0,
-            "aim must unproject fresh screen px, got {live:?}"
+            "fresh px must unproject through the live camera, got {live:?}"
         );
-        // A fresh root-path move still works.
-        app.cursor_move(Vec2::new(100.0, 100.0));
-        assert!(app.live_cursor_world().is_some());
+        // Many hover-only frames later the px source is stale: the
+        // baked hover point (always live) owns aim again, so the
+        // cursor never freezes on an old camera.
+        for _ in 0..40 {
+            app.stage_hover(Vec2::new(10.0, 10.0), [0.0, 0.0]);
+        }
+        assert_eq!(app.live_cursor_world(), Some(Vec2::new(10.0, 10.0)));
     }
 
     #[test]
