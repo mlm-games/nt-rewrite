@@ -1545,7 +1545,14 @@ impl App {
         let px = px?;
         let d = self.view_density.max(1e-6);
         let dp = [px.x / d, px.y / d];
-        let extent = camera_fit_extent(self.view_viewport_dp, self.view_density);
+        // `camera_fit_extent` takes PHYSICAL px (it divides by density
+        // itself): stored dp must be scaled back up first, or the
+        // extent double-divides and the aim scale collapses (~2.4x too
+        // fast at density 1.25).
+        let extent = camera_fit_extent(
+            [self.view_viewport_dp[0] * d, self.view_viewport_dp[1] * d],
+            self.view_density,
+        );
         // `world_size` here is the dp viewport extent; `dp_to_world_pt`
         // divides the dp point by the same fit the viewport paints with.
         Some(self.cam.dp_to_world_pt(self.view_viewport_dp, extent, dp))
@@ -3113,8 +3120,7 @@ pub fn resolve_assets_dir() -> Option<PathBuf> {
 /// (1280x720 -> 426x240). Pre-scaling here would apply the scale twice
 /// (once in the extent, once in the fit).
 ///
-/// `viewport_px` is physical pixels (`Scheduler.size`); `density` is
-/// the dp->px scale, so a 1.25x HiDPI window still frames the same view.
+/// Takes PHYSICAL px (`Scheduler.size`).
 pub fn camera_fit_extent(viewport_px: [f32; 2], density: f32) -> [f32; 2] {
     let d = if density.is_finite() && density > 1e-6 {
         density
