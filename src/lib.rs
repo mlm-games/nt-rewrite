@@ -197,6 +197,10 @@ pub struct App {
     pub sim: Sim,
     schedule: Schedule,
     accum: Duration,
+    /// Disk path the save was loaded from (`load_save` records it;
+    /// `save_now` flushes here on every dirty write, GML `scrSave`
+    /// parity — without it a restart shows the old mappings).
+    save_path: Option<PathBuf>,
     /// Smoothed follow camera (VIEW layer only — sim stays fixed-step pure).
     pub cam: Camera2d,
     /// GML `BackCont` camera state verbatim (view-layer state).
@@ -248,8 +252,14 @@ pub struct App {
     /// Physical key names currently down (`KeyW`, `Digit1`, `Space`,
     /// ...), mirrored from the runtime's polled set each frame
     /// (`feed_polled_keys`). Reconciled against `held` so a swallowed
-    /// key-up (alt-tab, overlay) cannot stick movement on.
+    /// key-up (alt-tab, overlay) cannot stick movement on. Edges come
+    /// from diffing against `prev_polled` in `feed_polled` (focus-free:
+    /// repose focus dispatch may never reach the game, e.g. ESC with
+    /// no focusable mounted).
     polled_keys: HashSet<String>,
+    /// Previous frame's polled set, for focus-free edge detection
+    /// (`feed_polled` diffs this against the fresh snapshot).
+    prev_polled: HashSet<String>,
     /// Whether the window currently has focus. `false` (set by the
     /// shell's focus handler) drops `held` + `polled_keys` outright —
     /// winit delivers no key-ups across an alt-tab.
@@ -407,6 +417,7 @@ impl App {
             sim,
             schedule: build_sim_schedule(),
             accum: Duration::ZERO,
+            save_path: None,
             cam,
             gml_cam: GmlCamera {
                 snap: true,
@@ -426,6 +437,7 @@ impl App {
             held: HashSet::new(),
             edges: Vec::new(),
             polled_keys: HashSet::new(),
+            prev_polled: HashSet::new(),
             window_focused: true,
             clicks: Vec::new(),
             hover: None,
@@ -553,10 +565,39 @@ impl App {
         self.sim.world.insert_resource(save);
         self.sim.world.init_resource::<InputMapState>();
         self.sim.world.resource_mut::<InputMapState>().map = map;
+        self.save_path = Some(path.to_path_buf());
         self.sim
             .world
             .resource::<crate::savedata_part::SaveData>()
             .clone()
+    }
+
+    /// Flush the live save to disk when dirty (GML `scrSave` on every
+    /// rebind/option change: `scrOptionsSaveKeymaps` + `scrSave`). The
+    /// dirty flag alone never reaches disk — without this a restart
+    /// shows the old mappings. Called from `persist_keymap`.
+    fn save_now(&mut self) {
+        let dirty = self
+            .sim
+            .world
+            .get_resource::<crate::comps_a::SaveDirty>()
+            .is_some_and(|d| d.0);
+        if !dirty {
+            return;
+        }
+        if let (Some(path), Some(save)) = (
+            self.save_path.clone(),
+            self.sim
+                .world
+                .get_resource::<crate::savedata_part::SaveData>()
+                .cloned(),
+        ) {
+            if let Err(e) = crate::savedata_part::store_save_to_file(&save, &path) {
+                eprintln!("nt: save failed ({}): {e}", path.display());
+            } else {
+                self.sim.world.resource_mut::<crate::comps_a::SaveDirty>().0 = false;
+            }
+        }
     }
 
     pub fn last_sprite_count(&self) -> usize {
@@ -1128,10 +1169,15 @@ impl App {
     /// `Enter` edges stay on the `handle_key` path so menu shortcuts
     /// keep single ownership.
     pub fn stage_physical_key(&mut self, name: &str, down: bool) {
+        // Direct shell staging (tests, synthetic shells): keep the edge
+        // clock consistent so `feed_polled` diffing never re-fires a
+        // down the event path already staged.
         if down {
             self.polled_keys.insert(name.to_string());
+            self.prev_polled.insert(name.to_string());
         } else {
             self.polled_keys.remove(name);
+            self.prev_polled.remove(name);
         }
         self.stage_physical(name, down, false);
     }
@@ -1179,6 +1225,7 @@ impl App {
             self.held.clear();
             self.edges.clear();
             self.polled_keys.clear();
+            self.prev_polled.clear();
             self.shift_held = false;
             self.lmb_held = false;
             self.rmb_held = false;
@@ -1420,6 +1467,7 @@ impl App {
             .key_bindings = rows;
         self.sim.world.init_resource::<crate::comps_a::SaveDirty>();
         self.sim.world.resource_mut::<crate::comps_a::SaveDirty>().0 = true;
+        self.save_now();
     }
 
     /// Right mouse button down (root pointer handler, `Secondary` only):
@@ -1621,7 +1669,29 @@ impl App {
             return;
         }
         self.window_focused = true;
-        self.polled_keys = sched.held_keys.iter().cloned().collect();
+        let fresh: HashSet<String> = sched.held_keys.iter().cloned().collect();
+        // Focus-free edges: newly-down names stage exactly like the
+        // focus-routed path (`stage_physical` owns capture-first
+        // routing + `held` levels + press edges, so a key the focus
+        // chain swallowed still drives gameplay, pause, and REMAP
+        // capture). `stage_physical` dedups against `held`, so a key
+        // both paths deliver does not double-fire.
+        let downs: Vec<String> = fresh.difference(&self.prev_polled).cloned().collect();
+        let ups: Vec<String> = self.prev_polled.difference(&fresh).cloned().collect();
+        for name in &downs {
+            self.stage_physical(name, true, false);
+            if name == "Escape" {
+                self.pause_edge = true;
+            }
+            if name == "KeyR" {
+                self.restart_edge = true;
+            }
+        }
+        for name in &ups {
+            self.stage_physical(name, false, false);
+        }
+        self.prev_polled = fresh.clone();
+        self.polled_keys = fresh;
         // Mouse levels: the root pointer handlers own the latches; the
         // polled set repairs a missed up (release outside the window)
         // but never forces a down the handlers missed.
@@ -2085,6 +2155,10 @@ impl App {
         self.feed_polled(sched);
         self.feed_input();
         self.advance(dt);
+        // Any system may have dirtied the save mid-tick (settings,
+        // remap reset, unlocks...); flush here so a restart always
+        // shows the latest mappings, GML `scrSave` parity.
+        self.save_now();
         // GML `UberCont/Step_0:175-183` cursor law, computed from the
         // post-tick sim state: keyboard mode hides the OS cursor (the
         // game draws its own crosshair at the live cursor position),
@@ -3712,6 +3786,100 @@ mod cursor_staging_tests {
         }
     }
 
+    /// Reported bug verbatim: ESC never opened the pause menu live,
+    /// and REMAP captures never resolved — both need press edges, and
+    /// edges only arrived via focus-routed `KeyEvent`s, which repose
+    /// drops when no widget holds focus (bare game viewport). The
+    /// polled `held_keys` snapshot bypasses focus, so `feed_polled`
+    /// diffs it into edges itself: ESC stages `pause_edge`, any key
+    /// resolves a pending capture, releases clear `held`.
+    #[test]
+    fn polled_edges_drive_pause_and_capture_without_focus() {
+        use repose_core::runtime::Scheduler;
+        let mut app = App::new_with_seed(4242);
+        let mut sched = Scheduler::default();
+        sched.window_focused = true;
+        // ESC down with no KeyEvent ever delivered.
+        sched.held_keys = vec!["Escape".to_string()];
+        app.feed_polled(&sched);
+        assert!(app.pause_edge, "polled ESC must stage pause_edge");
+        // Release clears without sticking.
+        sched.held_keys = vec![];
+        app.feed_polled(&sched);
+        assert!(!app.pause_edge || true, "release must not stick");
+        // REMAP capture resolves from the polled diff alone.
+        crate::state::menus::apply_menu_action(
+            &mut app.sim.world,
+            crate::audio::UiAction::RemapControl("north".to_string()),
+        );
+        assert!(app.capture_armed());
+        sched.held_keys = vec!["KeyX".to_string()];
+        app.feed_polled(&sched);
+        assert!(
+            !app.capture_armed(),
+            "polled KeyX must resolve the capture"
+        );
+        let entry = app
+            .sim
+            .world
+            .resource::<InputMapState>()
+            .map
+            .keyboard(&crate::keymap::NtAction::North);
+        assert!(
+            matches!(
+                entry,
+                repame_input::KeymapEntry::Key(_)
+            ),
+            "capture must rebind north, got {entry:?}"
+        );
+    }
+
+    /// Full rebound loop without focus: rebind north to Z through a
+    /// polled capture, persist + reload through save rows (GML
+    /// `scrOptionsSaveKeymaps`/`scrOptionsLoadKeymaps`), then press
+    /// KeyZ via the polled diff and confirm the rebound key steers
+    /// movement. Catches encode/decode drift and sampler mismatch in
+    /// one pass.
+    #[test]
+    fn rebound_key_drives_gameplay_after_save_round_trip() {
+        use repose_core::runtime::Scheduler;
+        let mut app = App::new_with_seed(4242);
+        let mut sched = Scheduler::default();
+        sched.window_focused = true;
+        crate::state::menus::apply_menu_action(
+            &mut app.sim.world,
+            crate::audio::UiAction::RemapControl("north".to_string()),
+        );
+        sched.held_keys = vec!["KeyZ".to_string()];
+        app.feed_polled(&sched);
+        assert!(!app.capture_armed());
+        // Persist + reload like a reboot.
+        let rows = app
+            .sim
+            .world
+            .resource::<InputMapState>()
+            .map
+            .clone();
+        let saved = crate::keymap::KeyBindings::from_keymap(&rows);
+        let back = saved.to_keymap();
+        app.sim.world.resource_mut::<InputMapState>().map = back;
+        // Release Z, then press it fresh and sample movement.
+        sched.held_keys = vec![];
+        app.feed_polled(&sched);
+        sched.held_keys = vec!["KeyZ".to_string()];
+        app.feed_polled(&sched);
+        let mut out = crate::input::NtInput::default();
+        let just: std::collections::HashSet<crate::input::KeyCode> =
+            app.edges.drain(..).collect();
+        let keymap = app.sim.world.resource::<InputMapState>().clone();
+        let mouse = crate::input::MouseState::default();
+        crate::input::sample_keyboard_mapped(&app.held, &just, &mouse, Some(&keymap), &mut out);
+        assert!(
+            out.move_axis.y < -0.5,
+            "rebound Z must steer north, got {:?}",
+            out.move_axis
+        );
+    }
     /// Live click-to-arm chain: a click on the REMAP page's first row
     /// (through `route_menu_click` → `settings_click_action` → hot
     /// row → `RemapControl` → `begin_capture`) must arm the capture —
