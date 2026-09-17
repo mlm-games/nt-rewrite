@@ -610,7 +610,9 @@ pub fn collect_pickups(
 
     let player_pos = player_pos.0;
     let dt = time.delta_secs;
-    let interact_pressed = input.take_interact_pressed();
+    // The weapon arm below peeks the shared pulse (see its note);
+    // nothing here consumes it, so `tick_throne_sit` can peek it too.
+    let _ = input.peek_interact_pressed();
 
     let telek_active = telek.is_some_and(|t| !t.timer.is_finished());
     let telek_mult = if telek_active {
@@ -704,7 +706,14 @@ pub fn collect_pickups(
             if nearest_weapon.is_none_or(|(e, _)| e != pickup_e) {
                 continue;
             }
-            if !interact_pressed {
+            // GML `Player/Collision_WepPickup:6` verbatim: press_pick OR
+            // the thrown-gun autopick (`autopick` is set only on Cuz
+            // scatter / Chicken Determination returns,
+            // `scrPowers:581` — never on chest/drop spawns). Every
+            // ground gun needs the interact press; the pulse is peeked,
+            // not taken, so the earlier `tick_throne_sit` peek of the
+            // same pulse never starves it.
+            if !input.peek_interact_pressed() {
                 continue;
             }
         } else if is_ammo || is_medkit {

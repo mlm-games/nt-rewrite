@@ -1869,6 +1869,17 @@ impl App {
                 && state != AppState::Loading,
             ..MouseState::default()
         };
+        // Right-button gameplay pulses: wire the shell RMB latch into
+        // the sampler (GML `spec` on `mb_right` parity). The keymap
+        // `Spec` row is mouse-Secondary, but `entry_held/pressed` read
+        // it through `MouseState::right_*` — without this the RMB edge
+        // only injects the ShiftLeft fallback, which the sampler then
+        // ignores in favour of the (dead) mouse channel.
+        let mouse = MouseState {
+            right_held: self.rmb_held,
+            right_pressed: rmb_down,
+            ..mouse
+        };
         {
             self.sim.world.init_resource::<InputMapState>();
             let keymap = self.sim.world.resource::<InputMapState>().clone();
@@ -2814,9 +2825,17 @@ impl App {
                 // shape as the rozvp pilot runner).
                 let app = unsafe { &mut *app_ptr };
                 match ev {
+                    // Primary-only fire clicks: the viewport reports
+                    // buttonless picks, so a right-button press would
+                    // otherwise stage a spurious fire edge (RMB must
+                    // only raise spec/ability via `rmb_down`).
                     PickEvent::Press { world, screen } | PickEvent::Click { world, screen } => {
-                        app.lmb_down();
-                        app.stage_click(world, screen)
+                        if app.rmb_held {
+                            app.rmb_down_edge = false;
+                        } else {
+                            app.lmb_down();
+                            app.stage_click(world, screen)
+                        }
                     }
                     PickEvent::Hover { world, screen } => app.stage_hover(world, screen),
                     // Touch contacts (screen px, y-down) feed bevy's
@@ -2837,8 +2856,12 @@ impl App {
                 let app = unsafe { &mut *app_ptr };
                 match ev {
                     PickEvent::Press { world, screen } | PickEvent::Click { world, screen } => {
-                        app.lmb_down();
-                        app.stage_click(world, screen)
+                        if app.rmb_held {
+                            app.rmb_down_edge = false;
+                        } else {
+                            app.lmb_down();
+                            app.stage_click(world, screen)
+                        }
                     }
                     PickEvent::Hover { world, screen } => app.stage_hover(world, screen),
                     PickEvent::TouchDown { id, screen } => {
@@ -3342,7 +3365,22 @@ pub fn placeholder_instances(world: &mut World) -> Vec<SpriteInstance> {
     {
         let mut q = world.query_filtered::<&Pos, With<WallTile>>();
         for pos in q.iter(world) {
-            out.push(quad(pos.0, 32.0, [0.35, 0.33, 0.38, 1.0]));
+            out.push(quad(pos.0, 16.0, [0.35, 0.33, 0.38, 1.0]));
+        }
+    }
+    // Assetless floors: the GPU path draws lit strips over mask cells
+    // (`world_instances`); without this the placeholder viewport is
+    // walls floating on the flat room colour.
+    if let Some(mask) = world.get_resource::<crate::comps_a::FloorMask>() {
+        for cell in &mask.cells {
+            out.push(quad(
+                Vec2::new(
+                    cell.0 as f32 * crate::comps_a::TILE + crate::comps_a::TILE * 0.5,
+                    cell.1 as f32 * crate::comps_a::TILE + crate::comps_a::TILE * 0.5,
+                ),
+                32.0,
+                [0.55, 0.45, 0.32, 1.0],
+            ));
         }
     }
     {
@@ -3838,6 +3876,32 @@ mod cursor_staging_tests {
     fn no_staging_yet_is_none() {
         let app = App::new_with_seed(4242);
         assert_eq!(app.live_cursor_world(), None);
+    }
+
+    /// E-key interact regression: the KeyE edge staged through either
+    /// the focus path (`handle_key`) or the polled path (`feed_polled`)
+    /// must surface as `interact_pressed` after the gameplay sampler
+    /// runs. Catches the sampler reading a rebound/missing Pick row.
+    #[test]
+    fn key_e_stages_interact_pulse() {
+        use crate::input::{KeyCode, MouseState, NtInput};
+        let mut app = App::new_with_seed(4242);
+        app.stage_physical_key("KeyE", true);
+        let just: std::collections::HashSet<KeyCode> = app.edges.drain(..).collect();
+        assert!(just.contains(&KeyCode::KeyE), "KeyE must stage an edge");
+        let keymap = app.sim.world.resource::<InputMapState>().clone();
+        let mut out = NtInput::default();
+        crate::input::sample_keyboard_mapped(
+            &app.held,
+            &just,
+            &MouseState::default(),
+            Some(&keymap),
+            &mut out,
+        );
+        assert!(
+            out.peek_interact_pressed(),
+            "KeyE edge must raise interact_pressed"
+        );
     }
 
     /// Reported bug verbatim: on the REMAP page, pressing most keys

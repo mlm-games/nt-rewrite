@@ -546,12 +546,13 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
                 .get_resource::<SaveData>()
                 .is_some_and(|s| s.hardmode_unlocked);
         // GML `GenCont/Create_0`: the `game.tutorial` save flag forces the
-        // 5-floor `TutCont` level. The port has no tutorial steps and no
-        // completion event, so the layout applies to first-ever runs only
-        // (`total_runs == 0`); afterwards the flag reads as completed.
-        let tutorial = world
-            .get_resource::<SaveData>()
-            .is_some_and(|s| s.settings.show_tutorial && s.total_runs == 0);
+        // 5-floor `TutCont` level. `show_tutorial` is the Settings display
+        // toggle; completion persists via `tutorial_done` (GML
+        // `save game.tutorial=false`), so finished tutorials never
+        // replay even on fresh profiles (`total_runs == 0`).
+        let tutorial = world.get_resource::<SaveData>().is_some_and(|s| {
+            !s.tutorial_done && (s.settings.show_tutorial || s.total_runs == 0)
+        });
         let mut run = world.resource_mut::<Run>();
         run.floor = 1;
         run.world = 1;
@@ -2240,7 +2241,7 @@ mod verbatim_title_to_first_level {
     fn chicken_first_level_starts_with_sword_and_bandits() {
         let mut world = World::new();
         let save = SaveData {
-            total_runs: 1,
+            tutorial_done: true,
             ..SaveData::default()
         };
         world.insert_resource(save);
@@ -2319,7 +2320,7 @@ mod verbatim_title_to_first_level {
         use crate::comps_b::{ChestKind, Pickup, PickupKind, RadChestContainer};
         let mut world = World::new();
         world.insert_resource(SaveData {
-            total_runs: 1,
+            tutorial_done: true,
             ..SaveData::default()
         });
         world.insert_resource(SelectedCharacter(RaceId::Fish));
@@ -2468,7 +2469,7 @@ mod verbatim_title_to_first_level {
         use crate::state::menus::{MenuState, apply_menu_action};
         let mut world = World::new();
         world.insert_resource(SaveData {
-            total_runs: 1,
+            tutorial_done: true,
             ..SaveData::default()
         });
         world.insert_resource(SelectedCharacter(RaceId::Fish));
@@ -2511,7 +2512,7 @@ mod verbatim_title_to_first_level {
         use crate::state::menus::{MenuState, apply_menu_action};
         let mut world = World::new();
         world.insert_resource(SaveData {
-            total_runs: 1,
+            tutorial_done: true,
             ..SaveData::default()
         });
         world.insert_resource(SelectedCharacter(RaceId::Fish));
@@ -2672,7 +2673,7 @@ mod verbatim_title_to_first_level {
         for seed in [4242u64, 777] {
             let mut world = World::new();
             world.insert_resource(SaveData {
-                total_runs: 1,
+                tutorial_done: true,
                 ..SaveData::default()
             });
             world.insert_resource(SelectedCharacter(RaceId::Fish));

@@ -3790,16 +3790,33 @@ pub fn tutorial_texts(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
         return Vec::new();
     }
     let vw = gml_view_size(canvas_dp)[0];
+    // GML `scrKeyName` parity: single letters upper-case, Space wider.
+    // `keymap_get` returns the raw row value; the port formats the
+    // debug `KeymapEntry` instead, so normalize the common shapes.
     let key_name = |action: &str| {
-        world
+        let raw: String = world
             .get_resource::<crate::keymap::InputMapState>()
             .and_then(|m| {
                 crate::keymap::NtAction::from_name(action).map(|a| format!("{:?}", m.map.keyboard(&a)))
             })
-            .unwrap_or_else(|| action.to_ascii_uppercase())
+            .unwrap_or_else(|| action.to_ascii_uppercase());
+        raw.replace("Key(KeyCode(", "")
+            .replace("Key(Character('", "")
+            .replace("'))", "")
+            .replace("')", "")
+            .replace("Space", "SPACE")
+            .to_ascii_uppercase()
     };
     let text = match step {
-        crate::state::TutorialStep::Walking => "WALK WITH @wWASD@s OR THE @wARROW KEYS".to_string(),
+        crate::state::TutorialStep::Walking => {
+            format!(
+                "WALK WITH @w{}, {}, {}, {}@s OR THE @wARROW KEYS",
+                key_name("north"),
+                key_name("west"),
+                key_name("south"),
+                key_name("east")
+            )
+        }
         crate::state::TutorialStep::PickingUp => {
             format!("PICK UP A NEW WEAPON WITH @w{}@s", key_name("pick"))
         }

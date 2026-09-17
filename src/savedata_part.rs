@@ -46,6 +46,11 @@ pub struct SaveData {
     pub best_floor: u32,
     #[serde(default)]
     pub total_runs: u32,
+    /// GML `save game.tutorial` completion bit (`TutCont/Alarm_0`
+    /// writes `false` before spawning the exit portal). Separate from
+    /// `settings.show_tutorial` (the instruction-bar display toggle).
+    #[serde(default)]
+    pub tutorial_done: bool,
     #[serde(default)]
     pub total_kills: u32,
     /// GML `ctot_wins` sum (stats DAILY/HARD/STREAK denominators).
@@ -602,6 +607,7 @@ impl Default for SaveData {
             achievements: BTreeMap::new(),
             unlocked_cheats: false,
             hardmode_unlocked: false,
+            tutorial_done: false,
             settings: SettingsData::default(),
             key_bindings: KeyBindings::default(),
         }

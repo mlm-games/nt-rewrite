@@ -164,6 +164,17 @@ impl TutorialState {
 #[derive(Debug, Clone, Copy, Default, bevy_ecs::prelude::Component)]
 pub struct TutorialRestart;
 
+/// Tutorial advance driver: [`tick_tutorial`] needs `&mut World`, so it
+/// cannot sit in the schedule directly. Runs it from the headless
+/// world each fixed step (GML `TutCont/Alarm_0` cadence).
+pub fn drive_tutorial(world: &mut World) {
+    let dt = world
+        .get_resource::<SimTime>()
+        .map(|t| t.delta_secs)
+        .unwrap_or(1.0 / 30.0);
+    tick_tutorial(world, dt);
+}
+
 /// Tutorial advance tick (GML `TutCont/Alarm_0` verbatim, minus the
 /// scripted `WeaponChest` spawn which rides worldgen): on timer expiry
 /// clear the latch, step forward, re-arm 45 steps on `Fin`, and past

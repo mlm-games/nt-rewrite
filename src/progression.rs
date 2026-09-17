@@ -1884,10 +1884,14 @@ pub fn tick_portal_suck(
     // GML `Portal/Alarm_1` verbatim: the tutorial exit portal restarts
     // the run (`game_restart()`) instead of advancing the floor. The
     // port reboots run state in place (same `Loading` path as death
-    // RETRY) and clears the tutorial flag, so the fresh run lands on
-    // the real first floor.
+    // RETRY). Completion persists to the save first (GML
+    // `save game.tutorial=false` in `TutCont/Alarm_0`, written before
+    // the exit portal spawns) so the fresh run lands on the real
+    // first floor instead of replaying the tutorial.
     if run.tutorial {
         run.tutorial = false;
+        save.tutorial_done = true;
+        dirty.0 = true;
         commands.entity(player_e).insert(crate::state::TutorialRestart);
         return;
     }
@@ -2112,7 +2116,12 @@ pub fn tick_throne_sit(
         }
         return;
     }
-    if !input.take_interact_pressed() {
+    if !input.peek_interact_pressed() {
+        return;
+    }
+    // Tutorial runs have no throne room yet; the unguarded take above
+    // would eat the E press the weapon chest needs (pickup starvation).
+    if run.tutorial {
         return;
     }
     let near = zones.iter().any(|z| z.0.distance(ppos.0) < 28.0);

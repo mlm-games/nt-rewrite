@@ -70,17 +70,21 @@ pub fn player_move(
         // impulses above maxspeed (melee lunge, knockback) are preserved
         // and decay via friction instead of being hard-clamped away.
         let max_speed = player.speed * player.speed_mult;
+        // GML `Player/Step_0:101,134` verbatim: any movement input
+        // latches the tutorial Walking step — `KeyCont.moving > 0`,
+        // not accel-gated (GML fires even at max speed; the port's
+        // old accel-gate stalled Walking until friction bled speed,
+        // deadlocking the tutorial for key-held players).
+        if input.move_axis != glam::Vec2::ZERO {
+            if let Some(tut) = tut.as_deref_mut() {
+                tut.complete_step(crate::state::TutorialStep::Walking);
+            }
+        }
         if input.move_axis != glam::Vec2::ZERO && vel.0.length() < max_speed {
             let dir = input.move_axis.normalize_or_zero();
             vel.0 += dir * player.accel * dt;
             if vel.0.length() > max_speed {
                 vel.0 = vel.0.normalize_or_zero() * max_speed;
-            }
-            // GML `Player/Step_0:134` verbatim: any walk accel latches
-            // the tutorial Walking step (`TutCont` only exists on the
-            // scripted first floor; the state no-ops elsewhere).
-            if let Some(tut) = tut.as_deref_mut() {
-                tut.complete_step(crate::state::TutorialStep::Walking);
             }
         }
 
@@ -159,14 +163,23 @@ pub fn weapon_switch(
 
     let cycle = input.take_cycle_weapon();
     if cycle != 0 && inv.weapon_slots > 1 {
-        let direction = if cycle > 0 { 1 } else { inv.weapon_slots - 1 };
+        // GML `Player/Step_0:22` verbatim: swap needs a held second gun
+        // (`bwep != 0`). Without it Space is a no-op (GML never reaches
+        // `scrSwapWeps`, so no tutorial latch either — the old code
+        // cycled onto the same slot, set `switched`, and stalled the
+        // tutorial at Swapping with one gun).
+        let has_second = (0..inv.weapon_slots)
+            .any(|s| s != inv.current && inv.weapons[s] != WeaponId::NONE);
+        if has_second {
+            let direction = if cycle > 0 { 1 } else { inv.weapon_slots - 1 };
 
-        for step in 1..=inv.weapon_slots {
-            let slot = (inv.current + step * direction) % inv.weapon_slots;
-            if inv.weapons[slot] != WeaponId::NONE {
-                switched |= slot != inv.current;
-                inv.current = slot;
-                break;
+            for step in 1..=inv.weapon_slots {
+                let slot = (inv.current + step * direction) % inv.weapon_slots;
+                if inv.weapons[slot] != WeaponId::NONE {
+                    switched |= slot != inv.current;
+                    inv.current = slot;
+                    break;
+                }
             }
         }
     }

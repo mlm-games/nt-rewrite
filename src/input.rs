@@ -583,11 +583,16 @@ fn entry_held_pos(entry: &repame_input::KeymapEntry, held: &HashSet<KeyCode>) ->
 fn entry_held(
     entry: &repame_input::KeymapEntry,
     held: &HashSet<KeyCode>,
-    mouse: &MouseState,
+    _mouse: &MouseState,
 ) -> bool {
     use repame_input::KeymapEntry;
     match entry {
-        KeymapEntry::Mouse(_) => mouse.left_held || mouse.right_held,
+        // Button-specific: a Mouse entry only reads the button its
+        // action binds (GML `fire` = mb_left only, `spec` = mb_right
+        // only). The sampler ORs the matching `mouse.*` channel
+        // explicitly, so a blanket `left || right` here would cross-talk
+        // (LMB raising spec, RMB raising fire).
+        KeymapEntry::Mouse(_) => false,
         _ => entry_held_pos(entry, held),
     }
 }
@@ -877,5 +882,33 @@ mod keymap_tests {
         s.resolve_capture(Some(chord('z')));
         assert_eq!(s.map.keyboard(&NtAction::North), chord('z'));
         assert_eq!(s.map.gamepad(&NtAction::North), s.map.gamepad(&NtAction::North));
+    }
+
+    #[test]
+    fn rmb_raises_spec_not_fire() {
+        let s = state();
+        let mouse = MouseState {
+            right_held: true,
+            right_pressed: true,
+            ..MouseState::default()
+        };
+        let mut out = NtInput::default();
+        sample_keyboard_mapped(&HashSet::new(), &HashSet::new(), &mouse, Some(&s), &mut out);
+        assert!(out.spec_held && out.spec_pressed && out.ability_pressed);
+        assert!(!out.fire_held && !out.fire_pressed);
+    }
+
+    #[test]
+    fn lmb_raises_fire_not_spec() {
+        let s = state();
+        let mouse = MouseState {
+            left_held: true,
+            left_pressed: true,
+            ..MouseState::default()
+        };
+        let mut out = NtInput::default();
+        sample_keyboard_mapped(&HashSet::new(), &HashSet::new(), &mouse, Some(&s), &mut out);
+        assert!(out.fire_held && out.fire_pressed);
+        assert!(!out.spec_held && !out.spec_pressed && !out.ability_pressed);
     }
 }
