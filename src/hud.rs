@@ -167,11 +167,12 @@ pub fn reset_hud_state(hud: &mut HudState) {
 /// GML `timer_string` verbatim (`GameCont/Step_0`): `M:S.F` from the
 /// sub-second `timer` counter at 30 steps/s
 /// (`string_pad_zeroes(..., 1)` = at least 1 digit, i.e. no zero padding:
-/// `round(timer / 30 * 100)` prints 0-97 unpadded). `timer` resets every
-/// second, so it equals `tottimer % 30` at whole steps; under slow-mo
-/// `timescale` fractions GML accumulates a float while the port derives
-/// from the integer `tottimer`, so sub-step fractions can differ by a
-/// frame (deferred: the sim has no float clock).
+/// `round(timer / 30 * 100)` prints 0-97 unpadded at whole steps).
+/// `timer` resets every second, so it equals `tottimer % 30` at whole
+/// steps; under slow-mo `timescale` fractions GML accumulates a float
+/// that can print `.100` on the last sub-step before the roll
+/// (`round(29.99/30*100)`), while the port derives from the integer
+/// `tottimer` and caps at 97 (deferred: the sim has no float clock).
 pub fn run_timer_string(tottimer: u32) -> String {
     let minutes = tottimer / 1800;
     let seconds = (tottimer / 30) % 60;

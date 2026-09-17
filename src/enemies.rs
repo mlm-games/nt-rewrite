@@ -2333,6 +2333,7 @@ pub fn spawn_lil_hunter_die(
         LevelCleanup,
         PortalClear {
             timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
+                        scale: 1.0,
         },
         Pos(pos),
     ));
@@ -2444,6 +2445,7 @@ pub fn tick_lil_hunter_die(
                     LevelCleanup,
                     PortalClear {
                         timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
+                        scale: 1.0,
                     },
                     Pos(pos.0),
                 ));

@@ -2331,31 +2331,20 @@ impl App {
                 stamp_z(&mut menu, Z_MENU);
                 s.extend(menu);
             }
-            // Menu crosshair (GML `UberCont/Draw_75` verbatim): on every
-            // non-play screen in keyboard mode (splash reel, main menu,
-            // campfire title, loading cover, game-over screen) the OS
-            // cursor is hidden and the game draws
+            // Menu crosshair (GML `UberCont/Draw_75` verbatim): in
+            // keyboard mode the OS cursor is hidden and the game draws
             // `sprCrosshair[opt_crosshair]` at the raw cursor position —
-            // no lerp, alpha 1, `opt_cursorcol`. Game-over belongs here:
-            // `TopCont/Draw_0` is `with Player` (no lerped crosshair
-            // once the entity is gone) and Draw_75 draws the raw GUI
-            // mouse point over everything.
-            // In GML this runs at Draw_75, above the Menu chrome, so it
-            // rides at menu z here (pushed after, stable-sorted on top).
+            // no lerp, alpha 1, `opt_cursorcol` — on EVERY screen
+            // (gameplay included; the lerped `TopCont` crosshair is the
+            // gamepad-mode counterpart). GML gates only on
+            // `window_get_cursor() == cr_none` + `scrCanDrawCursor()`
+            // (`show_crosshair`, desktop/keyboard, no spawner); the
+            // port's `keyboard_mode` (gamepad off/unused, no touch)
+            // carries the cursor-hidden half. No per-screen kind list:
+            // the old 5-kind gate left keyboard gameplay cursorless.
             // Skipped while paused/an overlay owns the pointer (those
             // show the OS cursor) and on touch input (no cursor at all).
-            let menu_crosshair = matches!(
-                menu_kind,
-                Some(
-                    MenuOverlay::Splash
-                        | MenuOverlay::MainMenu
-                        | MenuOverlay::Title
-                        | MenuOverlay::Loading
-                        | MenuOverlay::GameOver
-                )
-            ) && !paused
-                && overlay == OverlayMenu::None
-                && self.touch_active.is_empty();
+            let menu_crosshair = keyboard_mode && !paused && overlay == OverlayMenu::None;
             if menu_crosshair
                 && let Some(pos) = self.live_cursor_world()
             {

@@ -534,15 +534,16 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
         world.resource_mut::<Score>().0 = 0;
         world.resource_mut::<SaveDirty>().0 = false;
         // GML run start with hardmode (`hard = 13`, `loops++`).
+        // `UberCont.hardmode` persists once set (PlayButton image 3);
+        // `scrGameRestart` never clears it, so retries keep it. The
+        // port likewise consumes without clearing — the menu re-arms
+        // the flag on every PLAY path into Title.
         let hardmode = world
             .get_resource::<crate::state::menus::MenuState>()
             .is_some_and(|m| m.hardmode_selected)
             && world
                 .get_resource::<SaveData>()
                 .is_some_and(|s| s.hardmode_unlocked);
-        if let Some(mut menu) = world.get_resource_mut::<crate::state::menus::MenuState>() {
-            menu.hardmode_selected = false;
-        }
         // GML `GenCont/Create_0`: the `game.tutorial` save flag forces the
         // 5-floor `TutCont` level. The port has no tutorial steps and no
         // completion event, so the layout applies to first-ever runs only
@@ -708,6 +709,12 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
     });
     world.flush();
     world.insert_resource(run);
+    // GML `GenCont/Destroy:186-187` verbatim:
+    // `instance_destroy(SpiralCont)` once generation lands. The run
+    // setup warms the sim `SpiralCtl` for the generating room (see
+    // above); the built level means generation end, so the cont dies
+    // here instead of leaking a live spiral into settled play.
+    world.remove_resource::<crate::vortex::SpiralCtl>();
 
     world
         .resource_mut::<Queue<FloorStarted>>()
@@ -1479,6 +1486,7 @@ pub fn spawn_level(
                             5.0 / 30.0,
                             crate::time::TimerMode::Once,
                         ),
+                        scale: 1.0,
                     },
                     crate::spatial::Pos(p),
                 ));
@@ -1658,23 +1666,17 @@ pub fn setup_logo_room(world: &mut World) {
 /// debris strip), silenced area audio (`audio_stop_all`), cleared
 /// transition/offer covers.
 fn reset_menu_room_resources(world: &mut World) {
-    world.init_resource::<Run>();
+    // GML `GameCont/Create_0` verbatim: a fresh cont resets every run
+    // counter (area/loops/chests/kills/timers/flags/waypoints). Full
+    // default + campfire identity, so no field can leak a dead run
+    // into the menu room.
+    world.insert_resource(Run::default());
     {
         let mut run = world.resource_mut::<Run>();
         run.floor = 0;
         run.world = 0;
         run.area = crate::data::AreaId::Campfire;
-        run.loop_count = 0;
         run.floor_in_area = 0;
-        run.gen_seed = 0;
-        run.portal_open = false;
-        run.game_over = false;
-        run.total_kills = 0;
-        run.tottimer = 0;
-        run.won = false;
-        run.hardmode = false;
-        run.tutorial = false;
-        run.waypoints.clear();
     }
     world.init_resource::<crate::audio::AreaAudioState>();
     *world.resource_mut::<crate::audio::AreaAudioState>() = crate::audio::AreaAudioState::default();
@@ -1682,6 +1684,26 @@ fn reset_menu_room_resources(world: &mut World) {
     world.remove_resource::<PendingMutation>();
     world.remove_resource::<PendingUltra>();
     world.insert_resource(FloorTransition::default());
+    // GML `scrGameRestart` quit arm verbatim (`continued_run=false` +
+    // `scrCleanupSessionInstances`): no offer/flag/toast state survives
+    // into the menu room or the next run. Score re-seeds in
+    // `setup_run`; everything else resets here.
+    world.init_resource::<Score>();
+    world.resource_mut::<Score>().0 = 0;
+    world.init_resource::<crate::comps_a::Toast>();
+    *world.resource_mut::<crate::comps_a::Toast>() = crate::comps_a::Toast::default();
+    world.init_resource::<crate::comps_a::MutationChoice>();
+    world.resource_mut::<crate::comps_a::MutationChoice>().0 = None;
+    world.init_resource::<crate::comps_a::ScarierFace>();
+    world.resource_mut::<crate::comps_a::ScarierFace>().0 = false;
+    world.init_resource::<crate::comps_a::Euphoria>();
+    world.resource_mut::<crate::comps_a::Euphoria>().0 = false;
+    world.init_resource::<crate::comps_a::OpenMind>();
+    world.resource_mut::<crate::comps_a::OpenMind>().0 = false;
+    world.init_resource::<crate::comps_a::HeavyHeart>();
+    world.resource_mut::<crate::comps_a::HeavyHeart>().0 = false;
+    world.remove_resource::<crate::comps_b::LoopTransition>();
+    world.remove_resource::<crate::hud::HudBars>();
 }
 
 /// `scrCampfireMenuCreate` sim half: 3x4 jittered 3x3 floor patches,
@@ -1698,16 +1720,21 @@ pub fn setup_title_campfire(world: &mut World) {
     }
 
     // GML `MenuGen/Create_0` verbatim: 3 rows x 4 cols of 3x3 patches.
-    // `dix=32+col*32`, `diy=32+row*32` px; one `mody=choose(32,0,-32)`
-    // jitters BOTH axes of the patch. In cells (px/32): base
-    // `(1+col+mody_c, 1+row+mody_c)`, `mody_c in {1,0,-1}`.
-    let mut rng = StdRng::seed_from_u64(0xC0FFEE);
+    // `dix` starts 32 for row 0 but resets to 0 after each row (so
+    // rows 1-2 use dix=0,32,64,96); `diy=32+row*32` px; one
+    // `mody=choose(32,0,-32)` jitters BOTH axes of the patch. In cells
+    // (px/32): base `(dix_c+col+mody_c, 1+row+mody_c)` with
+    // `dix_c = 1` on row 0 else `0`, `mody_c in {1,0,-1}`. GML draws
+    // from the live global RNG stream, so every title visit differs;
+    // the port likewise rolls live entropy (no two camps alike).
+    let mut rng = rand::rng();
     let mut seen = std::collections::HashSet::new();
     let mut floors: Vec<(i32, i32)> = Vec::new();
     for row in 0..3 {
+        let dix_c = if row == 0 { 1 } else { 0 };
         for col in 0..4 {
             let mody_c: i32 = [1, 0, -1][rng.random_range(0..3)];
-            let bx = 1 + col + mody_c;
+            let bx = dix_c + col + mody_c;
             let by = 1 + row + mody_c;
             for ox in -1..=1 {
                 for oy in -1..=1 {
@@ -1728,26 +1755,135 @@ pub fn setup_title_campfire(world: &mut World) {
             }
         }
     }
+    // `MenuGen/Create_0:38-40` FloorMakers verbatim: 4 makers at
+    // `choose(0,32,64,96,128)` px each axis, `goal = 50` under MenuGen.
+    // The 12 patches + fill already exceed 50 floors, so every maker
+    // lays exactly its spawn cell on the first step (`Floor > goal`
+    // arm) — up to 4 satellite cells, duplicates popping themselves
+    // (`Floor/Create_0` overlap arm, matched by `seen` here).
+    for _ in 0..4 {
+        let c = (
+            rng.random_range(0..=4),
+            rng.random_range(0..=4),
+        );
+        if seen.insert(c) {
+            floors.push(c);
+        }
+    }
+
+    // Save read up front: camper placement (below) needs unlocks, and
+    // dressing gates on the placed campers.
+    let save = world
+        .get_resource::<SaveData>()
+        .cloned()
+        .unwrap_or_default();
+    let unlocked = |gml: usize| -> bool {
+        crate::state::menus::race_from_gml_id(gml).is_some_and(|r| save.race_unlocked(r))
+    };
+    // Campfire at GML (64,64); fixed starters Fish (64,32), Crystal
+    // (64,96), Eyes (104,64), Melting (24,64).
+    let camp_px = glam::Vec2::new(64.0, 64.0);
+    let mut campers: Vec<glam::Vec2> = Vec::new();
+    let mut fixed_campers: Vec<(usize, glam::Vec2)> = Vec::new();
+    // GML race ids: Fish 1, Crystal 2, Eyes 3, Melting 4.
+    for (gml, at) in [
+        (1usize, glam::Vec2::new(64.0, 32.0)),
+        (2, glam::Vec2::new(64.0, 96.0)),
+        (3, glam::Vec2::new(104.0, 64.0)),
+        (4, glam::Vec2::new(24.0, 64.0)),
+    ] {
+        if !unlocked(gml) {
+            continue;
+        }
+        fixed_campers.push((gml, at));
+        campers.push(at);
+    }
+    // Plant (5) .. Cuz (16), skipping locked; GML scatters with
+    // `move_contact_solid(random_angle, 32+iter*2+random(32)+...)`
+    // until 32px clear of every camper. The port walks the same
+    // distance law off the fixed stream and clamps onto floors
+    // (no physics here; contact-slide is renderer/collision-side).
+    // BigDog (13) keeps its four `PortalClear` dressings.
+    let floor_px: Vec<glam::Vec2> = floors
+        .iter()
+        .map(|(cx, cy)| {
+            glam::Vec2::new(
+                *cx as f32 * crate::comps_a::TILE + crate::comps_a::TILE * 0.5,
+                *cy as f32 * crate::comps_a::TILE + crate::comps_a::TILE * 0.5,
+            )
+        })
+        .collect();
+    let nearest_floor = |at: glam::Vec2| -> glam::Vec2 {
+        floor_px
+            .iter()
+            .min_by(|a, b| {
+                a.distance_squared(at)
+                    .partial_cmp(&b.distance_squared(at))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .copied()
+            .unwrap_or(at)
+    };
+    // Chicken TV anchor for the TV arm below.
+    let mut chicken_at: Option<glam::Vec2> = None;
+    // BigDog sleeper anchor for the four-clear arm below.
+    let mut bigdog_at: Option<glam::Vec2> = None;
+    let mut scattered: Vec<(usize, glam::Vec2)> = Vec::new();
+    let mut scatter_clears: Vec<glam::Vec2> = Vec::new();
+    for gml in 5..=16usize {
+        if !unlocked(gml) {
+            continue;
+        }
+        // GML starts scattered campers at the campfire.
+        let mut at = camp_px;
+        // GML `scrCampfireMenuCreate:44-62` scatter verbatim:
+        // up to 50 placement tries, then up to 50 more that
+        // each pop a `PortalClear` at the failed spot (blasting
+        // room in crowded seeds) before giving up at 100.
+        for iter in 0..100usize {
+            let dist = 32.0
+                + iter as f32 * 2.0
+                + rng.random_range(0.0..32.0)
+                + rng.random_range(0.0..64.0) * rng.random_range(0.0..1.0);
+            let ang = rng.random_range(0.0..std::f32::consts::TAU);
+            let cand = camp_px + glam::Vec2::from_angle(ang) * dist;
+            let cand = nearest_floor(cand);
+            let clear = campers.iter().all(|c| c.distance(cand) >= 32.0);
+            // GML chicken arm also keeps 16px above her head clear.
+            let chicken_clear = gml != 9
+                || campers
+                    .iter()
+                    .all(|c| (*c - (cand + glam::Vec2::new(0.0, -32.0))).length() >= 16.0);
+            if clear && chicken_clear {
+                at = cand;
+                break;
+            }
+            at = cand;
+            if iter >= 50 {
+                scatter_clears.push(cand);
+            }
+        }
+        at = nearest_floor(at);
+        scattered.push((gml, at));
+        campers.push(at);
+        if gml == 9 {
+            chicken_at = Some(at);
+        }
+        if gml == 13 {
+            bigdog_at = Some(at);
+        }
+    }
 
     // `MenuGen/Alarm_1` dressing verbatim: per floor `random(6)<1`, then
     // `irandom(21)` — nonzero rolls a NightCactus, zero rolls a
-    // TopDecalNightDesert. GML additionally gates the cactus on
+    // TopDecalNightDesert. GML gates the cactus on
     // `distance_to_object(CampChar)>24 && distance_to_object(NightCactus)>16`
-    // against the live actors; the port checks the same gates against the
-    // already-placed dressing + the fixed starters below (both in world
-    // px). Floors are dressed in plan order so the fixed stream matches.
+    // against the live actors — Alarm_1 runs after ALL campers
+    // (fixed + scattered) are placed, so the port gates on the full
+    // `campers` list too. Floors are dressed in plan order so the fixed
+    // stream matches.
     let mut cacti: Vec<glam::Vec2> = Vec::new();
     let mut decals: Vec<glam::Vec2> = Vec::new();
-    // Fixed starters exist before dressing for the distance gate:
-    // Campfire at GML (64,64); Fish (64,32), Crystal (64,96),
-    // Eyes (104,64), Melting (24,64).
-    let camp_px = glam::Vec2::new(64.0, 64.0);
-    let starter_px = [
-        glam::Vec2::new(64.0, 32.0),
-        glam::Vec2::new(64.0, 96.0),
-        glam::Vec2::new(104.0, 64.0),
-        glam::Vec2::new(24.0, 64.0),
-    ];
     for (cx, cy) in &floors {
         if rng.random_range(0.0..6.0) >= 1.0 {
             continue;
@@ -1757,7 +1893,7 @@ pub fn setup_title_campfire(world: &mut World) {
             *cy as f32 * crate::comps_a::TILE + crate::comps_a::TILE * 0.5,
         );
         if rng.random_range(0..22) != 0 {
-            let near_camper = starter_px.iter().any(|s| s.distance(at) <= 24.0);
+            let near_camper = campers.iter().any(|s| s.distance(at) <= 24.0);
             let near_cactus = cacti.iter().any(|c| c.distance(at) <= 16.0);
             if !near_camper && !near_cactus {
                 cacti.push(at);
@@ -1788,11 +1924,6 @@ pub fn setup_title_campfire(world: &mut World) {
     worldgen::build_walls(&camp_run, &floors, &mut plan);
     let floor_set: std::collections::HashSet<(i32, i32)> =
         plan.floor_cells.iter().copied().collect();
-    // Save read outside the command scope (`Commands` holds `&mut World`).
-    let save = world
-        .get_resource::<SaveData>()
-        .cloned()
-        .unwrap_or_default();
     world.resource_scope(|world, mut mask: Mut<FloorMask>| {
         world.resource_scope(|world, catalog: Mut<AnimCatalog>| {
             let mut commands = world.commands();
@@ -1827,12 +1958,10 @@ pub fn setup_title_campfire(world: &mut World) {
             // `scrCampfireMenuCreate` actors verbatim (positions in world
             // px, same as GML): Campfire (64,64) + LogMenu (64,32), four
             // fixed starters, scattered Plant..Cuz, chicken TV, BigDog
-            // sleepers. Only unlocked races get campers (locked return
-            // `noone` in GML). Every camper pops a `PortalClear`.
-            let unlocked = |gml: usize| -> bool {
-                crate::state::menus::race_from_gml_id(gml).is_some_and(|r| save.race_unlocked(r))
-            };
-            let mut campers: Vec<glam::Vec2> = Vec::new();
+            // sleepers. Positions were computed above (dressing gates on
+            // them); only unlocked races got campers (locked return
+            // `noone` in GML). Every camper pops a `PortalClear`
+            // (`MenuGen/Alarm_1`).
             commands.spawn((
                 GameCleanup,
                 LevelCleanup,
@@ -1846,15 +1975,7 @@ pub fn setup_title_campfire(world: &mut World) {
                 Pos(glam::Vec2::new(64.0, 32.0)),
             ));
             // GML race ids: Fish 1, Crystal 2, Eyes 3, Melting 4.
-            for (gml, at) in [
-                (1usize, glam::Vec2::new(64.0, 32.0)),
-                (2, glam::Vec2::new(64.0, 96.0)),
-                (3, glam::Vec2::new(104.0, 64.0)),
-                (4, glam::Vec2::new(24.0, 64.0)),
-            ] {
-                if !unlocked(gml) {
-                    continue;
-                }
+            for (gml, at) in fixed_campers {
                 commands.spawn((
                     GameCleanup,
                     LevelCleanup,
@@ -1864,65 +1985,11 @@ pub fn setup_title_campfire(world: &mut World) {
                     },
                     Pos(at),
                 ));
-                campers.push(at);
             }
-            // Plant (5) .. Cuz (16), skipping locked; GML scatters with
-            // `move_contact_solid(random_angle, 32+iter*2+random(32)+...)`
-            // until 32px clear of every camper. The port walks the same
-            // distance law off the fixed stream and clamps onto floors
-            // (no physics here; contact-slide is renderer/collision-side).
-            // BigDog (13) keeps its four `PortalClear` dressings.
-            let floor_px: Vec<glam::Vec2> = floors
-                .iter()
-                .map(|(cx, cy)| {
-                    glam::Vec2::new(
-                        *cx as f32 * crate::comps_a::TILE + crate::comps_a::TILE * 0.5,
-                        *cy as f32 * crate::comps_a::TILE + crate::comps_a::TILE * 0.5,
-                    )
-                })
-                .collect();
-            let nearest_floor = |at: glam::Vec2| -> glam::Vec2 {
-                floor_px
-                    .iter()
-                    .min_by(|a, b| {
-                        a.distance_squared(at)
-                            .partial_cmp(&b.distance_squared(at))
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
-                    .copied()
-                    .unwrap_or(at)
-            };
-            // Chicken TV anchor for the TV arm below.
-            let mut chicken_at: Option<glam::Vec2> = None;
-            // BigDog sleeper anchor for the four-clear arm below.
-            let mut bigdog_at: Option<glam::Vec2> = None;
-            for gml in 5..=16usize {
-                if !unlocked(gml) {
-                    continue;
-                }
-                // GML starts scattered campers at the campfire.
-                let mut at = camp_px;
-                for iter in 0..50usize {
-                    let dist = 32.0
-                        + iter as f32 * 2.0
-                        + rng.random_range(0.0..32.0)
-                        + rng.random_range(0.0..64.0) * rng.random_range(0.0..1.0);
-                    let ang = rng.random_range(0.0..std::f32::consts::TAU);
-                    let cand = camp_px + glam::Vec2::from_angle(ang) * dist;
-                    let cand = nearest_floor(cand);
-                    let clear = campers.iter().all(|c| c.distance(cand) >= 32.0);
-                    // GML chicken arm also keeps 16px above her head clear.
-                    let chicken_clear = gml != 9
-                        || campers
-                            .iter()
-                            .all(|c| (*c - (cand + glam::Vec2::new(0.0, -32.0))).length() >= 16.0);
-                    if clear && chicken_clear {
-                        at = cand;
-                        break;
-                    }
-                    at = cand;
-                }
-                at = nearest_floor(at);
+            // Scattered Plant..Cuz from the precomputed positions
+            // above (the distance law ran there, against the full
+            // camper list, like GML).
+            for (gml, at) in scattered {
                 commands.spawn((
                     GameCleanup,
                     LevelCleanup,
@@ -1932,22 +1999,49 @@ pub fn setup_title_campfire(world: &mut World) {
                     },
                     Pos(at),
                 ));
-                campers.push(at);
-                if gml == 9 {
-                    chicken_at = Some(at);
-                }
-                if gml == 13 {
-                    bigdog_at = Some(at);
-                }
             }
-            // Chicken TV + 2 half-scale clears; BigDog four clears.
+            // Scatter-overflow clears (one per failed try past 50).
+            for clear_at in scatter_clears {
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    PortalClear {
+                        timer: crate::time::GTimer::from_seconds(
+                            5.0 / 30.0,
+                            crate::time::TimerMode::Once,
+                        ),
+                    scale: 1.0,
+                    },
+                    Pos(clear_at),
+                ));
+            }
+            // Chicken TV + 2 half-scale clears (`scrCampfireMenuCreate`
+            // chicken arm verbatim: TV at `x + orandom(2), y + orandom(4)
+            // - 32`, clears at `(x, y + 16)` and `(x, y)` rescaled 0.5).
             if let Some(at) = chicken_at {
                 commands.spawn((
                     GameCleanup,
                     LevelCleanup,
                     crate::comps_b::TitleTv,
-                    Pos(glam::Vec2::new(at.x, at.y - 32.0)),
+                    Pos(glam::Vec2::new(
+                        at.x + rng.random_range(-2.0..2.0),
+                        at.y - 32.0 + rng.random_range(-4.0..4.0),
+                    )),
                 ));
+                for off in [glam::Vec2::new(0.0, 16.0), glam::Vec2::ZERO] {
+                    commands.spawn((
+                        GameCleanup,
+                        LevelCleanup,
+                        PortalClear {
+                            timer: crate::time::GTimer::from_seconds(
+                                5.0 / 30.0,
+                                crate::time::TimerMode::Once,
+                            ),
+                            scale: 0.5,
+                        },
+                        Pos(at + off),
+                    ));
+                }
             }
             if let Some(at) = bigdog_at {
                 for off in [
@@ -1964,6 +2058,7 @@ pub fn setup_title_campfire(world: &mut World) {
                                 5.0 / 30.0,
                                 crate::time::TimerMode::Once,
                             ),
+                        scale: 1.0,
                         },
                         Pos(at + off),
                     ));
@@ -1978,6 +2073,7 @@ pub fn setup_title_campfire(world: &mut World) {
                             5.0 / 30.0,
                             crate::time::TimerMode::Once,
                         ),
+                        scale: 1.0,
                     },
                     Pos(at),
                 ));

@@ -1311,6 +1311,11 @@ pub fn title_cam_focus(world: &mut World) -> Option<Vec2> {
 /// `m = 1` on entry). `t_lerp(a, b, 0.1) = lerp(b, a, 0.9^timescale)`,
 /// i.e. close 10% of the gap per step at timescale 1 — no `round()`
 /// (unlike `BackCont`). `cam.snap` forces the snap and clears.
+/// Runs per compose with the clamped frame dt: `1-0.9^(dt*30)` equals
+/// 0.1 at 30 Hz and converges identically to GML's fixed steps across
+/// hitches (three 0.1 steps ≈ one 0.27 step). Entry snap targets the
+/// settled (post-scatter) camper pos while GML snaps pre-scatter and
+/// lerps after — transient (<1 s) and self-correcting.
 pub fn title_camera_step(cam: &mut GmlCamera, vw: f32, vh: f32, focus: Vec2, dt: f32, snap: bool) {
     let m = if snap || cam.snap {
         1.0
@@ -1615,8 +1620,31 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                         continue;
                     }
                     let top_left = Vec2::new(cx as f32 * TILE, cy as f32 * TILE);
+                    // GML `Floor/Create_0:8-13` floor variant verbatim:
+                    // `random(500) < 1` takes frame 3, else
+                    // `choose(0,0,0,0,0,0,0,1,2) + choose(0,4)`. The
+                    // port has no live RNG stream here, so the cell
+                    // coords hash into the same distribution
+                    // deterministically (1/500 rare, 7/9 plain,
+                    // 1/9 mid, then +4 half the time).
+                    let h = (cx.wrapping_mul(0x8da6b343u32 as i32).wrapping_add(cy.wrapping_mul(0xd8163841u32 as i32))
+                        >> 7) as u32;
+                    let raw = if h % 500 == 0 {
+                        3
+                    } else {
+                        let base = match h % 9 {
+                            7 => 1,
+                            8 => 2,
+                            _ => 0,
+                        };
+                        base + if h % 2 == 0 { 4 } else { 0 }
+                    };
+                    // Clamp to the strip (GML families always carry
+                    // 0-7; a short pack strip must not drop the cell).
+                    let frames = strip_frames(assets, floor_png).max(1) as i32;
+                    let frame = raw % frames;
                     if let Some(s) =
-                        place_top_left(assets, floor_png, 0, top_left, [1.0; 4], GRID_OVERLAP)
+                        place_top_left(assets, floor_png, frame, top_left, [1.0; 4], GRID_OVERLAP)
                     {
                         out.push(s);
                     }
@@ -2457,15 +2485,18 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             let elapsed = clear.timer.duration() - clear.timer.remaining_secs();
             let frames = strip_frames(assets, "images/sprPortalClear.png").max(1);
             let frame = ((elapsed * 30.0).floor() as u32).min(frames - 1) as i32;
-            if let Some(s) = assets.sprite_for(
-                "images/sprPortalClear.png",
-                frame,
-                pos.0,
-                false,
-                0.0,
-                [1.0; 4],
-            ) {
-                out.push(s);
+            if let Some(def_size) = assets.native_size("images/sprPortalClear.png") {
+                let size = def_size * clear.scale.max(0.0);
+                if let Some(s) = assets.sprite_sized(
+                    "images/sprPortalClear.png",
+                    frame,
+                    pos.0,
+                    size,
+                    false,
+                    [1.0; 4],
+                ) {
+                    out.push(s);
+                }
             }
         }
         let mut q = world.query::<(&Pos, &PortalStrike)>();
@@ -2948,7 +2979,7 @@ pub fn hud_gui_texts(world: &mut World) -> Vec<HudGuiText> {
         true,
         false,
     ));
-    if hud.level < 10 {
+    if hud.level < PLAYER_LEVEL_MAX {
         out.push(hud_gui_left(
             hud.level.to_string(),
             11.0,
@@ -3094,7 +3125,10 @@ pub fn hud_gui_texts(world: &mut World) -> Vec<HudGuiText> {
         }
     }
     // Misc-HUD clock + map name (`scrDrawMiscHUD`: right-aligned rows
-    // stacking up from `view_height - (font + 10)`; row height 9 px).
+    // stacking up from `view_height - (font_offset + 10)` = 230 for the
+    // default font (`font_get_height_diff()` returns 0 outside CJK/
+    // Noto); row step is the string height in GML, 9px here to match
+    // the port's 7px Silkscreen rhythm.
     let show_timer = world
         .get_resource::<crate::savedata_part::SaveData>()
         .is_none_or(|s| s.settings.show_timer);
@@ -3117,7 +3151,7 @@ pub fn hud_gui_texts(world: &mut World) -> Vec<HudGuiText> {
         .is_none_or(|s| s.settings.show_area)
         && !transitioning
         && (!paused || boss_intro);
-    let mut gy = 240.0 - (7.0 + 10.0);
+    let mut gy = 240.0 - (0.0 + 10.0);
     if show_timer && !hud.timer_string.is_empty() {
         out.push(HudGuiText {
             text: hud.timer_string.clone(),
@@ -3377,7 +3411,14 @@ pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
         return Vec::new();
     }
     let player_alive = world.query::<&Player>().iter(world).next().is_some();
-    if !player_alive {
+    // GML `scrDrawMiscHUD:68` draws ultras/skills when `GameOver ||
+    // Player || paused || romInit` — the dead player's held icons stay
+    // on the game-over screen. `Run.game_over` carries the GameOver
+    // half (the entity is gone after death).
+    let game_over = world
+        .get_resource::<crate::comps_a::Run>()
+        .is_some_and(|r| r.game_over);
+    if !player_alive && !game_over {
         return Vec::new();
     }
     let vw = gml_view_size(canvas_dp)[0];
@@ -4194,7 +4235,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             let selected = world
                 .get_resource::<SelectedCharacter>()
                 .map(|s| s.0 as usize)
-                .unwrap_or(1);
+                .unwrap_or(0);
             let race = crate::state::menus::race_from_gml_id(selected);
             let Some(race) = race.filter(|r| *r != crate::data::RaceId::Random) else {
                 return Vec::new();
@@ -4205,26 +4246,29 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 .map(|m| m.textappear[0])
                 .unwrap_or(0.0);
             let mut rows = Vec::new();
+            // GML `scrCampfireMenuDrawCharText:444-466` law: the white
+            // NAME draws unconditionally (only its shadow gates on
+            // `textappear != 2`); the SKILLS block hides at `appear ==
+            // 2` (selection-change hide before the typewriter).
+            // GML single-player `fa_left/fa_bottom`: `_bigname_y = 36
+            // + 32 = 68`, then `_bigname_y = h - 68 = 172` — the NAME's
+            // bottom edge lands at y=172 via `draw_text_bigname`, above
+            // the 36px letterbox. The 12px row is top-anchored, so its
+            // top is `172 - 12 = 160` (the mapper's Silkscreen top bias
+            // lands the ink where the bigname surface sat).
+            // Bigname source (scale 1): fill+stroke faux-bold.
+            rows.push(MenuGuiText {
+                text: def.name.to_ascii_uppercase().to_string(),
+                gx: 0.0,
+                gy: 160.0,
+                color: GUI_WHITE,
+                px: 12.0,
+                centered: false,
+                middle_y: false,
+                right: false,
+                bold: true,
+            });
             if textappear != 2.0 {
-                // GML `scrCampfireMenuDrawCharText` law (single-player
-                // `fa_left/fa_bottom`): `_bigname_y = 36 + 32 = 68`, then
-                // `_bigname_y = h - 68 = 172` — the NAME's bottom edge
-                // lands at y=172 via `draw_text_bigname`, above the 36px
-                // letterbox. The 12px row is top-anchored, so its top is
-                // `172 - 12 = 160` (the mapper's Silkscreen top bias
-                // lands the ink where the bigname surface sat).
-                // Bigname source (scale 1): fill+stroke faux-bold.
-                rows.push(MenuGuiText {
-                    text: def.name.to_ascii_uppercase().to_string(),
-                    gx: 0.0,
-                    gy: 160.0,
-                    color: GUI_WHITE,
-                    px: 12.0,
-                    centered: false,
-                    middle_y: false,
-                    right: false,
-                    bold: true,
-                });
                 // Skills block: ONE two-line `draw_text_nt`,
                 // `fa_middle`, block middle at
                 // `_bigname_y + (height div 2) + appear + 8` = `188 +
@@ -5457,7 +5501,12 @@ pub fn hud_sprites(
         return out;
     }
     let player_alive = world.query::<&Player>().iter(world).next().is_some();
-    if !player_alive {
+    // Same `scrDrawMiscHUD:68` game-over law as the text rows above:
+    // held ultras/skills stay visible once the player is gone.
+    let game_over = world
+        .get_resource::<crate::comps_a::Run>()
+        .is_some_and(|r| r.game_over);
+    if !player_alive && !game_over {
         return out;
     }
     let hud: HudState = sync_hud_state(world);
@@ -5637,7 +5686,7 @@ pub fn hud_sprites(
     // (11,16) — the old `sprite_scaled_rotated` treated (11,16) as the
     // quad center, shifting it half a cell. `hud_gui_place` lands the
     // art top-left on the GUI point like `draw_sprite` does.
-    if hud.level >= 10 {
+    if hud.level >= PLAYER_LEVEL_MAX {
         if let Some(s) = hud_gui_place(
             assets,
             "images/sprUltraLevel.png",
@@ -5657,7 +5706,8 @@ pub fn hud_sprites(
     // y=32, `dx = 2+(t-1)*10` minus 2 at Bolts and up; BG frame 2 when
     // the type matches the primary weapon (or the secondary on
     // Steroids), 1 for the secondary, else 0; icon drains against the
-    // strip's own frame count over the Back-Muscle-adjusted cap).
+    // SHARED `sprBulletIcon` frame count (`_frames` is computed once,
+    // not per type) over the Back-Muscle-adjusted cap).
     const AMMO_ICONS: [(&str, &str); 5] = [
         ("images/sprBulletIconBG.png", "images/sprBulletIcon.png"),
         ("images/sprShotIconBG.png", "images/sprShotIcon.png"),
@@ -5701,7 +5751,7 @@ pub fn hud_sprites(
         if let Some(s) = hud_gui_place(assets, bg, bg_frame, dx, 32.0, 1.0, [1.0; 4], gm, view) {
             out.push(s);
         }
-        let frames = strip_frames(assets, icon).max(1) as f32 - 1.0;
+        let frames = strip_frames(assets, "images/sprBulletIcon.png").max(1) as f32 - 1.0;
         let icon_frame = (frames - (fill * frames).ceil()).clamp(0.0, frames) as i32;
         if let Some(s) = hud_gui_place(assets, icon, icon_frame, dx, 32.0, 1.0, [1.0; 4], gm, view)
         {
@@ -5976,6 +6026,13 @@ pub fn hud_sprites(
         let cursed = hud.weapon_cursed.get(slot).copied().unwrap_or(false);
         let ultra_gun = meta.wep_rads != 0;
         let golden = meta.wep_gold;
+        // GML outline gate (`scrDrawPlayerHUD:134`): outlines draw only
+        // for the active weapon, a broke-batch gun (ultra/cursed/
+        // golden fog batch), darkness, or letterbox frame >= 2. The
+        // port tracks no darkness/letterbox state, so those arms stay
+        // ungated with this note; inactive normal guns skip outlines.
+        let broke_batch = cursed || ultra_gun || golden;
+        let draw_outline = active || broke_batch;
         // GML fog tints over the body draw.
         let fog: Option<[f32; 4]> = if cursed {
             Some([139.0 / 255.0, 68.0 / 255.0, 140.0 / 255.0, 1.0])
@@ -6007,12 +6064,16 @@ pub fn hud_sprites(
         } else {
             16.0
         };
-        // 4-way outline quads (1 px GUI offsets around the body).
-        for (ox, oy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
-            if let Some(s) = hud_weapon_part(
-                assets, &path, dx + ox, 16.0 + oy, ww, outline, gm, view,
-            ) {
-                out.push(s);
+        // 4-way outline quads (1 px GUI offsets around the body),
+        // gated on active/broke-batch above (darkness/letterbox arms
+        // have no port state yet).
+        if draw_outline {
+            for (ox, oy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                if let Some(s) = hud_weapon_part(
+                    assets, &path, dx + ox, 16.0 + oy, ww, outline, gm, view,
+                ) {
+                    out.push(s);
+                }
             }
         }
         let body_tint = fog.unwrap_or([0.0, 0.0, 0.0, 1.0]);
@@ -6182,6 +6243,12 @@ impl Default for CrosshairState {
 /// the crosshair counts as active past `32 * 0.4125` px from the player.
 pub const CROSSHAIR_DEADZONE: f32 = 32.0 * 0.4125;
 
+/// GML `PLAYER_LEVEL_MAX` (`macros_gameplay:2`: `scrCustomParam(
+/// "maxlevel", 10)` — 10 normally, 0 in no-muts custom). The port has
+/// no custom-mode state yet, so the cap is always 10 and the `<= 0`
+/// `sprNomutsLevel` arm stays vacuous (noted at its draw site).
+pub const PLAYER_LEVEL_MAX: u32 = 10;
+
 /// World-space crosshair (GML `TopCont/Draw_0` player block verbatim):
 /// `sprCrosshair[opt_crosshair]` lerped toward
 /// `player + (16 + dis)` along the aim heading (0.8 active / 0.1 idle),
@@ -6217,6 +6284,18 @@ pub fn crosshair_sprites(
             .get_resource::<crate::comps_a::PendingUltra>()
             .is_none();
     if !live {
+        return out;
+    }
+    // GML `TopCont/Draw_0:43` verbatim: `if !UberCont.opt_keyboard ||
+    // index != global.index || is_gamepad(index)` — a keyboard-mode
+    // local player draws NO lerped world crosshair (the raw
+    // `Draw_75`/OS cursor covers aim). The port is single-player, so
+    // the gate is the gamepad setting: keyboard mode (gamepad
+    // disabled) skips, gamepad mode draws.
+    let gamepad_mode = world
+        .get_resource::<crate::savedata_part::SaveData>()
+        .is_some_and(|s| s.settings.gamepad_enabled);
+    if !gamepad_mode {
         return out;
     }
     let player = world
@@ -6453,9 +6532,15 @@ pub fn bloom_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInst
 /// (always 240); `wh[0]` is accepted for call-site symmetry but ignored
 /// for the step so widescreen keeps the GML left-clustered pods.
 pub fn char_pod_layout(wh: [f32; 2], count: usize, slot_h: f32) -> Vec<[f32; 2]> {
-    let step = 20.0_f32.min(((320.0 - 40.0) / count.max(1) as f32).floor());
+    let step = go_step(count);
     let y = wh[1] - slot_h - ((36.0 - slot_h) / 2.0).floor();
     (0..count).map(|i| [8.0 + i as f32 * step, y]).collect()
+}
+
+/// Shared pod-row step (GML `Menu/Create_0`: `min(20,
+/// floor((game_screen_width - 40) / count))` on the 320 base).
+pub fn go_step(count: usize) -> f32 {
+    20.0_f32.min(((320.0 - 40.0) / count.max(1) as f32).floor())
 }
 
 /// GO-button position (GML `Menu/Create_0`: past the last pod,
@@ -6464,8 +6549,7 @@ pub fn char_pod_layout(wh: [f32; 2], count: usize, slot_h: f32) -> Vec<[f32; 2]>
 /// `sprGoButtonSymbolic` has origin `(0,-2)`, so the drawn pixels/bbox sit
 /// 2 px below this (see `title_click_action` / `menu_sprites`).
 pub fn go_button_pos(wh: [f32; 2], count: usize, bbox_h: f32) -> [f32; 2] {
-    let step = 20.0_f32.min(((320.0 - 40.0) / count.max(1) as f32).floor());
-    let _ = wh[0];
+    let step = go_step(count);
     [
         8.0 + count as f32 * step + 2.0,
         wh[1] - 36.0 + (bbox_h / 2.0).floor() - 2.0,
@@ -6516,7 +6600,7 @@ pub fn title_click_action(
     let selected = world
         .get_resource::<SelectedCharacter>()
         .map(|s| s.0 as usize)
-        .unwrap_or(1);
+        .unwrap_or(0);
     let race = CHAR_SELECT_ORDER[selected.min(CHAR_SELECT_ORDER.len() - 1)];
     // Loadout zones first (the panel floats over the pods' right end).
     if loadout_available_for_race(race) {
@@ -6534,11 +6618,14 @@ pub fn title_click_action(
             return Some(a);
         }
     }
-    // GO button (armed only). `go_button_pos` is the GML instance position
+    // GO button (armed + space-gated like the draw above).
+    // `go_button_pos` is the GML instance position
     // (sprite origin); `sprGoButtonSymbolic` origin is (0,-2) so the
     let roster =
         crate::state::menus::visible_roster(world.get_resource::<crate::savedata_part::SaveData>());
-    if menu.title_go_visible {
+    if menu.title_go_visible
+        && 8.0 + roster.len() as f32 * go_step(roster.len()) < vw - 30.0
+    {
         let go = go_button_pos([vw, 240.0], roster.len(), 19.0);
         let top = go[1] + 2.0;
         if gx >= go[0] && gx <= go[0] + TITLE_GO_W && gy >= top && gy <= top + TITLE_GO_H {
@@ -7755,11 +7842,11 @@ pub fn menu_sprites(
             let selected = world
                 .get_resource::<SelectedCharacter>()
                 .map(|s| s.0 as usize)
-                .unwrap_or(1);
+                .unwrap_or(0);
             let (cursor, go_visible, loadout_open) = menu
                 .as_ref()
                 .map(|m| (m.title_cursor, m.title_go_visible, m.loadout_open))
-                .unwrap_or((1, false, false));
+                .unwrap_or((0, false, false));
             let slot_h = assets
                 .native_size("images/sprCharSelect.png")
                 .map(|s| s.y)
@@ -7820,7 +7907,10 @@ pub fn menu_sprites(
             // Selected-race portrait + splat + name plate (GML
             // scrCampfireMenuDrawRacePortrait/CharText: headless
             // chicken, hooded rebel, skin subimages, char splat,
-            // big-name art).
+            // big-name art). Single-player port: only index 0 draws.
+            // GML orders P2-P4 after (`scrMenuDrawPlayersOrdered`,
+            // back-layer gray at index >= 2) — vacuous here, the port
+            // has no coop player instances.
             let race = CHAR_SELECT_ORDER[selected.min(CHAR_SELECT_ORDER.len() - 1)];
             let skin = save
                 .as_ref()
@@ -7880,7 +7970,12 @@ pub fn menu_sprites(
             // unlocalized AND multiplayer
             // (`scrCampfireMenuDrawCharText:444`); single-player always
             // uses the bigname text (the overlay lines), so no sprite
-            if go_visible {
+            // GO button (armed only + GML `Menu/Create_0:49` space gate:
+            // created only if the pod row leaves room,
+            // `_slot_x < view_width - 30`; single-player is always
+            // `is_server`).
+            let go_space = 8.0 + roster.len() as f32 * go_step(roster.len()) < vw - 30.0;
+            if go_visible && go_space {
                 let dp = go_button_pos([vw, 240.0], roster.len(), 19.0);
                 if let Some(s) = assets.sprite_for(
                     "images/sprGoButtonSymbolic.png",
@@ -8852,11 +8947,16 @@ mod crosshair_gate_tests {
         world.insert_resource(HoverWorld(Some(Vec2::new(200.0, 100.0))));
         world.init_resource::<crate::savedata_part::SaveData>();
         world
+            .resource_mut::<crate::savedata_part::SaveData>()
+            .settings
+            .gamepad_enabled = true;
+        world
     }
 
-    /// GML `TopCont/Draw_0` parity: `with Player` — the lerped
-    /// crosshair draws during the run and vanishes with the player at
-    /// death. Needs several frames: alpha lerps from 0.
+    /// GML `TopCont/Draw_0:43` parity: the lerped crosshair draws during
+    /// the run in gamepad mode and vanishes with the player at death;
+    /// keyboard mode draws nothing here (the raw `Draw_75` cursor covers
+    /// aim). Needs several frames: alpha lerps from 0.
     #[test]
     fn crosshair_draws_during_play_not_game_over() {
         let dir = crate::resolve_assets_dir().expect("assets for parity test");
@@ -8871,6 +8971,17 @@ mod crosshair_gate_tests {
             }
         }
         assert!(drawn, "crosshair must draw during play");
+        // Keyboard mode: no lerped crosshair even alive.
+        world
+            .resource_mut::<crate::savedata_part::SaveData>()
+            .settings
+            .gamepad_enabled = false;
+        for _ in 0..60 {
+            assert!(
+                crosshair_sprites(&mut world, &assets, 1.0 / 30.0).is_empty(),
+                "keyboard mode draws no lerped crosshair (GML opt_keyboard gate)"
+            );
+        }
         let mut dead = world_with_player(true);
         for _ in 0..60 {
             assert!(

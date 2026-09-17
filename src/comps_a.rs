@@ -311,7 +311,9 @@ pub struct SelectedCharacter(pub RaceId);
 
 impl Default for SelectedCharacter {
     fn default() -> Self {
-        Self(RaceId::Fish)
+        // GML `PlayerInstance` boot + `reset_loadout` verbatim: the
+        // title starts on Random, never Fish.
+        Self(RaceId::Random)
     }
 }
 

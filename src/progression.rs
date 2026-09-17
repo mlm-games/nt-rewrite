@@ -1280,6 +1280,7 @@ pub fn portal_check(
         LevelCleanup,
         PortalClear {
             timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
+                        scale: 1.0,
         },
         Pos(pos),
     ));
@@ -1513,6 +1514,7 @@ pub fn tick_portal_shock(
                         LevelCleanup,
                         crate::comps_b::PortalClear {
                             timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
+                        scale: 1.0,
                         },
                         Pos(cpos),
                     ));
@@ -1538,6 +1540,7 @@ pub fn tick_portal_shock(
                         LevelCleanup,
                         crate::comps_b::PortalClear {
                             timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
+                        scale: 1.0,
                         },
                         Pos(cpos),
                     ));
@@ -2198,6 +2201,13 @@ pub fn tick_floor_transition(
             }
             run.portal_open = false;
             ft.active = false;
+            // GML `GenCont/Destroy:186-187` verbatim:
+            // `instance_destroy(SpiralCont)` at generation end. The
+            // view spiral dies in the lifecycle step; the sim
+            // `SpiralCtl` (ambience-duck presence) warms per
+            // generation (`try_start_pending_floor_gen`) and dies
+            // here, never leaking a live cont into settled play.
+            commands.remove_resource::<crate::vortex::SpiralCtl>();
 
             if !carried.0.is_empty() {
                 let base = pos.0;

@@ -264,10 +264,22 @@ pub struct GameOverScreen {
 /// Snapshot the game-over screen (bevy `hud.rs` death-mutation law:
 /// count comes from the dead player's held mutations).
 pub fn capture_game_over(world: &mut World) -> Option<GameOverScreen> {
-    let run = world.get_resource::<Run>()?;
-    if !run.game_over {
+    let over = world.get_resource::<Run>().is_some_and(|r| r.game_over);
+    if !over {
         return None;
     }
+    // GML `GameOver/Create_0:55` verbatim: death deletes the save
+    // (`file_delete(savegame_file)`) so no recontinue is offered after
+    // death. The port has no recontinue flow yet (PLAY sub-rows deny),
+    // but the flags clear at capture so one can never resurrect a dead
+    // run. (Cleared here, not in the death system: that system's 16
+    // system-param cap is full.)
+    world.init_resource::<crate::state::BootFlags>();
+    if let Some(mut flags) = world.get_resource_mut::<crate::state::BootFlags>() {
+        flags.has_save_file = false;
+        flags.continued_run = false;
+    }
+    let run = world.get_resource::<Run>()?;
     let screen = GameOverScreen {
         world: run.world,
         floor_in_world: crate::worldgen::floor_in_world(run.floor),
@@ -1732,7 +1744,7 @@ fn tick_title_input(world: &mut World, edge: MenuEdge) {
         let gml = roster
             .get(cursor)
             .map(|r| *r as usize)
-            .unwrap_or(RaceId::Fish as usize);
+            .unwrap_or(RaceId::Random as usize);
         apply_menu_action(world, UiAction::SelectCharacter(gml));
     }
     // GML `Menu/Other_11:14-37` verbatim anim tick (runs every step while
@@ -2018,6 +2030,14 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
             }
             goto_state(world, AppState::Loading);
         }
+        return;
+    }
+    // GML `Player/Keyboard_17` verbatim: R restarts the run mid-play
+    // (`game_restart()` — same path as the death RETRY: immediate
+    // restart through Loading). GML gates only on typing/console/
+    // public lobbies, none of which the port implements.
+    if edge.restart_pressed {
+        goto_state(world, AppState::Loading);
         return;
     }
 

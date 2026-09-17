@@ -645,6 +645,9 @@ pub struct PortalShock {
 #[derive(Component)]
 pub struct PortalClear {
     pub timer: Timer,
+    /// GML `image_xscale/yscale` (1.0 everywhere except the chicken-TV
+    /// arm's half-scale pair in `scrCampfireMenuCreate`).
+    pub scale: f32,
 }
 
 #[derive(Component)]

@@ -368,6 +368,7 @@ pub fn on_projectile_removed(
             LevelCleanup,
             PortalClear {
                 timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
+                        scale: 1.0,
             },
             Pos(pos),
         ));

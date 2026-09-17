@@ -328,7 +328,7 @@ pub fn goto_state(world: &mut World, next: AppState) {
             let gml = world
                 .get_resource::<crate::comps_a::SelectedCharacter>()
                 .map(|s| s.0 as usize)
-                .unwrap_or(crate::data::RaceId::Fish as usize);
+                .unwrap_or(crate::data::RaceId::Random as usize);
             let cursor =
                 menus::roster_position(world.get_resource::<crate::savedata_part::SaveData>(), gml)
                     .unwrap_or(0);
