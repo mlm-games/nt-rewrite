@@ -242,28 +242,17 @@ pub struct App {
     vortex_tex: Vec<VortexTexture>,
     vortex_tex_area: Option<u8>,
     // -- staged shell input (drained into `NtInput`/`MenuEdge` per frame) --
-    // `held` is the polled physical-key set: every `KeyboardInput`
-    // press/release reports its winit `KeyCode` name here through
-    // `stage_physical_key`, so held keys survive focus moves and never
-    // depend on a focused widget (GML `keyboard_check` parity). Layout
-    // independent: AZERTY reports the same `KeyW` position GML's
-    // `ord("W")` binds. Cleared on window focus loss.
+    // `held` is the event-staged key set: `on_key_event` presses land
+    // here through `stage_code`/`stage_physical`, so held keys survive
+    // focus moves without depending on a focused widget (GML
+    // `keyboard_check` parity). Layout independent: AZERTY reports the
+    // same `KeyW` position GML's `ord("W")` binds. Cleared on window
+    // focus loss.
     held: HashSet<KeyCode>,
     edges: Vec<KeyCode>,
-    /// Physical key names currently down (`KeyW`, `Digit1`, `Space`,
-    /// ...), mirrored from the runtime's polled set each frame
-    /// (`feed_polled_keys`). Reconciled against `held` so a swallowed
-    /// key-up (alt-tab, overlay) cannot stick movement on. Edges come
-    /// from diffing against `prev_polled` in `feed_polled` (focus-free:
-    /// repose focus dispatch may never reach the game, e.g. ESC with
-    /// no focusable mounted).
-    polled_keys: HashSet<String>,
-    /// Previous frame's polled set, for focus-free edge detection
-    /// (`feed_polled` diffs this against the fresh snapshot).
-    prev_polled: HashSet<String>,
     /// Whether the window currently has focus. `false` (set by the
-    /// shell's focus handler) drops `held` + `polled_keys` outright —
-    /// winit delivers no key-ups across an alt-tab.
+    /// shell's focus handler) drops `held` outright — winit delivers
+    /// no key-ups across an alt-tab.
     window_focused: bool,
     clicks: Vec<StagedClick>,
     /// Latest cursor world position (viewport `Hover`, single slot: only
@@ -437,8 +426,6 @@ impl App {
             vortex_tex_area: None,
             held: HashSet::new(),
             edges: Vec::new(),
-            polled_keys: HashSet::new(),
-            prev_polled: HashSet::new(),
             window_focused: true,
             clicks: Vec::new(),
             hover: None,
@@ -1076,13 +1063,72 @@ impl App {
             }
         }
     }
+}
 
+pub(crate) mod nt_shortcuts {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use repose_core::input::{Key, Modifiers};
+    use repose_core::shortcuts;
+
+    use super::App;
+
+    pub const PAUSE: &str = "nt.pause";
+    pub const RESTART: &str = "nt.restart";
+    pub const CONFIRM: &str = "nt.confirm";
+
+    pub fn map() -> shortcuts::ShortcutMap {
+        shortcuts::ShortcutMap::new()
+            .bind(Key::Escape, Modifiers::default(), action_for(PAUSE))
+            .bind(Key::Character('r'), Modifiers::default(), action_for(RESTART))
+            .bind(Key::Enter, Modifiers::default(), action_for(CONFIRM))
+    }
+
+    fn action_for(name: &'static str) -> shortcuts::Action {
+        shortcuts::Action::Custom(name.into())
+    }
+
+    thread_local! {
+        static MAP_INSTALLED: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub fn install(app: *mut App) {
+        // Process-lifetime install, called every frame from `view`:
+        // the map is pushed once (a push per frame would grow the scope
+        // stack unboundedly), while the handler is replaced every call
+        // so the raw `App` pointer never dangles across moves. Deliberately
+        // not `scoped_effect`: there is no owning scope to clean up after.
+        if !MAP_INSTALLED.with(|c| c.replace(true)) {
+            let _ = shortcuts::InstallShortcutMap(map());
+        }
+        let _ = shortcuts::InstallShortcutHandler(Rc::new(move |action| {
+            let app = unsafe { &mut *app };
+            match action {
+                shortcuts::Action::Custom(key) if key.as_ref() == PAUSE => {
+                    app.pause_edge = true;
+                    true
+                }
+                shortcuts::Action::Custom(key) if key.as_ref() == RESTART => {
+                    app.restart_edge = true;
+                    true
+                }
+                shortcuts::Action::Custom(key) if key.as_ref() == CONFIRM => {
+                    app.interact_edge = true;
+                    true
+                }
+                _ => false,
+            }
+        }));
+    }
+}
+
+impl App {
     /// Stage one shell key event (called from the root `on_key_event`
     /// handler; see the module docs for the mapping table). Character
     /// keys are matched by physical position (`KeyW`, not `'w'`), so
     /// non-US layouts move the same way GML's `ord("W")` does on a US
-    /// board. Edges still come from here; `held` levels are reconciled
-    /// against the polled physical set in `feed_input`.
+    /// board.
     fn handle_key(&mut self, ke: &KeyEvent) {
         let down = matches!(ke.event_type, KeyEventType::Down);
         // Shift has no `Key` variant, but every `KeyEvent` carries
@@ -1102,16 +1148,11 @@ impl App {
             }
         }
         match &ke.key {
-            Key::Escape => {
-                if down && !ke.is_repeat {
-                    self.pause_edge = true;
-                }
-            }
-            Key::Enter => {
-                if down && !ke.is_repeat {
-                    self.interact_edge = true;
-                }
-            }
+            // Esc / Enter / R stage ONLY via the scoped global shortcut
+            // map (`nt_shortcuts::map` + runtime `dispatch_action`). No
+            // direct staging here: this bubble return must stay a no-op
+            // for them so the shortcut path has single ownership.
+            Key::Escape | Key::Enter => {}
             Key::Space => self.stage_code(KeyCode::Space, down, ke.is_repeat),
             Key::Tab => self.stage_code(KeyCode::Tab, down, ke.is_repeat),
             Key::ArrowUp => self.stage_code(KeyCode::ArrowUp, down, ke.is_repeat),
@@ -1123,25 +1164,25 @@ impl App {
                 // (`KeyW`, not `'w'`) owns `held` levels + letter/digit
                 // edges, so non-US layouts move the same way GML's
                 // `ord("W")` does on a US board. The glyph below is
-                // only the fallback for synthetic events (tests) and
-                // the `R` restart shortcut.
+                // only the fallback for synthetic events (tests).
                 if let Some(name) = ke.physical.as_deref() {
-                    self.stage_physical(name, down, ke.is_repeat);
-                    if name == "KeyR" && down && !ke.is_repeat {
-                        self.restart_edge = true;
-                    }
-                    if down && !ke.is_repeat {
+                    // Capture first, before `stage_physical` can swallow
+                    // the press: `stage_physical` returns early while a
+                    // capture is armed (the key must not fire gameplay),
+                    // and Space's `Key::Space` match arm below never runs
+                    // on the physical path — without this Space could
+                    // never rebind.
+                    if down && !ke.is_repeat && self.capture_armed() {
                         self.capture_physical_press(name);
+                        return;
                     }
+                    self.stage_physical(name, down, ke.is_repeat);
                     return;
                 }
                 let c = c.to_ascii_lowercase();
                 if c == ' ' {
                     self.stage_code(KeyCode::Space, down, ke.is_repeat);
                 } else if c == 'r' {
-                    if down && !ke.is_repeat {
-                        self.restart_edge = true;
-                    }
                     self.stage_physical("KeyR", down, ke.is_repeat);
                 } else {
                     let _ = c;
@@ -1162,24 +1203,10 @@ impl App {
     }
 
     /// Stage one physical key transition by winit `KeyCode` debug name
-    /// (`KeyW`, `Digit1`, `Space`, `Backquote`, ...). Called by shells
-    /// that forward the raw `KeyboardInput` physical key alongside the
-    /// focus-routed `KeyEvent`. Down transitions also push press edges
-    /// (deduped against `held` so event+physical double delivery does
-    /// not double-fire); releases only clear `held`. `R`/`Escape`/
-    /// `Enter` edges stay on the `handle_key` path so menu shortcuts
-    /// keep single ownership.
+    /// (`KeyW`, `Digit1`, `Space`, `Backquote`, ...). Down transitions
+    /// push press edges (deduped against `held`); releases only clear
+    /// `held`.
     pub fn stage_physical_key(&mut self, name: &str, down: bool) {
-        // Direct shell staging (tests, synthetic shells): keep the edge
-        // clock consistent so `feed_polled` diffing never re-fires a
-        // down the event path already staged.
-        if down {
-            self.polled_keys.insert(name.to_string());
-            self.prev_polled.insert(name.to_string());
-        } else {
-            self.polled_keys.remove(name);
-            self.prev_polled.remove(name);
-        }
         self.stage_physical(name, down, false);
     }
 
@@ -1194,9 +1221,9 @@ impl App {
         let Some(code) = crate::input::keycode_for_physical(name) else {
             return;
         };
-        // All edges stage here: focus-routed `handle_key` and this
-        // polled path both land fresh presses in `edges`; `held`-insert
-        // dedups double delivery, so one landing pushes one edge.
+        // All edges stage here: focus-routed `handle_key` lands fresh
+        // presses in `edges`; `held`-insert dedups double delivery, so
+        // one landing pushes one edge.
         if down {
             let fresh = self.held.insert(code);
             if fresh && !is_repeat {
@@ -1215,77 +1242,9 @@ impl App {
         if !focused {
             self.held.clear();
             self.edges.clear();
-            self.polled_keys.clear();
-            self.prev_polled.clear();
             self.shift_held = false;
             self.lmb_held = false;
             self.rmb_held = false;
-        }
-    }
-
-    /// Reconcile event-staged `held` against the polled physical set.
-    /// Runs at the top of `feed_input`: any `KeyCode` whose physical
-    /// names are all up is dropped (swallowed key-up repair), and any
-    /// polled-down name missing from `held` is re-added (swallowed
-    /// key-down repair). Shift/RMB latches are outside this (modifier
-    /// + button state, not physical keys).
-    fn reconcile_held_with_polled(&mut self) {
-        if !self.window_focused {
-            return;
-        }
-        const PHYSICAL_NAMES: [(&str, KeyCode); 26] = [
-            ("KeyA", KeyCode::KeyA),
-            ("KeyB", KeyCode::KeyB),
-            ("KeyC", KeyCode::KeyC),
-            ("KeyD", KeyCode::KeyD),
-            ("KeyE", KeyCode::KeyE),
-            ("KeyF", KeyCode::KeyF),
-            ("KeyG", KeyCode::KeyG),
-            ("KeyH", KeyCode::KeyH),
-            ("KeyI", KeyCode::KeyI),
-            ("KeyJ", KeyCode::KeyJ),
-            ("KeyK", KeyCode::KeyK),
-            ("KeyL", KeyCode::KeyL),
-            ("KeyM", KeyCode::KeyM),
-            ("KeyN", KeyCode::KeyN),
-            ("KeyO", KeyCode::KeyO),
-            ("KeyP", KeyCode::KeyP),
-            ("KeyQ", KeyCode::KeyQ),
-            ("KeyR", KeyCode::KeyR),
-            ("KeyS", KeyCode::KeyS),
-            ("KeyT", KeyCode::KeyT),
-            ("KeyU", KeyCode::KeyU),
-            ("KeyV", KeyCode::KeyV),
-            ("KeyW", KeyCode::KeyW),
-            ("KeyX", KeyCode::KeyX),
-            ("KeyY", KeyCode::KeyY),
-            ("KeyZ", KeyCode::KeyZ),
-        ];
-        const PHYSICAL_NAMES_2: [(&str, KeyCode); 17] = [
-            ("ArrowUp", KeyCode::ArrowUp),
-            ("ArrowDown", KeyCode::ArrowDown),
-            ("ArrowLeft", KeyCode::ArrowLeft),
-            ("ArrowRight", KeyCode::ArrowRight),
-            ("Space", KeyCode::Space),
-            ("Tab", KeyCode::Tab),
-            ("Backquote", KeyCode::Backquote),
-            ("Digit0", KeyCode::Digit0),
-            ("Digit1", KeyCode::Digit1),
-            ("Digit2", KeyCode::Digit2),
-            ("Digit3", KeyCode::Digit3),
-            ("Digit4", KeyCode::Digit4),
-            ("Digit5", KeyCode::Digit5),
-            ("Digit6", KeyCode::Digit6),
-            ("Digit7", KeyCode::Digit7),
-            ("Digit8", KeyCode::Digit8),
-            ("Digit9", KeyCode::Digit9),
-        ];
-        for (name, code) in PHYSICAL_NAMES.into_iter().chain(PHYSICAL_NAMES_2) {
-            if self.polled_keys.contains(name) {
-                self.held.insert(code);
-            } else if !matches!(code, KeyCode::ShiftLeft | KeyCode::ShiftRight) {
-                self.held.remove(&code);
-            }
         }
     }
 
@@ -1306,7 +1265,7 @@ impl App {
     /// `rmb_down`); keys capture here and in `stage_physical`.
     /// Returns `true` while a capture is armed (callers skip normal
     /// staging so the capture key does not fire gameplay).
-    fn capture_armed(&self) -> bool {
+    pub(crate) fn capture_armed(&self) -> bool {
         self.sim
             .world
             .get_resource::<InputMapState>()
@@ -1336,7 +1295,7 @@ impl App {
         }
     }
 
-    fn capture_key_press(&mut self, key: &repose_core::input::Key) {
+    pub(crate) fn capture_key_press(&mut self, key: &repose_core::input::Key) {
         use repame_input::KeymapEntry;
         self.sim.world.init_resource::<InputMapState>();
         // Glyph path: Space/Tab/Enter/Escape map explicitly; any other
@@ -1378,7 +1337,7 @@ impl App {
         }
     }
 
-    fn capture_physical_press(&mut self, name: &str) {
+    pub(crate) fn capture_physical_press(&mut self, name: &str) {
         use repame_input::KeymapEntry;
         self.sim.world.init_resource::<InputMapState>();
         if !self.capture_armed() {
@@ -1646,46 +1605,16 @@ impl App {
         self.touch_new.remove(&id);
     }
 
-    /// Reconcile the event-staged sets against the platform's polled
-    /// hardware snapshot (`Scheduler::held_keys` + mouse levels,
-    /// maintained from raw winit events without passing through focus
-    /// dispatch — see `runner_common::on_keyboard_input`). Without this
-    /// a key whose release was swallowed (focus move, overlay,
-    /// alt-tab) sticks in `held` until pressed again; with it the
-    /// polled level wins and movement matches GML's `keyboard_check`
-    /// every frame.
+    /// Sync mouse-button latches against the platform snapshot. The root
+    /// pointer handlers own press edges; the polled set repairs a missed
+    /// up (release outside the window) but never forces a down the
+    /// handlers missed.
     pub fn feed_polled(&mut self, sched: &Scheduler) {
         if !sched.window_focused {
             self.set_window_focused(false);
             return;
         }
         self.window_focused = true;
-        let fresh: HashSet<String> = sched.held_keys.iter().cloned().collect();
-        // Focus-free edges: newly-down names stage exactly like the
-        // focus-routed path (`stage_physical` owns capture-first
-        // routing + `held` levels + press edges, so a key the focus
-        // chain swallowed still drives gameplay, pause, and REMAP
-        // capture). `stage_physical` dedups against `held`, so a key
-        // both paths deliver does not double-fire.
-        let downs: Vec<String> = fresh.difference(&self.prev_polled).cloned().collect();
-        let ups: Vec<String> = self.prev_polled.difference(&fresh).cloned().collect();
-        for name in &downs {
-            self.stage_physical(name, true, false);
-            if name == "Escape" {
-                self.pause_edge = true;
-            }
-            if name == "KeyR" {
-                self.restart_edge = true;
-            }
-        }
-        for name in &ups {
-            self.stage_physical(name, false, false);
-        }
-        self.prev_polled = fresh.clone();
-        self.polled_keys = fresh;
-        // Mouse levels: the root pointer handlers own the latches; the
-        // polled set repairs a missed up (release outside the window)
-        // but never forces a down the handlers missed.
         if !sched.mouse_primary {
             self.lmb_held = false;
         }
@@ -1706,11 +1635,6 @@ impl App {
         for action in self.menu_actions.drain(..) {
             apply_menu_action(&mut self.sim.world, action);
         }
-        // Reconcile event-staged levels against the polled physical
-        // set before sampling: a swallowed key-up (alt-tab, overlay)
-        // cannot stick movement on, and a polled-down key missing
-        // from `held` is re-added.
-        self.reconcile_held_with_polled();
 
         let just: HashSet<KeyCode> = self.edges.drain(..).collect();
         let state = self
@@ -2890,6 +2814,8 @@ impl App {
             repose_core::CursorIcon::Default
         });
         let app_ptr = self as *mut App;
+        nt_shortcuts::install(app_ptr);
+        let key_ptr = self as *mut App;
         let focus = remember(FocusRequester::new);
         let fr_positioned = (*focus).clone();
         let focus_ptr = self as *mut App;
@@ -2905,8 +2831,31 @@ impl App {
                 let app = unsafe { &mut *focus_ptr };
                 app.set_window_focused(focused);
             })
+            .on_preview_key_event(move |ke: KeyEvent| {
+                // Capture REMAP keys before the runtime's Space/Enter
+                // keyboard-activation consumes them: when a rebind is
+                // armed, the next pressed key resolves the capture and
+                // never reaches gameplay or button activation. Preview
+                // runs root-first, ahead of focus dispatch + shortcuts.
+                // SAFETY: synchronous compose-time dispatch only.
+                if matches!(ke.event_type, KeyEventType::Down) && !ke.is_repeat {
+                    let app = unsafe { &mut *key_ptr };
+                    if app.capture_armed() {
+                        if let Some(name) = ke.physical.as_deref() {
+                            app.capture_physical_press(name);
+                        } else {
+                            app.capture_key_press(&ke.key);
+                        }
+                        return true;
+                    }
+                }
+                false
+            })
             .on_key_event(move |ke: KeyEvent| {
                 // SAFETY: synchronous compose-time dispatch only.
+                // Esc/R/Enter also run through the scoped shortcut handler
+                // (`nt_shortcuts::install`); returning false lets the
+                // runtime resolve the shortcut after the bubble finishes.
                 let app = unsafe { &mut *app_ptr };
                 app.handle_key(&ke);
                 false
@@ -3878,10 +3827,55 @@ mod cursor_staging_tests {
         assert_eq!(app.live_cursor_world(), None);
     }
 
-    /// E-key interact regression: the KeyE edge staged through either
-    /// the focus path (`handle_key`) or the polled path (`feed_polled`)
-    /// must surface as `interact_pressed` after the gameplay sampler
-    /// runs. Catches the sampler reading a rebound/missing Pick row.
+    #[test]
+    fn global_shortcut_map_binds_pause_restart_confirm() {
+        use repose_core::input::{Key, Modifiers};
+        use repose_core::shortcuts::{Action, KeyChord, resolve_action};
+        let map = nt_shortcuts::map();
+        for (key, want) in [
+            (Key::Escape, nt_shortcuts::PAUSE),
+            (Key::Character('r'), nt_shortcuts::RESTART),
+            (Key::Enter, nt_shortcuts::CONFIRM),
+        ] {
+            let chord = KeyChord::new(key.clone(), Modifiers::default());
+            assert_eq!(
+                map.action_for(&chord),
+                Some(Action::Custom(want.into())),
+                "map must bind {want}"
+            );
+            // Installing wires the map into the global scope stack, so the
+            // runtime's `resolve_action` (the `dispatch_action` path) sees
+            // the chord even with no compose scope mounted.
+            let mut app = App::new_with_seed(4242);
+            let ptr = &mut app as *mut App;
+            nt_shortcuts::install(ptr);
+            assert_eq!(
+                resolve_action(KeyChord::new(key, Modifiers::default())),
+                Some(Action::Custom(want.into())),
+                "installed map must resolve {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn installed_shortcut_handler_stages_edges() {
+        use repose_core::shortcuts::{Action, handle};
+        let mut app = App::new_with_seed(4242);
+        let ptr = &mut app as *mut App;
+        nt_shortcuts::install(ptr);
+        assert!(handle(Action::Custom(nt_shortcuts::PAUSE.into())));
+        assert!(app.pause_edge);
+        assert!(handle(Action::Custom(nt_shortcuts::RESTART.into())));
+        assert!(app.restart_edge);
+        assert!(handle(Action::Custom(nt_shortcuts::CONFIRM.into())));
+        assert!(app.interact_edge);
+        assert!(!handle(Action::Custom("nt.unknown".into())));
+    }
+
+    /// E-key interact regression: the KeyE edge staged through
+    /// `handle_key` must surface as `interact_pressed` after the
+    /// gameplay sampler runs. Catches the sampler reading a
+    /// rebound/missing Pick row.
     #[test]
     fn key_e_stages_interact_pulse() {
         use crate::input::{KeyCode, MouseState, NtInput};
@@ -3935,39 +3929,43 @@ mod cursor_staging_tests {
         }
     }
 
-    /// Reported bug verbatim: ESC never opened the pause menu live,
-    /// and REMAP captures never resolved — both need press edges, and
-    /// edges only arrived via focus-routed `KeyEvent`s, which repose
-    /// drops when no widget holds focus (bare game viewport). The
-    /// polled `held_keys` snapshot bypasses focus, so `feed_polled`
-    /// diffs it into edges itself: ESC stages `pause_edge`, any key
-    /// resolves a pending capture, releases clear `held`.
+    /// REMAP capture resolves from the focus-routed `handle_key` path;
+    /// Esc/Enter/R stage only via the shortcut handler.
     #[test]
-    fn polled_edges_drive_pause_and_capture_without_focus() {
-        use repose_core::runtime::Scheduler;
+    fn focus_key_resolves_capture_and_pause() {
+        use repose_core::input::{Key, KeyEvent, KeyEventType, Modifiers};
+        use repose_core::shortcuts::{Action, handle};
         let mut app = App::new_with_seed(4242);
-        let mut sched = Scheduler::default();
-        sched.window_focused = true;
-        // ESC down with no KeyEvent ever delivered.
-        sched.held_keys = vec!["Escape".to_string()];
-        app.feed_polled(&sched);
-        assert!(app.pause_edge, "polled ESC must stage pause_edge");
-        // Release clears without sticking.
-        sched.held_keys = vec![];
-        app.feed_polled(&sched);
-        assert!(!app.pause_edge || true, "release must not stick");
-        // REMAP capture resolves from the polled diff alone.
+        let ptr = &mut app as *mut App;
+        nt_shortcuts::install(ptr);
+        app.handle_key(&KeyEvent {
+            key: Key::Escape,
+            modifiers: Modifiers::default(),
+            is_repeat: false,
+            event_type: KeyEventType::Down,
+            utf16_code_point: 0,
+            physical: None,
+        });
+        assert!(
+            !app.pause_edge,
+            "Escape KeyEvent alone must not stage pause_edge"
+        );
+        assert!(handle(Action::Custom(nt_shortcuts::PAUSE.into())));
+        assert!(app.pause_edge, "shortcut handler must stage pause_edge");
         crate::state::menus::apply_menu_action(
             &mut app.sim.world,
             crate::audio::UiAction::RemapControl("north".to_string()),
         );
         assert!(app.capture_armed());
-        sched.held_keys = vec!["KeyX".to_string()];
-        app.feed_polled(&sched);
-        assert!(
-            !app.capture_armed(),
-            "polled KeyX must resolve the capture"
-        );
+        app.handle_key(&KeyEvent {
+            key: Key::Character('x'),
+            modifiers: Modifiers::default(),
+            is_repeat: false,
+            event_type: KeyEventType::Down,
+            utf16_code_point: 0,
+            physical: Some("KeyX".to_string()),
+        });
+        assert!(!app.capture_armed(), "KeyX must resolve the capture");
         let entry = app
             .sim
             .world
@@ -3975,32 +3973,33 @@ mod cursor_staging_tests {
             .map
             .keyboard(&crate::keymap::NtAction::North);
         assert!(
-            matches!(
-                entry,
-                repame_input::KeymapEntry::Key(_)
-            ),
+            matches!(entry, repame_input::KeymapEntry::Key(_)),
             "capture must rebind north, got {entry:?}"
         );
     }
 
-    /// Full rebound loop without focus: rebind north to Z through a
-    /// polled capture, persist + reload through save rows (GML
-    /// `scrOptionsSaveKeymaps`/`scrOptionsLoadKeymaps`), then press
-    /// KeyZ via the polled diff and confirm the rebound key steers
-    /// movement. Catches encode/decode drift and sampler mismatch in
-    /// one pass.
+    /// Full rebound loop: rebind north to Z through a capture, persist +
+    /// reload through save rows (GML `scrOptionsSaveKeymaps`/
+    /// `scrOptionsLoadKeymaps`), then press KeyZ and confirm the rebound
+    /// key steers movement. Catches encode/decode drift and sampler
+    /// mismatch in one pass.
     #[test]
     fn rebound_key_drives_gameplay_after_save_round_trip() {
-        use repose_core::runtime::Scheduler;
+        use repose_core::input::{Key, KeyEvent, KeyEventType, Modifiers};
+        let press = |key: Key, physical: &str| KeyEvent {
+            key,
+            modifiers: Modifiers::default(),
+            is_repeat: false,
+            event_type: KeyEventType::Down,
+            utf16_code_point: 0,
+            physical: Some(physical.to_string()),
+        };
         let mut app = App::new_with_seed(4242);
-        let mut sched = Scheduler::default();
-        sched.window_focused = true;
         crate::state::menus::apply_menu_action(
             &mut app.sim.world,
             crate::audio::UiAction::RemapControl("north".to_string()),
         );
-        sched.held_keys = vec!["KeyZ".to_string()];
-        app.feed_polled(&sched);
+        app.handle_key(&press(Key::Character('z'), "KeyZ"));
         assert!(!app.capture_armed());
         // Persist + reload like a reboot.
         let rows = app
@@ -4013,10 +4012,8 @@ mod cursor_staging_tests {
         let back = saved.to_keymap();
         app.sim.world.resource_mut::<InputMapState>().map = back;
         // Release Z, then press it fresh and sample movement.
-        sched.held_keys = vec![];
-        app.feed_polled(&sched);
-        sched.held_keys = vec!["KeyZ".to_string()];
-        app.feed_polled(&sched);
+        app.stage_physical_key("KeyZ", false);
+        app.stage_physical_key("KeyZ", true);
         let mut out = crate::input::NtInput::default();
         let just: std::collections::HashSet<crate::input::KeyCode> =
             app.edges.drain(..).collect();
@@ -4121,12 +4118,11 @@ mod cursor_staging_tests {
         );
     }
 
-    /// Context switch: arrows via the polled-only path (no `handle_key`,
-    /// i.e. no focus) must still drive menu nav on MainMenu and on an
-    /// open Settings overlay.
+    /// Context switch: arrows via `handle_key` (focus-routed) must still
+    /// drive menu nav on MainMenu and on an open Settings overlay.
     #[test]
-    fn polled_arrows_drive_menu_nav_without_focus() {
-        use repose_core::runtime::Scheduler;
+    fn focus_arrows_drive_menu_nav() {
+        use repose_core::input::{Key, KeyEvent, KeyEventType, Modifiers};
         for (state, overlay) in [
             (AppState::MainMenu, OverlayMenu::None),
             (AppState::InGame, OverlayMenu::Settings),
@@ -4135,10 +4131,14 @@ mod cursor_staging_tests {
             app.sim.world.insert_resource(state);
             app.sim.world.insert_resource(overlay);
             app.sim.world.init_resource::<NtInput>();
-            let mut sched = Scheduler::default();
-            sched.window_focused = true;
-            sched.held_keys = vec!["ArrowDown".to_string()];
-            app.feed_polled(&sched);
+            app.handle_key(&KeyEvent {
+                key: Key::ArrowDown,
+                modifiers: Modifiers::default(),
+                is_repeat: false,
+                event_type: KeyEventType::Down,
+                utf16_code_point: 0,
+                physical: Some("ArrowDown".to_string()),
+            });
             app.feed_input();
             let (dv, dh) = app.sim.world.resource_mut::<NtInput>().take_menu_nav();
             assert_eq!(

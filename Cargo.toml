@@ -36,6 +36,21 @@ repose-text = { path = "../Repos/repose/crates/repose-text", version = "0.30" }
 anyhow = "1"
 log = "0.4"
 
+[patch.crates-io]
+repose-core = { path = "../Repos/repose/crates/repose-core" }
+repose-ui = { path = "../Repos/repose/crates/repose-ui" }
+repose-canvas = { path = "../Repos/repose/crates/repose-canvas" }
+repose-render-wgpu = { path = "../Repos/repose/crates/repose-render-wgpu" }
+repose-text = { path = "../Repos/repose/crates/repose-text" }
+repose-app = { path = "../Repos/repose/crates/repose-app" }
+repose-platform = { path = "../Repos/repose/crates/repose-platform" }
+repose-tree = { path = "../Repos/repose/crates/repose-tree" }
+repose-devtools = { path = "../Repos/repose/crates/repose-devtools" }
+repose-navigation = { path = "../Repos/repose/crates/repose-navigation" }
+repose-material = { path = "../Repos/repose/crates/repose-material" }
+repose-docking = { path = "../Repos/repose/crates/repose-docking" }
+repose-macros = { path = "../Repos/repose/crates/repose-macros" }
+
 [dev-dependencies]
 # (empty: offscreen pixel proofs use the main `repose-render-wgpu` dep,
 # same pattern as repame-sprite's own batch tests).
