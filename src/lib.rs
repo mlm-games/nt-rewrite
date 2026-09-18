@@ -1540,11 +1540,11 @@ impl App {
     }
 
     /// Decode the live `sprCrosshair` frame + `opt_cursorcol` tint into
-    /// the hardware cursor payload (`cursor_img`). Keyed on
-    /// (frame, tint bits, strip pixel hash) so the runner's OS handle
-    /// rebuilds only when the art actually changes. GML draws the raw
-    /// strip cell at GUI mouse (`Draw_75`, no lerp, alpha 1); the
-    /// hotspot is the catalog origin (crosshair strips center on
+    /// the hardware cursor payload (`cursor_img`). The mechanical pixel
+    /// work lives in [`repame_sprite::cursor_frame`]; this owns only
+    /// settings reads, file IO, and the `cursor_img` cache. GML draws
+    /// the raw strip cell at GUI mouse (`Draw_75`, no lerp, alpha 1);
+    /// the hotspot is the catalog origin (crosshair strips center on
     /// (8,8)). Missing assets clear the payload — callers fall back to
     /// `Hidden` (the old software path is gone).
     ///
@@ -1568,7 +1568,6 @@ impl App {
             return;
         };
         let frames = crate::render::strip_frames_pub(assets, "images/sprCrosshair.png").max(1) as i32;
-        let frame = frame.clamp(0, frames - 1);
         let path = dir.join("images").join("sprCrosshair.png");
         let Ok((sw, sh, rgba)) = crate::render::decode_png(&path) else {
             self.cursor_img = None;
@@ -1580,79 +1579,42 @@ impl App {
             self.cursor_img_key = None;
             return;
         };
-        let (cw, ch) = (def.w.max(1), def.h.max(1));
-        if sw < cw * (frame as u32 + 1) || sh < ch {
-            self.cursor_img = None;
-            self.cursor_img_key = None;
-            return;
-        }
-        let tint_u8 = [
-            (tint[0].clamp(0.0, 1.0) * 255.0) as u32,
-            (tint[1].clamp(0.0, 1.0) * 255.0) as u32,
-            (tint[2].clamp(0.0, 1.0) * 255.0) as u32,
-        ];
-        let mut h: u64 = 0xcbf29ce484222325;
-        for b in rgba.iter().copied() {
-            h ^= b as u64;
-            h = h.wrapping_mul(0x100000001b3);
-        }
         let mag = (self.view_density.max(1e-6)
             / crate::render::gml_view_scale(self.view_viewport_dp).max(1e-6))
         .round()
         .clamp(1.0, 8.0) as u32;
-        let key = (frame, tint_u8, h, mag);
-        if self.cursor_img_key == Some(key) {
-            return;
-        }
-        let fx = (frame as u32 * cw) as usize;
-        let (dw, dh) = (cw * mag, ch * mag);
-        if dw > 2048 || dh > 2048 {
-            self.cursor_img = None;
-            self.cursor_img_key = None;
-            return;
-        }
-        let mut px = Vec::with_capacity((dw * dh * 4) as usize);
-        for row in 0..ch {
-            let start = ((row * sw) as usize + fx) * 4;
-            let end = start + (cw as usize) * 4;
-            let Some(cell) = rgba.get(start..end) else {
-                self.cursor_img = None;
-                self.cursor_img_key = None;
-                return;
-            };
-            let mut mag_row = Vec::with_capacity((cw * mag * 4) as usize);
-            for pix in cell.chunks_exact(4) {
-                let t = [
-                    (pix[0] as u32 * tint_u8[0] / 255) as u8,
-                    (pix[1] as u32 * tint_u8[1] / 255) as u8,
-                    (pix[2] as u32 * tint_u8[2] / 255) as u8,
-                    pix[3],
-                ];
-                for _ in 0..mag {
-                    mag_row.extend_from_slice(&t);
+        let Some(built) = repame_sprite::cursor_frame(
+            &rgba,
+            sw,
+            sh,
+            frames as u32,
+            frame,
+            (def.w, def.h),
+            (def.xorigin, def.yorigin),
+            tint,
+            mag,
+            {
+                let mut h: u64 = 0xcbf29ce484222325;
+                for b in rgba.iter().copied() {
+                    h ^= b as u64;
+                    h = h.wrapping_mul(0x100000001b3);
                 }
-            }
-            for _ in 0..mag {
-                px.extend_from_slice(&mag_row);
-            }
-        }
-        let (w16, h16) = (dw.min(2048) as u16, dh.min(2048) as u16);
-        if dw > 2048 || dh > 2048 {
+                h
+            },
+        ) else {
             self.cursor_img = None;
             self.cursor_img_key = None;
+            return;
+        };
+        if self.cursor_img_key == Some(built.key) {
             return;
         }
         self.cursor_img = Some(std::sync::Arc::new(repose_core::CustomCursorImage {
-            rgba: px.into(),
-            size: [w16, h16],
-            hotspot: [
-                ((def.xorigin * mag as f32).round().clamp(0.0, (w16.saturating_sub(1)) as f32))
-                    as u16,
-                ((def.yorigin * mag as f32).round().clamp(0.0, (h16.saturating_sub(1)) as f32))
-                    as u16,
-            ],
+            rgba: built.rgba.into(),
+            size: built.size,
+            hotspot: built.hotspot,
         }));
-        self.cursor_img_key = Some(key);
+        self.cursor_img_key = Some(built.key);
     }
 
     /// Stage one gamepad snapshot for this tick (shells map
