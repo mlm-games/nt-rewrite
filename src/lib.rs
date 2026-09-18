@@ -30,15 +30,15 @@
 //! assets the game still runs: placeholder quads stand in for sprites and
 //! no system depends on art.
 //!
-//! Input-event mapping (this repose version has no per-frame key polling:
-//! [`Scheduler`]/[`RenderContext`] carry no input state; keys arrive via
-//! `Modifier::on_key_event` on the focused root, pointer clicks via the
-//! viewport `on_event` [`PickEvent`], both through the pilot-style raw-pointer
-//! staging pattern):
+//! Input-event mapping (keys arrive via `Modifier::on_key_event` on the
+//! focused root, pointer clicks via the viewport `on_event`
+//! [`PickEvent`] — whose `Press`/`Click` now carry their
+//! [`PointerButton`], so no parallel root button handlers are needed —
+//! staged into the sim through `feed_input`):
 //! - WASD/arrows -> move, mouse cursor position -> aim (every frame),
 //!   Space / left-click -> fire, Shift / right-click -> ability+spec
-//!   (GML `spec` on `mb_right`; Shift synthesizes the same codes from
-//!   `KeyEvent.modifiers`), E/F/Q/G/Tab/Enter -> interact/confirm,
+//!   (GML `spec` on `mb_right`; Shift arrives as its own `Key`
+//!   variants now), E/F/Q/G/Tab/Enter -> interact/confirm,
 //!   1-5 -> weapon slots / mutation picks / title cursor / main-menu+
 //!   pause rows, Left/Right arrows -> title cursor + mutation highlight,
 //!   Up/Down (+Left/Right) -> main-menu cursor + settings cursor/values,
@@ -48,11 +48,9 @@
 //!   right-click in settings/credits -> Back (GML `BackButton`
 //!   `mb_right`), Space on title -> loadout panel, Esc -> pause toggle
 //!   (+ overlay unwind + main-menu overlay close), R -> game-over retry.
-//! - NOT wired (needs shell services this repose version lacks): held-mouse
-//!   continuous fire (clicks are single-frame edges; hover aims every
-//!   frame), gamepad sticks/triggers (buttons/axes drain through
-//!   `stage_gamepad`), text entry for profile/color inputs (buttons only;
-//!   color cycles presets), key rebinding (REMAP screen is display-only).
+//! - NOT wired: text entry for profile/color inputs (buttons only;
+//!   color cycles presets). Key rebinding works through the REMAP
+//!   capture; gamepad sticks/triggers drain through `stage_gamepad`.
 //!
 //! Fidelity notes: view-layer camera smoothing never feeds back into the
 //! sim; [`SpiralCtl`] steps at the fixed cadence inside [`App::advance`]
@@ -75,7 +73,7 @@ use repame_sprite::{
 use repose_canvas::Embedded;
 use repose_core::PaddingValues;
 use repose_core::input::{
-    Key, KeyEvent, KeyEventType, PointerButton, PointerEvent, PointerEventKind,
+    Key, KeyEvent, KeyEventType, PointerButton, PointerEvent,
 };
 use repose_core::prelude::{AlignItems, Modifier};
 use repose_core::{
@@ -94,7 +92,7 @@ use crate::input::{
 };
 use crate::render::{
     ATLAS_PAGES, ATLAS_SIZE, CamPoi, CamStepInput, GmlCamera, RenderAssets, Z_BLOOM, Z_CROSSHAIR,
-    Z_FAINTED, Z_FOG, Z_FX, Z_HUD, Z_MENU, Z_PORTAL_INDICATOR, Z_SHADOW, Z_SIDEART,
+    Z_CURSOR, Z_FAINTED, Z_FOG, Z_FX, Z_HUD, Z_MENU, Z_PORTAL_INDICATOR, Z_SHADOW, Z_SIDEART,
     Z_SPIRAL_FIGURES, Z_SPLASH, background_color, bloom_sprites, cam_viewdist_for,
     crosshair_sprites, decode_png, fainted_bar_sprites, fog_sprites, fx_instances, fx_texts,
     gml_camera_step, gml_view_scale, gml_view_size, hud_gui_texts_dp, hud_sprites, menu_gui_texts,
@@ -305,20 +303,16 @@ pub struct App {
     pause_edge: bool,
     restart_edge: bool,
     interact_edge: bool,
-    /// Physical keyboard Shift held (tracked from `KeyEvent.modifiers`;
-    /// `Key` has no Shift variant, so this owns the release edge the
-    /// synthesized [`KeyCode::ShiftLeft`] cannot).
-    shift_held: bool,
     /// Right mouse held (GML `spec`/ability on `mb_right` parity).
     rmb_held: bool,
     /// Left mouse held (GML `fire` on `mb_left` parity): set on primary
     /// pointer-down, cleared on primary pointer-up, so automatic weapons
     /// keep firing while held (clicks alone are single-frame edges).
     lmb_held: bool,
-    /// Right-button down/up edges staged this window. The viewport emits
-    /// buttonless [`PickEvent`]s for right clicks too, so these flags let
-    /// [`App::feed_input`] drop the spurious picks (and route Back over
-    /// settings/credits like GML `BackButton`).
+    /// Right-button down/up edges staged this window. The viewport
+    /// `PickEvent` carries its button, so secondary presses stage here
+    /// directly (and route Back over settings/credits like GML
+    /// `BackButton`).
     rmb_down_edge: bool,
     rmb_up_edge: bool,
     /// Staged gamepad snapshots, one per pad (bevy `sample_input`
@@ -438,7 +432,6 @@ impl App {
             pause_edge: false,
             restart_edge: false,
             interact_edge: false,
-            shift_held: false,
             rmb_held: false,
             lmb_held: false,
             rmb_down_edge: false,
@@ -1131,28 +1124,14 @@ impl App {
     /// board.
     fn handle_key(&mut self, ke: &KeyEvent) {
         let down = matches!(ke.event_type, KeyEventType::Down);
-        // Shift has no `Key` variant, but every `KeyEvent` carries
-        // `modifiers.shift`: synthesize the `ShiftLeft` codes bevy
-        // `sample_input` reads (ability/spec) from it. Release clears
-        // unless the right mouse button holds the shared code.
-        if ke.modifiers.shift {
-            self.shift_held = true;
-            if down && !ke.is_repeat && !self.held.contains(&KeyCode::ShiftLeft) {
-                self.held.insert(KeyCode::ShiftLeft);
-                self.edges.push(KeyCode::ShiftLeft);
-            }
-        } else {
-            self.shift_held = false;
-            if !self.rmb_held {
-                self.held.remove(&KeyCode::ShiftLeft);
-            }
-        }
         match &ke.key {
             // Esc / Enter / R stage ONLY via the scoped global shortcut
             // map (`nt_shortcuts::map` + runtime `dispatch_action`). No
             // direct staging here: this bubble return must stay a no-op
             // for them so the shortcut path has single ownership.
             Key::Escape | Key::Enter => {}
+            Key::ShiftLeft => self.stage_code(KeyCode::ShiftLeft, down, ke.is_repeat),
+            Key::ShiftRight => self.stage_code(KeyCode::ShiftRight, down, ke.is_repeat),
             Key::Space => self.stage_code(KeyCode::Space, down, ke.is_repeat),
             Key::Tab => self.stage_code(KeyCode::Tab, down, ke.is_repeat),
             Key::ArrowUp => self.stage_code(KeyCode::ArrowUp, down, ke.is_repeat),
@@ -1242,7 +1221,6 @@ impl App {
         if !focused {
             self.held.clear();
             self.edges.clear();
-            self.shift_held = false;
             self.lmb_held = false;
             self.rmb_held = false;
         }
@@ -1261,8 +1239,8 @@ impl App {
 
     /// REMAP capture: the next pressed input resolves the pending
     /// rebind (`Key[$ key][type] = k`, `Other_10:374-404`). Mouse
-    /// buttons capture from the viewport press path (`lmb_down` /
-    /// `rmb_down`); keys capture here and in `stage_physical`.
+    /// buttons capture from the viewport press path (`pick_down`);
+    /// keys capture here and in `stage_physical`.
     /// Returns `true` while a capture is armed (callers skip normal
     /// staging so the capture key does not fire gameplay).
     pub(crate) fn capture_armed(&self) -> bool {
@@ -1318,6 +1296,14 @@ impl App {
                 repose_core::input::Key::Escape,
                 repose_core::input::Modifiers::default(),
             ),
+            repose_core::input::Key::ShiftLeft => repose_core::shortcuts::KeyChord::new(
+                repose_core::input::Key::ShiftLeft,
+                repose_core::input::Modifiers::default(),
+            ),
+            repose_core::input::Key::ShiftRight => repose_core::shortcuts::KeyChord::new(
+                repose_core::input::Key::ShiftRight,
+                repose_core::input::Modifiers::default(),
+            ),
             repose_core::input::Key::Character(c) => repose_core::shortcuts::KeyChord::new(
                 repose_core::input::Key::Character(c.to_ascii_lowercase()),
                 repose_core::input::Modifiers::default(),
@@ -1350,6 +1336,8 @@ impl App {
         let key = match name {
             "Space" => repose_core::input::Key::Space,
             "Tab" => repose_core::input::Key::Tab,
+            "ShiftLeft" => repose_core::input::Key::ShiftLeft,
+            "ShiftRight" => repose_core::input::Key::ShiftRight,
             "ArrowUp" => repose_core::input::Key::ArrowUp,
             "ArrowDown" => repose_core::input::Key::ArrowDown,
             "ArrowLeft" => repose_core::input::Key::ArrowLeft,
@@ -1420,50 +1408,36 @@ impl App {
         self.save_now();
     }
 
-    /// Right mouse button down (root pointer handler, `Secondary` only):
-    /// GML `spec` on `mb_right` shares the synthesized [`KeyCode::ShiftLeft`]
-    /// channel so `sample_keyboard` raises spec/ability through the bevy
-    /// path. The viewport also stages a buttonless pick for the press;
-    /// [`App::feed_input`] drops it via [`App::rmb_down_edge`].
-    fn rmb_down(&mut self) {
+    /// Viewport mouse-button down: secondary stages the RMB edge
+    /// (GML `spec` / menu Back; the sampler reads it through the
+    /// `MouseState::right_*` channel), primary latches `lmb_held` so
+    /// automatic weapons keep firing while held. A pending REMAP
+    /// capture eats the press instead (GML captures `mb_left` /
+    /// `mb_right` as the new binding).
+    fn pick_down(&mut self, button: PointerButton) {
+        let left = button == PointerButton::Primary;
         if self.capture_armed() {
-            self.capture_mouse_press(false);
+            self.capture_mouse_press(left);
             return;
         }
-        if !self.held.contains(&KeyCode::ShiftLeft) {
-            self.held.insert(KeyCode::ShiftLeft);
-            self.edges.push(KeyCode::ShiftLeft);
+        if left {
+            self.lmb_held = true;
+            return;
         }
-        self.rmb_down_edge = true;
+        self.rmb_down_edge = !self.rmb_held;
         self.rmb_held = true;
     }
 
-    /// Right mouse button up: release the shared code unless the
-    /// physical Shift key is still down.
-    fn rmb_up(&mut self) {
-        self.rmb_held = false;
-        self.rmb_up_edge = true;
-        if !self.shift_held {
-            self.held.remove(&KeyCode::ShiftLeft);
+    /// Viewport mouse-button release: the `Click` up-edge carries the
+    /// same button, so the held latch clears here (the polled snapshot
+    /// in `feed_polled` repairs a release outside the window).
+    fn pick_up(&mut self, button: PointerButton) {
+        if button == PointerButton::Primary {
+            self.lmb_held = false;
+        } else {
+            self.rmb_held = false;
+            self.rmb_up_edge = true;
         }
-    }
-
-    /// Left mouse button down (root pointer handler, `Primary` only):
-    /// latches [`App::lmb_held`] so automatic weapons keep firing while
-    /// held. The viewport `Press` still stages the aim/fire click edge.
-    /// A pending REMAP capture eats the press instead (GML captures
-    /// `mb_left` as the new binding).
-    fn lmb_down(&mut self) {
-        if self.capture_armed() {
-            self.capture_mouse_press(true);
-            return;
-        }
-        self.lmb_held = true;
-    }
-
-    /// Left mouse button up: release the held latch.
-    fn lmb_up(&mut self) {
-        self.lmb_held = false;
     }
 
     /// Stage the cursor's window-physical px position (root
@@ -1620,9 +1594,6 @@ impl App {
         }
         if !sched.mouse_secondary {
             self.rmb_held = false;
-            if !self.shift_held {
-                self.held.remove(&KeyCode::ShiftLeft);
-            }
         }
     }
 
@@ -1753,11 +1724,11 @@ impl App {
                     .push_menu_nav(dv, dh);
             }
         }
-        // Right-button press: no viewport pick is staged for it (RMB is
-        // handled via `rmb_down_edge` only), so there is nothing to drop
-        // here. Each arm below decides what RMB means (Back over
-        // settings/credits, silent elsewhere) without eating a coincident
-        // left click.
+        // Right-button press: staged straight from the viewport's
+        // buttoned `PickEvent` (see the viewport `on_event` closures),
+        // so there is nothing to drop here. Each arm below decides
+        // what RMB means (Back over settings/credits, silent
+        // elsewhere) without eating a coincident left click.
         let rmb_down = std::mem::replace(&mut self.rmb_down_edge, false);
         // Release stages no pick; drain the flag so it never leaks into
         // a later window.
@@ -1793,12 +1764,10 @@ impl App {
                 && state != AppState::Loading,
             ..MouseState::default()
         };
-        // Right-button gameplay pulses: wire the shell RMB latch into
-        // the sampler (GML `spec` on `mb_right` parity). The keymap
-        // `Spec` row is mouse-Secondary, but `entry_held/pressed` read
-        // it through `MouseState::right_*` — without this the RMB edge
-        // only injects the ShiftLeft fallback, which the sampler then
-        // ignores in favour of the (dead) mouse channel.
+        // Right-button gameplay pulses: the viewport `PickEvent` button
+        // stages `rmb_down_edge`/`rmb_held` directly, and the keymap
+        // `Spec` row is mouse-Secondary, read through
+        // `MouseState::right_*` below.
         let mouse = MouseState {
             right_held: self.rmb_held,
             right_pressed: rmb_down,
@@ -1856,10 +1825,11 @@ impl App {
                 sample_touch(&contacts, self.view_width / d, &mut input);
             }
         }
-        // Right-click shares the `ShiftLeft` spec channel (GML `spec`
-        // on `mb_right`); on Title that channel toggles loadout/hardmode,
-        // so a right-click would toggle panels as a side effect. Drop
-        // the pulse — Back only travels via Esc here.
+        // Right-click and Shift share the `spec` action (GML `spec`
+        // on `mb_right` plus the Shift keyboard fallback); on Title
+        // that action toggles loadout/hardmode, so a right-click
+        // would toggle panels as a side effect. Drop the pulse —
+        // Back only travels via Esc here.
         if rmb_down && state == AppState::Title {
             self.sim.world.resource_mut::<NtInput>().take_spec_pressed();
         }
@@ -2490,7 +2460,9 @@ impl App {
             // show the OS cursor) and on touch input (no cursor at all).
             // Keyboard-driven local (`opt_keyboard && !opt_gamepad`,
             // the same `keyboard_local` law as `crosshair_sprites`):
-            // gamepad mode draws the lerped crosshair instead.
+            // gamepad mode draws the lerped crosshair instead. Draw_75
+            // runs after every other GUI stage, so the cursor stamps
+            // the topmost rung — above menus, sideart, and HUD sprites.
             let keyboard_local = self
                 .sim
                 .world
@@ -2499,34 +2471,39 @@ impl App {
                 .unwrap_or(true);
             let menu_crosshair =
                 keyboard_mode && keyboard_local && !paused && overlay == OverlayMenu::None;
-            if menu_crosshair
-                && let Some(pos) = self.live_cursor_world()
-            {
+            if menu_crosshair && let Some(pos) = self.live_cursor_world() {
                 let frame = self
                     .sim
                     .world
                     .get_resource::<crate::savedata_part::SaveData>()
                     .map(|sv| sv.settings.crosshair as i32)
                     .unwrap_or(0);
-                let frames =
-                    crate::render::strip_frames_pub(assets, "images/sprCrosshair.png").max(1)
-                        as i32;
+                let frames = crate::render::strip_frames_pub(assets, "images/sprCrosshair.png")
+                    .max(1) as i32;
+                let tint = self
+                    .sim
+                    .world
+                    .get_resource::<crate::savedata_part::SaveData>()
+                    .map(|sv| sv.settings.cursorcol_rgba())
+                    .unwrap_or([1.0, 1.0, 1.0, 1.0]);
                 if let Some(sp) = assets.sprite_for(
                     "images/sprCrosshair.png",
                     frame.clamp(0, frames - 1),
                     pos,
                     false,
                     0.0,
-                    [1.0, 1.0, 1.0, 1.0],
+                    tint,
                 ) {
                     let mut title_cross = vec![sp];
-                    stamp_z(&mut title_cross, Z_MENU);
+                    stamp_z(&mut title_cross, Z_CURSOR);
                     s.extend(title_cross);
                 }
             }
             // Sideart chrome around the view (GML `UberCont/Draw_74`:
-            // over everything, game and menus alike — but never over a
-            // generation screen, whose draw scripts own the full frame).
+            // GUI Begin — before the GUI-64 HUD/menus and the Draw_75
+            // cursor, so it rungs above the room chrome but below every
+            // HUD/menu/cursor sprite; never over a generation screen,
+            // whose draw scripts own the full frame).
             if playing {
                 let mut side = sideart_sprites(
                     &mut self.sim.world,
@@ -2749,17 +2726,20 @@ impl App {
                 // shape as the rozvp pilot runner).
                 let app = unsafe { &mut *app_ptr };
                 match ev {
-                    // Primary-only fire clicks: the viewport reports
-                    // buttonless picks, so a right-button press would
-                    // otherwise stage a spurious fire edge (RMB must
-                    // only raise spec/ability via `rmb_down`).
-                    PickEvent::Press { world, screen } | PickEvent::Click { world, screen } => {
-                        if app.rmb_held {
-                            app.rmb_down_edge = false;
-                        } else {
-                            app.lmb_down();
+                    PickEvent::Press {
+                        world,
+                        screen,
+                        button,
+                    } => {
+                        app.pick_down(button);
+                        if button == PointerButton::Primary {
                             app.stage_click(world, screen)
                         }
+                    }
+                    PickEvent::Click {
+                        button, ..
+                    } => {
+                        app.pick_up(button);
                     }
                     PickEvent::Hover { world, screen } => app.stage_hover(world, screen),
                     // Touch contacts (screen px, y-down) feed bevy's
@@ -2779,13 +2759,20 @@ impl App {
                 // SAFETY: synchronous compose-time dispatch only.
                 let app = unsafe { &mut *app_ptr };
                 match ev {
-                    PickEvent::Press { world, screen } | PickEvent::Click { world, screen } => {
-                        if app.rmb_held {
-                            app.rmb_down_edge = false;
-                        } else {
-                            app.lmb_down();
+                    PickEvent::Press {
+                        world,
+                        screen,
+                        button,
+                    } => {
+                        app.pick_down(button);
+                        if button == PointerButton::Primary {
                             app.stage_click(world, screen)
                         }
+                    }
+                    PickEvent::Click {
+                        button, ..
+                    } => {
+                        app.pick_up(button);
                     }
                     PickEvent::Hover { world, screen } => app.stage_hover(world, screen),
                     PickEvent::TouchDown { id, screen } => {
@@ -2861,13 +2848,12 @@ impl App {
                 false
             });
         // Right mouse button (GML `mb_right` ability / menu Back): the
-        // viewport reports buttonless picks, so stage spec here from the
-        // raw event (the viewport's spurious pick is dropped in
-        // `feed_input` via the rmb edges).
-        let rmb_ptr_down = self as *mut App;
-        let rmb_ptr_up = self as *mut App;
-        let lmb_ptr_down = self as *mut App;
-        let lmb_ptr_up = self as *mut App;
+        // viewport `PickEvent` button stages `rmb_down`/`lmb_down`
+        // directly, so only the held latches (`rmb_held` for spec
+        // hold, `lmb_held` for autofire) are repaired here from the
+        // raw events. The cursor move stays (free moves dispatch only
+        // to the topmost region, so the root handler alone misses
+        // them — see `stage_hover`).
         let cursor_ptr = self as *mut App;
         let root_mod = root_mod
             // Live cursor in window-physical px (bevy `player_aim`
@@ -2883,30 +2869,6 @@ impl App {
                     let app = unsafe { &mut *cursor_ptr };
                     let p = ev.position_in_window();
                     app.cursor_move(Vec2::new(p.x, p.y));
-                }
-            })
-            .on_pointer_down(move |ev: PointerEvent| {
-                if matches!(ev.event, PointerEventKind::Down(PointerButton::Secondary)) {
-                    // SAFETY: synchronous compose-time dispatch only.
-                    let app = unsafe { &mut *rmb_ptr_down };
-                    app.rmb_down();
-                }
-                if matches!(ev.event, PointerEventKind::Down(PointerButton::Primary)) {
-                    // SAFETY: synchronous compose-time dispatch only.
-                    let app = unsafe { &mut *lmb_ptr_down };
-                    app.lmb_down();
-                }
-            })
-            .on_pointer_up(move |ev: PointerEvent| {
-                if matches!(ev.event, PointerEventKind::Up(PointerButton::Secondary)) {
-                    // SAFETY: synchronous compose-time dispatch only.
-                    let app = unsafe { &mut *rmb_ptr_up };
-                    app.rmb_up();
-                }
-                if matches!(ev.event, PointerEventKind::Up(PointerButton::Primary)) {
-                    // SAFETY: synchronous compose-time dispatch only.
-                    let app = unsafe { &mut *lmb_ptr_up };
-                    app.lmb_up();
                 }
             });
 

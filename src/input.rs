@@ -208,11 +208,11 @@ pub enum KeyCode {
 
 /// Physical key name (`KeyCode::KeyW`, `Digit1`, `Space`, ...) to the
 /// backend-neutral [`KeyCode`]. Returns `None` for keys the sim never
-/// reads. Shift is intentionally absent: winit reports left/right
-/// Shift as distinct codes and the port merges them into the shared
-/// spec channel from `modifiers.shift` instead.
+/// reads.
 pub fn keycode_for_physical(name: &str) -> Option<KeyCode> {
     Some(match name {
+        "ShiftLeft" => KeyCode::ShiftLeft,
+        "ShiftRight" => KeyCode::ShiftRight,
         "KeyA" => KeyCode::KeyA,
         "KeyB" => KeyCode::KeyB,
         "KeyC" => KeyCode::KeyC,
@@ -381,11 +381,18 @@ pub fn sample_keyboard_mapped(
                 let pick = state.map.active(&crate::keymap::NtAction::Pick, false);
                 let fire_edge = entry_pressed(&fire, just_pressed, mouse, true);
                 let spec_edge = entry_pressed(&spec, just_pressed, mouse, false);
+                let shift_held = held.contains(&KeyCode::ShiftLeft)
+                    || held.contains(&KeyCode::ShiftRight);
+                let shift_edge = just_pressed.contains(&KeyCode::ShiftLeft)
+                    || just_pressed.contains(&KeyCode::ShiftRight);
                 (
                     entry_held(&fire, held, mouse) || mouse.left_held || fire_edge,
                     fire_edge || mouse.left_pressed,
-                    entry_held(&spec, held, mouse) || mouse.right_held || spec_edge,
-                    spec_edge || mouse.right_pressed,
+                    entry_held(&spec, held, mouse)
+                        || mouse.right_held
+                        || spec_edge
+                        || shift_held,
+                    spec_edge || mouse.right_pressed || shift_edge,
                     entry_pressed(&swap, just_pressed, mouse, true),
                     entry_pressed(&pick, just_pressed, mouse, true),
                 )
@@ -552,6 +559,8 @@ fn keycode_for_chord(key: &repose_core::input::Key) -> Option<KeyCode> {
         Key::Character('9') => KeyCode::Digit9,
         Key::Character('`') => KeyCode::Backquote,
         Key::Space => KeyCode::Space,
+        Key::ShiftLeft => KeyCode::ShiftLeft,
+        Key::ShiftRight => KeyCode::ShiftRight,
         Key::Tab => KeyCode::Tab,
         Key::ArrowUp => KeyCode::ArrowUp,
         Key::ArrowDown => KeyCode::ArrowDown,
@@ -562,21 +571,6 @@ fn keycode_for_chord(key: &repose_core::input::Key) -> Option<KeyCode> {
 }
 
 fn entry_held_pos(entry: &repame_input::KeymapEntry, held: &HashSet<KeyCode>) -> bool {
-    // Shift-`spec` parity: a rebound Shift key is synthesized from
-    // `modifiers.shift` into the shared channel, so a key entry for
-    // Shift reads the synthesized level.
-    if matches!(
-        entry,
-        repame_input::KeymapEntry::Key(chord)
-        if chord.modifiers.shift
-            && matches!(
-                chord.key,
-                repose_core::input::Key::Character(' ')
-                    | repose_core::input::Key::Space
-            )
-    ) {
-        return held.contains(&KeyCode::ShiftLeft) || held.contains(&KeyCode::ShiftRight);
-    }
     keycode_for_entry(entry).is_some_and(|code| held.contains(&code))
 }
 
@@ -612,22 +606,7 @@ fn entry_pressed(
                 mouse.right_pressed
             }
         }
-        _ => {
-            if matches!(
-                entry,
-                KeymapEntry::Key(chord)
-                if chord.modifiers.shift
-                    && matches!(
-                        chord.key,
-                        repose_core::input::Key::Character(' ')
-                            | repose_core::input::Key::Space
-                    )
-            ) {
-                return just.contains(&KeyCode::ShiftLeft)
-                    || just.contains(&KeyCode::ShiftRight);
-            }
-            keycode_for_entry(entry).is_some_and(|code| just.contains(&code))
-        }
+        _ => keycode_for_entry(entry).is_some_and(|code| just.contains(&code)),
     }
 }
 

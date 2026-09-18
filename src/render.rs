@@ -1037,18 +1037,28 @@ pub fn healthcol_dark(c: [f32; 4]) -> [f32; 4] {
 /// overlap is deterministic. Edge texels stretch ~3%: invisible.
 pub const GRID_OVERLAP: f32 = 1.0;
 
-/// Sprite z-ladder (GML `__global_object_depths` draw order verbatim:
-/// higher GM depth draws first = further back, so the port's `z` runs
-/// the other way — larger `z` draws on top; the engine stable-sorts by
-/// `(blend, z, page)`, keeping push order on ties).
+/// Sprite z-ladder (GML `__global_object_depths` draw order for the
+/// `Draw_0` stage verbatim: higher GM depth draws first = further back,
+/// so the port's `z` runs the other way — larger `z` draws on top; the
+/// engine stable-sorts by `(blend, z, page)`, keeping push order on
+/// ties).
 ///
 /// GM order (back → front): Floor(10) → Detail(8) → BackCont-shadows(5)
 /// → Corpse(1) → Wall/shots(0) → Player/Ally(-2) → Portal(-3) →
 /// SubTopCont wall-tops/bloom(-6) → TopCont fog/crosshair/revive(-15) →
-/// SpiralCont figures(-101) → Draw-GUI HUD text/menus → Menu(-1001).
+/// SpiralCont figures(-101) → Draw-GUI chain (GUI Begin 74 → GUI 64 →
+/// GUI End 75, in stage order, ignoring instance depth) → Menu(-1001).
 /// The world batch keeps its internal push order at 0 (bevy parity —
 /// untouched); every chrome layer above it stamps one rung so atlas
 /// page can never lottery a HUD bar under a floor tile again.
+///
+/// Draw-GUI stages vs sprite rungs: GML `UberCont/Draw_74`
+/// (`scrDrawSidearts`) runs BEFORE the GUI-64 HUD text, while
+/// `UberCont/Draw_75` (the raw `sprCrosshair` cursor) runs AFTER it —
+/// the cursor is topmost by pipeline stage and has no z at all. The
+/// port keeps both as sprite rungs with the same ordering: sideart
+/// above the room chrome but below HUD text/menus, the cursor above
+/// everything (`Z_CURSOR` is the highest rung).
 pub const Z_SHADOW: f32 = -10.0;
 pub const Z_WORLD: f32 = 0.0;
 pub const Z_FX: f32 = 1.0;
@@ -1058,10 +1068,11 @@ pub const Z_CROSSHAIR: f32 = 4.0;
 pub const Z_FAINTED: f32 = 5.0;
 pub const Z_PORTAL_INDICATOR: f32 = 6.0;
 pub const Z_SPIRAL_FIGURES: f32 = 7.0;
+pub const Z_SIDEART: f32 = 8.0;
 pub const Z_HUD: f32 = 10.0;
 pub const Z_SPLASH: f32 = 15.0;
 pub const Z_MENU: f32 = 20.0;
-pub const Z_SIDEART: f32 = 30.0;
+pub const Z_CURSOR: f32 = 30.0;
 
 /// Stamp a layer rung over a finished push batch (keeps the producer's
 /// internal push order: the engine sort is stable on `(blend, z, page)`
@@ -1528,9 +1539,10 @@ pub fn sideart_tiles(view_w: f32, view_h: f32) -> Vec<[f32; 2]> {
 }
 
 /// Sideart chrome around the view (GML `scrDrawSidearts`, drawn from
-/// `UberCont/Draw_74` over everything): `sprSideArt` frame
-/// `opt_sideart` at every [`sideart_tiles`] position, mapped through
-/// the view like the menu art (the port canvas IS the view).
+/// `UberCont/Draw_74` — GUI Begin, i.e. BEFORE the GUI-64 HUD text and
+/// the Draw_75 cursor): `sprSideArt` frame `opt_sideart` at every
+/// [`sideart_tiles`] position, mapped through the view like the menu
+/// art (the port canvas IS the view).
 pub fn sideart_sprites(
     world: &mut World,
     assets: &RenderAssets,
@@ -8866,10 +8878,11 @@ mod verbatim_ui_layers {
         assert!(Z_CROSSHAIR < Z_FAINTED);
         assert!(Z_FAINTED < Z_PORTAL_INDICATOR);
         assert!(Z_PORTAL_INDICATOR < Z_SPIRAL_FIGURES);
-        assert!(Z_SPIRAL_FIGURES < Z_HUD);
+        assert!(Z_SPIRAL_FIGURES < Z_SIDEART);
+        assert!(Z_SIDEART < Z_HUD);
         assert!(Z_HUD < Z_SPLASH);
         assert!(Z_SPLASH < Z_MENU);
-        assert!(Z_MENU < Z_SIDEART);
+        assert!(Z_MENU < Z_CURSOR);
     }
 
     /// `stamp_z` assigns the rung without disturbing intra-layer push

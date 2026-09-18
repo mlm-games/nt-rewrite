@@ -551,6 +551,26 @@ impl SettingsData {
         }
         [252.0 / 255.0, 56.0 / 255.0, 0.0, 1.0]
     }
+
+    /// GML `UberCont.opt_cursorcol` (`scrOptionsUpdate:92-104`): the
+    /// player color, or `c_white` when unset (GML leaves the 0 black
+    /// only on `opt_healthcol`). Tints the `UberCont/Draw_75` raw
+    /// cursor the same way `healthcol_rgba` tints the health bar.
+    pub fn cursorcol_rgba(&self) -> [f32; 4] {
+        let hex = self.player_color_hex.trim_start_matches('#');
+        if hex.len() == 6 {
+            if let (Ok(r), Ok(g), Ok(b)) = (
+                u8::from_str_radix(&hex[0..2], 16),
+                u8::from_str_radix(&hex[2..4], 16),
+                u8::from_str_radix(&hex[4..6], 16),
+            ) {
+                if r != 0 || g != 0 || b != 0 {
+                    return [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0];
+                }
+            }
+        }
+        [1.0, 1.0, 1.0, 1.0]
+    }
 }
 
 impl Default for SaveData {

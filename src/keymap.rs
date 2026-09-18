@@ -97,9 +97,9 @@ fn chord_shift(c: char) -> KeymapEntry {
 }
 
 /// GML `scrKeymapsSetup` defaults verbatim, minus the debug `horn`
-/// row: `spec` is RMB-or-Shift (GML default `mb_right`; Shift is the
-/// keyboard fallback this port synthesizes since `Key` has no Shift
-/// variant), `swap` is Space, `pick` is E.
+/// row: `spec` is RMB (GML default `mb_right`; Shift is the keyboard
+/// fallback the sampler ORs in next to the row), `swap` is Space,
+/// `pick` is E.
 pub fn default_keymap() -> Keymap<NtAction> {
     let mut map = Keymap::new();
     map.set_keyboard(
@@ -143,9 +143,8 @@ pub fn default_keymap() -> Keymap<NtAction> {
         KeymapEntry::Pad(GamepadButton::DPadRight),
     );
     // Shift is the keyboard-side `spec` fallback next to RMB: GML
-    // binds `spec` to `mb_right` only, but the port synthesizes
-    // Shift onto the same channel, so a rebound Shift key must keep
-    // working. OR-matching below covers both.
+    // binds `spec` to `mb_right` only. The sampler ORs the Shift
+    // levels in next to the row, so a rebound Shift key keeps working.
     let _ = chord_shift;
     map
 }
