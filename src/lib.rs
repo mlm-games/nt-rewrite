@@ -73,7 +73,7 @@ use repame_sprite::{
 use repose_canvas::Embedded;
 use repose_core::PaddingValues;
 use repose_core::input::{
-    Key, KeyEvent, KeyEventType, PointerButton, PointerEvent,
+    Key, KeyEvent, KeyEventType, PhysicalKey, PointerButton, PointerEvent,
 };
 use repose_core::prelude::{AlignItems, Modifier};
 use repose_core::{
@@ -92,7 +92,7 @@ use crate::input::{
 };
 use crate::render::{
     ATLAS_PAGES, ATLAS_SIZE, CamPoi, CamStepInput, GmlCamera, RenderAssets, Z_BLOOM, Z_CROSSHAIR,
-    Z_CURSOR, Z_FAINTED, Z_FOG, Z_FX, Z_HUD, Z_MENU, Z_PORTAL_INDICATOR, Z_SHADOW, Z_SIDEART,
+    Z_FAINTED, Z_FOG, Z_FX, Z_HUD, Z_MENU, Z_PORTAL_INDICATOR, Z_SHADOW, Z_SIDEART,
     Z_SPIRAL_FIGURES, Z_SPLASH, background_color, bloom_sprites, cam_viewdist_for,
     crosshair_sprites, decode_png, fainted_bar_sprites, fog_sprites, fx_instances, fx_texts,
     gml_camera_step, gml_view_scale, gml_view_size, hud_gui_texts_dp, hud_sprites, menu_gui_texts,
@@ -235,6 +235,12 @@ pub struct App {
     /// Art dir the catalog loaded from (vortex background textures
     /// decode from here on area switches).
     assets_dir: Option<PathBuf>,
+    /// Decoded hardware cursor (`CursorIcon::Custom` payload) for the
+    /// live `opt_crosshair` frame + `opt_cursorcol` tint. Cached so the
+    /// runner's `create_custom_cursor` handle rebuilds only when the
+    /// art changes (frame/tint/pixels/scale); cleared when assets unload.
+    cursor_img: Option<std::sync::Arc<repose_core::CustomCursorImage>>,
+    cursor_img_key: Option<(i32, [u32; 3], u64, u32)>,
     /// Decoded vortex background textures for `vortex_tex_area`
     /// (slots: spiral, bolt, debris, proto, idpd, idpd2).
     vortex_tex: Vec<VortexTexture>,
@@ -416,6 +422,8 @@ impl App {
             spiral,
             assets: None,
             assets_dir: None,
+            cursor_img: None,
+            cursor_img_key: None,
             vortex_tex: Vec::new(),
             vortex_tex_area: None,
             held: HashSet::new(),
@@ -478,6 +486,8 @@ impl App {
         self.sim.world.insert_resource(catalog);
         self.assets = Some(assets);
         self.assets_dir = Some(dir.to_path_buf());
+        self.cursor_img = None;
+        self.cursor_img_key = None;
         self.vortex_tex.clear();
         self.vortex_tex_area = None;
         Ok(())
@@ -1139,12 +1149,12 @@ impl App {
             Key::ArrowLeft => self.stage_code(KeyCode::ArrowLeft, down, ke.is_repeat),
             Key::ArrowRight => self.stage_code(KeyCode::ArrowRight, down, ke.is_repeat),
             Key::Character(c) => {
-                // Physical position first: the winit `KeyCode` name
-                // (`KeyW`, not `'w'`) owns `held` levels + letter/digit
-                // edges, so non-US layouts move the same way GML's
-                // `ord("W")` does on a US board. The glyph below is
-                // only the fallback for synthetic events (tests).
-                if let Some(name) = ke.physical.as_deref() {
+                // Physical position first: the typed [`PhysicalKey`]
+                // owns `held` levels + letter/digit edges, so non-US
+                // layouts move the same way GML's `ord("W")` does on a
+                // US board. The glyph below is only the fallback for
+                // synthetic events (tests).
+                if let Some(key) = ke.physical {
                     // Capture first, before `stage_physical` can swallow
                     // the press: `stage_physical` returns early while a
                     // capture is armed (the key must not fire gameplay),
@@ -1152,17 +1162,17 @@ impl App {
                     // on the physical path — without this Space could
                     // never rebind.
                     if down && !ke.is_repeat && self.capture_armed() {
-                        self.capture_physical_press(name);
+                        self.capture_physical_press(key);
                         return;
                     }
-                    self.stage_physical(name, down, ke.is_repeat);
+                    self.stage_physical(key, down, ke.is_repeat);
                     return;
                 }
                 let c = c.to_ascii_lowercase();
                 if c == ' ' {
                     self.stage_code(KeyCode::Space, down, ke.is_repeat);
                 } else if c == 'r' {
-                    self.stage_physical("KeyR", down, ke.is_repeat);
+                    self.stage_physical(PhysicalKey::KeyR, down, ke.is_repeat);
                 } else {
                     let _ = c;
                     if down && !ke.is_repeat {
@@ -1181,23 +1191,21 @@ impl App {
         }
     }
 
-    /// Stage one physical key transition by winit `KeyCode` debug name
-    /// (`KeyW`, `Digit1`, `Space`, `Backquote`, ...). Down transitions
-    /// push press edges (deduped against `held`); releases only clear
-    /// `held`.
-    pub fn stage_physical_key(&mut self, name: &str, down: bool) {
-        self.stage_physical(name, down, false);
+    /// Stage one physical key transition. Down transitions push press
+    /// edges (deduped against `held`); releases only clear `held`.
+    pub fn stage_physical_key(&mut self, key: PhysicalKey, down: bool) {
+        self.stage_physical(key, down, false);
     }
 
-    fn stage_physical(&mut self, name: &str, down: bool, is_repeat: bool) {
+    fn stage_physical(&mut self, key: PhysicalKey, down: bool, is_repeat: bool) {
         // Capture first: the remap gesture accepts ANY physical key,
-        // including names with no gameplay `KeyCode` (KeyX etc. never
+        // including keys with no gameplay `KeyCode` (KeyX etc. never
         // reach the table below). GML captures any pressed input.
         if down && !is_repeat && self.capture_armed() {
-            self.capture_physical_press(name);
+            self.capture_physical_press(key);
             return;
         }
-        let Some(code) = crate::input::keycode_for_physical(name) else {
+        let Some(code) = crate::input::keycode_for_physical(key) else {
             return;
         };
         // All edges stage here: focus-routed `handle_key` lands fresh
@@ -1323,26 +1331,27 @@ impl App {
         }
     }
 
-    pub(crate) fn capture_physical_press(&mut self, name: &str) {
+    pub(crate) fn capture_physical_press(&mut self, key: PhysicalKey) {
         use repame_input::KeymapEntry;
         self.sim.world.init_resource::<InputMapState>();
         if !self.capture_armed() {
             return;
         }
-        // Physical name -> KeyChord: explicit special keys first,
+        // Physical position -> KeyChord: explicit special keys first,
         // then the generic `KeyX`/`DigitN` derivation so EVERY key is
         // capturable (GML captures any pressed input; the old table
         // silently swallowed two-thirds of the keyboard).
-        let key = match name {
-            "Space" => repose_core::input::Key::Space,
-            "Tab" => repose_core::input::Key::Tab,
-            "ShiftLeft" => repose_core::input::Key::ShiftLeft,
-            "ShiftRight" => repose_core::input::Key::ShiftRight,
-            "ArrowUp" => repose_core::input::Key::ArrowUp,
-            "ArrowDown" => repose_core::input::Key::ArrowDown,
-            "ArrowLeft" => repose_core::input::Key::ArrowLeft,
-            "ArrowRight" => repose_core::input::Key::ArrowRight,
+        let chord_key = match key {
+            PhysicalKey::Space => repose_core::input::Key::Space,
+            PhysicalKey::Tab => repose_core::input::Key::Tab,
+            PhysicalKey::ShiftLeft => repose_core::input::Key::ShiftLeft,
+            PhysicalKey::ShiftRight => repose_core::input::Key::ShiftRight,
+            PhysicalKey::ArrowUp => repose_core::input::Key::ArrowUp,
+            PhysicalKey::ArrowDown => repose_core::input::Key::ArrowDown,
+            PhysicalKey::ArrowLeft => repose_core::input::Key::ArrowLeft,
+            PhysicalKey::ArrowRight => repose_core::input::Key::ArrowRight,
             _ => {
+                let name = key.name();
                 let tail = name
                     .strip_prefix("Key")
                     .or_else(|| name.strip_prefix("Digit"))
@@ -1362,7 +1371,7 @@ impl App {
                 }
             }
         };
-        let chord = repose_core::shortcuts::KeyChord::new(key, repose_core::input::Modifiers::default());
+        let chord = repose_core::shortcuts::KeyChord::new(chord_key, repose_core::input::Modifiers::default());
         let mut state = self.sim.world.resource_mut::<InputMapState>();
         let Some(capture) = state.capture.clone() else {
             return;
@@ -1530,6 +1539,122 @@ impl App {
         Some(self.cam.dp_to_world_pt(self.view_viewport_dp, extent, dp))
     }
 
+    /// Decode the live `sprCrosshair` frame + `opt_cursorcol` tint into
+    /// the hardware cursor payload (`cursor_img`). Keyed on
+    /// (frame, tint bits, strip pixel hash) so the runner's OS handle
+    /// rebuilds only when the art actually changes. GML draws the raw
+    /// strip cell at GUI mouse (`Draw_75`, no lerp, alpha 1); the
+    /// hotspot is the catalog origin (crosshair strips center on
+    /// (8,8)). Missing assets clear the payload — callers fall back to
+    /// `Hidden` (the old software path is gone).
+    ///
+    /// Size law: GML draws the cell at scale 1 in GUI space
+    /// (`device_mouse_x_to_gui`, GUI stretched over the window), so the
+    /// 16px cell covers `16 * window_w / view_w` screen px (48 at
+    /// 1280x720). The OS cursor buffer is physical px while
+    /// `units_per_pixel` is dp, so magnification is
+    /// `density / units_per_pixel` — not `1 / units_per_pixel`, which
+    /// undersizes the cursor on fractional display scales. The scale
+    /// rides the cache key so resizes and monitor moves re-decode.
+    fn refresh_cursor_img(&mut self, frame: i32, tint: [f32; 4]) {
+        let Some(assets) = self.assets.as_ref() else {
+            self.cursor_img = None;
+            self.cursor_img_key = None;
+            return;
+        };
+        let Some(dir) = self.assets_dir.clone() else {
+            self.cursor_img = None;
+            self.cursor_img_key = None;
+            return;
+        };
+        let frames = crate::render::strip_frames_pub(assets, "images/sprCrosshair.png").max(1) as i32;
+        let frame = frame.clamp(0, frames - 1);
+        let path = dir.join("images").join("sprCrosshair.png");
+        let Ok((sw, sh, rgba)) = crate::render::decode_png(&path) else {
+            self.cursor_img = None;
+            self.cursor_img_key = None;
+            return;
+        };
+        let Some((_, def)) = assets.uv("images/sprCrosshair.png", frame) else {
+            self.cursor_img = None;
+            self.cursor_img_key = None;
+            return;
+        };
+        let (cw, ch) = (def.w.max(1), def.h.max(1));
+        if sw < cw * (frame as u32 + 1) || sh < ch {
+            self.cursor_img = None;
+            self.cursor_img_key = None;
+            return;
+        }
+        let tint_u8 = [
+            (tint[0].clamp(0.0, 1.0) * 255.0) as u32,
+            (tint[1].clamp(0.0, 1.0) * 255.0) as u32,
+            (tint[2].clamp(0.0, 1.0) * 255.0) as u32,
+        ];
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in rgba.iter().copied() {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        let mag = (self.view_density.max(1e-6)
+            / crate::render::gml_view_scale(self.view_viewport_dp).max(1e-6))
+        .round()
+        .clamp(1.0, 8.0) as u32;
+        let key = (frame, tint_u8, h, mag);
+        if self.cursor_img_key == Some(key) {
+            return;
+        }
+        let fx = (frame as u32 * cw) as usize;
+        let (dw, dh) = (cw * mag, ch * mag);
+        if dw > 2048 || dh > 2048 {
+            self.cursor_img = None;
+            self.cursor_img_key = None;
+            return;
+        }
+        let mut px = Vec::with_capacity((dw * dh * 4) as usize);
+        for row in 0..ch {
+            let start = ((row * sw) as usize + fx) * 4;
+            let end = start + (cw as usize) * 4;
+            let Some(cell) = rgba.get(start..end) else {
+                self.cursor_img = None;
+                self.cursor_img_key = None;
+                return;
+            };
+            let mut mag_row = Vec::with_capacity((cw * mag * 4) as usize);
+            for pix in cell.chunks_exact(4) {
+                let t = [
+                    (pix[0] as u32 * tint_u8[0] / 255) as u8,
+                    (pix[1] as u32 * tint_u8[1] / 255) as u8,
+                    (pix[2] as u32 * tint_u8[2] / 255) as u8,
+                    pix[3],
+                ];
+                for _ in 0..mag {
+                    mag_row.extend_from_slice(&t);
+                }
+            }
+            for _ in 0..mag {
+                px.extend_from_slice(&mag_row);
+            }
+        }
+        let (w16, h16) = (dw.min(2048) as u16, dh.min(2048) as u16);
+        if dw > 2048 || dh > 2048 {
+            self.cursor_img = None;
+            self.cursor_img_key = None;
+            return;
+        }
+        self.cursor_img = Some(std::sync::Arc::new(repose_core::CustomCursorImage {
+            rgba: px.into(),
+            size: [w16, h16],
+            hotspot: [
+                ((def.xorigin * mag as f32).round().clamp(0.0, (w16.saturating_sub(1)) as f32))
+                    as u16,
+                ((def.yorigin * mag as f32).round().clamp(0.0, (h16.saturating_sub(1)) as f32))
+                    as u16,
+            ],
+        }));
+        self.cursor_img_key = Some(key);
+    }
+
     /// Stage one gamepad snapshot for this tick (shells map
     /// `repame-shell` `GamepadEvent`s / platform pad state onto
     /// [`GamepadState`]; drained by [`App::feed_input`] in stage order).
@@ -1579,16 +1704,25 @@ impl App {
         self.touch_new.remove(&id);
     }
 
-    /// Sync mouse-button latches against the platform snapshot. The root
-    /// pointer handlers own press edges; the polled set repairs a missed
-    /// up (release outside the window) but never forces a down the
-    /// handlers missed.
+    /// Sync event-staged levels against the platform snapshot
+    /// (`Scheduler::held_keys` + mouse levels). Event handlers own
+    /// press edges; the polled set only repairs what they missed:
+    /// release a key/button the handlers never saw go up (release
+    /// outside the window, swallowed key-up), but never force a down
+    /// the handlers missed. Keyboard and mouse share the rule; Esc/R
+    /// shortcut edges are untouched (shortcuts own those).
     pub fn feed_polled(&mut self, sched: &Scheduler) {
         if !sched.window_focused {
             self.set_window_focused(false);
             return;
         }
         self.window_focused = true;
+        repame_input::reconcile_held(
+            &mut self.held,
+            &sched.held_keys,
+            crate::input::keycode_for_physical,
+            crate::input::physical_keys_for_code,
+        );
         if !sched.mouse_primary {
             self.lmb_held = false;
         }
@@ -2232,6 +2366,11 @@ impl App {
         // Sprite layer: real instances with assets, placeholder quads
         // without. The batch is the headless-verifiable artifact (push +
         // camera wired here); `Viewport2dGpu` rebuilds its own internally.
+        // Hardware cursor request: computed inside the sprite borrow
+        // (save reads only), refreshed after it ends (`refresh_cursor_img`
+        // needs `&mut self`). `None` when assets are absent or the gate
+        // is off — the refresh then clears the payload.
+        let mut cursor_req: Option<(i32, [f32; 4])> = None;
         let (mut sprites, texts) = if self.assets.is_some() {
             let assets = self.assets.as_ref().expect("checked");
             // Cursor world position for the GML crosshair distance
@@ -2444,11 +2583,11 @@ impl App {
                 stamp_z(&mut menu, Z_MENU);
                 s.extend(menu);
             }
-            // Menu crosshair (GML `UberCont/Draw_75` verbatim): in
-            // keyboard mode the OS cursor is hidden and the game draws
-            // `sprCrosshair[opt_crosshair]` at the raw cursor position —
-            // no lerp, alpha 1, `opt_cursorcol` — on EVERY screen
-            // (gameplay included; the lerped `TopCont` crosshair is the
+            // Hardware cursor (GML `UberCont/Draw_75` verbatim): in
+            // keyboard mode the OS cursor carries `sprCrosshair[opt_crosshair]`
+            // (`opt_cursorcol`, alpha 1) — composited by the OS, so it sits
+            // above every sprite and UI layer with zero frame lag, on EVERY
+            // screen (gameplay included; the lerped `TopCont` crosshair is the
             // gamepad-mode counterpart and replaces this there — never
             // both, else a double cursor). GML gates only on
             // `window_get_cursor() == cr_none` + `scrCanDrawCursor()`
@@ -2460,9 +2599,9 @@ impl App {
             // show the OS cursor) and on touch input (no cursor at all).
             // Keyboard-driven local (`opt_keyboard && !opt_gamepad`,
             // the same `keyboard_local` law as `crosshair_sprites`):
-            // gamepad mode draws the lerped crosshair instead. Draw_75
-            // runs after every other GUI stage, so the cursor stamps
-            // the topmost rung — above menus, sideart, and HUD sprites.
+            // gamepad mode draws the lerped crosshair instead. The pixels
+            // decode once per (frame, tint) into `cursor_img`; the runner
+            // caches the OS handle by content hash.
             let keyboard_local = self
                 .sim
                 .world
@@ -2471,34 +2610,23 @@ impl App {
                 .unwrap_or(true);
             let menu_crosshair =
                 keyboard_mode && keyboard_local && !paused && overlay == OverlayMenu::None;
-            if menu_crosshair && let Some(pos) = self.live_cursor_world() {
+            cursor_req = if menu_crosshair {
                 let frame = self
                     .sim
                     .world
                     .get_resource::<crate::savedata_part::SaveData>()
                     .map(|sv| sv.settings.crosshair as i32)
                     .unwrap_or(0);
-                let frames = crate::render::strip_frames_pub(assets, "images/sprCrosshair.png")
-                    .max(1) as i32;
                 let tint = self
                     .sim
                     .world
                     .get_resource::<crate::savedata_part::SaveData>()
                     .map(|sv| sv.settings.cursorcol_rgba())
                     .unwrap_or([1.0, 1.0, 1.0, 1.0]);
-                if let Some(sp) = assets.sprite_for(
-                    "images/sprCrosshair.png",
-                    frame.clamp(0, frames - 1),
-                    pos,
-                    false,
-                    0.0,
-                    tint,
-                ) {
-                    let mut title_cross = vec![sp];
-                    stamp_z(&mut title_cross, Z_CURSOR);
-                    s.extend(title_cross);
-                }
-            }
+                Some((frame, tint))
+            } else {
+                None
+            };
             // Sideart chrome around the view (GML `UberCont/Draw_74`:
             // GUI Begin — before the GUI-64 HUD/menus and the Draw_75
             // cursor, so it rungs above the room chrome but below every
@@ -2524,6 +2652,15 @@ impl App {
         } else {
             (placeholder_instances(&mut self.sim.world), Vec::new())
         };
+        // Hardware cursor refresh runs after the sprite borrow ends
+        // (it needs `&mut self` for the `cursor_img` cache).
+        match cursor_req {
+            Some((frame, tint)) => self.refresh_cursor_img(frame, tint),
+            None => {
+                self.cursor_img = None;
+                self.cursor_img_key = None;
+            }
+        }
         // Cover flag for the chrome below: same generation-screen law
         // as the sprite composer above (its `playing` is block-local).
         // Canvas text rides above the opaque vortex pass, so the HUD
@@ -2794,9 +2931,15 @@ impl App {
         // Cursor: the scheduler override wins over hover (hover would
         // always report Default over the viewport and un-hide the
         // pointer). GML `UberCont/Step_0:175-183`: keyboard mode hides
-        // the OS cursor, menus/mouse mode shows it.
+        // the OS cursor, menus/mouse mode shows it. When the hardware
+        // cursor art is live (`cursor_img`, same gate as the decode
+        // above), the OS composites the crosshair itself — topmost,
+        // zero lag, no sprite needed.
         sched.cursor_override = Some(if hide_os_cursor {
-            repose_core::CursorIcon::Hidden
+            match &self.cursor_img {
+                Some(img) => repose_core::CursorIcon::Custom(img.clone()),
+                None => repose_core::CursorIcon::Hidden,
+            }
         } else {
             repose_core::CursorIcon::Default
         });
@@ -2828,8 +2971,8 @@ impl App {
                 if matches!(ke.event_type, KeyEventType::Down) && !ke.is_repeat {
                     let app = unsafe { &mut *key_ptr };
                     if app.capture_armed() {
-                        if let Some(name) = ke.physical.as_deref() {
-                            app.capture_physical_press(name);
+                        if let Some(key) = ke.physical {
+                            app.capture_physical_press(key);
                         } else {
                             app.capture_key_press(&ke.key);
                         }
@@ -3842,7 +3985,7 @@ mod cursor_staging_tests {
     fn key_e_stages_interact_pulse() {
         use crate::input::{KeyCode, MouseState, NtInput};
         let mut app = App::new_with_seed(4242);
-        app.stage_physical_key("KeyE", true);
+        app.stage_physical_key(PhysicalKey::KeyE, true);
         let just: std::collections::HashSet<KeyCode> = app.edges.drain(..).collect();
         assert!(just.contains(&KeyCode::KeyE), "KeyE must stage an edge");
         let keymap = app.sim.world.resource::<InputMapState>().clone();
@@ -3867,26 +4010,35 @@ mod cursor_staging_tests {
     /// `KeyX`/`DigitN` name generically.
     #[test]
     fn remap_capture_accepts_any_key() {
-        use repose_core::input::{Key, KeyEvent, KeyEventType, Modifiers};
-        for key in ["KeyX", "KeyC", "KeyV", "KeyZ", "KeyH", "KeyM", "Digit6", "ArrowUp"] {
+        use repose_core::input::{Key, KeyEvent, KeyEventType, Modifiers, PhysicalKey};
+        for key in [
+            PhysicalKey::KeyX,
+            PhysicalKey::KeyC,
+            PhysicalKey::KeyV,
+            PhysicalKey::KeyZ,
+            PhysicalKey::KeyH,
+            PhysicalKey::KeyM,
+            PhysicalKey::Digit6,
+            PhysicalKey::ArrowUp,
+        ] {
             let mut app = App::new_with_seed(4242);
             crate::state::menus::apply_menu_action(
                 &mut app.sim.world,
                 crate::audio::UiAction::RemapControl("north".to_string()),
             );
-            assert!(app.capture_armed(), "capture must arm for {key}");
-            // Live shell path: focus-routed KeyEvent with physical name.
+            assert!(app.capture_armed(), "capture must arm for {key:?}");
+            // Live shell path: focus-routed KeyEvent with physical key.
             app.handle_key(&KeyEvent {
                 key: Key::Character('x'),
                 modifiers: Modifiers::default(),
                 is_repeat: false,
                 event_type: KeyEventType::Down,
                 utf16_code_point: 0,
-                physical: Some(key.to_string()),
+                physical: Some(key),
             });
             assert!(
                 !app.capture_armed(),
-                "pressing {key} must resolve the capture"
+                "pressing {key:?} must resolve the capture"
             );
         }
     }
@@ -3895,7 +4047,7 @@ mod cursor_staging_tests {
     /// Esc/Enter/R stage only via the shortcut handler.
     #[test]
     fn focus_key_resolves_capture_and_pause() {
-        use repose_core::input::{Key, KeyEvent, KeyEventType, Modifiers};
+        use repose_core::input::{Key, KeyEvent, KeyEventType, Modifiers, PhysicalKey};
         use repose_core::shortcuts::{Action, handle};
         let mut app = App::new_with_seed(4242);
         let ptr = &mut app as *mut App;
@@ -3925,7 +4077,7 @@ mod cursor_staging_tests {
             is_repeat: false,
             event_type: KeyEventType::Down,
             utf16_code_point: 0,
-            physical: Some("KeyX".to_string()),
+            physical: Some(PhysicalKey::KeyX),
         });
         assert!(!app.capture_armed(), "KeyX must resolve the capture");
         let entry = app
@@ -3947,21 +4099,21 @@ mod cursor_staging_tests {
     /// mismatch in one pass.
     #[test]
     fn rebound_key_drives_gameplay_after_save_round_trip() {
-        use repose_core::input::{Key, KeyEvent, KeyEventType, Modifiers};
-        let press = |key: Key, physical: &str| KeyEvent {
+        use repose_core::input::{Key, KeyEvent, KeyEventType, Modifiers, PhysicalKey};
+        let press = |key: Key, physical: PhysicalKey| KeyEvent {
             key,
             modifiers: Modifiers::default(),
             is_repeat: false,
             event_type: KeyEventType::Down,
             utf16_code_point: 0,
-            physical: Some(physical.to_string()),
+            physical: Some(physical),
         };
         let mut app = App::new_with_seed(4242);
         crate::state::menus::apply_menu_action(
             &mut app.sim.world,
             crate::audio::UiAction::RemapControl("north".to_string()),
         );
-        app.handle_key(&press(Key::Character('z'), "KeyZ"));
+        app.handle_key(&press(Key::Character('z'), PhysicalKey::KeyZ));
         assert!(!app.capture_armed());
         // Persist + reload like a reboot.
         let rows = app
@@ -3974,8 +4126,8 @@ mod cursor_staging_tests {
         let back = saved.to_keymap();
         app.sim.world.resource_mut::<InputMapState>().map = back;
         // Release Z, then press it fresh and sample movement.
-        app.stage_physical_key("KeyZ", false);
-        app.stage_physical_key("KeyZ", true);
+        app.stage_physical_key(PhysicalKey::KeyZ, false);
+        app.stage_physical_key(PhysicalKey::KeyZ, true);
         let mut out = crate::input::NtInput::default();
         let just: std::collections::HashSet<crate::input::KeyCode> =
             app.edges.drain(..).collect();
@@ -4084,7 +4236,7 @@ mod cursor_staging_tests {
     /// drive menu nav on MainMenu and on an open Settings overlay.
     #[test]
     fn focus_arrows_drive_menu_nav() {
-        use repose_core::input::{Key, KeyEvent, KeyEventType, Modifiers};
+        use repose_core::input::{Key, KeyEvent, KeyEventType, Modifiers, PhysicalKey};
         for (state, overlay) in [
             (AppState::MainMenu, OverlayMenu::None),
             (AppState::InGame, OverlayMenu::Settings),
@@ -4099,7 +4251,7 @@ mod cursor_staging_tests {
                 is_repeat: false,
                 event_type: KeyEventType::Down,
                 utf16_code_point: 0,
-                physical: Some("ArrowDown".to_string()),
+                physical: Some(PhysicalKey::ArrowDown),
             });
             app.feed_input();
             let (dv, dh) = app.sim.world.resource_mut::<NtInput>().take_menu_nav();

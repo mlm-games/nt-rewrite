@@ -7,6 +7,7 @@
 
 use bevy_ecs::prelude::*;
 use glam::Vec2;
+use repose_core::input::PhysicalKey;
 use std::collections::HashSet;
 
 /// Sampled player intent for one tick.
@@ -206,56 +207,55 @@ pub enum KeyCode {
     Digit9,
 }
 
-/// Physical key name (`KeyCode::KeyW`, `Digit1`, `Space`, ...) to the
-/// backend-neutral [`KeyCode`]. Returns `None` for keys the sim never
-/// reads.
-pub fn keycode_for_physical(name: &str) -> Option<KeyCode> {
-    Some(match name {
-        "ShiftLeft" => KeyCode::ShiftLeft,
-        "ShiftRight" => KeyCode::ShiftRight,
-        "KeyA" => KeyCode::KeyA,
-        "KeyB" => KeyCode::KeyB,
-        "KeyC" => KeyCode::KeyC,
-        "KeyD" => KeyCode::KeyD,
-        "KeyE" => KeyCode::KeyE,
-        "KeyF" => KeyCode::KeyF,
-        "KeyG" => KeyCode::KeyG,
-        "KeyH" => KeyCode::KeyH,
-        "KeyI" => KeyCode::KeyI,
-        "KeyJ" => KeyCode::KeyJ,
-        "KeyK" => KeyCode::KeyK,
-        "KeyL" => KeyCode::KeyL,
-        "KeyM" => KeyCode::KeyM,
-        "KeyN" => KeyCode::KeyN,
-        "KeyO" => KeyCode::KeyO,
-        "KeyP" => KeyCode::KeyP,
-        "KeyQ" => KeyCode::KeyQ,
-        "KeyR" => KeyCode::KeyR,
-        "KeyS" => KeyCode::KeyS,
-        "KeyT" => KeyCode::KeyT,
-        "KeyU" => KeyCode::KeyU,
-        "KeyV" => KeyCode::KeyV,
-        "KeyW" => KeyCode::KeyW,
-        "KeyX" => KeyCode::KeyX,
-        "KeyY" => KeyCode::KeyY,
-        "KeyZ" => KeyCode::KeyZ,
-        "ArrowUp" => KeyCode::ArrowUp,
-        "ArrowDown" => KeyCode::ArrowDown,
-        "ArrowLeft" => KeyCode::ArrowLeft,
-        "ArrowRight" => KeyCode::ArrowRight,
-        "Space" => KeyCode::Space,
-        "Tab" => KeyCode::Tab,
-        "Backquote" => KeyCode::Backquote,
-        "Digit0" => KeyCode::Digit0,
-        "Digit1" => KeyCode::Digit1,
-        "Digit2" => KeyCode::Digit2,
-        "Digit3" => KeyCode::Digit3,
-        "Digit4" => KeyCode::Digit4,
-        "Digit5" => KeyCode::Digit5,
-        "Digit6" => KeyCode::Digit6,
-        "Digit7" => KeyCode::Digit7,
-        "Digit8" => KeyCode::Digit8,
-        "Digit9" => KeyCode::Digit9,
+/// Physical key position to the backend-neutral [`KeyCode`].
+/// Returns `None` for keys the sim never reads.
+pub fn keycode_for_physical(key: PhysicalKey) -> Option<KeyCode> {
+    Some(match key {
+        PhysicalKey::ShiftLeft => KeyCode::ShiftLeft,
+        PhysicalKey::ShiftRight => KeyCode::ShiftRight,
+        PhysicalKey::KeyA => KeyCode::KeyA,
+        PhysicalKey::KeyB => KeyCode::KeyB,
+        PhysicalKey::KeyC => KeyCode::KeyC,
+        PhysicalKey::KeyD => KeyCode::KeyD,
+        PhysicalKey::KeyE => KeyCode::KeyE,
+        PhysicalKey::KeyF => KeyCode::KeyF,
+        PhysicalKey::KeyG => KeyCode::KeyG,
+        PhysicalKey::KeyH => KeyCode::KeyH,
+        PhysicalKey::KeyI => KeyCode::KeyI,
+        PhysicalKey::KeyJ => KeyCode::KeyJ,
+        PhysicalKey::KeyK => KeyCode::KeyK,
+        PhysicalKey::KeyL => KeyCode::KeyL,
+        PhysicalKey::KeyM => KeyCode::KeyM,
+        PhysicalKey::KeyN => KeyCode::KeyN,
+        PhysicalKey::KeyO => KeyCode::KeyO,
+        PhysicalKey::KeyP => KeyCode::KeyP,
+        PhysicalKey::KeyQ => KeyCode::KeyQ,
+        PhysicalKey::KeyR => KeyCode::KeyR,
+        PhysicalKey::KeyS => KeyCode::KeyS,
+        PhysicalKey::KeyT => KeyCode::KeyT,
+        PhysicalKey::KeyU => KeyCode::KeyU,
+        PhysicalKey::KeyV => KeyCode::KeyV,
+        PhysicalKey::KeyW => KeyCode::KeyW,
+        PhysicalKey::KeyX => KeyCode::KeyX,
+        PhysicalKey::KeyY => KeyCode::KeyY,
+        PhysicalKey::KeyZ => KeyCode::KeyZ,
+        PhysicalKey::ArrowUp => KeyCode::ArrowUp,
+        PhysicalKey::ArrowDown => KeyCode::ArrowDown,
+        PhysicalKey::ArrowLeft => KeyCode::ArrowLeft,
+        PhysicalKey::ArrowRight => KeyCode::ArrowRight,
+        PhysicalKey::Space => KeyCode::Space,
+        PhysicalKey::Tab => KeyCode::Tab,
+        PhysicalKey::Backquote => KeyCode::Backquote,
+        PhysicalKey::Digit0 => KeyCode::Digit0,
+        PhysicalKey::Digit1 => KeyCode::Digit1,
+        PhysicalKey::Digit2 => KeyCode::Digit2,
+        PhysicalKey::Digit3 => KeyCode::Digit3,
+        PhysicalKey::Digit4 => KeyCode::Digit4,
+        PhysicalKey::Digit5 => KeyCode::Digit5,
+        PhysicalKey::Digit6 => KeyCode::Digit6,
+        PhysicalKey::Digit7 => KeyCode::Digit7,
+        PhysicalKey::Digit8 => KeyCode::Digit8,
+        PhysicalKey::Digit9 => KeyCode::Digit9,
         _ => return None,
     })
 }
@@ -512,6 +512,7 @@ fn keycode_for_entry(entry: &repame_input::KeymapEntry) -> Option<KeyCode> {
     use repame_input::KeymapEntry;
     match entry {
         KeymapEntry::Key(chord) => keycode_for_chord(&chord.key),
+        KeymapEntry::Physical(key) => keycode_for_physical(*key),
         KeymapEntry::None | KeymapEntry::Mouse(_) | KeymapEntry::Pad(_) | KeymapEntry::Axis { .. } => {
             None
         }
@@ -567,6 +568,61 @@ fn keycode_for_chord(key: &repose_core::input::Key) -> Option<KeyCode> {
         Key::ArrowLeft => KeyCode::ArrowLeft,
         Key::ArrowRight => KeyCode::ArrowRight,
         _ => return None,
+    })
+}
+
+/// Physical keys driving one [`KeyCode`] (`Scheduler::held_keys`
+/// entries). `None` for codes no physical key reports (unreachable in
+/// practice: every variant has at least one key). Used only to drop
+/// stuck levels in the polled repair — never to stage edges.
+pub fn physical_keys_for_code(code: &KeyCode) -> Option<&'static [PhysicalKey]> {
+    use repose_core::input::PhysicalKey as P;
+    Some(match code {
+        KeyCode::ShiftLeft => &[P::ShiftLeft],
+        KeyCode::ShiftRight => &[P::ShiftRight],
+        KeyCode::KeyA => &[P::KeyA],
+        KeyCode::KeyB => &[P::KeyB],
+        KeyCode::KeyC => &[P::KeyC],
+        KeyCode::KeyD => &[P::KeyD],
+        KeyCode::KeyE => &[P::KeyE],
+        KeyCode::KeyF => &[P::KeyF],
+        KeyCode::KeyG => &[P::KeyG],
+        KeyCode::KeyH => &[P::KeyH],
+        KeyCode::KeyI => &[P::KeyI],
+        KeyCode::KeyJ => &[P::KeyJ],
+        KeyCode::KeyK => &[P::KeyK],
+        KeyCode::KeyL => &[P::KeyL],
+        KeyCode::KeyM => &[P::KeyM],
+        KeyCode::KeyN => &[P::KeyN],
+        KeyCode::KeyO => &[P::KeyO],
+        KeyCode::KeyP => &[P::KeyP],
+        KeyCode::KeyQ => &[P::KeyQ],
+        KeyCode::KeyR => &[P::KeyR],
+        KeyCode::KeyS => &[P::KeyS],
+        KeyCode::KeyT => &[P::KeyT],
+        KeyCode::KeyU => &[P::KeyU],
+        KeyCode::KeyV => &[P::KeyV],
+        KeyCode::KeyW => &[P::KeyW],
+        KeyCode::KeyX => &[P::KeyX],
+        KeyCode::KeyY => &[P::KeyY],
+        KeyCode::KeyZ => &[P::KeyZ],
+        KeyCode::ArrowUp => &[P::ArrowUp],
+        KeyCode::ArrowDown => &[P::ArrowDown],
+        KeyCode::ArrowLeft => &[P::ArrowLeft],
+        KeyCode::ArrowRight => &[P::ArrowRight],
+        KeyCode::Space => &[P::Space],
+        KeyCode::Tab => &[P::Tab],
+        KeyCode::Backquote => &[P::Backquote],
+        KeyCode::Digit0 => &[P::Digit0],
+        KeyCode::Digit1 => &[P::Digit1],
+        KeyCode::Digit2 => &[P::Digit2],
+        KeyCode::Digit3 => &[P::Digit3],
+        KeyCode::Digit4 => &[P::Digit4],
+        KeyCode::Digit5 => &[P::Digit5],
+        KeyCode::Digit6 => &[P::Digit6],
+        KeyCode::Digit7 => &[P::Digit7],
+        KeyCode::Digit8 => &[P::Digit8],
+        KeyCode::Digit9 => &[P::Digit9],
     })
 }
 

@@ -1055,10 +1055,10 @@ pub const GRID_OVERLAP: f32 = 1.0;
 /// Draw-GUI stages vs sprite rungs: GML `UberCont/Draw_74`
 /// (`scrDrawSidearts`) runs BEFORE the GUI-64 HUD text, while
 /// `UberCont/Draw_75` (the raw `sprCrosshair` cursor) runs AFTER it —
-/// the cursor is topmost by pipeline stage and has no z at all. The
-/// port keeps both as sprite rungs with the same ordering: sideart
-/// above the room chrome but below HUD text/menus, the cursor above
-/// everything (`Z_CURSOR` is the highest rung).
+/// the cursor is topmost by pipeline stage. The port implements
+/// `Draw_75` as a hardware cursor (`CursorIcon::Custom`, composited by
+/// the OS above every sprite and UI layer), so no sprite rung exists
+/// for it; sideart rungs above the room chrome but below HUD/menus.
 pub const Z_SHADOW: f32 = -10.0;
 pub const Z_WORLD: f32 = 0.0;
 pub const Z_FX: f32 = 1.0;
@@ -1072,7 +1072,6 @@ pub const Z_SIDEART: f32 = 8.0;
 pub const Z_HUD: f32 = 10.0;
 pub const Z_SPLASH: f32 = 15.0;
 pub const Z_MENU: f32 = 20.0;
-pub const Z_CURSOR: f32 = 30.0;
 
 /// Stamp a layer rung over a finished push batch (keeps the producer's
 /// internal push order: the engine sort is stable on `(blend, z, page)`
@@ -8882,7 +8881,6 @@ mod verbatim_ui_layers {
         assert!(Z_SIDEART < Z_HUD);
         assert!(Z_HUD < Z_SPLASH);
         assert!(Z_SPLASH < Z_MENU);
-        assert!(Z_MENU < Z_CURSOR);
     }
 
     /// `stamp_z` assigns the rung without disturbing intra-layer push
