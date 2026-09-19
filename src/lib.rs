@@ -1473,10 +1473,8 @@ impl App {
         let staging_edges = self.staging.borrow_mut().take_edges();
         for code in staging_edges {
             if let Some(mapped) = crate::input::keycode_for_physical(code) {
-                let fresh = self.held.insert(mapped);
-                if fresh {
-                    self.edges.push(mapped);
-                }
+                self.held.insert(mapped);
+                self.edges.push(mapped);
             }
         }
 
@@ -1785,7 +1783,7 @@ impl App {
                     }
                 }
             }
-            
+
         } else if game_over {
             if let Some(click) = staging_clicks.last().copied() {
                 let viewport_dp = self.view_viewport_dp;
@@ -1798,7 +1796,7 @@ impl App {
                     apply_menu_action(&mut self.sim.world, action);
                 }
             }
-            
+
         } else if state == AppState::MainMenu {
             // Settings/Credits/Stats open over the buttons (GML MenuOptions
             // / DrawStats parity): route through the live overlay kind so
@@ -1823,7 +1821,7 @@ impl App {
                     apply_menu_action(&mut self.sim.world, action);
                 }
             }
-            
+
         } else if state == AppState::Title {
             // Settings/Credits open over the campfire: route those through
             // the menu router (mouse + RMB-back); otherwise pods / GO /
@@ -1851,7 +1849,7 @@ impl App {
                     apply_menu_action(&mut self.sim.world, action);
                 }
             }
-            
+
         } else if offer_open {
             // Mutation/ultra offer: right-button is silent (never confirms
             // or eats the left click).
@@ -1870,14 +1868,14 @@ impl App {
                     apply_menu_action(&mut self.sim.world, action);
                 }
             }
-            
+
         } else if let Some(_click) = staging_clicks.last().copied() {
             // Splash/Loading advance on any mouse button (bevy `boot_intro`
             // any-key/mouse law).
-            
+
             self.sim.world.resource_mut::<NtInput>().press_interact();
         } else {
-            
+
         }
     }
 
