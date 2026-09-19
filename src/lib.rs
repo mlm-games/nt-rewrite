@@ -1235,7 +1235,6 @@ impl App {
         if self.capture_armed() {
             let left = button == PointerButton::Primary;
             self.capture_mouse_press(left);
-            return;
         }
         self.staging.borrow_mut().pick_down(button);
     }
