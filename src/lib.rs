@@ -1012,12 +1012,6 @@ pub(crate) mod nt_shortcuts {
     }
 
     pub fn install(edges: &SharedEdges) {
-        use std::sync::OnceLock;
-        static INSTALLED: OnceLock<()> = OnceLock::new();
-        if INSTALLED.get().is_none() {
-            let _ = repose_core::shortcuts::InstallShortcutMap(map());
-            let _ = INSTALLED.set(());
-        }
         repame_shell::install_into(edges, PAUSE, RESTART, CONFIRM);
     }
 
@@ -1441,8 +1435,42 @@ impl App {
         for action in self.menu_actions.drain(..) {
             apply_menu_action(&mut self.sim.world, action);
         }
+        let was_armed = self.capture_armed();
+        {
+            let (pending_physical, pending_key, pending_mouse) = {
+                let mut staging = self.staging.borrow_mut();
+                if was_armed {
+                    (
+                        staging.take_capture_physical(),
+                        staging.take_capture_key(),
+                        staging.take_capture_mouse(),
+                    )
+                } else {
+                    staging.capture_pending_physical = None;
+                    staging.capture_pending_key = None;
+                    staging.capture_pending_mouse = None;
+                    (None, None, None)
+                }
+            };
+            if was_armed {
+                if let Some(key) = pending_physical {
+                    self.capture_physical_press(key);
+                    self.staging.borrow_mut().edges.clear();
+                } else if let Some(key) = pending_key {
+                    if key == Key::Backspace {
+                        self.cancel_remap_capture();
+                    } else {
+                        self.capture_key_press(&key);
+                    }
+                    self.staging.borrow_mut().edges.clear();
+                } else if let Some(left) = pending_mouse {
+                    self.capture_mouse_press(left);
+                }
+            }
+            self.staging.borrow_mut().capture_armed = self.capture_armed();
+        }
         nt_shortcuts::drain(self, &self.shortcut_edges.clone());
-        let staging_edges = self.staging.borrow().edges.clone();
+        let staging_edges = self.staging.borrow_mut().take_edges();
         for code in staging_edges {
             if let Some(mapped) = crate::input::keycode_for_physical(code) {
                 let fresh = self.held.insert(mapped);
@@ -1451,7 +1479,6 @@ impl App {
                 }
             }
         }
-        self.staging.borrow_mut().edges.clear();
 
         let just: HashSet<KeyCode> = self.edges.drain(..).collect();
         let state = self
@@ -2660,7 +2687,23 @@ impl App {
                 focus_staging.borrow_mut().set_window_focused(focused);
             })
             .on_key_event(move |ke: KeyEvent| {
-                staging.borrow_mut().handle_key(&ke);
+                let mut staging = staging.borrow_mut();
+                // Preview-less capture: Esc/Enter/R are shortcut-owned,
+                // so plain `handle_key` never sees them — stash those as
+                // capture input too while armed, else Esc can never
+                // rebind and R/Enter resolve to the wrong key.
+                if matches!(ke.event_type, KeyEventType::Down)
+                    && !ke.is_repeat
+                    && staging.capture_armed
+                    && matches!(
+                        ke.key,
+                        Key::Escape | Key::Enter | Key::Character('r') | Key::Character('R')
+                    )
+                {
+                    staging.capture_pending_key = Some(ke.key.clone());
+                    return true;
+                }
+                staging.handle_key(&ke);
                 false
             });
         // Right mouse button (GML `mb_right` ability / menu Back): the
@@ -3692,8 +3735,11 @@ mod cursor_staging_tests {
                 crate::audio::UiAction::RemapControl("north".to_string()),
             );
             assert!(app.capture_armed(), "capture must arm for {key:?}");
-            // Live shell path: focus-routed KeyEvent with physical key.
-            app.handle_key(&KeyEvent {
+            // Live shell path: shared staging (mirrors the armed flag in
+            // `feed_input`) stashes the press; the next `feed_input`
+            // resolves it.
+            app.staging.borrow_mut().capture_armed = true;
+            app.staging.borrow_mut().handle_key(&KeyEvent {
                 key: Key::Character('x'),
                 modifiers: Modifiers::default(),
                 is_repeat: false,
@@ -3701,6 +3747,7 @@ mod cursor_staging_tests {
                 utf16_code_point: 0,
                 physical: Some(key),
             });
+            app.feed_input();
             assert!(
                 !app.capture_armed(),
                 "pressing {key:?} must resolve the capture"
@@ -3716,7 +3763,7 @@ mod cursor_staging_tests {
         use repose_core::shortcuts::{Action, handle};
         let mut app = App::new_with_seed(4242);
         nt_shortcuts::install(&app.shortcut_edges);
-        app.handle_key(&KeyEvent {
+        app.staging.borrow_mut().handle_key(&KeyEvent {
             key: Key::Escape,
             modifiers: Modifiers::default(),
             is_repeat: false,
@@ -3737,7 +3784,8 @@ mod cursor_staging_tests {
             crate::audio::UiAction::RemapControl("north".to_string()),
         );
         assert!(app.capture_armed());
-        app.handle_key(&KeyEvent {
+        app.staging.borrow_mut().capture_armed = true;
+        app.staging.borrow_mut().handle_key(&KeyEvent {
             key: Key::Character('x'),
             modifiers: Modifiers::default(),
             is_repeat: false,
@@ -3745,6 +3793,7 @@ mod cursor_staging_tests {
             utf16_code_point: 0,
             physical: Some(PhysicalKey::KeyX),
         });
+        app.feed_input();
         assert!(!app.capture_armed(), "KeyX must resolve the capture");
         let entry = app
             .sim
@@ -3780,7 +3829,11 @@ mod cursor_staging_tests {
             &mut app.sim.world,
             crate::audio::UiAction::RemapControl("north".to_string()),
         );
-        app.handle_key(&press(Key::Character('z'), PhysicalKey::KeyZ));
+        app.staging.borrow_mut().capture_armed = true;
+        app.staging
+            .borrow_mut()
+            .handle_key(&press(Key::Character('z'), PhysicalKey::KeyZ));
+        app.feed_input();
         assert!(!app.capture_armed());
         // Persist + reload like a reboot.
         let rows = app
@@ -3909,7 +3962,7 @@ mod cursor_staging_tests {
             app.sim.world.insert_resource(state);
             app.sim.world.insert_resource(overlay);
             app.sim.world.init_resource::<NtInput>();
-            app.handle_key(&KeyEvent {
+            app.staging.borrow_mut().handle_key(&KeyEvent {
                 key: Key::ArrowDown,
                 modifiers: Modifiers::default(),
                 is_repeat: false,
