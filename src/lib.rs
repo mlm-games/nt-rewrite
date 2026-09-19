@@ -176,16 +176,6 @@ pub fn ensure_nt_font() {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
 pub struct TickCount(pub u64);
 
-/// Staged pointer click: world position (aim-at-click + fire) plus
-/// canvas-dp position (menu button hit-testing, camera-independent:
-/// overlay text is screen-anchored through the live GML GUI map, so
-/// world coords would unproject through the wrong frame).
-#[derive(Clone, Copy, Debug)]
-struct StagedClick {
-    world: Vec2,
-    dp: [f32; 2],
-}
-
 /// The game: fixed-step sim plus presentational (view-layer) state.
 ///
 /// `sim`/`schedule`/`spiral` are sim-pure; `cam`, `held`/`edges`/`clicks`/
@@ -258,54 +248,12 @@ pub struct App {
     /// shell's focus handler) drops `held` outright — winit delivers
     /// no key-ups across an alt-tab.
     window_focused: bool,
-    clicks: Vec<StagedClick>,
-    /// Latest cursor world position (viewport `Hover`, single slot: only
-    /// the newest position matters). Fallback only: screen-anchored
-    /// sources below re-unproject every frame, so this baked point is
-    /// used solely when no screen px was ever staged (touch/pen never
-    /// stage cursor moves... see `hover_px`).
-    hover: Option<Vec2>,
-    /// Latest viewport-hover position in window-physical px (the
-    /// `Hover.screen` the engine documents as "stage this raw and
-    /// unproject through the live camera each frame"). Unlike
-    /// [`App::hover`] (a world point baked through the camera at event
-    /// time), this stays valid as the camera moves: [`App::feed_input`]
-    /// unprojects it through the *current* camera each frame — bevy
-    /// `player_aim` (`window.cursor_position()` + `viewport_to_world_2d`)
-    /// parity. The player therefore keeps aiming at the on-screen
-    /// cursor while walking, instead of at a stale world point behind
-    /// them. Fires on every free mouse move (the viewport's
-    /// `on_pointer_move` reaches it; the root's `cursor_move` almost
-    /// never does — free moves dispatch only to the topmost region).
-    hover_px: Option<Vec2>,
-    /// Root-staged cursor position in window-physical px (root
-    /// `on_pointer_move`, y-down). Same space as [`App::hover_px`]
-    /// (both are `position_in_window()` physical px); both unproject
-    /// through the live camera each frame in `live_cursor_world` —
-    /// bevy `player_aim` (`window.cursor_position()` +
-    /// `viewport_to_world_2d`) parity. The root handler runs almost
-    /// exclusively while a button is held (capture-path dispatch
-    /// reaches ancestors), so this goes stale on free moves and the
-    /// always-fresh viewport hover px owns aim the rest of the time.
-    cursor_px: Option<Vec2>,
-    /// Staging order stamps. Repose dispatches free moves ONLY to the
-    /// topmost region (proven: parent/root handlers get 0 calls), so
-    /// the root's `cursor_move` runs almost exclusively while a button
-    /// is held (capture-path dispatch reaches ancestors). The viewport
-    /// `Hover` DOES fire on free moves — but through `stage_hover`,
-    /// which stages both the baked point and the raw px, so order
-    /// tracking still needs the shared `input_seq` clock. Without
-    /// staleness tracking, a stale px from the last drag shadows live
-    /// hovers through `.or()` and the crosshair freezes everywhere
-    /// except while dragging — exactly the reported symptom. Both px
-    /// sources therefore win only while fresh (see
-    /// `live_cursor_world`); the baked hover point is the last-resort
-    /// fallback (touch/pen never stage any px), so the cursor never
-    /// freezes on an old camera.
-    cursor_seq: u64,
-    hover_seq: u64,
-    hover_px_seq: u64,
-    input_seq: u64,
+    clicks: Vec<repame_input::StagedClick>,
+    /// Screen-anchored pointer staging (raw window-physical px in, live
+    /// world point out via [`App::live_cursor_world`]). The freshness
+    /// discipline lives in [`repame_input::AimTracker`]; unprojection
+    /// needs this frame's camera so it stays here.
+    aim: repame_input::AimTracker,
     pause_edge: bool,
     restart_edge: bool,
     interact_edge: bool,
@@ -430,13 +378,7 @@ impl App {
             edges: Vec::new(),
             window_focused: true,
             clicks: Vec::new(),
-            hover: None,
-            hover_px: None,
-            cursor_px: None,
-            cursor_seq: 0,
-            hover_seq: 0,
-            hover_px_seq: 0,
-            input_seq: 0,
+            aim: repame_input::AimTracker::default(),
             pause_edge: false,
             restart_edge: false,
             interact_edge: false,
@@ -1337,41 +1279,9 @@ impl App {
         if !self.capture_armed() {
             return;
         }
-        // Physical position -> KeyChord: explicit special keys first,
-        // then the generic `KeyX`/`DigitN` derivation so EVERY key is
-        // capturable (GML captures any pressed input; the old table
-        // silently swallowed two-thirds of the keyboard).
-        let chord_key = match key {
-            PhysicalKey::Space => repose_core::input::Key::Space,
-            PhysicalKey::Tab => repose_core::input::Key::Tab,
-            PhysicalKey::ShiftLeft => repose_core::input::Key::ShiftLeft,
-            PhysicalKey::ShiftRight => repose_core::input::Key::ShiftRight,
-            PhysicalKey::ArrowUp => repose_core::input::Key::ArrowUp,
-            PhysicalKey::ArrowDown => repose_core::input::Key::ArrowDown,
-            PhysicalKey::ArrowLeft => repose_core::input::Key::ArrowLeft,
-            PhysicalKey::ArrowRight => repose_core::input::Key::ArrowRight,
-            _ => {
-                let name = key.name();
-                let tail = name
-                    .strip_prefix("Key")
-                    .or_else(|| name.strip_prefix("Digit"))
-                    .unwrap_or("");
-                let mut chars = tail.chars();
-                match (chars.next(), chars.next()) {
-                    (Some(c), None) => {
-                        repose_core::input::Key::Character(c.to_ascii_lowercase())
-                    }
-                    _ => {
-                        if name == "Backquote" {
-                            repose_core::input::Key::Character('`')
-                        } else {
-                            return;
-                        }
-                    }
-                }
-            }
+        let Some(chord) = repame_input::chord_for_physical(key) else {
+            return;
         };
-        let chord = repose_core::shortcuts::KeyChord::new(chord_key, repose_core::input::Modifiers::default());
         let mut state = self.sim.world.resource_mut::<InputMapState>();
         let Some(capture) = state.capture.clone() else {
             return;
@@ -1455,9 +1365,7 @@ impl App {
     /// — [`App::px_to_world`] unprojects it through the live camera
     /// each frame.
     fn cursor_move(&mut self, phys_px: Vec2) {
-        self.input_seq += 1;
-        self.cursor_seq = self.input_seq;
-        self.cursor_px = Some(phys_px);
+        self.aim.cursor_move(phys_px);
     }
 
     /// Stage one viewport hover: the baked world point AND the raw
@@ -1472,11 +1380,7 @@ impl App {
     /// free move, which is exactly when the root handler stays silent
     /// (free moves dispatch only to the topmost region).
     fn stage_hover(&mut self, world: Vec2, screen: [f32; 2]) {
-        self.input_seq += 1;
-        self.hover_seq = self.input_seq;
-        self.hover = Some(world);
-        self.hover_px_seq = self.input_seq;
-        self.hover_px = Some(Vec2::new(screen[0], screen[1]));
+        self.aim.stage_hover(world, screen);
     }
 
     /// Live cursor in world coords: staged window-physical px
@@ -1495,37 +1399,23 @@ impl App {
     /// dispatch reaches ancestors) and its px goes stale ~30 frames
     /// after the last drag.
     fn live_cursor_world(&self) -> Option<Vec2> {
-        const STALE_AFTER: u64 = 30;
-        if self.hover_px_seq > 0
-            && self.input_seq.wrapping_sub(self.hover_px_seq) <= STALE_AFTER
-        {
-            return self.px_to_world(self.hover_px).or(self.hover);
+        // Staging discipline (freshness order, stale fallback) lives in
+        // `AimTracker`; unprojection needs this frame's camera, so it
+        // stays here.
+        let aim = &self.aim;
+        if let Some(px) = aim.live_px() {
+            return self.px_to_world(Some(px)).or_else(|| aim.baked());
         }
-        if self.cursor_seq > 0 && self.input_seq.wrapping_sub(self.cursor_seq) <= STALE_AFTER {
-            self.cursor_to_world().or(self.hover)
-        } else {
-            self.hover.or_else(|| self.cursor_to_world())
-        }
-    }
-
-    /// Live cursor in world coords: the staged window-physical px point
-    /// unprojected through this frame's camera (`Camera2d::dp_to_world_pt`
-    /// over the dp viewport extent — bevy `player_aim`
-    /// `viewport_to_world_2d` parity). `None` until the first pointer
-    /// move; callers fall back to the last viewport `Hover` world point
-    /// (touch/pen never stage cursor moves).
-    fn cursor_to_world(&self) -> Option<Vec2> {
-        self.px_to_world(self.cursor_px)
+        aim.baked().or_else(|| self.px_to_world(None))
     }
 
     /// Unproject one window-physical px point through this frame's
-    /// camera (shared by the root `cursor_move` source and the
-    /// viewport-hover px source; both arrive as
-    /// `position_in_window()` physical px per the engine contract).
+    /// camera. Pure viewport math lives in
+    /// [`repame_sprite::unproject_px`]; the NT wrappings (`Option`
+    /// staging, NT's dp-viewport fields) stay here.
     fn px_to_world(&self, px: Option<Vec2>) -> Option<Vec2> {
         let px = px?;
         let d = self.view_density.max(1e-6);
-        let dp = [px.x / d, px.y / d];
         // `camera_fit_extent` takes PHYSICAL px (it divides by density
         // itself): stored dp must be scaled back up first, or the
         // extent double-divides and the aim scale collapses (~2.4x too
@@ -1534,9 +1424,13 @@ impl App {
             [self.view_viewport_dp[0] * d, self.view_viewport_dp[1] * d],
             self.view_density,
         );
-        // `world_size` here is the dp viewport extent; `dp_to_world_pt`
-        // divides the dp point by the same fit the viewport paints with.
-        Some(self.cam.dp_to_world_pt(self.view_viewport_dp, extent, dp))
+        Some(repame_sprite::unproject_px(
+            px,
+            self.view_viewport_dp,
+            extent,
+            self.view_density,
+            &self.cam,
+        ))
     }
 
     /// Decode the live `sprCrosshair` frame + `opt_cursorcol` tint into
@@ -1638,7 +1532,7 @@ impl App {
     /// menu hit-testing; drained by [`App::feed_input`]).
     fn stage_click(&mut self, world: Vec2, screen: [f32; 2]) {
         let d = repose_core::locals::effective_density_scale().max(1e-6);
-        self.clicks.push(StagedClick {
+        self.clicks.push(repame_input::StagedClick {
             world,
             dp: [screen[0] / d, screen[1] / d],
         });

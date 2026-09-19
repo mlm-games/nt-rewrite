@@ -207,55 +207,41 @@ pub enum KeyCode {
     Digit9,
 }
 
-/// Physical key position to the backend-neutral [`KeyCode`].
-/// Returns `None` for keys the sim never reads.
+/// `Scheduler::held_keys` position to the backend-neutral [`KeyCode`].
+/// Derived from the W3C `name()`: letters/digits/Backquote spell their
+/// own [`KeyCode`], the rest match by name. Returns `None` for keys
+/// the sim never reads (F-keys, punctuation, numpad, modifiers...).
 pub fn keycode_for_physical(key: PhysicalKey) -> Option<KeyCode> {
+    let name = key.name();
+    if let Some(tail) = name
+        .strip_prefix("Key")
+        .or_else(|| name.strip_prefix("Digit"))
+    {
+        let mut chars = tail.chars();
+        match (chars.next(), chars.next()) {
+            (Some(c), None) => {
+                let upper = c.to_ascii_uppercase();
+                if upper.is_ascii_alphabetic() {
+                    return keycode_for_glyph(upper.to_ascii_lowercase());
+                }
+                if upper.is_ascii_digit() {
+                    return keycode_for_glyph(upper);
+                }
+                return None;
+            }
+            _ => return None,
+        }
+    }
     Some(match key {
-        PhysicalKey::ShiftLeft => KeyCode::ShiftLeft,
-        PhysicalKey::ShiftRight => KeyCode::ShiftRight,
-        PhysicalKey::KeyA => KeyCode::KeyA,
-        PhysicalKey::KeyB => KeyCode::KeyB,
-        PhysicalKey::KeyC => KeyCode::KeyC,
-        PhysicalKey::KeyD => KeyCode::KeyD,
-        PhysicalKey::KeyE => KeyCode::KeyE,
-        PhysicalKey::KeyF => KeyCode::KeyF,
-        PhysicalKey::KeyG => KeyCode::KeyG,
-        PhysicalKey::KeyH => KeyCode::KeyH,
-        PhysicalKey::KeyI => KeyCode::KeyI,
-        PhysicalKey::KeyJ => KeyCode::KeyJ,
-        PhysicalKey::KeyK => KeyCode::KeyK,
-        PhysicalKey::KeyL => KeyCode::KeyL,
-        PhysicalKey::KeyM => KeyCode::KeyM,
-        PhysicalKey::KeyN => KeyCode::KeyN,
-        PhysicalKey::KeyO => KeyCode::KeyO,
-        PhysicalKey::KeyP => KeyCode::KeyP,
-        PhysicalKey::KeyQ => KeyCode::KeyQ,
-        PhysicalKey::KeyR => KeyCode::KeyR,
-        PhysicalKey::KeyS => KeyCode::KeyS,
-        PhysicalKey::KeyT => KeyCode::KeyT,
-        PhysicalKey::KeyU => KeyCode::KeyU,
-        PhysicalKey::KeyV => KeyCode::KeyV,
-        PhysicalKey::KeyW => KeyCode::KeyW,
-        PhysicalKey::KeyX => KeyCode::KeyX,
-        PhysicalKey::KeyY => KeyCode::KeyY,
-        PhysicalKey::KeyZ => KeyCode::KeyZ,
         PhysicalKey::ArrowUp => KeyCode::ArrowUp,
         PhysicalKey::ArrowDown => KeyCode::ArrowDown,
         PhysicalKey::ArrowLeft => KeyCode::ArrowLeft,
         PhysicalKey::ArrowRight => KeyCode::ArrowRight,
         PhysicalKey::Space => KeyCode::Space,
+        PhysicalKey::ShiftLeft => KeyCode::ShiftLeft,
+        PhysicalKey::ShiftRight => KeyCode::ShiftRight,
         PhysicalKey::Tab => KeyCode::Tab,
         PhysicalKey::Backquote => KeyCode::Backquote,
-        PhysicalKey::Digit0 => KeyCode::Digit0,
-        PhysicalKey::Digit1 => KeyCode::Digit1,
-        PhysicalKey::Digit2 => KeyCode::Digit2,
-        PhysicalKey::Digit3 => KeyCode::Digit3,
-        PhysicalKey::Digit4 => KeyCode::Digit4,
-        PhysicalKey::Digit5 => KeyCode::Digit5,
-        PhysicalKey::Digit6 => KeyCode::Digit6,
-        PhysicalKey::Digit7 => KeyCode::Digit7,
-        PhysicalKey::Digit8 => KeyCode::Digit8,
-        PhysicalKey::Digit9 => KeyCode::Digit9,
         _ => return None,
     })
 }
@@ -511,54 +497,22 @@ pub fn keymap_move(
 fn keycode_for_entry(entry: &repame_input::KeymapEntry) -> Option<KeyCode> {
     use repame_input::KeymapEntry;
     match entry {
+        // `Physical` entries never occur: `capture_physical_press`
+        // resolves every capture through `chord_for_physical` into a
+        // `Key` chord, so only glyph chords reach the sampler.
         KeymapEntry::Key(chord) => keycode_for_chord(&chord.key),
-        KeymapEntry::Physical(key) => keycode_for_physical(*key),
-        KeymapEntry::None | KeymapEntry::Mouse(_) | KeymapEntry::Pad(_) | KeymapEntry::Axis { .. } => {
-            None
-        }
+        KeymapEntry::None
+        | KeymapEntry::Physical(_)
+        | KeymapEntry::Mouse(_)
+        | KeymapEntry::Pad(_)
+        | KeymapEntry::Axis { .. } => None,
     }
 }
 
 fn keycode_for_chord(key: &repose_core::input::Key) -> Option<KeyCode> {
     use repose_core::input::Key;
     Some(match key {
-        Key::Character('a') => KeyCode::KeyA,
-        Key::Character('b') => KeyCode::KeyB,
-        Key::Character('c') => KeyCode::KeyC,
-        Key::Character('d') => KeyCode::KeyD,
-        Key::Character('e') => KeyCode::KeyE,
-        Key::Character('f') => KeyCode::KeyF,
-        Key::Character('g') => KeyCode::KeyG,
-        Key::Character('h') => KeyCode::KeyH,
-        Key::Character('i') => KeyCode::KeyI,
-        Key::Character('j') => KeyCode::KeyJ,
-        Key::Character('k') => KeyCode::KeyK,
-        Key::Character('l') => KeyCode::KeyL,
-        Key::Character('m') => KeyCode::KeyM,
-        Key::Character('n') => KeyCode::KeyN,
-        Key::Character('o') => KeyCode::KeyO,
-        Key::Character('p') => KeyCode::KeyP,
-        Key::Character('q') => KeyCode::KeyQ,
-        Key::Character('r') => KeyCode::KeyR,
-        Key::Character('s') => KeyCode::KeyS,
-        Key::Character('t') => KeyCode::KeyT,
-        Key::Character('u') => KeyCode::KeyU,
-        Key::Character('v') => KeyCode::KeyV,
-        Key::Character('w') => KeyCode::KeyW,
-        Key::Character('x') => KeyCode::KeyX,
-        Key::Character('y') => KeyCode::KeyY,
-        Key::Character('z') => KeyCode::KeyZ,
-        Key::Character('0') => KeyCode::Digit0,
-        Key::Character('1') => KeyCode::Digit1,
-        Key::Character('2') => KeyCode::Digit2,
-        Key::Character('3') => KeyCode::Digit3,
-        Key::Character('4') => KeyCode::Digit4,
-        Key::Character('5') => KeyCode::Digit5,
-        Key::Character('6') => KeyCode::Digit6,
-        Key::Character('7') => KeyCode::Digit7,
-        Key::Character('8') => KeyCode::Digit8,
-        Key::Character('9') => KeyCode::Digit9,
-        Key::Character('`') => KeyCode::Backquote,
+        Key::Character(c) => keycode_for_glyph(*c)?,
         Key::Space => KeyCode::Space,
         Key::ShiftLeft => KeyCode::ShiftLeft,
         Key::ShiftRight => KeyCode::ShiftRight,
@@ -571,10 +525,57 @@ fn keycode_for_chord(key: &repose_core::input::Key) -> Option<KeyCode> {
     })
 }
 
+/// NT glyph coverage: the rebound chord alphabet is letters, digits
+/// and backquote (see `default_keymap` + `chord_for_physical`). Chords
+/// outside it (punctuation, F-keys) are unstageable by design —
+// `keycode_for_entry` maps them to `None` and the sampler skips them.
+fn keycode_for_glyph(c: char) -> Option<KeyCode> {
+    Some(match c {
+        'a' => KeyCode::KeyA,
+        'b' => KeyCode::KeyB,
+        'c' => KeyCode::KeyC,
+        'd' => KeyCode::KeyD,
+        'e' => KeyCode::KeyE,
+        'f' => KeyCode::KeyF,
+        'g' => KeyCode::KeyG,
+        'h' => KeyCode::KeyH,
+        'i' => KeyCode::KeyI,
+        'j' => KeyCode::KeyJ,
+        'k' => KeyCode::KeyK,
+        'l' => KeyCode::KeyL,
+        'm' => KeyCode::KeyM,
+        'n' => KeyCode::KeyN,
+        'o' => KeyCode::KeyO,
+        'p' => KeyCode::KeyP,
+        'q' => KeyCode::KeyQ,
+        'r' => KeyCode::KeyR,
+        's' => KeyCode::KeyS,
+        't' => KeyCode::KeyT,
+        'u' => KeyCode::KeyU,
+        'v' => KeyCode::KeyV,
+        'w' => KeyCode::KeyW,
+        'x' => KeyCode::KeyX,
+        'y' => KeyCode::KeyY,
+        'z' => KeyCode::KeyZ,
+        '0' => KeyCode::Digit0,
+        '1' => KeyCode::Digit1,
+        '2' => KeyCode::Digit2,
+        '3' => KeyCode::Digit3,
+        '4' => KeyCode::Digit4,
+        '5' => KeyCode::Digit5,
+        '6' => KeyCode::Digit6,
+        '7' => KeyCode::Digit7,
+        '8' => KeyCode::Digit8,
+        '9' => KeyCode::Digit9,
+        '`' => KeyCode::Backquote,
+        _ => return None,
+    })
+}
+
 /// Physical keys driving one [`KeyCode`] (`Scheduler::held_keys`
-/// entries). `None` for codes no physical key reports (unreachable in
-/// practice: every variant has at least one key). Used only to drop
-/// stuck levels in the polled repair — never to stage edges.
+/// entries). Derived from the W3C `name()`: single letters/digits map
+/// to their own positions, the rest by name. Used only to drop stuck
+/// levels in the polled repair — never to stage edges.
 pub fn physical_keys_for_code(code: &KeyCode) -> Option<&'static [PhysicalKey]> {
     use repose_core::input::PhysicalKey as P;
     Some(match code {
