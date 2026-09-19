@@ -1,5 +1,5 @@
 use bevy_ecs::prelude::*;
-use repame_input::{Keymap, KeymapCapture, KeymapDevice, KeymapEntry, KeymapRow};
+use repame_input::{Keymap, KeymapDevice, KeymapEntry, KeymapRow, RemapSession};
 use repose_core::input::{GamepadButton, Key, Modifiers, PointerButton};
 use repose_core::shortcuts::KeyChord;
 use serde::{Deserialize, Serialize};
@@ -196,32 +196,41 @@ impl KeyBindings {
 /// save file on boot (`KeyBindings`), written back on every rebind.
 #[derive(Resource, Clone, Debug)]
 pub struct InputMapState {
-    pub map: Keymap<NtAction>,
-    pub capture: Option<KeymapCapture<NtAction>>,
+    pub session: RemapSession<NtAction>,
 }
 
 impl Default for InputMapState {
     fn default() -> Self {
-        Self {
-            map: default_keymap(),
-            capture: None,
-        }
+        let mut session = RemapSession::default();
+        session.map = default_keymap();
+        Self { session }
+    }
+}
+
+impl std::ops::Deref for InputMapState {
+    type Target = RemapSession<NtAction>;
+    fn deref(&self) -> &Self::Target {
+        &self.session
+    }
+}
+
+impl std::ops::DerefMut for InputMapState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.session
     }
 }
 
 impl InputMapState {
     pub fn begin_capture(&mut self, action: NtAction, device: KeymapDevice) {
-        self.capture = Some(self.map.begin_capture(action, device));
+        self.session.begin(action, device);
     }
 
     pub fn cancel_capture(&mut self) {
-        self.capture = None;
+        self.session.cancel();
     }
 
     pub fn resolve_capture(&mut self, pressed: Option<KeymapEntry>) {
-        if let Some(capture) = self.capture.take() {
-            self.map.resolve_capture(&capture, pressed);
-        }
+        self.session.resolve(pressed);
     }
 }
 

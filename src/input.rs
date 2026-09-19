@@ -136,15 +136,7 @@ impl NtInput {
 
 /// Gamepad stick dead zone with rescaled response (bevy parity).
 pub fn dead_zone(value: Vec2) -> Vec2 {
-    const DEAD_ZONE: f32 = 0.22;
-
-    let length = value.length();
-    if length <= DEAD_ZONE {
-        return Vec2::ZERO;
-    }
-
-    let scaled = ((length - DEAD_ZONE) / (1.0 - DEAD_ZONE)).clamp(0.0, 1.0);
-    value.normalize_or_zero() * scaled
+    repame_input::dead_zone(value)
 }
 
 /// Drop pulses at the end of every tick (bevy `clear_input_pulses`).
@@ -246,47 +238,7 @@ pub fn keycode_for_physical(key: PhysicalKey) -> Option<KeyCode> {
     })
 }
 
-/// Backend-neutral mouse button state for one tick: held vs pressed
-/// this tick (bevy `pressed` vs `just_pressed`).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct MouseState {
-    pub left_held: bool,
-    pub left_pressed: bool,
-    pub right_held: bool,
-    pub right_pressed: bool,
-}
-
-/// Backend-neutral gamepad snapshot for one tick: raw stick axes plus
-/// held/pressed edges for exactly the buttons bevy `sample_input`
-/// reads (right/left trigger 2, South/East, D-pad L/U/R, North).
-/// Any shell (repame-shell `GamepadPoller`, winit, test harness) maps
-/// its native events onto this; the sim law below is bevy-verbatim.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct GamepadState {
-    pub left_stick: Vec2,
-    pub right_stick: Vec2,
-    pub right_trigger_held: bool,
-    pub right_trigger_pressed: bool,
-    pub left_trigger_held: bool,
-    pub left_trigger_pressed: bool,
-    pub south_pressed: bool,
-    pub east_pressed: bool,
-    pub dpad_left_pressed: bool,
-    pub dpad_up_pressed: bool,
-    pub dpad_right_pressed: bool,
-    pub north_pressed: bool,
-}
-
-/// Backend-neutral touch contact: `start` is the touchdown point,
-/// `pos` the current point (both in screen px, y-down from the top),
-/// `just_pressed` marks contacts that began this tick (bevy
-/// `iter_just_pressed` vs `iter`).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct TouchContact {
-    pub start: Vec2,
-    pub pos: Vec2,
-    pub just_pressed: bool,
-}
+pub use repame_input::{GamepadState, MouseState, TouchContact, apply_stick};
 
 /// WASD/arrows move vector in world space. The world is y-down
 /// (GML convention: north is −y, see `worldgen::Maker::step_delta`),
@@ -310,13 +262,6 @@ pub fn keyboard_move(held: &HashSet<KeyCode>) -> Vec2 {
     }
 
     value.normalize_or_zero()
-}
-
-/// Stick response shared by future gamepad/touch shells (bevy law:
-/// `dead_zone` rescale, then length clamp — `sample_input` applied the
-/// clamp when writing `move_axis`/`aim_axis`).
-pub fn apply_stick(raw: Vec2) -> Vec2 {
-    dead_zone(raw).clamp_length_max(1.0)
 }
 
 /// Backend-neutral port of bevy `sample_input`'s keyboard+mouse path.

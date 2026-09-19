@@ -56,7 +56,7 @@
 //! sim; [`SpiralCtl`] steps at the fixed cadence inside [`App::advance`]
 //! (sim-pure); the sim schedule in `schedule.rs` is unchanged.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -88,7 +88,7 @@ use crate::comps_a::{NT_CAM_SCALE, Player, Projectile, WallCell, WallTile};
 use crate::comps_b::{Enemy, Pickup, Prop};
 use crate::data::AreaId;
 use crate::input::{
-    GamepadState, KeyCode, MouseState, NtInput, TouchContact, sample_gamepads, sample_touch,
+    GamepadState, KeyCode, MouseState, NtInput, sample_gamepads, sample_touch,
 };
 use crate::render::{
     ATLAS_PAGES, ATLAS_SIZE, CamPoi, CamStepInput, GmlCamera, RenderAssets, Z_BLOOM, Z_CROSSHAIR,
@@ -248,12 +248,8 @@ pub struct App {
     /// shell's focus handler) drops `held` outright — winit delivers
     /// no key-ups across an alt-tab.
     window_focused: bool,
-    clicks: Vec<repame_input::StagedClick>,
-    /// Screen-anchored pointer staging (raw window-physical px in, live
-    /// world point out via [`App::live_cursor_world`]). The freshness
-    /// discipline lives in [`repame_input::AimTracker`]; unprojection
-    /// needs this frame's camera so it stays here.
-    aim: repame_input::AimTracker,
+    staging: std::rc::Rc<std::cell::RefCell<repame_shell::Staging>>,
+    shortcut_edges: repame_shell::SharedEdges,
     pause_edge: bool,
     restart_edge: bool,
     interact_edge: bool,
@@ -263,28 +259,11 @@ pub struct App {
     /// pointer-down, cleared on primary pointer-up, so automatic weapons
     /// keep firing while held (clicks alone are single-frame edges).
     lmb_held: bool,
-    /// Right-button down/up edges staged this window. The viewport
-    /// `PickEvent` carries its button, so secondary presses stage here
-    /// directly (and route Back over settings/credits like GML
-    /// `BackButton`).
-    rmb_down_edge: bool,
-    rmb_up_edge: bool,
-    /// Staged gamepad snapshots, one per pad (bevy `sample_input`
-    /// `gamepads` query order verbatim: keyboard, then pads in order,
-    /// then touch).
-    pads: Vec<GamepadState>,
     /// Latched gamepad presence: set while any staged snapshot shows a
     /// connected pad, cleared when a frame stages none. `pads` drains
     /// every frame so it can't answer "is a pad in use" outside
     /// `feed_input`; this carries that fact to the cursor gate.
     pad_live: bool,
-    /// Live touch/pen contacts by pointer id: (touchdown, current),
-    /// screen-px y-down (bevy `Touches` parity — `feed_input`
-    /// synthesizes the per-frame contact list from this map, so held
-    /// contacts keep steering like bevy's `touches.iter()`).
-    touch_active: HashMap<u64, (Vec2, Vec2)>,
-    /// Contacts that began this tick (bevy `iter_just_pressed` parity).
-    touch_new: HashSet<u64>,
     /// Viewport width in screen px for the touch button zones (bevy
     /// reads `window.width()`; refreshed from the frame geometry).
     view_width: f32,
@@ -378,19 +357,14 @@ impl App {
             held: HashSet::new(),
             edges: Vec::new(),
             window_focused: true,
-            clicks: Vec::new(),
-            aim: repame_input::AimTracker::default(),
+            staging: repame_shell::Staging::shared(),
+            shortcut_edges: repame_shell::shared_edges(),
             pause_edge: false,
             restart_edge: false,
             interact_edge: false,
             rmb_held: false,
             lmb_held: false,
-            rmb_down_edge: false,
-            rmb_up_edge: false,
-            pads: Vec::new(),
             pad_live: false,
-            touch_active: HashMap::new(),
-            touch_new: HashSet::new(),
             view_width: 1280.0,
             view_viewport_dp: [1280.0, 720.0],
             view_density: 1.0,
@@ -1021,11 +995,7 @@ impl App {
 }
 
 pub(crate) mod nt_shortcuts {
-    use std::cell::Cell;
-    use std::rc::Rc;
-
-    use repose_core::input::{Key, Modifiers};
-    use repose_core::shortcuts;
+    use repame_shell::{SharedEdges, shared_edges};
 
     use super::App;
 
@@ -1033,48 +1003,23 @@ pub(crate) mod nt_shortcuts {
     pub const RESTART: &str = "nt.restart";
     pub const CONFIRM: &str = "nt.confirm";
 
-    pub fn map() -> shortcuts::ShortcutMap {
-        shortcuts::ShortcutMap::new()
-            .bind(Key::Escape, Modifiers::default(), action_for(PAUSE))
-            .bind(Key::Character('r'), Modifiers::default(), action_for(RESTART))
-            .bind(Key::Enter, Modifiers::default(), action_for(CONFIRM))
+    pub fn map() -> repose_core::shortcuts::ShortcutMap {
+        repame_shell::game_shortcut_map(PAUSE, RESTART, CONFIRM)
     }
 
-    fn action_for(name: &'static str) -> shortcuts::Action {
-        shortcuts::Action::Custom(name.into())
+    pub fn shared() -> SharedEdges {
+        shared_edges()
     }
 
-    thread_local! {
-        static MAP_INSTALLED: Cell<bool> = const { Cell::new(false) };
+    pub fn install(edges: &SharedEdges) {
+        repame_shell::install_into(edges, PAUSE, RESTART, CONFIRM);
     }
 
-    pub fn install(app: *mut App) {
-        // Process-lifetime install, called every frame from `view`:
-        // the map is pushed once (a push per frame would grow the scope
-        // stack unboundedly), while the handler is replaced every call
-        // so the raw `App` pointer never dangles across moves. Deliberately
-        // not `scoped_effect`: there is no owning scope to clean up after.
-        if !MAP_INSTALLED.with(|c| c.replace(true)) {
-            let _ = shortcuts::InstallShortcutMap(map());
-        }
-        let _ = shortcuts::InstallShortcutHandler(Rc::new(move |action| {
-            let app = unsafe { &mut *app };
-            match action {
-                shortcuts::Action::Custom(key) if key.as_ref() == PAUSE => {
-                    app.pause_edge = true;
-                    true
-                }
-                shortcuts::Action::Custom(key) if key.as_ref() == RESTART => {
-                    app.restart_edge = true;
-                    true
-                }
-                shortcuts::Action::Custom(key) if key.as_ref() == CONFIRM => {
-                    app.interact_edge = true;
-                    true
-                }
-                _ => false,
-            }
-        }));
+    pub fn drain(app: &mut App, edges: &SharedEdges) {
+        let (pause, restart, confirm) = repame_shell::take_shortcut_edges(edges);
+        app.pause_edge |= pause;
+        app.restart_edge |= restart;
+        app.interact_edge |= confirm;
     }
 }
 
@@ -1178,6 +1123,7 @@ impl App {
     /// alt-tab, and GML's `keyboard_check` reads all-up there too.
     pub fn set_window_focused(&mut self, focused: bool) {
         self.window_focused = focused;
+        self.staging.borrow_mut().set_window_focused(focused);
         if !focused {
             self.held.clear();
             self.edges.clear();
@@ -1215,92 +1161,40 @@ impl App {
     /// side; gamepad-side captures resolve from pad edges in
     /// `feed_input`.
     fn capture_mouse_press(&mut self, left: bool) {
-        use repame_input::KeymapEntry;
         self.sim.world.init_resource::<InputMapState>();
-        let entry = if left {
-            KeymapEntry::Mouse(repose_core::input::PointerButton::Primary)
-        } else {
-            KeymapEntry::Mouse(repose_core::input::PointerButton::Secondary)
-        };
-        let mut state = self.sim.world.resource_mut::<InputMapState>();
-        let Some(capture) = state.capture.clone() else {
-            return;
-        };
-        if capture.device == repame_input::KeymapDevice::KeyboardMouse {
-            state.map.resolve_capture(&capture, Some(entry));
-            state.capture = None;
+        let done = self
+            .sim
+            .world
+            .resource_mut::<InputMapState>()
+            .resolve_mouse(left);
+        if done {
             self.persist_keymap();
         }
     }
 
     pub(crate) fn capture_key_press(&mut self, key: &repose_core::input::Key) {
-        use repame_input::KeymapEntry;
         self.sim.world.init_resource::<InputMapState>();
-        // Glyph path: Space/Tab/Enter/Escape map explicitly; any other
-        // glyph resolves as its lowercase char (same swallow bug as the
-        // physical path had — GML captures any pressed input).
-        let chord = match key {
-            repose_core::input::Key::Space => repose_core::shortcuts::KeyChord::new(
-                repose_core::input::Key::Space,
-                repose_core::input::Modifiers::default(),
-            ),
-            repose_core::input::Key::Tab => repose_core::shortcuts::KeyChord::new(
-                repose_core::input::Key::Tab,
-                repose_core::input::Modifiers::default(),
-            ),
-            repose_core::input::Key::Enter => repose_core::shortcuts::KeyChord::new(
-                repose_core::input::Key::Enter,
-                repose_core::input::Modifiers::default(),
-            ),
-            repose_core::input::Key::Escape => repose_core::shortcuts::KeyChord::new(
-                repose_core::input::Key::Escape,
-                repose_core::input::Modifiers::default(),
-            ),
-            repose_core::input::Key::ShiftLeft => repose_core::shortcuts::KeyChord::new(
-                repose_core::input::Key::ShiftLeft,
-                repose_core::input::Modifiers::default(),
-            ),
-            repose_core::input::Key::ShiftRight => repose_core::shortcuts::KeyChord::new(
-                repose_core::input::Key::ShiftRight,
-                repose_core::input::Modifiers::default(),
-            ),
-            repose_core::input::Key::Character(c) => repose_core::shortcuts::KeyChord::new(
-                repose_core::input::Key::Character(c.to_ascii_lowercase()),
-                repose_core::input::Modifiers::default(),
-            ),
-            _ => return,
-        };
-        let mut state = self.sim.world.resource_mut::<InputMapState>();
-        let Some(capture) = state.capture.clone() else {
-            return;
-        };
-        if capture.device == repame_input::KeymapDevice::KeyboardMouse {
-            state
-                .map
-                .resolve_capture(&capture, Some(KeymapEntry::Key(chord)));
-            state.capture = None;
+        let done = self
+            .sim
+            .world
+            .resource_mut::<InputMapState>()
+            .resolve_key(key);
+        if done {
             self.persist_keymap();
         }
     }
 
     pub(crate) fn capture_physical_press(&mut self, key: PhysicalKey) {
-        use repame_input::KeymapEntry;
         self.sim.world.init_resource::<InputMapState>();
         if !self.capture_armed() {
             return;
         }
-        let Some(chord) = repame_input::chord_for_physical(key) else {
-            return;
-        };
-        let mut state = self.sim.world.resource_mut::<InputMapState>();
-        let Some(capture) = state.capture.clone() else {
-            return;
-        };
-        if capture.device == repame_input::KeymapDevice::KeyboardMouse {
-            state
-                .map
-                .resolve_capture(&capture, Some(KeymapEntry::Key(chord)));
-            state.capture = None;
+        let done = self
+            .sim
+            .world
+            .resource_mut::<InputMapState>()
+            .resolve_physical(key);
+        if done {
             self.persist_keymap();
         }
     }
@@ -1308,12 +1202,9 @@ impl App {
     fn cancel_remap_capture(&mut self) {
         self.sim.world.init_resource::<InputMapState>();
         let mut state = self.sim.world.resource_mut::<InputMapState>();
-        // GML Backspace clears the entry (`Key[$ key][type]` stays but
-        // reads unbound); Escape cancels the gesture.
-        if state.capture.is_some() {
-            let capture = state.capture.clone().expect("checked");
-            state.map.resolve_capture(&capture, None);
-            state.capture = None;
+        if state.armed() {
+            state.resolve(None);
+            drop(state);
             self.persist_keymap();
         }
     }
@@ -1344,53 +1235,24 @@ impl App {
     /// capture eats the press instead (GML captures `mb_left` /
     /// `mb_right` as the new binding).
     fn pick_down(&mut self, button: PointerButton) {
-        let left = button == PointerButton::Primary;
         if self.capture_armed() {
+            let left = button == PointerButton::Primary;
             self.capture_mouse_press(left);
             return;
         }
-        if left {
-            self.lmb_held = true;
-            return;
-        }
-        self.rmb_down_edge = !self.rmb_held;
-        self.rmb_held = true;
+        self.staging.borrow_mut().pick_down(button);
     }
 
-    /// Viewport mouse-button release: the `Click` up-edge carries the
-    /// same button, so the held latch clears here (the polled snapshot
-    /// in `feed_polled` repairs a release outside the window).
     fn pick_up(&mut self, button: PointerButton) {
-        if button == PointerButton::Primary {
-            self.lmb_held = false;
-        } else {
-            self.rmb_held = false;
-            self.rmb_up_edge = true;
-        }
+        self.staging.borrow_mut().pick_up(button);
     }
 
-    /// Stage the cursor's window-physical px position (root
-    /// `on_pointer_move`, y-down: `position_in_window()`, the same
-    /// space [`App::stage_hover`] stages from the viewport). Stored raw
-    /// — [`App::px_to_world`] unprojects it through the live camera
-    /// each frame.
     fn cursor_move(&mut self, phys_px: Vec2) {
-        self.aim.cursor_move(phys_px);
+        self.staging.borrow_mut().cursor_move(phys_px);
     }
 
-    /// Stage one viewport hover: the baked world point AND the raw
-    /// window-physical `screen` px. The engine contract on
-    /// `PickEvent::Hover.screen` is explicit: "Games stage this raw and
-    /// unproject through the live camera each frame (screen-anchored
-    /// aim)". The baked point is the stale fallback (touch/pen never
-    /// stage cursor moves, so theirs is the only cursor); the px is
-    /// the live source `live_cursor_world` prefers. `cursor_move`
-    /// (root `on_pointer_move`) stages window px in the same space and
-    /// refreshes the same way — the viewport hover px arrives on every
-    /// free move, which is exactly when the root handler stays silent
-    /// (free moves dispatch only to the topmost region).
     fn stage_hover(&mut self, world: Vec2, screen: [f32; 2]) {
-        self.aim.stage_hover(world, screen);
+        self.staging.borrow_mut().stage_hover(world, screen);
     }
 
     /// Live cursor in world coords: staged window-physical px
@@ -1409,10 +1271,8 @@ impl App {
     /// dispatch reaches ancestors) and its px goes stale ~30 frames
     /// after the last drag.
     fn live_cursor_world(&self) -> Option<Vec2> {
-        // Staging discipline (freshness order, stale fallback) lives in
-        // `AimTracker`; unprojection needs this frame's camera, so it
-        // stays here.
-        let aim = &self.aim;
+        let staging = self.staging.borrow();
+        let aim = &staging.aim;
         if let Some(px) = aim.live_px() {
             return self.px_to_world(Some(px)).or_else(|| aim.baked());
         }
@@ -1527,7 +1387,7 @@ impl App {
     /// Also latches [`App::pad_live`]: shells stage only live pads, so
     /// any snapshot means a pad is in use this frame.
     pub fn stage_gamepad(&mut self, pad: GamepadState) {
-        self.pads.push(pad);
+        self.staging.borrow_mut().stage_gamepad(pad);
         self.pad_live = true;
     }
 
@@ -1542,32 +1402,19 @@ impl App {
     /// menu hit-testing; drained by [`App::feed_input`]).
     fn stage_click(&mut self, world: Vec2, screen: [f32; 2]) {
         let d = repose_core::locals::effective_density_scale().max(1e-6);
-        self.clicks.push(repame_input::StagedClick {
-            world,
-            dp: [screen[0] / d, screen[1] / d],
-        });
+        self.staging.borrow_mut().stage_click(world, screen, d);
     }
 
-    /// Touch/pen contact began (shell maps pointer-down screen-px
-    /// y-down coordinates; mouse never lands here — clicks/hover
-    /// cover it).
     pub fn touch_down(&mut self, id: u64, screen: Vec2) {
-        self.touch_active.insert(id, (screen, screen));
-        self.touch_new.insert(id);
+        self.staging.borrow_mut().touch_down(id, screen);
     }
 
-    /// Touch/pen contact moved (ignored unless the contact began with
-    /// [`App::touch_down`], so pen hovers never become sticks).
     pub fn touch_move(&mut self, id: u64, screen: Vec2) {
-        if let Some(contact) = self.touch_active.get_mut(&id) {
-            contact.1 = screen;
-        }
+        self.staging.borrow_mut().touch_move(id, screen);
     }
 
-    /// Touch/pen contact ended (up/cancel/leave).
     pub fn touch_up(&mut self, id: u64) {
-        self.touch_active.remove(&id);
-        self.touch_new.remove(&id);
+        self.staging.borrow_mut().touch_up(id);
     }
 
     /// Sync event-staged levels against the platform snapshot
@@ -1578,34 +1425,37 @@ impl App {
     /// the handlers missed. Keyboard and mouse share the rule; Esc/R
     /// shortcut edges are untouched (shortcuts own those).
     pub fn feed_polled(&mut self, sched: &Scheduler) {
-        if !sched.window_focused {
-            self.set_window_focused(false);
-            return;
-        }
-        self.window_focused = true;
-        repame_input::reconcile_held(
+        repame_shell::apply_scheduler_levels(
             &mut self.held,
-            &sched.held_keys,
+            &mut self.lmb_held,
+            &mut self.rmb_held,
+            &mut self.window_focused,
+            sched,
             crate::input::keycode_for_physical,
             crate::input::physical_keys_for_code,
         );
-        if !sched.mouse_primary {
-            self.lmb_held = false;
-        }
-        if !sched.mouse_secondary {
-            self.rmb_held = false;
+        if !self.window_focused {
+            self.edges.clear();
         }
     }
 
     /// Drain staged shell input into sim resources (runs before
     /// [`App::advance`] each frame; pulses are take-once downstream).
     fn feed_input(&mut self) {
-        // Staged menu button actions (pause/settings/credits `on_click`
-        // handlers): apply headlessly before the sim advances, so a
-        // click lands the same tick as a keyboard edge would.
         for action in self.menu_actions.drain(..) {
             apply_menu_action(&mut self.sim.world, action);
         }
+        nt_shortcuts::drain(self, &self.shortcut_edges.clone());
+        let staging_edges = self.staging.borrow().edges.clone();
+        for code in staging_edges {
+            if let Some(mapped) = crate::input::keycode_for_physical(code) {
+                let fresh = self.held.insert(mapped);
+                if fresh {
+                    self.edges.push(mapped);
+                }
+            }
+        }
+        self.staging.borrow_mut().edges.clear();
 
         let just: HashSet<KeyCode> = self.edges.drain(..).collect();
         let state = self
@@ -1729,22 +1579,12 @@ impl App {
         // so there is nothing to drop here. Each arm below decides
         // what RMB means (Back over settings/credits, silent
         // elsewhere) without eating a coincident left click.
-        let rmb_down = std::mem::replace(&mut self.rmb_down_edge, false);
-        // Release stages no pick; drain the flag so it never leaks into
-        // a later window.
-        let _ = std::mem::replace(&mut self.rmb_up_edge, false);
-
-        // No fire pulses from clicks over the main menu / title: both
-        // route positionally now, and Title takes `fire` (Space) as the
-        // loadout toggle — a pod click must not toggle it as a side
-        // effect. Splash/Loading advance via the click→interact arm
-        // below, so they stage no fire pulse either (one pulse per
-        // click, not two).
-        // `clicks` are single-frame edges (staged on Press, drained at the
-        // end of this fn); `lmb_held` latches primary down/up at the root
-        // so automatic weapons keep firing while the button is held.
-        let mouse_down_edge = !self.clicks.is_empty();
-        let mouse_down = (mouse_down_edge || self.lmb_held)
+        let rmb_down = self.staging.borrow_mut().take_rmb_down();
+        let staging_clicks = self.staging.borrow_mut().take_clicks();
+        let staging_lmb = self.staging.borrow().lmb_held;
+        let staging_rmb = self.staging.borrow().rmb_held;
+        let mouse_down_edge = !staging_clicks.is_empty();
+        let mouse_down = (mouse_down_edge || staging_lmb)
             && !menu_open
             && !game_over
             && !offer_open
@@ -1769,7 +1609,7 @@ impl App {
         // `Spec` row is mouse-Secondary, read through
         // `MouseState::right_*` below.
         let mouse = MouseState {
-            right_held: self.rmb_held,
+            right_held: staging_rmb,
             right_pressed: rmb_down,
             ..mouse
         };
@@ -1794,35 +1634,15 @@ impl App {
                 (self.held.clone(), just.clone())
             };
             crate::input::sample_keyboard_mapped(&held, &just, &mouse, Some(&keymap), &mut input);
-            // Bevy `sample_input` layering verbatim: gamepads in query
-            // order, then touch. Sticks overwrite nonzero axes; pulses
-            // OR-accumulate; slots replace; cycle saturating-adds.
-            let pads = self.pads.drain(..).collect::<Vec<_>>();
-            // No snapshots staged this frame = no live pad: unlatch so
-            // the cursor gate falls back to keyboard mode.
-            self.pad_live = !pads.is_empty();
+            let pads = self.staging.borrow_mut().take_pads();
+            self.pad_live = self.staging.borrow().pad_live;
             sample_gamepads(&pads, &mut input);
-            // Touch contacts synthesize fresh every tick from the live
-            // map (bevy `touches.iter()` yields all pressed contacts;
-            // `touch_new` marks this tick's `iter_just_pressed`).
-            if !self.touch_active.is_empty() {
-                // `PickEvent` screens and `sched.size` are physical px;
-                // `sample_touch` zones are authored in dp (96dp button
-                // strip, 56dp stick scale). Convert both to dp so HiDPI
-                // windows keep dp-sized zones instead of shrinking them
-                // by the density.
+            {
                 let d = repose_core::locals::effective_density_scale().max(1e-6);
-                let contacts: Vec<TouchContact> = self
-                    .touch_active
-                    .iter()
-                    .map(|(id, (start, pos))| TouchContact {
-                        start: *start / d,
-                        pos: *pos / d,
-                        just_pressed: self.touch_new.contains(id),
-                    })
-                    .collect();
-                self.touch_new.clear();
-                sample_touch(&contacts, self.view_width / d, &mut input);
+                let contacts = self.staging.borrow_mut().touch_contacts(d);
+                if !contacts.is_empty() {
+                    sample_touch(&contacts, self.view_width / d, &mut input);
+                }
             }
         }
         // Right-click and Shift share the `spec` action (GML `spec`
@@ -1861,7 +1681,7 @@ impl App {
                 || had_pause
                 || had_restart
                 || had_interact
-                || !self.clicks.is_empty())
+                || !staging_clicks.is_empty())
         {
             self.sim.world.resource_mut::<NtInput>().press_interact();
         }
@@ -1906,7 +1726,7 @@ impl App {
                         }
                     }
                 }
-                if let Some(click) = self.clicks.last().copied() {
+                if let Some(click) = staging_clicks.last().copied() {
                     let mut input = self.sim.world.resource_mut::<NtInput>();
                     let dir = click.world - pp;
                     if dir.length_squared() > 1e-6 {
@@ -1916,7 +1736,6 @@ impl App {
                     input.press_fire();
                 }
             }
-            self.clicks.clear();
         } else if menu_open {
             // Open menu over a live run: right-click steps back (GML
             // `BackButton` `mb_right` parity — Settings pops one level
@@ -1927,7 +1746,7 @@ impl App {
                 apply_menu_action(&mut self.sim.world, UiAction::SettingsBack);
             } else if rmb_down && overlay == OverlayMenu::Credits {
                 apply_menu_action(&mut self.sim.world, UiAction::CloseOverlay);
-            } else if let Some(click) = self.clicks.last().copied() {
+            } else if let Some(click) = staging_clicks.last().copied() {
                 let viewport_dp = self.view_viewport_dp;
                 let kind = menu_overlay_kind(
                     state,
@@ -1943,9 +1762,9 @@ impl App {
                     }
                 }
             }
-            self.clicks.clear();
+            
         } else if game_over {
-            if let Some(click) = self.clicks.last().copied() {
+            if let Some(click) = staging_clicks.last().copied() {
                 let viewport_dp = self.view_viewport_dp;
                 if let Some(action) = route_menu_click(
                     &mut self.sim.world,
@@ -1956,7 +1775,7 @@ impl App {
                     apply_menu_action(&mut self.sim.world, action);
                 }
             }
-            self.clicks.clear();
+            
         } else if state == AppState::MainMenu {
             // Settings/Credits/Stats open over the buttons (GML MenuOptions
             // / DrawStats parity): route through the live overlay kind so
@@ -1966,7 +1785,7 @@ impl App {
                 apply_menu_action(&mut self.sim.world, UiAction::SettingsBack);
             } else if rmb_down && matches!(overlay, OverlayMenu::Credits | OverlayMenu::Stats) {
                 apply_menu_action(&mut self.sim.world, UiAction::CloseOverlay);
-            } else if let Some(click) = self.clicks.last().copied() {
+            } else if let Some(click) = staging_clicks.last().copied() {
                 let viewport_dp = self.view_viewport_dp;
                 let kind = menu_overlay_kind(
                     state,
@@ -1981,7 +1800,7 @@ impl App {
                     apply_menu_action(&mut self.sim.world, action);
                 }
             }
-            self.clicks.clear();
+            
         } else if state == AppState::Title {
             // Settings/Credits open over the campfire: route those through
             // the menu router (mouse + RMB-back); otherwise pods / GO /
@@ -1990,7 +1809,7 @@ impl App {
                 apply_menu_action(&mut self.sim.world, UiAction::SettingsBack);
             } else if rmb_down && overlay == OverlayMenu::Credits {
                 apply_menu_action(&mut self.sim.world, UiAction::CloseOverlay);
-            } else if let Some(click) = self.clicks.last().copied() {
+            } else if let Some(click) = staging_clicks.last().copied() {
                 let viewport_dp = self.view_viewport_dp;
                 if overlay == OverlayMenu::Settings || overlay == OverlayMenu::Credits {
                     let kind = menu_overlay_kind(
@@ -2009,11 +1828,11 @@ impl App {
                     apply_menu_action(&mut self.sim.world, action);
                 }
             }
-            self.clicks.clear();
+            
         } else if offer_open {
             // Mutation/ultra offer: right-button is silent (never confirms
             // or eats the left click).
-            if let Some(click) = self.clicks.last().copied() {
+            if let Some(click) = staging_clicks.last().copied() {
                 let viewport_dp = self.view_viewport_dp;
                 let vw = crate::render::gml_view_size(viewport_dp)[0];
                 let k = (viewport_dp[1].max(1.0) / 240.0).max(1e-6);
@@ -2028,14 +1847,14 @@ impl App {
                     apply_menu_action(&mut self.sim.world, action);
                 }
             }
-            self.clicks.clear();
-        } else if let Some(_click) = self.clicks.last().copied() {
+            
+        } else if let Some(_click) = staging_clicks.last().copied() {
             // Splash/Loading advance on any mouse button (bevy `boot_intro`
             // any-key/mouse law).
-            self.clicks.clear();
+            
             self.sim.world.resource_mut::<NtInput>().press_interact();
         } else {
-            self.clicks.clear();
+            
         }
     }
 
@@ -2074,6 +1893,25 @@ impl App {
 
     /// Build this frame's view: stage input, advance the sim, snapshot
     /// sim+render+vortex+HUD+menus into repose views.
+    pub fn drain_audio_cues(&mut self) -> Vec<repame_audio::Cue> {
+        if let Some(mut q) = self
+            .sim
+            .world
+            .get_resource_mut::<crate::msg::Queue<crate::audio::AudioCue>>()
+        {
+            q.drain()
+                .iter()
+                .map(|c| repame_audio::Cue {
+                    name: c.name,
+                    volume: c.volume,
+                    variance: c.variance,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
     pub fn view(&mut self, sched: &mut Scheduler, _ctx: &RenderContext, dt: Duration) -> View {
         request_frame();
         // Touch button zones read the viewport width (bevy
@@ -2102,7 +1940,7 @@ impl App {
                 .get_resource::<crate::savedata_part::SaveData>()
                 .is_some_and(|s| s.settings.gamepad_enabled)
                 && self.pad_live;
-            !gamepad && self.touch_active.is_empty()
+            !gamepad && self.staging.borrow().touch_active.is_empty()
         };
         let overlay_now = self
             .sim
@@ -2711,7 +2549,7 @@ impl App {
             chroma: 0.0,
         };
 
-        let app_ptr = self as *mut App;
+        let staging = self.staging.clone();
         let viewport = if self.assets.is_some() {
             let geom = GeomHandle::new();
             let uploads = self
@@ -2725,66 +2563,66 @@ impl App {
                 .map(|a| a.batch_desc())
                 .unwrap_or_default();
             Viewport2dGpu(frame, geom, uploads, desc, move |ev| {
-                // SAFETY: synchronous compose-time dispatch only (same
-                // shape as the rozvp pilot runner).
-                let app = unsafe { &mut *app_ptr };
+                let mut staging = staging.borrow_mut();
                 match ev {
                     PickEvent::Press {
                         world,
                         screen,
                         button,
                     } => {
-                        app.pick_down(button);
+                        staging.pick_down(button);
                         if button == PointerButton::Primary {
-                            app.stage_click(world, screen)
+                            let d =
+                                repose_core::locals::effective_density_scale().max(1e-6);
+                            staging.stage_click(world, screen, d);
                         }
                     }
                     PickEvent::Click {
                         button, ..
                     } => {
-                        app.pick_up(button);
+                        staging.pick_up(button);
                     }
-                    PickEvent::Hover { world, screen } => app.stage_hover(world, screen),
-                    // Touch contacts (screen px, y-down) feed bevy's
-                    // touch zones; taps still land as clicks above.
+                    PickEvent::Hover { world, screen } => staging.stage_hover(world, screen),
                     PickEvent::TouchDown { id, screen } => {
-                        app.touch_down(id, Vec2::new(screen[0], screen[1]))
+                        staging.touch_down(id, Vec2::new(screen[0], screen[1]))
                     }
                     PickEvent::TouchMove { id, screen } => {
-                        app.touch_move(id, Vec2::new(screen[0], screen[1]))
+                        staging.touch_move(id, Vec2::new(screen[0], screen[1]))
                     }
-                    PickEvent::TouchUp { id } => app.touch_up(id),
+                    PickEvent::TouchUp { id } => staging.touch_up(id),
                 }
             })
         } else {
             let geom = GeomHandle::new();
+            let staging = self.staging.clone();
             Viewport2d(frame, geom, move |ev| {
-                // SAFETY: synchronous compose-time dispatch only.
-                let app = unsafe { &mut *app_ptr };
+                let mut staging = staging.borrow_mut();
                 match ev {
                     PickEvent::Press {
                         world,
                         screen,
                         button,
                     } => {
-                        app.pick_down(button);
+                        staging.pick_down(button);
                         if button == PointerButton::Primary {
-                            app.stage_click(world, screen)
+                            let d =
+                                repose_core::locals::effective_density_scale().max(1e-6);
+                            staging.stage_click(world, screen, d);
                         }
                     }
                     PickEvent::Click {
                         button, ..
                     } => {
-                        app.pick_up(button);
+                        staging.pick_up(button);
                     }
-                    PickEvent::Hover { world, screen } => app.stage_hover(world, screen),
+                    PickEvent::Hover { world, screen } => staging.stage_hover(world, screen),
                     PickEvent::TouchDown { id, screen } => {
-                        app.touch_down(id, Vec2::new(screen[0], screen[1]))
+                        staging.touch_down(id, Vec2::new(screen[0], screen[1]))
                     }
                     PickEvent::TouchMove { id, screen } => {
-                        app.touch_move(id, Vec2::new(screen[0], screen[1]))
+                        staging.touch_move(id, Vec2::new(screen[0], screen[1]))
                     }
-                    PickEvent::TouchUp { id } => app.touch_up(id),
+                    PickEvent::TouchUp { id } => staging.touch_up(id),
                 }
             })
         };
@@ -2809,12 +2647,14 @@ impl App {
         } else {
             repose_core::CursorIcon::Default
         });
-        let app_ptr = self as *mut App;
-        nt_shortcuts::install(app_ptr);
-        let key_ptr = self as *mut App;
+        let edges = self.shortcut_edges.clone();
+        nt_shortcuts::install(&edges);
+        let app_capture = self.staging.clone();
+        let _ = &app_capture;
+        let staging = self.staging.clone();
         let focus = remember(FocusRequester::new);
         let fr_positioned = (*focus).clone();
-        let focus_ptr = self as *mut App;
+        let focus_staging = self.staging.clone();
         let root_mod = Modifier::new()
             .fill_max_size()
             .focusable(true)
@@ -2823,37 +2663,17 @@ impl App {
                 fr_positioned.request_focus();
             })
             .on_focus_changed(move |focused| {
-                // SAFETY: synchronous compose-time dispatch only.
-                let app = unsafe { &mut *focus_ptr };
-                app.set_window_focused(focused);
+                focus_staging.borrow_mut().set_window_focused(focused);
             })
             .on_preview_key_event(move |ke: KeyEvent| {
-                // Capture REMAP keys before the runtime's Space/Enter
-                // keyboard-activation consumes them: when a rebind is
-                // armed, the next pressed key resolves the capture and
-                // never reaches gameplay or button activation. Preview
-                // runs root-first, ahead of focus dispatch + shortcuts.
-                // SAFETY: synchronous compose-time dispatch only.
                 if matches!(ke.event_type, KeyEventType::Down) && !ke.is_repeat {
-                    let app = unsafe { &mut *key_ptr };
-                    if app.capture_armed() {
-                        if let Some(key) = ke.physical {
-                            app.capture_physical_press(key);
-                        } else {
-                            app.capture_key_press(&ke.key);
-                        }
-                        return true;
-                    }
+                    let _ = &ke;
+                    return false;
                 }
                 false
             })
             .on_key_event(move |ke: KeyEvent| {
-                // SAFETY: synchronous compose-time dispatch only.
-                // Esc/R/Enter also run through the scoped shortcut handler
-                // (`nt_shortcuts::install`); returning false lets the
-                // runtime resolve the shortcut after the bubble finishes.
-                let app = unsafe { &mut *app_ptr };
-                app.handle_key(&ke);
+                staging.borrow_mut().handle_key(&ke);
                 false
             });
         // Right mouse button (GML `mb_right` ability / menu Back): the
@@ -2863,21 +2683,12 @@ impl App {
         // raw events. The cursor move stays (free moves dispatch only
         // to the topmost region, so the root handler alone misses
         // them — see `stage_hover`).
-        let cursor_ptr = self as *mut App;
+        let staging = self.staging.clone();
         let root_mod = root_mod
-            // Live cursor in window-physical px (bevy `player_aim`
-            // `window.cursor_position()` parity): fires on every pointer
-            // move even when the camera — and therefore the viewport
-            // `Hover` world point — hasn't been recomputed, so aim tracks
-            // the on-screen cursor while the player walks. Touch/pen
-            // moves are skipped (sticks own those; `TouchMove` covers
-            // them).
             .on_pointer_move(move |ev: PointerEvent| {
                 if matches!(ev.kind, repose_core::input::PointerKind::Mouse) {
-                    // SAFETY: synchronous compose-time dispatch only.
-                    let app = unsafe { &mut *cursor_ptr };
                     let p = ev.position_in_window();
-                    app.cursor_move(Vec2::new(p.x, p.y));
+                    staging.borrow_mut().cursor_move(Vec2::new(p.x, p.y));
                 }
             });
 
@@ -3817,9 +3628,8 @@ mod cursor_staging_tests {
             // Installing wires the map into the global scope stack, so the
             // runtime's `resolve_action` (the `dispatch_action` path) sees
             // the chord even with no compose scope mounted.
-            let mut app = App::new_with_seed(4242);
-            let ptr = &mut app as *mut App;
-            nt_shortcuts::install(ptr);
+            let app = App::new_with_seed(4242);
+            nt_shortcuts::install(&app.shortcut_edges);
             assert_eq!(
                 resolve_action(KeyChord::new(key, Modifiers::default())),
                 Some(Action::Custom(want.into())),
@@ -3831,15 +3641,17 @@ mod cursor_staging_tests {
     #[test]
     fn installed_shortcut_handler_stages_edges() {
         use repose_core::shortcuts::{Action, handle};
-        let mut app = App::new_with_seed(4242);
-        let ptr = &mut app as *mut App;
-        nt_shortcuts::install(ptr);
+        let app = App::new_with_seed(4242);
+        nt_shortcuts::install(&app.shortcut_edges);
         assert!(handle(Action::Custom(nt_shortcuts::PAUSE.into())));
-        assert!(app.pause_edge);
+        let (pause, _, _) = repame_shell::take_shortcut_edges(&app.shortcut_edges);
+        assert!(pause);
         assert!(handle(Action::Custom(nt_shortcuts::RESTART.into())));
-        assert!(app.restart_edge);
+        let (_, restart, _) = repame_shell::take_shortcut_edges(&app.shortcut_edges);
+        assert!(restart);
         assert!(handle(Action::Custom(nt_shortcuts::CONFIRM.into())));
-        assert!(app.interact_edge);
+        let (_, _, confirm) = repame_shell::take_shortcut_edges(&app.shortcut_edges);
+        assert!(confirm);
         assert!(!handle(Action::Custom("nt.unknown".into())));
     }
 
@@ -3916,8 +3728,7 @@ mod cursor_staging_tests {
         use repose_core::input::{Key, KeyEvent, KeyEventType, Modifiers, PhysicalKey};
         use repose_core::shortcuts::{Action, handle};
         let mut app = App::new_with_seed(4242);
-        let ptr = &mut app as *mut App;
-        nt_shortcuts::install(ptr);
+        nt_shortcuts::install(&app.shortcut_edges);
         app.handle_key(&KeyEvent {
             key: Key::Escape,
             modifiers: Modifiers::default(),
@@ -3931,6 +3742,8 @@ mod cursor_staging_tests {
             "Escape KeyEvent alone must not stage pause_edge"
         );
         assert!(handle(Action::Custom(nt_shortcuts::PAUSE.into())));
+        let edges = app.shortcut_edges.clone();
+        nt_shortcuts::drain(&mut app, &edges);
         assert!(app.pause_edge, "shortcut handler must stage pause_edge");
         crate::state::menus::apply_menu_action(
             &mut app.sim.world,
@@ -4025,10 +3838,8 @@ mod cursor_staging_tests {
         map.set_keyboard(NtAction::Fire, space());
         map.set_keyboard(NtAction::North, space());
         map.set_keyboard(NtAction::Swap, space());
-        let state = InputMapState {
-            map,
-            capture: None,
-        };
+        let mut state = InputMapState::default();
+        state.session.map = map;
         let held: HashSet<KeyCode> = [KeyCode::Space].into_iter().collect();
         let just: HashSet<KeyCode> = [KeyCode::Space].into_iter().collect();
         let mut out = NtInput::default();
@@ -4071,10 +3882,8 @@ mod cursor_staging_tests {
         let mut map = Keymap::new();
         map.set_keyboard(NtAction::Fire, space());
         map.set_keyboard(NtAction::North, space());
-        let state = InputMapState {
-            map,
-            capture: None,
-        };
+        let mut state = InputMapState::default();
+        state.session.map = map;
         let held: HashSet<KeyCode> = [KeyCode::Space].into_iter().collect();
         let just: HashSet<KeyCode> = [KeyCode::Space].into_iter().collect();
         let strip = |c: KeyCode| !menu_owned_key(c);

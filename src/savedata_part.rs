@@ -1458,14 +1458,7 @@ pub fn save_file_name() -> &'static str {
 /// Portable save path: `$NT_SAVE_PATH` when set, else
 /// `<current_dir>/nt-save.json`.
 pub fn save_file_path() -> PathBuf {
-    if let Ok(p) = std::env::var("NT_SAVE_PATH")
-        && !p.is_empty()
-    {
-        return PathBuf::from(p);
-    }
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(save_file_name())
+    repame_shell::save_file_path("NT_SAVE_PATH", save_file_name())
 }
 
 /// Serialize a save to JSON (pretty; version stamp included).
@@ -1484,18 +1477,13 @@ pub fn parse_save(text: &str) -> Result<SaveData, String> {
 /// Write a save to disk (creates parent dirs).
 pub fn store_save_to_file(save: &SaveData, path: &Path) -> Result<(), String> {
     let text = serialize_save(save)?;
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(path, text).map_err(|e| e.to_string())
+    repame_shell::store_json(&text, path)
 }
 
 /// Read a save from disk (`Err` when missing/corrupt; callers fall
 /// back to `SaveData::default()`).
 pub fn load_save_from_file(path: &Path) -> Result<SaveData, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let text = repame_shell::load_json(path)?;
     parse_save(&text)
 }
 
