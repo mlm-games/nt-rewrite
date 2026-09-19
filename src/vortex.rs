@@ -125,8 +125,7 @@ pub fn rewarm_view_spiral(world: &mut World, view_w: f32) {
         .unwrap_or(0);
     // The logo room is campfire (`setup_logo_room` resets the run there);
     // GML reads `GameCont.area` at cont creation, which is campfire here.
-    let mut ctl = SpiralCtl::warmed_up_for_area_seeded(AreaId::Campfire, seed);
-    ctl.view_w = view_w;
+    let ctl = SpiralCtl::warmed_up_for_gml_area_seeded_in_view(0, seed, view_w);
     world.insert_resource(ctl);
 }
 
@@ -365,6 +364,10 @@ impl SpiralCtl {
     }
 
     pub fn warmed_up_for_gml_area_seeded(gml_area: u8, seed: u64) -> Self {
+        Self::warmed_up_for_gml_area_seeded_in_view(gml_area, seed, GUI_W)
+    }
+
+    pub fn warmed_up_for_gml_area_seeded_in_view(gml_area: u8, seed: u64, view_w: f32) -> Self {
         let mut ctl = Self {
             angle: rand::random::<f32>() * 360.0,
             ticks: 0.0,
@@ -398,7 +401,7 @@ impl SpiralCtl {
             gml_area,
             seed,
             bossfight_suppressed: false,
-            view_w: GUI_W,
+            view_w,
             streams: vec![WispStream::dead(); MAX_WISPS],
         };
         for _ in 0..WARMUP_TICKS {
@@ -410,7 +413,11 @@ impl SpiralCtl {
     /// Re-warm under a new stream seed (run seed). Same seed + same
     /// ticks = identical streams and snapshot.
     pub fn with_seed(self, seed: u64) -> Self {
-        Self::warmed_up_for_gml_area_seeded(self.gml_area, seed)
+        Self::warmed_up_for_gml_area_seeded_in_view(self.gml_area, seed, self.view_w)
+    }
+
+    pub fn with_view_w(self, view_w: f32) -> Self {
+        Self::warmed_up_for_gml_area_seeded_in_view(self.gml_area, self.seed, view_w)
     }
 
     /// Mark the spiral dead (bevy `mark_vortex_dead` / `teardown_vortex`):

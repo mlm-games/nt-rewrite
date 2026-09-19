@@ -342,7 +342,8 @@ impl App {
             .get_resource::<crate::comps_a::Run>()
             .map(|r| r.area)
             .unwrap_or(AreaId::Desert);
-        let spiral = SpiralCtl::warmed_up_for_area_seeded(area, seed);
+        let spiral =
+            SpiralCtl::warmed_up_for_gml_area_seeded_in_view(gml_area_for_area(area), seed, 426.0);
         // GML `BackCont` boot: the 320x240-base view opens snapped
         // on the player (`force_snap_camera_position` on generation
         // end; GML has no zoom).
@@ -701,7 +702,9 @@ impl App {
         // start, ticks 185→150 over live play).
         let mut killed_this_tick = false;
         if state == AppState::Loading && self.adv_state != AppState::Loading {
-            self.spiral = SpiralCtl::warmed_up_for_area_seeded(area, seed);
+            let view_w = self.spiral.view_w;
+            self.spiral =
+                SpiralCtl::warmed_up_for_gml_area_seeded_in_view(gml_area_for_area(area), seed, view_w);
             self.adv_seed = seed;
             self.adv_area = gml_area_for_area(area);
         }
@@ -737,7 +740,8 @@ impl App {
             && self.adv_state != AppState::Splash
             && !self.spiral.alive
         {
-            self.spiral = SpiralCtl::warmed_up_for_area_seeded(AreaId::Campfire, seed);
+            let view_w = self.spiral.view_w;
+            self.spiral = SpiralCtl::warmed_up_for_gml_area_seeded_in_view(0, seed, view_w);
         }
         // GML `PlayButton/Other_10:108` verbatim: entering the campfire
         // char-select DESTROYS the `SpiralCont` (`instance_destroy`) while
@@ -777,7 +781,9 @@ impl App {
         if killed_this_tick {
             // no rewarm this tick
         } else if cover && !self.adv_cover {
-            self.spiral = SpiralCtl::warmed_up_for_area_seeded(area, seed);
+            let view_w = self.spiral.view_w;
+            self.spiral =
+                SpiralCtl::warmed_up_for_gml_area_seeded_in_view(gml_area_for_area(area), seed, view_w);
         } else if !cover && self.adv_cover {
             self.spiral.kill();
         }
@@ -935,7 +941,11 @@ impl App {
             // warmup carries the menu-room area, so the first InGame
             // tick would otherwise read area drift and rewarm right
             // after the entry kill (the load-end double start).
-            self.spiral = SpiralCtl::warmed_up_for_area_seeded(area, seed);
+            self.spiral = SpiralCtl::warmed_up_for_gml_area_seeded_in_view(
+                gml_area_for_area(area),
+                seed,
+                self.spiral.view_w,
+            );
             self.adv_area = gml_area_for_area(area);
         }
     }
