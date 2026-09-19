@@ -1153,7 +1153,7 @@ impl App {
         self.sim
             .world
             .get_resource::<InputMapState>()
-            .is_some_and(|s| s.capture.is_some())
+            .is_some_and(|s| s.armed())
     }
 
     /// Resolve the pending capture with a mouse button (viewport press
@@ -1446,6 +1446,30 @@ impl App {
             apply_menu_action(&mut self.sim.world, action);
         }
         nt_shortcuts::drain(self, &self.shortcut_edges.clone());
+        {
+            let mut staging = self.staging.borrow_mut();
+            if self.capture_armed() {
+                if let Some(key) = staging.take_capture_physical() {
+                    drop(staging);
+                    self.capture_physical_press(key);
+                    self.staging.borrow_mut().edges.clear();
+                    self.staging.borrow_mut().clicks.clear();
+                    self.staging.borrow_mut().mouse_edges.clear();
+                } else if let Some(key) = staging.take_capture_key() {
+                    drop(staging);
+                    self.capture_key_press(&key);
+                    self.staging.borrow_mut().edges.clear();
+                    self.staging.borrow_mut().clicks.clear();
+                    self.staging.borrow_mut().mouse_edges.clear();
+                } else if let Some(left) = staging.take_capture_mouse() {
+                    drop(staging);
+                    self.capture_mouse_press(left);
+                    self.staging.borrow_mut().edges.clear();
+                    self.staging.borrow_mut().clicks.clear();
+                    self.staging.borrow_mut().mouse_edges.clear();
+                }
+            }
+        }
         let staging_edges = self.staging.borrow().edges.clone();
         for code in staging_edges {
             if let Some(mapped) = crate::input::keycode_for_physical(code) {
@@ -2649,9 +2673,8 @@ impl App {
         });
         let edges = self.shortcut_edges.clone();
         nt_shortcuts::install(&edges);
-        let app_capture = self.staging.clone();
-        let _ = &app_capture;
         let staging = self.staging.clone();
+        let capture_staging = self.staging.clone();
         let focus = remember(FocusRequester::new);
         let fr_positioned = (*focus).clone();
         let focus_staging = self.staging.clone();
@@ -2667,8 +2690,13 @@ impl App {
             })
             .on_preview_key_event(move |ke: KeyEvent| {
                 if matches!(ke.event_type, KeyEventType::Down) && !ke.is_repeat {
-                    let _ = &ke;
-                    return false;
+                    if let Some(physical) = ke.physical {
+                        capture_staging.borrow_mut().capture_pending_physical = Some(physical);
+                    } else {
+                        capture_staging.borrow_mut().capture_pending_key =
+                            Some(ke.key.clone());
+                    }
+                    return true;
                 }
                 false
             })
