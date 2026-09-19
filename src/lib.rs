@@ -472,7 +472,7 @@ impl App {
         let map = save.key_bindings.to_keymap();
         self.sim.world.insert_resource(save);
         self.sim.world.init_resource::<InputMapState>();
-        self.sim.world.resource_mut::<InputMapState>().map = map;
+        self.sim.world.resource_mut::<InputMapState>().session.map = map;
         self.save_path = Some(path.to_path_buf());
         self.sim
             .world
@@ -1012,6 +1012,12 @@ pub(crate) mod nt_shortcuts {
     }
 
     pub fn install(edges: &SharedEdges) {
+        use std::sync::OnceLock;
+        static INSTALLED: OnceLock<()> = OnceLock::new();
+        if INSTALLED.get().is_none() {
+            let _ = repose_core::shortcuts::InstallShortcutMap(map());
+            let _ = INSTALLED.set(());
+        }
         repame_shell::install_into(edges, PAUSE, RESTART, CONFIRM);
     }
 
@@ -1031,6 +1037,14 @@ impl App {
     /// board.
     fn handle_key(&mut self, ke: &KeyEvent) {
         let down = matches!(ke.event_type, KeyEventType::Down);
+        if down && !ke.is_repeat && self.capture_armed() {
+            if let Some(key) = ke.physical {
+                self.capture_physical_press(key);
+            } else {
+                self.capture_key_press(&ke.key);
+            }
+            return;
+        }
         match &ke.key {
             // Esc / Enter / R stage ONLY via the scoped global shortcut
             // map (`nt_shortcuts::map` + runtime `dispatch_action`). No
@@ -1052,16 +1066,6 @@ impl App {
                 // US board. The glyph below is only the fallback for
                 // synthetic events (tests).
                 if let Some(key) = ke.physical {
-                    // Capture first, before `stage_physical` can swallow
-                    // the press: `stage_physical` returns early while a
-                    // capture is armed (the key must not fire gameplay),
-                    // and Space's `Key::Space` match arm below never runs
-                    // on the physical path — without this Space could
-                    // never rebind.
-                    if down && !ke.is_repeat && self.capture_armed() {
-                        self.capture_physical_press(key);
-                        return;
-                    }
                     self.stage_physical(key, down, ke.is_repeat);
                     return;
                 }
@@ -1095,13 +1099,6 @@ impl App {
     }
 
     fn stage_physical(&mut self, key: PhysicalKey, down: bool, is_repeat: bool) {
-        // Capture first: the remap gesture accepts ANY physical key,
-        // including keys with no gameplay `KeyCode` (KeyX etc. never
-        // reach the table below). GML captures any pressed input.
-        if down && !is_repeat && self.capture_armed() {
-            self.capture_physical_press(key);
-            return;
-        }
         let Some(code) = crate::input::keycode_for_physical(key) else {
             return;
         };
@@ -1216,7 +1213,7 @@ impl App {
             .sim
             .world
             .get_resource::<InputMapState>()
-            .map(|s| KeyBindings::from_keymap(&s.map))
+            .map(|s| KeyBindings::from_keymap(&s.session.map))
             .unwrap_or_default();
         self.sim.world.init_resource::<crate::savedata_part::SaveData>();
         self.sim
@@ -1446,30 +1443,6 @@ impl App {
             apply_menu_action(&mut self.sim.world, action);
         }
         nt_shortcuts::drain(self, &self.shortcut_edges.clone());
-        {
-            let mut staging = self.staging.borrow_mut();
-            if self.capture_armed() {
-                if let Some(key) = staging.take_capture_physical() {
-                    drop(staging);
-                    self.capture_physical_press(key);
-                    self.staging.borrow_mut().edges.clear();
-                    self.staging.borrow_mut().clicks.clear();
-                    self.staging.borrow_mut().mouse_edges.clear();
-                } else if let Some(key) = staging.take_capture_key() {
-                    drop(staging);
-                    self.capture_key_press(&key);
-                    self.staging.borrow_mut().edges.clear();
-                    self.staging.borrow_mut().clicks.clear();
-                    self.staging.borrow_mut().mouse_edges.clear();
-                } else if let Some(left) = staging.take_capture_mouse() {
-                    drop(staging);
-                    self.capture_mouse_press(left);
-                    self.staging.borrow_mut().edges.clear();
-                    self.staging.borrow_mut().clicks.clear();
-                    self.staging.borrow_mut().mouse_edges.clear();
-                }
-            }
-        }
         let staging_edges = self.staging.borrow().edges.clone();
         for code in staging_edges {
             if let Some(mapped) = crate::input::keycode_for_physical(code) {
@@ -2674,7 +2647,6 @@ impl App {
         let edges = self.shortcut_edges.clone();
         nt_shortcuts::install(&edges);
         let staging = self.staging.clone();
-        let capture_staging = self.staging.clone();
         let focus = remember(FocusRequester::new);
         let fr_positioned = (*focus).clone();
         let focus_staging = self.staging.clone();
@@ -2687,18 +2659,6 @@ impl App {
             })
             .on_focus_changed(move |focused| {
                 focus_staging.borrow_mut().set_window_focused(focused);
-            })
-            .on_preview_key_event(move |ke: KeyEvent| {
-                if matches!(ke.event_type, KeyEventType::Down) && !ke.is_repeat {
-                    if let Some(physical) = ke.physical {
-                        capture_staging.borrow_mut().capture_pending_physical = Some(physical);
-                    } else {
-                        capture_staging.borrow_mut().capture_pending_key =
-                            Some(ke.key.clone());
-                    }
-                    return true;
-                }
-                false
             })
             .on_key_event(move |ke: KeyEvent| {
                 staging.borrow_mut().handle_key(&ke);
@@ -3791,6 +3751,7 @@ mod cursor_staging_tests {
             .sim
             .world
             .resource::<InputMapState>()
+            .session
             .map
             .keyboard(&crate::keymap::NtAction::North);
         assert!(
@@ -3827,11 +3788,12 @@ mod cursor_staging_tests {
             .sim
             .world
             .resource::<InputMapState>()
+            .session
             .map
             .clone();
         let saved = crate::keymap::KeyBindings::from_keymap(&rows);
         let back = saved.to_keymap();
-        app.sim.world.resource_mut::<InputMapState>().map = back;
+        app.sim.world.resource_mut::<InputMapState>().session.map = back;
         // Release Z, then press it fresh and sample movement.
         app.stage_physical_key(PhysicalKey::KeyZ, false);
         app.stage_physical_key(PhysicalKey::KeyZ, true);

@@ -298,7 +298,7 @@ pub fn sample_keyboard_mapped(
     output: &mut NtInput,
 ) {
     let move_axis = match keymap {
-        Some(state) => keymap_move(&state.map, held),
+        Some(state) => keymap_move(&state.session.map, held),
         None => keyboard_move(held),
     };
     let aim_axis = Vec2::ZERO;
@@ -306,10 +306,10 @@ pub fn sample_keyboard_mapped(
     let (fire_held, fire_pressed, spec_held_now, spec_pressed_now, swap_pressed, pick_pressed) =
         match keymap {
             Some(state) => {
-                let fire = state.map.active(&crate::keymap::NtAction::Fire, false);
-                let spec = state.map.active(&crate::keymap::NtAction::Spec, false);
-                let swap = state.map.active(&crate::keymap::NtAction::Swap, false);
-                let pick = state.map.active(&crate::keymap::NtAction::Pick, false);
+                let fire = state.session.map.active(&crate::keymap::NtAction::Fire, false);
+                let spec = state.session.map.active(&crate::keymap::NtAction::Spec, false);
+                let swap = state.session.map.active(&crate::keymap::NtAction::Swap, false);
+                let pick = state.session.map.active(&crate::keymap::NtAction::Pick, false);
                 let fire_edge = entry_pressed(&fire, just_pressed, mouse, true);
                 let spec_edge = entry_pressed(&spec, just_pressed, mouse, false);
                 let shift_held = held.contains(&KeyCode::ShiftLeft)
@@ -346,7 +346,7 @@ pub fn sample_keyboard_mapped(
         };
     let swap_pressed = match keymap {
         Some(state)
-            if state.map.keyboard(&crate::keymap::NtAction::Swap)
+            if state.session.map.keyboard(&crate::keymap::NtAction::Swap)
                 != repame_input::KeymapEntry::None =>
         {
             swap_pressed
@@ -795,7 +795,7 @@ mod keymap_tests {
     #[test]
     fn rebound_move_key_steers() {
         let mut s = state();
-        s.map.set_keyboard(NtAction::North, chord('z'));
+        s.session.map.set_keyboard(NtAction::North, chord('z'));
         let held: HashSet<KeyCode> = [KeyCode::KeyW].into_iter().collect();
         let mut out = NtInput::default();
         sample_keyboard_mapped(
@@ -812,7 +812,7 @@ mod keymap_tests {
     #[test]
     fn rebound_fire_key_fires() {
         let mut s = state();
-        s.map.set_keyboard(NtAction::Fire, chord('f'));
+        s.session.map.set_keyboard(NtAction::Fire, chord('f'));
         let just: HashSet<KeyCode> = [KeyCode::KeyF].into_iter().collect();
         let mut out = NtInput::default();
         sample_keyboard_mapped(
@@ -829,7 +829,7 @@ mod keymap_tests {
     #[test]
     fn mouse_rebound_fire_still_clicks() {
         let mut s = state();
-        s.map
+        s.session.map
             .set_keyboard(NtAction::Fire, KeymapEntry::Mouse(PointerButton::Primary));
         let mouse = MouseState {
             left_held: true,
@@ -861,8 +861,8 @@ mod keymap_tests {
         let mut s = state();
         s.begin_capture(NtAction::North, KeymapDevice::KeyboardMouse);
         s.resolve_capture(Some(chord('z')));
-        assert_eq!(s.map.keyboard(&NtAction::North), chord('z'));
-        assert_eq!(s.map.gamepad(&NtAction::North), s.map.gamepad(&NtAction::North));
+        assert_eq!(s.session.map.keyboard(&NtAction::North), chord('z'));
+        assert_eq!(s.session.map.gamepad(&NtAction::North), s.session.map.gamepad(&NtAction::North));
     }
 
     #[test]

@@ -3808,7 +3808,8 @@ pub fn tutorial_texts(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
         let raw: String = world
             .get_resource::<crate::keymap::InputMapState>()
             .and_then(|m| {
-                crate::keymap::NtAction::from_name(action).map(|a| format!("{:?}", m.map.keyboard(&a)))
+                crate::keymap::NtAction::from_name(action)
+                    .map(|a| format!("{:?}", m.session.map.keyboard(&a)))
             })
             .unwrap_or_else(|| action.to_ascii_uppercase());
         raw.replace("Key(KeyCode(", "")
@@ -5538,11 +5539,11 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             out.push(gui_center("REMAP", cx, 24.0, GUI_MID));
             let keymap = world
                 .get_resource::<crate::keymap::InputMapState>()
-                .map(|s| s.map.clone())
+                .map(|s| s.session.map.clone())
                 .unwrap_or_else(crate::keymap::default_keymap);
             let capturing = world
                 .get_resource::<crate::keymap::InputMapState>()
-                .and_then(|s| s.capture.clone());
+                .and_then(|s| s.session.capture.clone());
             let mut y = 56.0;
             for action in crate::keymap::NtAction::ALL {
                 let entry = keymap.active(&action, false);

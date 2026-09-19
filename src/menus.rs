@@ -724,9 +724,9 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             world.init_resource::<SaveData>();
             let rows = {
                 let mut state = world.resource_mut::<crate::keymap::InputMapState>();
-                state.map = crate::keymap::default_keymap();
-                state.capture = None;
-                crate::keymap::KeyBindings::from_keymap(&state.map)
+                state.session.map = crate::keymap::default_keymap();
+                state.session.capture = None;
+                crate::keymap::KeyBindings::from_keymap(&state.session.map)
             };
             world.resource_mut::<SaveData>().key_bindings = rows;
             mark_dirty(world);

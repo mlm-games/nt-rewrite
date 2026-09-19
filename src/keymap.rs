@@ -282,11 +282,11 @@ mod tests {
     fn capture_rebinds_one_side() {
         let mut state = InputMapState::default();
         state.begin_capture(NtAction::North, KeymapDevice::KeyboardMouse);
-        assert!(state.capture.is_some());
+        assert!(state.armed());
         state.resolve_capture(Some(chord('z')));
-        assert!(state.capture.is_none());
-        assert_eq!(state.map.keyboard(&NtAction::North), chord('z'));
+        assert!(!state.armed());
+        assert_eq!(state.session.map.keyboard(&NtAction::North), chord('z'));
         state.resolve_capture(Some(chord('x')));
-        assert_eq!(state.map.keyboard(&NtAction::North), chord('z'));
+        assert_eq!(state.session.map.keyboard(&NtAction::North), chord('z'));
     }
 }
