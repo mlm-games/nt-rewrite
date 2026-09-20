@@ -62,11 +62,14 @@ pub fn spawn_burst(
     for _ in 0..count {
         let angle = rng.random_range(0.0..TAU);
         let speed = rng.random_range(speed_range.0..speed_range.1);
+        let life_secs = rng.random_range(0.4..0.9);
         commands.spawn(Particle {
             pos: [pos.x, pos.y],
             vel: [angle.cos() * speed, angle.sin() * speed],
+            age_secs: 0.0,
+            life_secs,
             age_ticks: 0,
-            life_ticks: (rng.random_range(0.4..0.9) * 30.0) as i32,
+            life_ticks: (life_secs * 100.0).ceil().max(1.0) as i32,
             size_px: rng.random_range(3.0..7.0),
             gravity_pps2: 0.0,
             drag_per_sec: 0.0,

@@ -458,6 +458,21 @@ pub fn backfill_spawn_anims(world: &mut World) {
             .map(|(e, pa, anim)| (e, pa.idle.to_string(), anim.is_some()))
             .collect()
     };
+    let prop_rows: Vec<(Entity, String, bool)> = {
+        let mut q = world.query::<(&PropSprites, Option<&SpriteAnim>, Entity)>();
+        // Corpses carry `PropSprites` without `Prop` and already seed their
+        // own dead-strip oneshot at spawn; only live props backfill here.
+        let mut pq = world.query::<(&Prop, Entity)>();
+        let live: std::collections::HashSet<Entity> =
+            pq.iter(world).map(|(_, e)| e).collect();
+        q.iter(world)
+            .filter_map(|(sprites, anim, e)| {
+                live.contains(&e).then(|| {
+                    (e, sprites.idle.to_string(), anim.is_some())
+                })
+            })
+            .collect()
+    };
     let catalog = world.resource::<AnimCatalog>();
     let mut enemy_inserts: Vec<(Entity, Option<EnemySprites>, Option<SpriteAnim>)> =
         Vec::new();
@@ -492,6 +507,17 @@ pub fn backfill_spawn_anims(world: &mut World) {
             player_inserts.push((*e, SpriteAnim::new(idle.clone(), def)));
         }
     }
+    let mut prop_inserts: Vec<(Entity, SpriteAnim)> = Vec::new();
+    for (e, idle, has_anim) in &prop_rows {
+        if *has_anim {
+            continue;
+        }
+        // Live props idle on their idle strip; the dead strip only plays
+        // as the corpse oneshot after `spawn_prop_corpse`.
+        if let Some(def) = catalog.def(idle.as_str()) {
+            prop_inserts.push((*e, SpriteAnim::new(idle.clone(), def)));
+        }
+    }
     for (e, sprites, anim) in enemy_inserts {
         if let Some(sprites) = sprites {
             world.entity_mut(e).insert(sprites);
@@ -501,6 +527,9 @@ pub fn backfill_spawn_anims(world: &mut World) {
         }
     }
     for (e, anim) in player_inserts {
+        world.entity_mut(e).insert(anim);
+    }
+    for (e, anim) in prop_inserts {
         world.entity_mut(e).insert(anim);
     }
 }

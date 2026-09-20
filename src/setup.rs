@@ -894,13 +894,20 @@ pub fn ground_decal_for_floor(floor: u32) -> &'static str {
 
 /// Pick the recorded art path: hash-pick among catalog-present
 /// candidates (bevy parity), else the first candidate. hurt/dead fall
-/// back to idle — strips resolve renderer-side.
+/// back to idle — strips resolve renderer-side. City cars use the frozen
+/// strip (`Car/Create_0.gml` `area_city` arm verbatim).
 fn pick_prop_idle(
     catalog: &repame_anim::AnimCatalog,
-    seed: u64,
+    run: &Run,
     kind: PropKind,
     pos: glam::Vec2,
 ) -> (&'static str, bool) {
+    // GML `Car/Create_0.gml:8-12` verbatim: `area_city` swaps the whole
+    // triple to the frozen strips (hurt/dead resolve from this idle).
+    if kind == PropKind::Car && run.area == AreaId::City {
+        return ("images/sprFrozenCar.png", prop_hash_flip(run.gen_seed, pos, 0x53));
+    }
+    let seed = run.gen_seed;
     let candidates = prop_candidates(kind);
     let present: Vec<&'static str> = candidates
         .iter()
@@ -927,7 +934,9 @@ fn pick_prop_idle(
 /// Prop hurt/dead art for a picked idle strip (GML prop objects carry
 /// `spr_idle / spr_hurt / spr_dead` triples; the pack mirrors them as
 /// `sprXHurt.png` / `sprXDead.png`, with `*Idle` idles stripping the
-/// suffix — except `sprCarIdle`, whose hurt strip is `sprCarHurt`).
+/// suffix). Cars leave a scorch mark, not a car corpse
+/// (`Car/Create_0.gml:6`, `corpse = false` in `Destroy_0`); the frozen
+/// city-car variant (`area_city` arm) reuses the same scorch dead strip.
 /// Returns static candidates; callers keep `idle` when the catalog lacks
 /// the strip (GML-equivalent: no hit anim / plain debris).
 fn prop_hurt_dead_paths(idle: &'static str) -> (&'static str, &'static str) {
@@ -946,7 +955,11 @@ fn prop_hurt_dead_paths(idle: &'static str) -> (&'static str, &'static str) {
         "images/sprPlantPotIdle.png" => {
             ("images/sprPlantPotHurt.png", "images/sprPlantPotDead.png")
         }
-        "images/sprCarIdle.png" => ("images/sprCarHurt.png", "images/sprCarIdle.png"),
+        "images/sprCarIdle.png" => ("images/sprCarHurt.png", "images/sprScorchmark.png"),
+        "images/sprFrozenCar.png" => (
+            "images/sprFrozenCarHurt.png",
+            "images/sprScorchmark.png",
+        ),
         "images/sprMine.png" | "images/sprMineIdle.png" => {
             ("images/sprMine.png", "images/sprMine.png")
         }
@@ -955,7 +968,7 @@ fn prop_hurt_dead_paths(idle: &'static str) -> (&'static str, &'static str) {
         "images/sprCactus3.png" => ("images/sprCactus3Hurt.png", "images/sprCactus3Dead.png"),
         "images/sprBigSkullOpen.png" => (
             "images/sprBigSkullOpenHurt.png",
-            "images/sprBigSkullOpen.png",
+            "images/sprBigSkullDead.png",
         ),
         "images/sprBarrel.png" => ("images/sprBarrelHurt.png", "images/sprBarrelDead.png"),
         "images/sprSewerPipe.png" => ("images/sprSewerPipeHurt.png", "images/sprSewerPipeDead.png"),
@@ -1198,7 +1211,7 @@ pub fn spawn_prop_sim(
             let idle = if catalog.def(decal).is_some() {
                 decal
             } else {
-                pick_prop_idle(catalog, run.gen_seed, kind, pos).0
+                pick_prop_idle(catalog, run, kind, pos).0
             };
             return Some(
                 commands
@@ -1221,7 +1234,7 @@ pub fn spawn_prop_sim(
     }
 
     let (size, hp, explosive, effect) = prop_stats(kind, run.loop_count);
-    let (idle, flip) = pick_prop_idle(catalog, run.gen_seed, kind, pos);
+    let (idle, flip) = pick_prop_idle(catalog, run, kind, pos);
     // GML prop objects swap to hurt/dead strips on damage/death; the
     // hurt system (`prop_hurt_on_damage`) and corpse spawner
     // (`spawn_prop_corpse`) both read these, and the hurt system bails
