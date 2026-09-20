@@ -19,7 +19,7 @@ use crate::comps_a::{
 };
 use crate::comps_b::{
     CustomExplosion, DeploysSentry, GoldBarrelDrop, HazardCloud, PlasmaBurst, PortalClear, Prop,
-    PropSprites, RadChestContainer, SecretEntrance, SentryTurret, SnowmanAmbush,
+    PropNestMarkers, PropSprites, RadChestContainer, SecretEntrance, SentryTurret,
     SpawnsWeaponPickup,
 };
 use crate::data::{EnemyKind, HazardDef, HazardKind, SplitDef};
@@ -398,7 +398,7 @@ pub fn damage_destructible_prop(
         With<Prop>,
     >,
     entrances: &Query<&SecretEntrance>,
-    snowmen: &Query<&SnowmanAmbush>,
+    nests: &Query<&PropNestMarkers, With<Prop>>,
     gold_barrels: &Query<&GoldBarrelDrop>,
     rad_chests: &Query<&RadChestContainer>,
     secrets: &mut SecretTriggers,
@@ -447,7 +447,8 @@ pub fn damage_destructible_prop(
     if let Ok(entrance) = entrances.get(prop_e) {
         secrets.queue(entrance.target);
     }
-    if snowmen.get(prop_e).is_ok() {
+    let nest_flags = nests.get(prop_e).copied().unwrap_or_default();
+    if nest_flags.snowman {
         let mut rng = rand::rng();
         for _ in 0..3 {
             commands.spawn(PendingEnemySpawn {
@@ -459,6 +460,62 @@ pub fn damage_destructible_prop(
             });
         }
         for _ in 0..6 {
+            spawn_rad(commands, catalog, center, 1);
+        }
+    }
+    if nest_flags.cocoon {
+        let mut rng = rand::rng();
+        if rng.random_range(0.0..3.0) < 1.0 {
+            commands.spawn(PendingEnemySpawn {
+                kind: EnemyKind::Gator,
+                pos: center,
+                difficulty: 1.0,
+                loops,
+            });
+        }
+    }
+    if nest_flags.mutant_tube {
+        let mut rng = rand::rng();
+        for _ in 0..8 {
+            commands.spawn(PendingEnemySpawn {
+                kind: EnemyKind::Freak,
+                pos: center
+                    + glam::Vec2::new(rng.random_range(-4.0..4.0), rng.random_range(-4.0..4.0)),
+                difficulty: 1.0,
+                loops,
+            });
+        }
+    }
+    if nest_flags.soda_machine {
+        let mut rng = rand::rng();
+        for _ in 0..20 {
+            let a = rng.random_range(0.0..std::f32::consts::TAU);
+            let d = glam::Vec2::new(a.cos(), a.sin());
+            let s = rng.random_range(3.0..7.0) * 30.0;
+            spawn_pickup(
+                commands,
+                catalog,
+                crate::comps_b::PickupKind::Medkit(1),
+                center
+                    + glam::Vec2::new(rng.random_range(-4.0..4.0), rng.random_range(0.0..16.0))
+                    + d * s * 0.05,
+                loops,
+                false,
+            );
+        }
+    }
+    if nest_flags.pizza_box && rand::rng().random_range(0.0..1.0) < 0.2 {
+        spawn_pickup(
+            commands,
+            catalog,
+            crate::comps_b::PickupKind::Medkit(2),
+            center,
+            loops,
+            false,
+        );
+    }
+    if nest_flags.small_gen {
+        for _ in 0..5 {
             spawn_rad(commands, catalog, center, 1);
         }
     }

@@ -1000,6 +1000,16 @@ pub struct GoldBarrelDrop;
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RadChestContainer;
 
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct PropNestMarkers {
+    pub snowman: bool,
+    pub cocoon: bool,
+    pub mutant_tube: bool,
+    pub soda_machine: bool,
+    pub pizza_box: bool,
+    pub small_gen: bool,
+}
+
 #[derive(Component, Clone, Copy, Debug)]
 pub struct ThroneCarpet {
     pub half_extents: Vec2,

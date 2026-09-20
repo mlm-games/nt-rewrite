@@ -7,6 +7,7 @@
 //! as arrays.
 
 use bevy_ecs::prelude::*;
+use rand::RngExt;
 use repame_sim::SimTime;
 
 use crate::anim::SpriteAnim;
@@ -217,6 +218,18 @@ impl EnvironmentHazardSpec {
             hurts_enemies: true,
         }
     }
+
+    pub fn ground_flame() -> Self {
+        Self {
+            kind: EnvironmentHazardKind::Fire,
+            radius: 14.0,
+            damage: 1,
+            duration: 12.0,
+            tick: 0.5,
+            hurts_player: true,
+            hurts_enemies: true,
+        }
+    }
 }
 
 #[derive(Component, Clone, Debug)]
@@ -417,6 +430,7 @@ pub struct ExplosionPayload {
 pub struct PropDeathEffect {
     pub explosion: Option<ExplosionPayload>,
     pub hazard: Option<EnvironmentHazardSpec>,
+    pub ground_flames: u8,
 }
 
 impl PropDeathEffect {
@@ -427,6 +441,7 @@ impl PropDeathEffect {
                 damage: 5,
             }),
             hazard: Some(EnvironmentHazardSpec::toxic_barrel()),
+            ground_flames: 4,
         }
     }
 
@@ -437,6 +452,7 @@ impl PropDeathEffect {
                 damage: 8,
             }),
             hazard: None,
+            ground_flames: 6,
         }
     }
 
@@ -447,6 +463,7 @@ impl PropDeathEffect {
                 damage: 7,
             }),
             hazard: Some(EnvironmentHazardSpec::mine_fire()),
+            ground_flames: 4,
         }
     }
 
@@ -457,6 +474,29 @@ impl PropDeathEffect {
                 damage: 6,
             }),
             hazard: None,
+            ground_flames: 4,
+        }
+    }
+
+    pub fn small_generator() -> Self {
+        Self {
+            explosion: Some(ExplosionPayload {
+                radius: 110.0,
+                damage: 12,
+            }),
+            hazard: None,
+            ground_flames: 6,
+        }
+    }
+
+    pub fn big_generator() -> Self {
+        Self {
+            explosion: Some(ExplosionPayload {
+                radius: 130.0,
+                damage: 8,
+            }),
+            hazard: None,
+            ground_flames: 6,
         }
     }
 }
@@ -528,6 +568,17 @@ pub fn spawn_prop_death_effect(
 
     if let Some(hazard) = effect.hazard {
         spawn_environment_hazard(commands, pos, hazard);
+    }
+
+    if effect.ground_flames > 0 {
+        let mut rng = rand::rng();
+        for _ in 0..effect.ground_flames {
+            let off = glam::Vec2::new(
+                rng.random_range(-24.0..24.0),
+                rng.random_range(-24.0..24.0),
+            );
+            spawn_environment_hazard(commands, pos + off, EnvironmentHazardSpec::ground_flame());
+        }
     }
 }
 

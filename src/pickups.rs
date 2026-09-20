@@ -302,6 +302,28 @@ pub fn idpd_chest_destroy(
     true
 }
 
+/// Cached per-tick gun-decide context (built once in a PreUpdate-ish
+/// system so `move_projectiles` stays under bevy's 16-system-param
+/// limit; GML `instance_nearest(x, y, Player)` + `GameCont.hard`).
+#[derive(Resource, Default, Clone)]
+pub struct GunDecideCache(pub Option<crate::decide_wep::DecideCtx>);
+
+pub fn refresh_gun_decide_cache(
+    run: Res<Run>,
+    player_q: Query<(&Player, &Inventory, &RaceState), (With<Player>, Without<Prop>)>,
+    mut cache: ResMut<GunDecideCache>,
+) {
+    cache.0 = player_q.single().ok().map(|(p, inv, race)| {
+        decide_ctx_for(
+            &run,
+            p,
+            race.race,
+            inv,
+            u32::from(race.race == RaceId::Steroids),
+        )
+    });
+}
+
 /// Build the `DecideCtx` for drop/chest rolls around one player
 /// (GML `instance_nearest(x, y, Player)` + `GameCont.hard`).
 pub fn decide_ctx_for(

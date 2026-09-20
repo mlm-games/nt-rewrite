@@ -38,6 +38,7 @@ pub const GUN_GUN: WeaponId = WeaponId(125);
 
 /// Everything `decide_wep` needs from the world (single-player: the one
 /// player; GML reads `instance_nearest(x, y, Player)`).
+#[derive(Clone)]
 pub struct DecideCtx {
     /// `GameCont.hard` (int: `floor + loops*16 + hardmode?13:0`).
     pub hard: i32,

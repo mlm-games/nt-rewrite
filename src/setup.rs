@@ -39,7 +39,7 @@ use crate::comps_a::{
 use crate::comps_b::{
     BigGenerator, BloodFlower, ChestKind, CrownPedestal, Enemy, FloorTransition, GoldBarrelDrop,
     GoldCar, LoopTransition, ManholeCover, PendingDelayedBoss, PortalClear, Prop, PropHpTracker,
-    PropSprites, ProtoStatue, RadChestContainer, SecretEntrance, SnowmanAmbush, ThroneCarpet,
+    PropNestMarkers, PropSprites, ProtoStatue, RadChestContainer, SecretEntrance, ThroneCarpet,
     ThroneStatueProp,
 };
 use crate::crown::{apply_crown_to_spawn, crown_name_for_toast};
@@ -856,7 +856,12 @@ fn prop_stats(kind: PropKind, loop_count: u32) -> (f32, i32, bool, Option<PropDe
         PropKind::Tube => (20.0, 2, false, None),
         PropKind::MutantTube => (24.0, 24, false, None),
         PropKind::Pillar => (24.0, 70, false, None),
-        PropKind::SmallGenerator => (24.0, 40, false, None),
+        PropKind::SmallGenerator => (
+            24.0,
+            40,
+            false,
+            Some(PropDeathEffect::small_generator()),
+        ),
         PropKind::Anchor => (28.0, 50, false, None),
         PropKind::WaterPlant => (20.0, 2, false, None),
         PropKind::OasisBarrel => (22.0, 2, false, None),
@@ -867,7 +872,12 @@ fn prop_stats(kind: PropKind, loop_count: u32) -> (f32, i32, bool, Option<PropDe
         PropKind::BigFlower => (24.0, 8, false, None),
         PropKind::PizzaBox => (22.0, 4, false, None),
         PropKind::PlantPot => (20.0, 3, false, None),
-        PropKind::BigGenerator => (40.0, if loop_count == 0 { 230 } else { 50 }, false, None),
+        PropKind::BigGenerator => (
+            40.0,
+            if loop_count == 0 { 230 } else { 50 },
+            false,
+            Some(PropDeathEffect::big_generator()),
+        ),
         PropKind::ThroneStatue => (32.0, 1000, false, None),
         PropKind::GroundDecal
         | PropKind::Cobweb
@@ -1268,7 +1278,40 @@ pub fn spawn_prop_sim(
     }
     match kind {
         PropKind::Snowman => {
-            ec.insert(SnowmanAmbush);
+            ec.insert(PropNestMarkers {
+                snowman: true,
+                ..Default::default()
+            });
+        }
+        PropKind::Cocoon => {
+            ec.insert(PropNestMarkers {
+                cocoon: true,
+                ..Default::default()
+            });
+        }
+        PropKind::MutantTube => {
+            ec.insert(PropNestMarkers {
+                mutant_tube: true,
+                ..Default::default()
+            });
+        }
+        PropKind::SodaMachine => {
+            ec.insert(PropNestMarkers {
+                soda_machine: true,
+                ..Default::default()
+            });
+        }
+        PropKind::SmallGenerator => {
+            ec.insert(PropNestMarkers {
+                small_gen: true,
+                ..Default::default()
+            });
+        }
+        PropKind::PizzaBox => {
+            ec.insert(PropNestMarkers {
+                pizza_box: true,
+                ..Default::default()
+            });
         }
         // Bevy `spawn_prop` Torch arm: the torch flame throbs.
         PropKind::Torch => {

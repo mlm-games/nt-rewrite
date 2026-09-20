@@ -153,6 +153,7 @@ pub fn build_sim_schedule() -> Schedule {
                 loop_transition::tick_yv_couch.in_set(NtSimSet::Always),
                 deaths::tick_revive.in_set(NtSimSet::Always),
                 environment::tick_fog.in_set(NtSimSet::Always),
+                pickups::refresh_gun_decide_cache.in_set(NtSimSet::Always),
                 enemies::flush_pending_enemy_spawns.in_set(NtSimSet::Always),
                 savedata_part::tick_area_skins.in_set(NtSimSet::Always),
                 savedata_part::tick_global_skins.in_set(NtSimSet::Always),

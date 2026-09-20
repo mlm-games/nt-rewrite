@@ -23,10 +23,9 @@ use crate::comps_a::{
 };
 use crate::comps_b::{
     Beam, ChestKind, Corpse, CustomExplosion, DeploysSentry, Dying, Enemy, EnemyBrain,
-    GoldBarrelDrop, HazardCloud, LoopTransition, Pickup, PickupLifetime, PlasmaBurst,
-    Portal, PortalPhase, PortalShock, PortalState, Prop, PropSprites, RadChestContainer,
-    SecretEntrance, SentryTurret, Shield, SnowmanAmbush,
-    SpawnsWeaponPickup, ThroneRoomState,
+    GoldBarrelDrop, HazardCloud, LoopTransition, Pickup, PickupLifetime, PlasmaBurst, Portal,
+    PortalPhase, PortalShock, PortalState, Prop, PropNestMarkers, PropSprites, RadChestContainer,
+    SecretEntrance, SentryTurret, Shield, SpawnsWeaponPickup, ThroneRoomState,
 };
 use crate::data::{CrownKind, EnemyKind, HazardKind, MutationId, RaceId, WeaponId};
 use crate::effects::{
@@ -1166,6 +1165,7 @@ pub fn resolve_death_drops(
 /// directly. Everything else (bounce math, fuses, cascades) is
 /// byte-identical, including call order into the removal cascade.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
 pub fn move_projectiles(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -1209,7 +1209,7 @@ pub fn move_projectiles(
         With<Prop>,
     >,
     entrances: Query<&SecretEntrance>,
-    snowmen: Query<&SnowmanAmbush>,
+    nests: Query<&PropNestMarkers, With<Prop>>,
     gold_barrels: Query<&GoldBarrelDrop>,
     rad_chests: Query<&RadChestContainer>,
     frame: Res<CurrentFrame>,
@@ -1217,18 +1217,10 @@ pub fn move_projectiles(
     mut secrets: ResMut<SecretTriggers>,
     audio: Res<GameAudio>,
     mut cues: ResMut<Queue<AudioCue>>,
-    player_inv_q: Query<(&Player, &Inventory, &RaceState), (With<Player>, Without<Prop>)>,
+    decide: Res<crate::pickups::GunDecideCache>,
 ) {
     let dt = time.delta_secs;
-    let gun_decide = player_inv_q.single().ok().map(|(p, inv, race)| {
-        crate::pickups::decide_ctx_for(
-            &run,
-            p,
-            race.race,
-            inv,
-            u32::from(race.race == RaceId::Steroids),
-        )
-    });
+    let gun_decide = decide.0.clone();
 
     for (
         e,
@@ -1385,7 +1377,7 @@ pub fn move_projectiles(
                         &catalog,
                         &mut props,
                         &entrances,
-                        &snowmen,
+                        &nests,
                         &gold_barrels,
                         &rad_chests,
                         &mut secrets,
@@ -1450,7 +1442,7 @@ pub fn move_projectiles(
                             &catalog,
                             &mut props,
                             &entrances,
-                            &snowmen,
+                            &nests,
                             &gold_barrels,
                             &rad_chests,
                             &mut secrets,
@@ -1514,7 +1506,7 @@ pub fn move_projectiles(
                         &catalog,
                         &mut props,
                         &entrances,
-                        &snowmen,
+                        &nests,
                         &gold_barrels,
                         &rad_chests,
                         &mut secrets,
@@ -1624,7 +1616,7 @@ pub fn move_projectiles(
                     &catalog,
                     &mut props,
                     &entrances,
-                    &snowmen,
+                    &nests,
                     &gold_barrels,
                     &rad_chests,
                     &mut secrets,
@@ -3260,7 +3252,7 @@ pub fn apply_explosions(
             Option<&PropDeathEffect>,
             Option<&PropSprites>,
             Option<&SecretEntrance>,
-            Option<&SnowmanAmbush>,
+            Option<&PropNestMarkers>,
             Option<&GoldBarrelDrop>,
             Option<&RadChestContainer>,
         ),
@@ -3368,7 +3360,7 @@ pub fn apply_explosions(
                 }
             }
             let mut destroyed_props = Vec::new();
-            for (prop_e, mut prop, ppos, death_effect, sprites, entrance, snowman, gold, rad) in
+            for (prop_e, mut prop, ppos, death_effect, sprites, entrance, nest, gold, rad) in
                 &mut props
             {
                 if !prop.destructible {
@@ -3391,7 +3383,7 @@ pub fn apply_explosions(
                             death_effect.copied(),
                             sprites.copied(),
                             entrance.map(|s| s.target),
-                            snowman.is_some(),
+                            nest.map(|n| n.snowman).unwrap_or(false),
                             gold.is_some(),
                             rad.is_some(),
                         ));
