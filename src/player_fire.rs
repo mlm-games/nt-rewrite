@@ -1055,6 +1055,20 @@ fn melee_attack(
         .count() as f32;
     let player_pos = shot.pos;
     let aim_angle = shot.aim.y.atan2(shot.aim.x);
+    // GML `scrFire` melee arms all do `instance_create(x, y, Dust)` at
+    // the player on every swing; the puff re-anchors the eye at the
+    // swing origin (bevy never ported it).
+    {
+        let mut rng = rand::rng();
+        crate::effects::spawn_burst(
+            commands,
+            &mut rng,
+            player_pos,
+            1,
+            [0.75, 0.72, 0.68, 1.0],
+            (20.0, 60.0),
+        );
+    }
 
     // Bevy reads the fired strip (`anim_opt.def.frames`, mega sprite
     // when applicable), defaulting to 3 — never a per-kind constant.

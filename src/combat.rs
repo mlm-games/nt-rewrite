@@ -1650,11 +1650,9 @@ pub fn move_projectiles(
                     (20.0, 55.0),
                 );
 
-                // Wall-impact dust (bevy shape: `has`-gate, oneshot
-                // `1/(fps*0.7)` 0.45 s when stripped, static 0.4 s
-                // otherwise. The port has no bare-PNG probe sim-side,
-                // so the static marker always spawns and the renderer
-                // draws it only when resolvable.)
+                // Wall-impact dust (GML `Bullet1/Collision_Wall`: plain
+                // `instance_create(x, y, Dust)` — `Dust/Create_0` law is
+                // `image_angle = random_angle` per puff).
                 if let Some(def) = catalog.def("images/sprDust.png") {
                     let mut anim = SpriteAnim::oneshot("images/sprDust.png", def);
                     anim.timer = GTimer::from_seconds(
@@ -1666,6 +1664,9 @@ pub fn move_projectiles(
                         LevelCleanup,
                         Pos(pos),
                         anim,
+                        crate::comps_b::FxAngle(
+                            rand::rng().random_range(0.0..std::f32::consts::TAU),
+                        ),
                         crate::comps_b::PickupLifetime {
                             timer: GTimer::from_seconds(0.45, TimerMode::Once),
                         },
@@ -1678,6 +1679,9 @@ pub fn move_projectiles(
                         crate::comps_b::StaticFx {
                             path: "images/sprDust.png",
                         },
+                        crate::comps_b::FxAngle(
+                            rand::rng().random_range(0.0..std::f32::consts::TAU),
+                        ),
                         crate::comps_b::PickupLifetime {
                             timer: GTimer::from_seconds(0.4, TimerMode::Once),
                         },
@@ -2101,10 +2105,16 @@ pub fn projectile_hits(
             }
 
             {
+                // GML flesh hits spawn no BulletHit (`scr_hit` has none —
+                // the visible burst is the destroy-path fade). The extra
+                // impact star here is game feel, so it inherits the
+                // projectile heading like `scrBulletHitFX` instead of a
+                // random angle.
                 let hit_sprite = match *proj_team {
                     Team::Player => "images/sprBulletHit.png",
                     Team::Enemy => "images/sprEnemyBulletHit.png",
                 };
+                let hit_angle = proj_vel.0.y.atan2(proj_vel.0.x);
                 // Bevy shape: `has`-gate, oneshot `1/(fps*1.5)` 0.2 s
                 // when stripped, static 0.15 s otherwise (same
                 // renderer-only caveat as the dust fallback above).
@@ -2119,6 +2129,7 @@ pub fn projectile_hits(
                         LevelCleanup,
                         Pos(target_pos),
                         anim,
+                        crate::comps_b::FxAngle(hit_angle),
                         crate::comps_b::PickupLifetime {
                             timer: GTimer::from_seconds(0.2, TimerMode::Once),
                         },
@@ -2129,6 +2140,7 @@ pub fn projectile_hits(
                         LevelCleanup,
                         Pos(target_pos),
                         crate::comps_b::StaticFx { path: hit_sprite },
+                        crate::comps_b::FxAngle(hit_angle),
                         crate::comps_b::PickupLifetime {
                             timer: GTimer::from_seconds(0.15, TimerMode::Once),
                         },
