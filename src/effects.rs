@@ -50,6 +50,12 @@ pub fn rumble(queue: &mut Queue<RumbleRequest>, weak: f32, strong: f32, duration
 /// parity): `count` dots, uniform directions, `speed_range` px/s,
 /// 3–7 px size, 0.4–0.9 s life. `rng` is caller-supplied so tests
 /// seed it (the bevy build used thread rng).
+///
+/// GML parity (`BloodStreak`: `friction = 0.4`, `Dust`: 0.3, `Smoke`:
+/// 0.1 — all flat px/step² decays): bursts carry exponential drag so
+/// dots settle near the corpse instead of coasting at full speed for
+/// their whole life. 4/s halves a dot every ~0.17 s, matching the feel
+/// of GML's flat friction over a ~0.6 s life.
 pub fn spawn_burst(
     commands: &mut Commands,
     rng: &mut impl rand::RngExt,
@@ -72,7 +78,7 @@ pub fn spawn_burst(
             life_ticks: (life_secs * 100.0).ceil().max(1.0) as i32,
             size_px: rng.random_range(3.0..7.0),
             gravity_pps2: 0.0,
-            drag_per_sec: 0.0,
+            drag_per_sec: 4.0,
             gradient: Gradient::solid(color),
             ease: EaseKind::Linear,
             spawner: None,

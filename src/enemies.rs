@@ -44,7 +44,7 @@ use crate::comps_a::{
 };
 use crate::comps_b::{
     BossBrain, Corpse, EliteBlocker, Enemy, EnemyBrain, FxAngle, HazardCloud, HitWarning,
-    HurtAnim, IdpdShieldUnit, IdpdVanBrain, LilHunterDie, MomShot, PendingDelayedBoss,
+    HurtAnim, IdpdShieldUnit, IdpdVanBrain, LilHunterDie, MomShot, PendingDelayedBoss, Pickup,
     PickupLifetime, PopoNadeM, PortalClear, Prop, ProtoGuardian, ShieldFollower, StaticFx,
     ThroneBall, TrapFire,
 };
@@ -3306,10 +3306,19 @@ fn separate(positions: &[glam::Vec2], epos: glam::Vec2, pos: &mut Pos, radius: f
 /// ticks, corpses drift with GML 0.4 friction, expiry despawns).
 /// Port adaptation: `Transform.translation` is [`Pos`] here; corpses
 /// without [`Velocity`] (player-kill drops) only tick life.
+///
+/// Also slides `GroundPhysics` gibs/debris (player-death blood gibs):
+/// GML gives them flat friction like every ground slide, and nothing
+/// else ticks them — without this they coast at full speed for their
+/// whole 0.9 s life and land ~144 px away.
 pub fn tick_corpses(
     time: Res<SimTime>,
     mut commands: Commands,
     mut q: Query<(Entity, &mut Corpse, Option<&mut Velocity>, Option<&mut Pos>)>,
+    mut gibs: Query<
+        (&mut Pos, &mut crate::comps_b::GroundPhysics),
+        (Without<Corpse>, Without<Pickup>),
+    >,
 ) {
     let dt = time.delta_secs;
     for (e, mut c, vel, pos) in &mut q {
@@ -3322,6 +3331,10 @@ pub fn tick_corpses(
             apply_gml_friction(&mut v.0, 0.4, dt);
             p.0 += v.0 * dt;
         }
+    }
+    for (mut p, mut g) in &mut gibs {
+        apply_gml_friction(&mut g.vel, 0.4, dt);
+        p.0 += g.vel * dt;
     }
 }
 

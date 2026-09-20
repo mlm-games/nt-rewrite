@@ -362,6 +362,9 @@ pub fn resolve_player_gameover(
     for _ in 0..12 {
         let a = rng.random_range(0.0..std::f32::consts::TAU);
         let d = glam::Vec2::new(a.cos(), a.sin());
+        // GML `Player/Destroy_0` blood-gib speeds verbatim (px/step at
+        // 30 Hz): corpse slide law below (`tick_gib_physics`, friction
+        // 0.4) settles them like `BloodStreak` instead of coasting.
         let s = rng.random_range(50.0..160.0);
         commands.spawn((
             GameCleanup,
