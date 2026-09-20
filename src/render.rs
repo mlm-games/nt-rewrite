@@ -2438,10 +2438,14 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
         for (pos, proj, vel, team, slash, fuse, visual) in q.iter(world) {
             let path = projectile_art(proj, team, slash, visual);
             let frame = projectile_frame(assets, path, &proj.life);
-            let rotation = vel
-                .filter(|v| v.0.length_squared() > 1e-6)
-                .map(|v| v.0.y.atan2(v.0.x))
-                .unwrap_or(0.0);
+            // Slashes freeze at spawn without this
+            let rotation = match slash {
+                Some(s) => s.dir.y.atan2(s.dir.x),
+                None => vel
+                    .filter(|v| v.0.length_squared() > 1e-6)
+                    .map(|v| v.0.y.atan2(v.0.x))
+                    .unwrap_or(0.0),
+            };
             let tint = match fuse {
                 Some(f) => {
                     let remaining = f.alarm1.remaining_secs();
@@ -6677,10 +6681,15 @@ pub fn bloom_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInst
     for (pos, proj, vel, team, slash, visual) in q.iter(world) {
         let path = projectile_art(proj, team, slash, visual);
         let frame = projectile_frame(assets, path, &proj.life);
-        let rotation = vel
-            .filter(|v| v.0.length_squared() > 1e-6)
-            .map(|v| v.0.y.atan2(v.0.x))
-            .unwrap_or(0.0);
+        // Same latched-direction law as the body pass below: slashes
+        // freeze at spawn but keep `slash.dir`.
+        let rotation = match slash {
+            Some(s) => s.dir.y.atan2(s.dir.x),
+            None => vel
+                .filter(|v| v.0.length_squared() > 1e-6)
+                .map(|v| v.0.y.atan2(v.0.x))
+                .unwrap_or(0.0),
+        };
         if let Some(mut s) =
             assets.sprite_scaled_rotated(path, frame, pos.0, 2.0, rotation, [1.0, 1.0, 1.0, 0.1])
         {
