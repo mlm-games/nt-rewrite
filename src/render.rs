@@ -937,33 +937,160 @@ pub fn strip_frames_pub(assets: &RenderAssets, path: &str) -> u32 {
     strip_frames(assets, path)
 }
 
-/// Bevy `wall_body_frame` verbatim (Bot variant).
-fn wall_body_frame(seed: u64, wx: i32, wy: i32, frames: u32) -> i32 {
-    let raw = if wall_hash(seed, wx, wy, 0x11) % 150 == 0 {
+/// GML `Wall/Create_0:16-23` body variant verbatim: `random(150) < 1`
+/// takes 3, else `choose(0,0,0,0,0,0,0,1,2) + choose(0,4)`. The port hashes
+/// the cell into the same distribution deterministically. Shared by Bot AND
+/// Top: GML draws `topspr` with the Bot's `image_index`
+/// (`SubTopCont/Draw_0:27`); the `topindex` roll (`Wall/Create_0:25-30`) is
+/// never read.
+fn wall_body_raw(seed: u64, wx: i32, wy: i32) -> usize {
+    if wall_hash(seed, wx, wy, 0x11) % 150 == 0 {
         3
     } else {
         [0usize, 0, 0, 0, 0, 0, 0, 1, 2][(wall_hash(seed, wx, wy, 0x12) % 9) as usize]
             + [0usize, 4][(wall_hash(seed, wx, wy, 0x13) % 2) as usize]
-    };
-    (raw % frames.max(1) as usize) as i32
+    }
 }
 
-/// Bevy `wall_top_frame` verbatim.
-fn wall_top_frame(seed: u64, wx: i32, wy: i32, frames: u32) -> i32 {
-    let raw = if wall_hash(seed, wx, wy, 0x21) % 200 == 0 {
-        3
+/// GML `Wall/Create_0:32` Out variant verbatim:
+/// `choose(0,0,0,0,1,2,3,4) + choose(0,4)`.
+fn wall_out_raw(seed: u64, wx: i32, wy: i32) -> usize {
+    [0usize, 0, 0, 0, 1, 2, 3, 4][(wall_hash(seed, wx, wy, 0x31) % 8) as usize]
+        + [0usize, 4][(wall_hash(seed, wx, wy, 0x32) % 2) as usize]
+}
+
+/// GML `mcr_wall_update_lrwh` verbatim (`macros_general.gml:75-80`):
+/// `l`/`r` are the source-rect origin into the 24-wide Out cell, `w`/`h`
+/// its extent. `place_free` = no wall body at that 16px neighbor cell.
+fn wall_out_crop(wall_set: &HashSet<(i32, i32)>, wx: i32, wy: i32) -> (f32, f32, f32, f32) {
+    let l = if wall_set.contains(&(wx - 1, wy)) { 4.0 } else { 0.0 };
+    let w = if wall_set.contains(&(wx + 1, wy)) {
+        20.0 - l
     } else {
-        [0usize, 0, 0, 0, 0, 0, 0, 1, 2][(wall_hash(seed, wx, wy, 0x22) % 9) as usize]
-            + [0usize, 4, 8][(wall_hash(seed, wx, wy, 0x23) % 3) as usize]
+        24.0 - l
     };
-    (raw % frames.max(1) as usize) as i32
+    let r = if wall_set.contains(&(wx, wy - 1)) { 4.0 } else { 0.0 };
+    let h = if wall_set.contains(&(wx, wy + 1)) {
+        20.0 - r
+    } else {
+        24.0 - r
+    };
+    (l, r, w, h)
 }
 
-/// Bevy `wall_out_frame` verbatim.
-fn wall_out_frame(seed: u64, wx: i32, wy: i32, frames: u32) -> i32 {
-    let raw = [0usize, 0, 0, 0, 1, 2, 3, 4][(wall_hash(seed, wx, wy, 0x31) % 8) as usize]
-        + [0usize, 4][(wall_hash(seed, wx, wy, 0x32) % 2) as usize];
-    (raw % frames.max(1) as usize) as i32
+/// One GML `draw_sprite_part_ext` Out window: source rect `(l, r, w, h)` of
+/// the 24x32 strip frame (origin (4,12)), drawn with its top-left at GML
+/// `(x - 4 + l, y - 12 + r)`.
+fn wall_out_part(
+    assets: &RenderAssets,
+    path: &str,
+    frame: i32,
+    wx: i32,
+    wy: i32,
+    crop: (f32, f32, f32, f32),
+    tint: [f32; 4],
+) -> Option<SpriteInstance> {
+    let (l, r, w, h) = crop;
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let (uv, def) = assets.uv(path, frame)?;
+    let (sw, sh) = (def.w as f32, def.h as f32);
+    if sw <= 0.0 || sh <= 0.0 {
+        return None;
+    }
+    let ix1 = (l + w).min(sw);
+    let iy1 = (r + h).min(sh);
+    if ix1 <= l || iy1 <= r {
+        return None;
+    }
+    let fx0 = l / sw;
+    let fy0 = r / sh;
+    let fx1 = ix1 / sw;
+    let fy1 = iy1 / sh;
+    let uv_min = Vec2::new(
+        uv.min[0] + (uv.max[0] - uv.min[0]) * fx0,
+        uv.min[1] + (uv.max[1] - uv.min[1]) * fy0,
+    );
+    let uv_max = Vec2::new(
+        uv.min[0] + (uv.max[0] - uv.min[0]) * fx1,
+        uv.min[1] + (uv.max[1] - uv.min[1]) * fy1,
+    );
+    let iw = ix1 - l;
+    let ih = iy1 - r;
+    let top_left = Vec2::new(
+        wx as f32 * 16.0 - 4.0 + l,
+        wy as f32 * 16.0 - 12.0 + r,
+    );
+    Some(SpriteInstance {
+        center: top_left + Vec2::new(iw, ih) * 0.5,
+        rotation: 0.0,
+        size: Vec2::new(iw, ih),
+        anchor: Vec2::new(0.5, 0.5),
+        flip_x: false,
+        flip_y: false,
+        uv_min: Vec2::new(uv_min[0], uv_min[1]),
+        uv_max: Vec2::new(uv_max[0], uv_max[1]),
+        color: tint_to_linear(tint),
+        page: uv.page,
+        z: 0.0,
+        blend: SpriteBlend::Alpha,
+    })
+}
+
+/// GML `Top`/`TopSmall` chain verbatim: each floor spawns 8 Tops at the 8
+/// 32px neighbors (`mcr_floor_create_tops`); each Top splits into 4
+/// `TopSmall`s at `(x, y)`, `(x+16, y)`, `(x, y+16)`, `(x+16, y+16)`
+/// (`Top/Create_0:11-14`), drawn from the Trans strip at `y - 8`
+/// (`SubTopCont/Draw_0:22-24`). Survivors: not on a wall or floor cell
+/// (`TopSmall/Create_0:1-4` + `Collision_Floor`), deduped
+/// (`Collision_TopSmall`). Returns the 16px Trans cells plus the per-cell
+/// frame (GML `image_index = irandom(image_number)`).
+fn trans_cells(
+    cells: &HashSet<(i32, i32)>,
+    wall_set: &HashSet<(i32, i32)>,
+    seed: u64,
+    trans_frames: u32,
+) -> Vec<((i32, i32), i32)> {
+    let mut seen: HashSet<(i32, i32)> = HashSet::new();
+    let mut out = Vec::new();
+    let mut sorted: Vec<(i32, i32)> = cells.iter().copied().collect();
+    sorted.sort_unstable();
+    for (cx, cy) in sorted {
+        let fx = cx as f32 * TILE;
+        let fy = cy as f32 * TILE;
+        for (ox, oy) in [
+            (-32.0, 0.0),
+            (32.0, 0.0),
+            (0.0, 32.0),
+            (0.0, -32.0),
+            (-32.0, 32.0),
+            (32.0, 32.0),
+            (-32.0, -32.0),
+            (32.0, -32.0),
+        ] {
+            let tx = fx + ox;
+            let ty = fy + oy;
+            for (sx, sy) in [(0.0, 0.0), (16.0, 0.0), (0.0, 16.0), (16.0, 16.0)] {
+                let wx = ((tx + sx) / 16.0).floor() as i32;
+                let wy = ((ty + sy) / 16.0).floor() as i32;
+                if wall_set.contains(&(wx, wy)) {
+                    continue;
+                }
+                if cells.contains(&(wx.div_euclid(2), wy.div_euclid(2))) {
+                    continue;
+                }
+                if !seen.insert((wx, wy)) {
+                    continue;
+                }
+                let frame = (wall_hash(seed, wx, wy, 0x41) as usize
+                    % trans_frames.max(1) as usize) as i32;
+                out.push(((wx, wy), frame));
+            }
+        }
+    }
+    out.sort_unstable_by_key(|((wx, wy), _)| (*wy, *wx));
+    out
 }
 
 /// sRGB channel -> linear light (exact transfer function). GPU tints
@@ -1662,12 +1789,13 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                 }
             }
         }
-        // Walls: bevy `spawn_level` composite per 16px cell — Out skirt
-        // always, Bot iff the screen-south tile is floor, Top always
-        // straddling the cell's top edge (+8y in bevy numbers = 8px
-        // screen-up = top-left (wx*16, wy*16-8) here), then the Trans
-        // skirting pass. Variant frames are the seeded
-        // `wall_{body,top,out}_frame` laws. Push order = draw order.
+        // Walls: GML law (`GenCont/Alarm_0` + `SubTopCont/Draw_0`): Out
+        // skirt always (neighbor-cropped), Bot iff the screen-south tile
+        // is floor (`place_meeting(x, y + 16, Floor)` on the wall
+        // instance), Top always straddling the cell's top edge
+        // (top-left (wx*16, wy*16-8) here), then the full-ring Trans
+        // skirting pass. Both Bot and Top use the body's image_index
+        // (the `topindex` roll is never read). Push order = draw order.
         let mut walls: Vec<WallCell> = world
             .query_filtered::<&WallCell, With<WallTile>>()
             .iter(world)
@@ -1680,25 +1808,31 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
         let top_frames = strip_frames(assets, wall_top_png);
         for cell in &walls {
             let (wx, wy) = (cell.0, cell.1);
-            // Screen-south tile (y-down: +y), mirroring bevy's
-            // `(c.x, c.y - WALL_PX)` probe in y-up numbers.
-            let south_tile = (wx.div_euclid(2), wy.div_euclid(2) + 1);
+            // GML `Wall/Create_0:34` verbatim: `place_meeting(x, y + 16,
+            // Floor)` on the 16x16 wall body (origin (0,0) at the cell
+            // top-left). The south point owns exactly one floor cell.
+            let south_tile = (
+                (wx as f32 * 16.0 / TILE).floor() as i32,
+                ((wy as f32 * 16.0 + 16.0) / TILE).floor() as i32,
+            );
             let floor_south = cells.contains(&south_tile);
+            let raw = wall_body_raw(seed, wx, wy);
             if has(wall_out_png) {
-                let frame = wall_out_frame(seed, wx, wy, out_frames);
-                if let Some(s) = place_top_left(
+                let frame = (wall_out_raw(seed, wx, wy) % out_frames.max(1) as usize) as i32;
+                if let Some(s) = wall_out_part(
                     assets,
                     wall_out_png,
                     frame,
-                    Vec2::new(wx as f32 * 16.0 - 4.0, wy as f32 * 16.0 - 12.0),
+                    wx,
+                    wy,
+                    wall_out_crop(&wall_set, wx, wy),
                     [1.0; 4],
-                    0.0,
                 ) {
                     out.push(s);
                 }
             }
             if floor_south && has(wall_bot_png) {
-                let frame = wall_body_frame(seed, wx, wy, bot_frames);
+                let frame = (raw % bot_frames.max(1) as usize) as i32;
                 if let Some(s) = place_top_left(
                     assets,
                     wall_bot_png,
@@ -1711,7 +1845,7 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                 }
             }
             if has(wall_top_png) {
-                let frame = wall_top_frame(seed, wx, wy, top_frames);
+                let frame = (raw % top_frames.max(1) as usize) as i32;
                 if let Some(s) = place_top_left(
                     assets,
                     wall_top_png,
@@ -1724,74 +1858,72 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                 }
             }
         }
-        // Trans skirting: floor-cell bottom edge 2x2 sub-tiles that are
-        // neither wall nor floor (bevy loop verbatim, y-down: south = +y).
-        if has(wall_trans_png) {
-            let trans_frames = strip_frames(assets, wall_trans_png);
-            for &(cx, cy) in &cells {
-                let ftl = Vec2::new(cx as f32 * TILE, (cy as f32 + 1.0) * TILE);
-                for (ox, oy) in [(0.0, 0.0), (16.0, 0.0), (0.0, 16.0), (16.0, 16.0)] {
-                    let p = ftl + Vec2::new(ox, oy);
-                    let wx = (p.x / 16.0).floor() as i32;
-                    let wy = (p.y / 16.0).floor() as i32;
-                    if wall_set.contains(&(wx, wy)) {
-                        continue;
-                    }
-                    let owner = (wx.div_euclid(2), wy.div_euclid(2));
-                    if cells.contains(&owner) {
-                        continue;
-                    }
-                    let frame = (wall_hash(seed, wx, wy, 0x41) as usize
-                        % trans_frames.max(1) as usize) as i32;
-                    if let Some(s) = place_top_left(
-                        assets,
-                        wall_trans_png,
-                        frame,
-                        Vec2::new(wx as f32 * 16.0, wy as f32 * 16.0),
-                        [1.0; 4],
-                        GRID_OVERLAP,
-                    ) {
-                        out.push(s);
-                    }
-                }
+        // Trans skirting: the GML `Top`/`TopSmall` chain leaves a full
+        // second ring past the walls (8 Tops per floor, 4 TopSmalls each,
+        // minus wall/floor contact, deduped). Drawn from the Trans strip
+        // at `y - 8`.
+        let trans_cells: Vec<((i32, i32), i32)> = if has(wall_trans_png) {
+            trans_cells(
+                &cells,
+                &wall_set,
+                seed,
+                strip_frames(assets, wall_trans_png),
+            )
+        } else {
+            Vec::new()
+        };
+        let trans_set: HashSet<(i32, i32)> =
+            trans_cells.iter().map(|(c, _)| *c).collect();
+        for ((wx, wy), frame) in &trans_cells {
+            if let Some(s) = place_top_left(
+                assets,
+                wall_trans_png,
+                *frame,
+                Vec2::new(*wx as f32 * 16.0, *wy as f32 * 16.0 - 8.0),
+                [1.0; 4],
+                GRID_OVERLAP,
+            ) {
+                out.push(s);
             }
         }
-        // Wall drop shadows (GML `scrShadows` wall half: the Out strip
-        // flipped under each wall with open floor to its screen-south,
-        // drawn into the `shad` surface in `shadow_color` at 0.4 alpha
-        // and composited under the actors by `BackCont/Draw_0`). The
-        // port has no TopSmall adjacency, so the south-neighbor wall
-        // test stands in (interior skirts hide under the next wall's
-        // own art either way); tint is flat black 0.4 (the area shadow
+        // Wall drop shadows (GML `scrShadows` wall half: the Out crop
+        // flipped under each wall with no `TopSmall` at `(x, y + 16)`,
+        // drawn into the `shad` surface and composited under the actors
+        // by `BackCont/Draw_0`). Cropped the same way so interior
+        // skirts stay hidden; tint is flat black 0.4 (the area shadow
         // colors are not ported yet).
         if has(wall_out_png) {
-            if let Some(size) = assets.native_size(wall_out_png) {
-                let (w, h) = (size.x, size.y);
-                for cell in &walls {
-                    let (wx, wy) = (cell.0, cell.1);
-                    if wall_set.contains(&(wx, wy + 1)) {
-                        continue;
-                    }
-                    let frame = wall_out_frame(seed, wx, wy, out_frames);
-                    // Flipped skirt spans [y+18-h, y+18] (GML draws the
-                    // Out strip at (x, y+18) with yscale -1).
-                    if let Some((_, def)) = assets.uv(wall_out_png, frame) {
-                        let a = def.anchor();
-                        let center = Vec2::new(
-                            wx as f32 * 16.0 - 4.0 + a[0] * w,
-                            wy as f32 * 16.0 + 18.0 - h + a[1] * h,
+            for cell in &walls {
+                let (wx, wy) = (cell.0, cell.1);
+                if trans_set.contains(&(wx, wy + 1)) {
+                    continue;
+                }
+                let frame = (wall_out_raw(seed, wx, wy) % out_frames.max(1) as usize) as i32;
+                let crop = wall_out_crop(&wall_set, wx, wy);
+                let (l, _r, w, h) = crop;
+                if w <= 0.0 || h <= 0.0 {
+                    continue;
+                }
+                // Flipped crop spans [y+18-h, y+18] (GML draws the
+                // Out strip at (x, y+18) with yscale -1). Same crop
+                // window, recentered on the shadow span.
+                if assets.uv(wall_out_png, frame).is_some() {
+                    let size = Vec2::new(w.min(24.0), h.min(32.0));
+                    if let Some(mut s) = wall_out_part(
+                        assets,
+                        wall_out_png,
+                        frame,
+                        wx,
+                        wy,
+                        crop,
+                        [0.0, 0.0, 0.0, 0.4],
+                    ) {
+                        s.flip_y = true;
+                        s.center = Vec2::new(
+                            wx as f32 * 16.0 - 4.0 + l + size.x * 0.5,
+                            wy as f32 * 16.0 + 18.0 - size.y * 0.5,
                         );
-                        if let Some(s) = assets.sprite_for_full(
-                            wall_out_png,
-                            frame,
-                            center,
-                            false,
-                            true,
-                            0.0,
-                            [0.0, 0.0, 0.0, 0.4],
-                        ) {
-                            out.push(s);
-                        }
+                        out.push(s);
                     }
                 }
             }
