@@ -3763,7 +3763,7 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "repame-anim"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bevy_ecs",
  "repame-atlas",
@@ -3773,11 +3773,11 @@ dependencies = [
 
 [[package]]
 name = "repame-atlas"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "repame-audio"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "cpal",
@@ -3789,7 +3789,7 @@ dependencies = [
 
 [[package]]
 name = "repame-fx"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bevy_ecs",
  "getrandom 0.4.3",
@@ -3806,7 +3806,7 @@ dependencies = [
 
 [[package]]
 name = "repame-input"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bevy_ecs",
  "glam 0.33.6",
@@ -3817,7 +3817,7 @@ dependencies = [
 
 [[package]]
 name = "repame-shell"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "glam 0.33.6",
@@ -3837,7 +3837,7 @@ dependencies = [
 
 [[package]]
 name = "repame-sim"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bevy_ecs",
  "glam 0.33.6",
@@ -3847,7 +3847,7 @@ dependencies = [
 
 [[package]]
 name = "repame-sprite"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -3863,7 +3863,7 @@ dependencies = [
 
 [[package]]
 name = "repame-view3d"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bytemuck",
  "glam 0.33.6",
