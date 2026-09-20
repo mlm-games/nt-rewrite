@@ -33,7 +33,7 @@ use rand::RngExt;
 use repame_fx::Trauma;
 use repame_sim::SimTime;
 
-use crate::anim::SpriteAnim;
+use crate::anim::{SpriteAnim, derive_hurt_path, derive_walk_path};
 use crate::audio::AudioCue;
 use crate::combat::PendingEnemySpawn;
 use crate::comps_a::{
@@ -201,6 +201,14 @@ pub fn spawn_enemy(
         }
         _ => {}
     }
+    // Bevy parity: every enemy carries its strip table (`EnemySprites`)
+    // plus the seeded idle `SpriteAnim`; the switch/hurt/fire systems
+    // resolve walk/hurt/fire strips from the table each tick.
+    ec.insert(crate::comps_b::EnemySprites {
+        idle: def.sprite,
+        walk: derive_walk_path(def.sprite),
+        hurt: derive_hurt_path(def.sprite),
+    });
     // Seed the idle strip only (walk/hurt/fire strips resolve
     // renderer-side); without a catalog entry no anim rides along and
     // `show_enemy_fire` becomes a silent no-op for this enemy.

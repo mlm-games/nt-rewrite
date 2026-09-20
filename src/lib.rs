@@ -387,8 +387,14 @@ impl App {
         )
         .map_err(|e| anyhow::anyhow!("{e}"))?;
         // Future spawns (next floors, portal waves) resolve art variants
-        // against the full catalog; existing entities keep recorded paths.
+        // against the full catalog. Entities spawned pre-assets (headless
+        // `setup_run` runs against the empty catalog) carry no `SpriteAnim`
+        // and, for enemies, no `EnemySprites` table — backfill both here so
+        // `player_anim_switch` / `enemy_anim_switch` / `hurt_on_damage`
+        // match exactly like post-asset spawns (bevy parity: every actor
+        // spawns with its strip table + seeded idle anim).
         self.sim.world.insert_resource(catalog);
+        crate::anim::backfill_spawn_anims(&mut self.sim.world);
         self.assets = Some(assets);
         self.assets_dir = Some(dir.to_path_buf());
         self.cursor_img = None;

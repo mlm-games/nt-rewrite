@@ -125,30 +125,11 @@ pub fn spawn_enemy(commands: &mut Commands, kind: EnemyKind, pos: glam::Vec2) ->
         .id()
 }
 
-/// Hurt-sprite path for a player idle sprite. Bevy `anim.rs` maps
-/// every `*Idle.png` to `*Hurt.png` (including B/C skin variants);
-/// run setup only ever passes the 16 base `sprMutant{N}Idle` sprites,
-/// so the exact table is those 16 arms plus an identity fallback.
+/// Hurt-sprite path for a player idle sprite. Delegates to the full
+/// bevy `anim.rs` table in [`crate::anim`] (B/C skin variants included);
+/// kept here for setup call-site compatibility.
 pub fn derive_hurt_path(idle: &'static str) -> &'static str {
-    match idle {
-        "images/sprMutant1Idle.png" => "images/sprMutant1Hurt.png",
-        "images/sprMutant2Idle.png" => "images/sprMutant2Hurt.png",
-        "images/sprMutant3Idle.png" => "images/sprMutant3Hurt.png",
-        "images/sprMutant4Idle.png" => "images/sprMutant4Hurt.png",
-        "images/sprMutant5Idle.png" => "images/sprMutant5Hurt.png",
-        "images/sprMutant6Idle.png" => "images/sprMutant6Hurt.png",
-        "images/sprMutant7Idle.png" => "images/sprMutant7Hurt.png",
-        "images/sprMutant8Idle.png" => "images/sprMutant8Hurt.png",
-        "images/sprMutant9Idle.png" => "images/sprMutant9Hurt.png",
-        "images/sprMutant10Idle.png" => "images/sprMutant10Hurt.png",
-        "images/sprMutant11Idle.png" => "images/sprMutant11Hurt.png",
-        "images/sprMutant12Idle.png" => "images/sprMutant12Hurt.png",
-        "images/sprMutant13Idle.png" => "images/sprMutant13Hurt.png",
-        "images/sprMutant14Idle.png" => "images/sprMutant14Hurt.png",
-        "images/sprMutant15Idle.png" => "images/sprMutant15Hurt.png",
-        "images/sprMutant16Idle.png" => "images/sprMutant16Hurt.png",
-        _ => idle,
-    }
+    crate::anim::derive_hurt_path(idle)
 }
 
 /// Start ammo is pickup amount x3 per held weapon (GML `scrCreatePlayers`
@@ -428,31 +409,38 @@ pub fn build_player_bundle(race: RaceId, loadout: &RunLoadout) -> PlayerBundle {
 
 /// Spawn a loadout-built player (tags + aim + position; shared by
 /// `setup_run` so spawn code is not duplicated). `GameCleanup` only —
-/// same portal-survival reason as [`spawn_player`].
+/// same portal-survival reason as [`spawn_player`]. Bevy parity: the
+/// idle `SpriteAnim` rides along so `player_anim_switch`/`hurt_on_damage`
+/// match (without it the `&mut SpriteAnim` queries never fire and the
+/// player sticks on the render fallback frame 0).
 pub fn spawn_player_loaded(
     commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
     pos: glam::Vec2,
     bundle: PlayerBundle,
 ) -> Entity {
-    commands
-        .spawn((
-            GameCleanup,
-            bundle.player,
-            bundle.race_state,
-            bundle.inv,
-            bundle.cooldown,
-            bundle.health,
-            bundle.crown_state,
-            Team::Player,
-            Hitbox {
-                radius: PLAYER_RADIUS,
-            },
-            AimDir(glam::Vec2::Y),
-            Velocity(glam::Vec2::ZERO),
-            bundle.anim,
-            Pos(pos),
-        ))
-        .id()
+    let idle = bundle.anim.idle;
+    let mut ec = commands.spawn((
+        GameCleanup,
+        bundle.player,
+        bundle.race_state,
+        bundle.inv,
+        bundle.cooldown,
+        bundle.health,
+        bundle.crown_state,
+        Team::Player,
+        Hitbox {
+            radius: PLAYER_RADIUS,
+        },
+        AimDir(glam::Vec2::Y),
+        Velocity(glam::Vec2::ZERO),
+        bundle.anim,
+        Pos(pos),
+    ));
+    if let Some(def) = catalog.def(idle) {
+        ec.insert(SpriteAnim::new(idle, def));
+    }
+    ec.id()
 }
 
 /// Headless run setup (bevy `setup_run` resource flow verbatim, minus
@@ -634,11 +622,21 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
     world.resource_mut::<Run>().blood_crown = loadout.crown == CrownKind::Blood;
     let bundle = build_player_bundle(race, &loadout);
 
-    spawn_player_loaded(
-        &mut world.commands(),
-        glam::Vec2::new(crate::comps_a::TILE * 0.5, crate::comps_a::TILE * 0.5),
-        bundle,
-    );
+    // The idle `SpriteAnim` seed needs the catalog, which only exists
+    // from here on (empty headless catalog pre-assets, full catalog
+    // post-`load_assets_from`).
+    if world.get_resource::<AnimCatalog>().is_none() {
+        world.insert_resource(empty_anim_catalog());
+    }
+    world.resource_scope(|world, catalog: Mut<AnimCatalog>| {
+        let mut commands = world.commands();
+        spawn_player_loaded(
+            &mut commands,
+            &catalog,
+            glam::Vec2::new(crate::comps_a::TILE * 0.5, crate::comps_a::TILE * 0.5),
+            bundle,
+        );
+    });
     // `World::commands` only queues: flush so the player exists before
     // the mask/queue writes below (system callers flush on schedule run).
     world.flush();
