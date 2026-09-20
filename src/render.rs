@@ -2663,8 +2663,9 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             }
         }
         // Animated hit-effect leftovers (anything with a live strip
-        // that isn't a corpse/portal/actor).
-        let mut q = world.query::<(
+        // that isn't a corpse/portal/actor/mote — motes have their own
+        // scaled arm below).
+        let mut q = world.query_filtered::<(
             &Pos,
             &SpriteAnim,
             Option<&HitFlash>,
@@ -2680,7 +2681,7 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             Option<&Pickup>,
             Option<&WeaponVisual>,
             Option<&SwingFx>,
-        )>();
+        ), bevy_ecs::prelude::Without<Mote>>();
         for (
             pos,
             anim,

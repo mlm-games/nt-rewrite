@@ -657,8 +657,7 @@ pub fn spawn_prop_death_effect(
 /// entity per mote, `PickupLifetime` expiry. Speed/friction/spin/grow
 /// laws are verbatim from the `Create_0` handlers (speeds converted
 /// px/step → px/s at 30 Hz); the step integration lives in
-/// [`tick_motes`]. `strip_override` replaces the default strip
-/// (feather callers pass Leaf/Money/Raven per spawn).
+/// [`tick_motes`].
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_motes(
     commands: &mut Commands,
@@ -763,9 +762,11 @@ impl Default for ProximityMine {
 /// GML `Dust/Step_0` + `Smoke/Step_0` + `Feather/Step_0` + `Curse`
 /// integration (sim half): flat-friction slide + spin + grow/decay on
 /// `MoteScale`, feather fall-sway (`x += 0.35*sin(fall/7)`,
-/// `y += 0.3`, `speed *= 0.9` over 0.2, `image_speed = 0` at rest).
-/// `PickupLifetime` expiry is handled by `tick_hit_effects`; scale <= 0
-/// despawns like GML's `image_xscale < 0` kill.
+/// `y += 0.3`, `speed *= 0.9` over 0.2, `image_speed = 0` at rest),
+/// wall bounce (Smoke every 3rd tick, Feather at half speed —
+/// `move_bounce_solid`). `PickupLifetime` expiry is handled by
+/// `tick_hit_effects`; scale <= 0 despawns like GML's
+/// `image_xscale < 0` kill.
 pub fn tick_motes(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -776,9 +777,32 @@ pub fn tick_motes(
         &mut FxAngle,
         &mut Mote,
         &mut MoteScale,
-    )>,
+    ), Without<crate::comps_a::WallTile>>,
+    walls: Query<(&crate::comps_a::WallCell, &Pos), With<crate::comps_a::WallTile>>,
+    frame: Res<crate::state::CurrentFrame>,
 ) {
     let dt = time.delta_secs;
+    let wall_cells: Vec<((i32, i32), glam::Vec2)> =
+        walls.iter().map(|(c, p)| ((c.0, c.1), p.0)).collect();
+    let bounce = |pos: glam::Vec2, vel: &mut glam::Vec2, keep: f32| {
+        for ((cx, cy), wp) in &wall_cells {
+            let half = 8.0;
+            let closest = glam::Vec2::new(
+                pos.x.clamp(wp.x - half, wp.x + half),
+                pos.y.clamp(wp.y - half, wp.y + half),
+            );
+            if pos.distance(closest) > 4.0 {
+                continue;
+            }
+            let _ = (cx, cy);
+            if (pos.x - closest.x).abs() > (pos.y - closest.y).abs() {
+                vel.x = -vel.x * keep;
+            } else {
+                vel.y = -vel.y * keep;
+            }
+            break;
+        }
+    };
     for (e, mut pos, mut ground, mut angle, mut mote, mut scale) in &mut q {
         if mote.sway {
             pos.0.x += 0.35 * (30.0 * dt).sin() * 30.0 * dt;
@@ -789,6 +813,7 @@ pub fn tick_motes(
             } else {
                 ground.vel = glam::Vec2::ZERO;
             }
+            bounce(pos.0, &mut ground.vel, 0.5);
         } else if mote.friction > 0.0 {
             crate::comps_a::apply_gml_friction(&mut ground.vel, mote.friction, dt);
         }
@@ -800,6 +825,63 @@ pub fn tick_motes(
             if scale.0 < 0.0 {
                 commands.entity(e).despawn();
             }
+        }
+    }
+}
+
+/// GML `Explosion/Create_0` mote ring (sim half): `count/2` `Smoke`
+/// at `2+random(3)` plus `count` `Dust` fanned at speed 6 around a
+/// random start angle (`_angle += 360/count`). Full size is 20 + 10
+/// smoke, small (`SmallExplosion`) is 8 + 4. Gated on `particles_on`
+/// (`UberCont.opt_prtcls`).
+pub fn spawn_explosion_motes(
+    commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
+    particles_on: bool,
+    pos: glam::Vec2,
+    small: bool,
+) {
+    if !particles_on {
+        return;
+    }
+    let mut rng = rand::rng();
+    let dust_n = if small { 8 } else { 20 };
+    let smoke_n = dust_n / 2;
+    for _ in 0..smoke_n {
+        spawn_motes(commands, catalog, true, pos, MoteStrip::Smoke, 1);
+    }
+    let start = rng.random_range(0.0..std::f32::consts::TAU);
+    for i in 0..dust_n {
+        let a = start + i as f32 * std::f32::consts::TAU / dust_n as f32;
+        let dir = glam::Vec2::new(a.cos(), a.sin());
+        let mut ec = commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            crate::comps_b::GroundPhysics {
+                vel: dir * 6.0 * 30.0,
+                rotspeed: rng.random_range(0.7..1.0)
+                    * if rng.random_bool(0.5) { 1.0 } else { -1.0 },
+            },
+            FxAngle(rng.random_range(0.0..std::f32::consts::TAU)),
+            Mote {
+                friction: 0.3,
+                spin: rng.random_range(1.0..4.0)
+                    * if rng.random_bool(0.5) { 1.0 } else { -1.0 },
+                grow: rng.random_range(0.05..0.10),
+                grow_decay: 0.02,
+                sway: false,
+            },
+            MoteScale(0.7),
+            MoteStrip::Dust,
+            Pos(pos),
+            PickupLifetime {
+                timer: GTimer::from_seconds(0.6, TimerMode::Once),
+            },
+        ));
+        if let Some(def) = catalog.def("images/sprDust.png") {
+            let mut anim = SpriteAnim::new("images/sprDust.png", def);
+            anim.frame = rng.random_range(0..def.frames.max(1));
+            ec.insert(anim);
         }
     }
 }

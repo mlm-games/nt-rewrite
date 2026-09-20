@@ -3324,22 +3324,16 @@ pub fn apply_explosions(
             feel.trauma.add(0.45);
             chromatic_pulse(&mut feel.chroma, 0.3);
             feel.hitstop.trigger(0.14, 0.1);
-            let mut rng = rand::rng();
-            spawn_burst(
+            // GML `Explosion/Create_0`: 10 `Smoke` at `2+random(3)`
+            // plus 20 `Dust` fanned at speed 6 around a random start
+            // angle (small variant: 4 + 8). `opt_prtcls` rides
+            // `decide.particles`.
+            crate::environment::spawn_explosion_motes(
                 &mut commands,
-                &mut rng,
+                &catalog,
+                decide.particles,
                 pos,
-                32,
-                [1.0, 0.4, 0.1, 1.0],
-                (130.0, 400.0),
-            );
-            spawn_burst(
-                &mut commands,
-                &mut rng,
-                pos,
-                16,
-                [1.0, 0.9, 0.5, 1.0],
-                (60.0, 220.0),
+                false,
             );
             audio.play_boom(&mut cues);
         }
