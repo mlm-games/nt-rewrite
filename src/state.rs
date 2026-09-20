@@ -638,6 +638,10 @@ pub fn tick_escape_pause(
                 menu.pause_confirm = None;
                 return;
             }
+            // Esc on the pause menu resumes through the same delayed
+            // path as the Resume button: overlay clears now, `paused`
+            // follows when the 0.2 s timer drains.
+            // paused.0 = false;
             *overlay = OverlayMenu::None;
             pending.0 = Some(GTimer::from_seconds(UNPAUSE_DELAY_SECS, TimerMode::Once));
         }

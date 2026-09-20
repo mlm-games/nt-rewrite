@@ -236,14 +236,12 @@ pub struct App {
     vortex_tex: Vec<VortexTexture>,
     vortex_tex_area: Option<u8>,
     // -- staged shell input (drained into `NtInput`/`MenuEdge` per frame) --
-    // `held` is the event-staged key set: `on_key_event` presses land
-    // here through `stage_code`/`stage_physical`, so held keys survive
-    // focus moves without depending on a focused widget (GML
-    // `keyboard_check` parity). Layout independent: AZERTY reports the
-    // same `KeyW` position GML's `ord("W")` binds. Cleared on window
-    // focus loss.
-    held: HashSet<KeyCode>,
-    edges: Vec<KeyCode>,
+    // Shared staging owns every level: event-staged physical holds land
+    // in `staging.held` (layout-independent positions, GML
+    // `keyboard_check` parity), mouse levels in
+    // `staging.lmb_held/rmb_held`, edges in `staging.edges`. Nothing
+    // key/mouse lives on `App` itself anymore — `feed_polled` repairs
+    // into staging and `feed_input` samples it, one store both ways.
     /// Whether the window currently has focus. `false` (set by the
     /// shell's focus handler) drops `held` outright — winit delivers
     /// no key-ups across an alt-tab.
@@ -253,12 +251,6 @@ pub struct App {
     pause_edge: bool,
     restart_edge: bool,
     interact_edge: bool,
-    /// Right mouse held (GML `spec`/ability on `mb_right` parity).
-    rmb_held: bool,
-    /// Left mouse held (GML `fire` on `mb_left` parity): set on primary
-    /// pointer-down, cleared on primary pointer-up, so automatic weapons
-    /// keep firing while held (clicks alone are single-frame edges).
-    lmb_held: bool,
     /// Latched gamepad presence: set while any staged snapshot shows a
     /// connected pad, cleared when a frame stages none. `pads` drains
     /// every frame so it can't answer "is a pad in use" outside
@@ -354,16 +346,12 @@ impl App {
             cursor_img_key: None,
             vortex_tex: Vec::new(),
             vortex_tex_area: None,
-            held: HashSet::new(),
-            edges: Vec::new(),
             window_focused: true,
             staging: repame_shell::Staging::shared(),
             shortcut_edges: repame_shell::shared_edges(),
             pause_edge: false,
             restart_edge: false,
             interact_edge: false,
-            rmb_held: false,
-            lmb_held: false,
             pad_live: false,
             view_width: 1280.0,
             view_viewport_dp: [1280.0, 720.0],
@@ -994,7 +982,7 @@ impl App {
     }
 }
 
-pub(crate) mod nt_shortcuts {
+pub mod nt_shortcuts {
     use repame_shell::{SharedEdges, shared_edges};
 
     use super::App;
@@ -1023,6 +1011,12 @@ pub(crate) mod nt_shortcuts {
         app.pause_edge |= pause;
         app.restart_edge |= restart;
         app.interact_edge |= confirm;
+    }
+
+    /// Borrow the live shortcut edges (golden demo drives Esc through
+    /// the installed handler exactly like the runtime dispatch does).
+    pub fn edges_handle(app: &App) -> SharedEdges {
+        app.shortcut_edges.clone()
     }
 }
 
@@ -1091,50 +1085,33 @@ impl App {
 
     /// Stage one physical key transition. Down transitions push press
     /// edges (deduped against `held`); releases only clear `held`.
+    /// Golden-demo hook: the tape drives keys without a live `KeyEvent`
+    /// route, so it stages here directly into shared staging.
     pub fn stage_physical_key(&mut self, key: PhysicalKey, down: bool) {
         self.stage_physical(key, down, false);
     }
 
     fn stage_physical(&mut self, key: PhysicalKey, down: bool, is_repeat: bool) {
-        let Some(code) = crate::input::keycode_for_physical(key) else {
-            return;
-        };
-        // All edges stage here: focus-routed `handle_key` lands fresh
-        // presses in `edges`; `held`-insert dedups double delivery, so
-        // one landing pushes one edge.
-        if down {
-            let fresh = self.held.insert(code);
-            if fresh && !is_repeat {
-                self.edges.push(code);
-            }
-        } else {
-            self.held.remove(&code);
-        }
+        self.staging.borrow_mut().stage_physical(key, down, is_repeat);
     }
 
     /// Window focus changed (shell forwards winit `Focused`). Losing
     /// focus drops every held key + edge: no key-ups arrive across an
     /// alt-tab, and GML's `keyboard_check` reads all-up there too.
+    /// Staging owns the full cancel (keys, edges, clicks, mouse, touch,
+    /// pads); the `window_focused` mirror just tracks it.
     pub fn set_window_focused(&mut self, focused: bool) {
-        self.window_focused = focused;
         self.staging.borrow_mut().set_window_focused(focused);
-        if !focused {
-            self.held.clear();
-            self.edges.clear();
-            self.lmb_held = false;
-            self.rmb_held = false;
-        }
+        self.window_focused = self.staging.borrow().window_focused;
     }
 
-    fn stage_code(&mut self, code: KeyCode, down: bool, is_repeat: bool) {
-        if down {
-            self.held.insert(code);
-            if !is_repeat {
-                self.edges.push(code);
-            }
-        } else {
-            self.held.remove(&code);
-        }
+    fn stage_code(&mut self, code: KeyCode, down: bool, _is_repeat: bool) {
+        let Some(key) = crate::input::physical_key_for_code(code) else {
+            return;
+        };
+        self.staging
+            .borrow_mut()
+            .stage_physical(key, down, _is_repeat);
     }
 
     /// REMAP capture: the next pressed input resolves the pending
@@ -1253,6 +1230,19 @@ impl App {
     /// Public for the golden demo walkthrough (`tests/golden_demo.rs`).
     pub fn stage_hover(&mut self, world: Vec2, screen: [f32; 2]) {
         self.staging.borrow_mut().stage_hover(world, screen);
+    }
+
+    /// Public for the golden demo walkthrough: focus-routed key event
+    /// into shared staging, same entry the live root `on_key_event`
+    /// closure calls.
+    pub fn stage_key(&mut self, ke: &KeyEvent) {
+        self.staging.borrow_mut().handle_key(ke);
+    }
+
+    /// Release half of `stage_physical_key`: clears the staging level so
+    /// the release path matches hardware key-up exactly.
+    pub fn staging_key_up(&mut self, key: PhysicalKey) {
+        self.staging.borrow_mut().stage_physical(key, false, false);
     }
 
     /// Live cursor in world coords: staged window-physical px
@@ -1426,18 +1416,11 @@ impl App {
     /// the handlers missed. Keyboard and mouse share the rule; Esc/R
     /// shortcut edges are untouched (shortcuts own those).
     pub fn feed_polled(&mut self, sched: &Scheduler) {
-        repame_shell::apply_scheduler_levels(
-            &mut self.held,
-            &mut self.lmb_held,
-            &mut self.rmb_held,
-            &mut self.window_focused,
-            sched,
-            crate::input::keycode_for_physical,
-            crate::input::physical_keys_for_code,
-        );
-        if !self.window_focused {
-            self.edges.clear();
-        }
+        // Single store: staging owns held keys + mouse levels; repair
+        // runs into it directly. The old parallel `App.held/lmb_held`
+        // copies are gone — sampling and repair read the same fields.
+        self.staging.borrow_mut().feed_polled(sched);
+        self.window_focused = self.staging.borrow().window_focused;
     }
 
     /// Drain staged shell input into sim resources (runs before
@@ -1483,15 +1466,28 @@ impl App {
             self.staging.borrow_mut().capture_armed = self.capture_armed();
         }
         nt_shortcuts::drain(self, &self.shortcut_edges.clone());
-        let staging_edges = self.staging.borrow_mut().take_edges();
-        for code in staging_edges {
-            if let Some(mapped) = crate::input::keycode_for_physical(code) {
-                self.held.insert(mapped);
-                self.edges.push(mapped);
+        // Staging owns held levels; translate physical edges into the
+        // sampler's `KeyCode` space here. The old `App.held` level set
+        // is gone — levels below read staging directly.
+        let mut staging = self.staging.borrow_mut();
+        let mut staged_held: HashSet<KeyCode> = HashSet::new();
+        for key in staging.held.iter() {
+            if let Some(code) = crate::input::keycode_for_physical(*key) {
+                staged_held.insert(code);
             }
         }
-
-        let just: HashSet<KeyCode> = self.edges.drain(..).collect();
+        let mut just: HashSet<KeyCode> = HashSet::new();
+        for code in staging.take_edges() {
+            if let Some(mapped) = crate::input::keycode_for_physical(code) {
+                staged_held.insert(mapped);
+                just.insert(mapped);
+            }
+        }
+        let rmb_down = staging.take_rmb_down();
+        let staging_clicks = staging.take_clicks();
+        let staging_lmb = staging.lmb_held;
+        let staging_rmb = staging.rmb_held;
+        drop(staging);
         let state = self
             .sim
             .world
@@ -1613,10 +1609,12 @@ impl App {
         // so there is nothing to drop here. Each arm below decides
         // what RMB means (Back over settings/credits, silent
         // elsewhere) without eating a coincident left click.
-        let rmb_down = self.staging.borrow_mut().take_rmb_down();
-        let staging_clicks = self.staging.borrow_mut().take_clicks();
-        let staging_lmb = self.staging.borrow().lmb_held;
-        let staging_rmb = self.staging.borrow().rmb_held;
+        let state = self
+            .sim
+            .world
+            .get_resource::<AppState>()
+            .copied()
+            .unwrap_or_default();
         let mouse_down_edge = !staging_clicks.is_empty();
         let mouse_down = (mouse_down_edge || staging_lmb)
             && !menu_open
@@ -1655,8 +1653,7 @@ impl App {
             // gameplay sampler so one press can't both confirm a menu
             // row and pulse a gameplay action (fire/swap).
             let (held, just) = if in_menu {
-                let held: HashSet<KeyCode> = self
-                    .held
+                let held: HashSet<KeyCode> = staged_held
                     .iter()
                     .copied()
                     .filter(|c| !menu_owned_key(*c))
@@ -1665,7 +1662,7 @@ impl App {
                     just.iter().copied().filter(|c| !menu_owned_key(*c)).collect();
                 (held, sampled)
             } else {
-                (self.held.clone(), just.clone())
+                (staged_held.clone(), just.clone())
             };
             crate::input::sample_keyboard_mapped(&held, &just, &mouse, Some(&keymap), &mut input);
             let pads = self.staging.borrow_mut().take_pads();
@@ -3706,12 +3703,24 @@ mod cursor_staging_tests {
         use crate::input::{KeyCode, MouseState, NtInput};
         let mut app = App::new_with_seed(4242);
         app.stage_physical_key(PhysicalKey::KeyE, true);
-        let just: std::collections::HashSet<KeyCode> = app.edges.drain(..).collect();
+        let mut staging = app.staging.borrow_mut();
+        let edges = staging.take_edges();
+        let mut held = std::collections::HashSet::new();
+        for key in staging.held.iter() {
+            if let Some(code) = crate::input::keycode_for_physical(*key) {
+                held.insert(code);
+            }
+        }
+        drop(staging);
+        let just: std::collections::HashSet<KeyCode> = edges
+            .into_iter()
+            .filter_map(crate::input::keycode_for_physical)
+            .collect();
         assert!(just.contains(&KeyCode::KeyE), "KeyE must stage an edge");
         let keymap = app.sim.world.resource::<InputMapState>().clone();
         let mut out = NtInput::default();
         crate::input::sample_keyboard_mapped(
-            &app.held,
+            &held,
             &just,
             &MouseState::default(),
             Some(&keymap),
@@ -3865,11 +3874,22 @@ mod cursor_staging_tests {
         app.stage_physical_key(PhysicalKey::KeyZ, false);
         app.stage_physical_key(PhysicalKey::KeyZ, true);
         let mut out = crate::input::NtInput::default();
-        let just: std::collections::HashSet<crate::input::KeyCode> =
-            app.edges.drain(..).collect();
+        let mut staging = app.staging.borrow_mut();
+        let edges = staging.take_edges();
+        let mut held = std::collections::HashSet::new();
+        for key in staging.held.iter() {
+            if let Some(code) = crate::input::keycode_for_physical(*key) {
+                held.insert(code);
+            }
+        }
+        drop(staging);
+        let just: std::collections::HashSet<crate::input::KeyCode> = edges
+            .into_iter()
+            .filter_map(crate::input::keycode_for_physical)
+            .collect();
         let keymap = app.sim.world.resource::<InputMapState>().clone();
         let mouse = crate::input::MouseState::default();
-        crate::input::sample_keyboard_mapped(&app.held, &just, &mouse, Some(&keymap), &mut out);
+        crate::input::sample_keyboard_mapped(&held, &just, &mouse, Some(&keymap), &mut out);
         assert!(
             out.move_axis.y < -0.5,
             "rebound Z must steer north, got {:?}",

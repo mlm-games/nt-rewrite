@@ -122,6 +122,9 @@ impl NtInput {
     }
 
     pub fn clear_transient(&mut self) {
+        self.move_axis = Vec2::ZERO;
+        self.aim_axis = Vec2::ZERO;
+        self.fire_held = false;
         self.fire_pressed = false;
         self.ability_pressed = false;
         self.interact_pressed = false;
@@ -517,6 +520,10 @@ fn keycode_for_glyph(c: char) -> Option<KeyCode> {
 /// entries). Derived from the W3C `name()`: single letters/digits map
 /// to their own positions, the rest by name. Used only to drop stuck
 /// levels in the polled repair — never to stage edges.
+pub fn physical_key_for_code(code: KeyCode) -> Option<PhysicalKey> {
+    physical_keys_for_code(&code)
+        .and_then(|keys| keys.first().copied())
+}
 pub fn physical_keys_for_code(code: &KeyCode) -> Option<&'static [PhysicalKey]> {
     use repose_core::input::PhysicalKey as P;
     Some(match code {
