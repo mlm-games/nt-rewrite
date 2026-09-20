@@ -1012,7 +1012,10 @@ pub(crate) mod nt_shortcuts {
     }
 
     pub fn install(edges: &SharedEdges) {
-        repame_shell::install_into(edges, PAUSE, RESTART, CONFIRM);
+        // `#[test]` threads share one process: install the map into the
+        // shared default every call.
+        repame_shell::install_map(map());
+        repame_shell::install_handler_into(edges, PAUSE, RESTART, CONFIRM);
     }
 
     pub fn drain(app: &mut App, edges: &SharedEdges) {
@@ -1225,23 +1228,30 @@ impl App {
     /// automatic weapons keep firing while held. A pending REMAP
     /// capture eats the press instead (GML captures `mb_left` /
     /// `mb_right` as the new binding).
-    fn pick_down(&mut self, button: PointerButton) {
+    /// Public for the golden demo walkthrough (`tests/golden_demo.rs`),
+    /// which drives the same path as the live viewport closures.
+    pub fn pick_down(&mut self, button: PointerButton) {
         if self.capture_armed() {
             let left = button == PointerButton::Primary;
             self.capture_mouse_press(left);
+            return;
         }
         self.staging.borrow_mut().pick_down(button);
     }
 
-    fn pick_up(&mut self, button: PointerButton) {
+    /// Public for the golden demo walkthrough (`tests/golden_demo.rs`).
+    pub fn pick_up(&mut self, button: PointerButton) {
         self.staging.borrow_mut().pick_up(button);
     }
 
-    fn cursor_move(&mut self, phys_px: Vec2) {
+    /// Public for the golden demo walkthrough (`tests/golden_demo.rs`),
+    /// which drives the same path as the live viewport closures.
+    pub fn cursor_move(&mut self, phys_px: Vec2) {
         self.staging.borrow_mut().cursor_move(phys_px);
     }
 
-    fn stage_hover(&mut self, world: Vec2, screen: [f32; 2]) {
+    /// Public for the golden demo walkthrough (`tests/golden_demo.rs`).
+    pub fn stage_hover(&mut self, world: Vec2, screen: [f32; 2]) {
         self.staging.borrow_mut().stage_hover(world, screen);
     }
 
@@ -1390,7 +1400,8 @@ impl App {
 
     /// Stage one viewport click (world aim position + screen px for
     /// menu hit-testing; drained by [`App::feed_input`]).
-    fn stage_click(&mut self, world: Vec2, screen: [f32; 2]) {
+    /// Public for the golden demo walkthrough, same path as live.
+    pub fn stage_click(&mut self, world: Vec2, screen: [f32; 2]) {
         let d = repose_core::locals::effective_density_scale().max(1e-6);
         self.staging.borrow_mut().stage_click(world, screen, d);
     }
@@ -1431,7 +1442,9 @@ impl App {
 
     /// Drain staged shell input into sim resources (runs before
     /// [`App::advance`] each frame; pulses are take-once downstream).
-    fn feed_input(&mut self) {
+    /// Public for the golden demo walkthrough, which drives the same
+    /// per-frame order as `view` without a live `Scheduler`.
+    pub fn feed_input(&mut self) {
         for action in self.menu_actions.drain(..) {
             apply_menu_action(&mut self.sim.world, action);
         }
@@ -3653,7 +3666,8 @@ mod cursor_staging_tests {
                 Some(Action::Custom(want.into())),
                 "map must bind {want}"
             );
-            // Installing wires the map into the global scope stack, so the
+            // Installing wires the map into the process-global default map
+            // (installed once) plus the handler into fresh edges, so the
             // runtime's `resolve_action` (the `dispatch_action` path) sees
             // the chord even with no compose scope mounted.
             let app = App::new_with_seed(4242);
@@ -3801,7 +3815,10 @@ mod cursor_staging_tests {
             .map
             .keyboard(&crate::keymap::NtAction::North);
         assert!(
-            matches!(entry, repame_input::KeymapEntry::Key(_)),
+            matches!(
+                entry,
+                repame_input::KeymapEntry::Key(_) | repame_input::KeymapEntry::Physical(_)
+            ),
             "capture must rebind north, got {entry:?}"
         );
     }

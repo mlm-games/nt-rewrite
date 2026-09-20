@@ -53,6 +53,8 @@ repose-docking = { path = "../Repos/repose/crates/repose-docking" }
 repose-macros = { path = "../Repos/repose/crates/repose-macros" }
 
 [dev-dependencies]
+insta = "1.44.1"
+repame-input = { path = "../Repos/repame/crates/repame-input", version = "0.2" }
 # (empty: offscreen pixel proofs use the main `repose-render-wgpu` dep,
 # same pattern as repame-sprite's own batch tests).
 

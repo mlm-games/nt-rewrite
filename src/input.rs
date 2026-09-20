@@ -442,15 +442,11 @@ pub fn keymap_move(
 fn keycode_for_entry(entry: &repame_input::KeymapEntry) -> Option<KeyCode> {
     use repame_input::KeymapEntry;
     match entry {
-        // `Physical` entries never occur: `capture_physical_press`
-        // resolves every capture through `chord_for_physical` into a
-        // `Key` chord, so only glyph chords reach the sampler.
         KeymapEntry::Key(chord) => keycode_for_chord(&chord.key),
-        KeymapEntry::None
-        | KeymapEntry::Physical(_)
-        | KeymapEntry::Mouse(_)
-        | KeymapEntry::Pad(_)
-        | KeymapEntry::Axis { .. } => None,
+        KeymapEntry::Physical(key) => keycode_for_physical(*key),
+        KeymapEntry::None | KeymapEntry::Mouse(_) | KeymapEntry::Pad(_) | KeymapEntry::Axis { .. } => {
+            None
+        }
     }
 }
 
