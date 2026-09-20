@@ -1390,6 +1390,7 @@ pub fn tick_portal_shock(
     time: Res<SimTime>,
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
+    save: Res<crate::savedata_part::SaveData>,
     mut shocks: Query<(Entity, &Pos, &mut PortalShock)>,
     mut props: Query<
         (
@@ -1450,7 +1451,15 @@ pub fn tick_portal_shock(
             if let Some(sprites) = ps {
                 spawn_prop_corpse(&mut commands, &catalog, ppos, &sprites);
             }
-            spawn_prop_death_effect(&mut commands, ppos, death, explosive, None);
+            spawn_prop_death_effect(
+                &mut commands,
+                &catalog,
+                save.settings.particles,
+                ppos,
+                death,
+                explosive,
+                None,
+            );
             if let Ok(entrance) = entrances.get(prop_e) {
                 secrets.queue(entrance.target);
             }

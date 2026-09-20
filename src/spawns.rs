@@ -404,6 +404,7 @@ pub fn damage_destructible_prop(
     secrets: &mut SecretTriggers,
     audio: &GameAudio,
     cues: &mut Queue<AudioCue>,
+    particles_on: bool,
     prop_e: Entity,
     center: glam::Vec2,
     damage: i32,
@@ -438,6 +439,8 @@ pub fn damage_destructible_prop(
     }
     crate::environment::spawn_prop_death_effect(
         commands,
+        catalog,
+        particles_on,
         center,
         death_copy,
         legacy_explosive,

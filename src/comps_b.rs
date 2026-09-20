@@ -694,6 +694,40 @@ pub struct GroundPhysics {
     pub rotspeed: f32,
 }
 
+/// GML `Dust`/`Smoke`/`Feather`/`Curse` motes: sprite debris with its
+/// own friction, spin, and scale law. `strip` selects the art
+/// (`sprDust`, `sprSmoke`, `sprRavenFeather`/`sprLeaf`/`sprMoney` set
+/// per-spawn, `sprCurse`); `friction` is the flat GML friction value
+/// (0.3 dust, 0.1 smoke, 0.005 curse, feathers use fall-sway instead);
+/// `spin`/`grow`/`grow_decay` drive `FxAngle` + `MoteScale` exactly
+/// like the `Step_0` handlers; `sway` enables the feather fall law
+/// (downward drift + sine wobble, `speed *= 0.9` over 0.2).
+#[derive(Component, Clone, Copy)]
+pub struct Mote {
+    pub friction: f32,
+    pub spin: f32,
+    pub grow: f32,
+    pub grow_decay: f32,
+    pub sway: bool,
+}
+
+/// Mote visual scale (`image_xscale`/`image_yscale` verbatim): dust
+/// 0.7, smoke 0.8, feathers 1.0. Renderer-owned draw scale.
+#[derive(Component, Clone, Copy)]
+pub struct MoteScale(pub f32);
+
+/// Mote strip selector (renderer maps to the catalog strip; feathers
+/// carry their per-spawn sprite: leaf/money/raven).
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MoteStrip {
+    Dust,
+    Smoke,
+    Leaf,
+    Money,
+    Raven,
+    Curse,
+}
+
 #[derive(Component)]
 pub struct PortalSucking {
     pub portal: Entity,

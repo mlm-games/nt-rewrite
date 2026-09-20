@@ -49,9 +49,9 @@ use crate::comps_a::{
 };
 use crate::comps_b::{
     Beam, BossBrain, BossPhase, ChestKind, Corpse, Enemy, EnemyBrain, FxAngle, GroundDecalTint,
-    HazardCloud, OpenedChest, Pickup, PickupKind, PickupLifetime, Portal, PortalClear, PortalShock,
-    PortalStrike, Prop, PropSprites, StaticFx, SwingFx, Telekinesis, ThroneCarpet, ThroneSit,
-    TitleCampChar, TitleCampfire, WeaponVisual, YvCouch,
+    HazardCloud, Mote, MoteScale, OpenedChest, Pickup, PickupKind, PickupLifetime, Portal,
+    PortalClear, PortalShock, PortalStrike, Prop, PropSprites, StaticFx, SwingFx, Telekinesis,
+    ThroneCarpet, ThroneSit, TitleCampChar, TitleCampfire, WeaponVisual, YvCouch,
 };
 use crate::data::{
     AreaId, CrownKind, EnemyKind, HazardKind, MutationId, RaceId, UltraMutationId, WeaponId,
@@ -2734,6 +2734,30 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                 tint[3] *= (lt.timer.remaining_secs() / 0.12).clamp(0.0, 1.0);
             }
             if let Some(s) = assets.sprite_for(fx.path, 0, pos.0, false, rotation, tint) {
+                out.push(s);
+            }
+        }
+        // GML `Dust`/`Smoke`/`Feather`/`Curse` motes: sprite debris with
+        // live `MoteScale` (grow/decay law) and `FxAngle` spin. Drawn
+        // from the catalog strip at the mote scale, no lifetime fade
+        // (GML kills on `image_xscale < 0`, not alpha).
+        let mut q = world.query::<(
+            &Pos,
+            &SpriteAnim,
+            &Mote,
+            &MoteScale,
+            Option<&FxAngle>,
+        )>();
+        for (pos, anim, _mote, scale, angle) in q.iter(world) {
+            let rotation = angle.map(|a| a.0).unwrap_or(0.0);
+            if let Some(s) = assets.sprite_scaled_rotated(
+                &anim.path,
+                anim.frame as i32,
+                pos.0,
+                scale.0.max(0.0),
+                rotation,
+                [1.0; 4],
+            ) {
                 out.push(s);
             }
         }

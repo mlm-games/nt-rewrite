@@ -1614,6 +1614,7 @@ pub fn hammerhead_chew(
     mut cooldown: Local<f32>,
     mut budget: ResMut<HammerheadBudget>,
     catalog: Res<repame_anim::AnimCatalog>,
+    save: Res<crate::savedata_part::SaveData>,
     player_q: Query<(Entity, &Pos, &Player, &Velocity), With<Player>>,
     mut props: Query<
         (
@@ -1695,6 +1696,8 @@ pub fn hammerhead_chew(
             }
             spawn_prop_death_effect(
                 &mut commands,
+                &catalog,
+                save.settings.particles,
                 center,
                 death_effect.copied(),
                 prop.explosive,

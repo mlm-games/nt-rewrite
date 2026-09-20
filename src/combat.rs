@@ -1220,7 +1220,7 @@ pub fn move_projectiles(
     decide: Res<crate::pickups::GunDecideCache>,
 ) {
     let dt = time.delta_secs;
-    let gun_decide = decide.0.clone();
+    let gun_decide = decide.ctx.clone();
 
     for (
         e,
@@ -1383,6 +1383,7 @@ pub fn move_projectiles(
                         &mut secrets,
                         &audio,
                         &mut cues,
+                        decide.particles,
                         prop_e,
                         center,
                         dmg,
@@ -1448,6 +1449,7 @@ pub fn move_projectiles(
                             &mut secrets,
                             &audio,
                             &mut cues,
+                            decide.particles,
                             prop_e,
                             center,
                             p.damage,
@@ -1512,6 +1514,7 @@ pub fn move_projectiles(
                         &mut secrets,
                         &audio,
                         &mut cues,
+                        decide.particles,
                         prop_e,
                         center,
                         p.damage,
@@ -1622,6 +1625,7 @@ pub fn move_projectiles(
                     &mut secrets,
                     &audio,
                     &mut cues,
+                    decide.particles,
                     prop_e,
                     center,
                     dmg,
@@ -2695,6 +2699,7 @@ pub fn tick_slash_projectiles(
     time: Res<SimTime>,
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
+    save: Res<SaveData>,
     audio: Res<GameAudio>,
     mut cues: ResMut<Queue<AudioCue>>,
     mut trauma: ResMut<Trauma>,
@@ -2991,7 +2996,15 @@ pub fn tick_slash_projectiles(
             if let Some(ps) = sprites {
                 spawn_prop_corpse(&mut commands, &catalog, center, &ps);
             }
-            spawn_prop_death_effect(&mut commands, center, death, explosive, proj.source);
+            spawn_prop_death_effect(
+                &mut commands,
+                &catalog,
+                save.settings.particles,
+                center,
+                death,
+                explosive,
+                proj.source,
+            );
             if let Some(target) = entrance {
                 secrets.queue(target);
             }
@@ -3226,6 +3239,7 @@ pub fn apply_explosions(
     catalog: Res<repame_anim::AnimCatalog>,
     run: Res<Run>,
     mut secrets: ResMut<SecretTriggers>,
+    decide: Res<crate::pickups::GunDecideCache>,
     mut q: Query<
         (Entity, &mut Explosion, &Pos),
         (Without<Enemy>, Without<Player>, Without<Prop>),
@@ -3241,6 +3255,8 @@ pub fn apply_explosions(
             &mut Health,
             &Player,
             Option<&mut Velocity>,
+            &Inventory,
+            &RaceState,
         ),
         (With<Player>, Without<Enemy>),
     >,
@@ -3261,15 +3277,14 @@ pub fn apply_explosions(
     walls: Query<(Entity, &WallCell, &Pos), With<WallTile>>,
     mut lingering_q: Query<&mut LingeringBlast>,
     mut last_damage: ResMut<LastDamageTaken>,
-    player_inv_q: Query<(&Inventory, &RaceState), (With<Player>, Without<Enemy>)>,
 ) {
     let death_crown = player_q
         .single()
-        .map(|(_, _, _, p, _)| p.crown == CrownKind::Death)
+        .map(|(_, _, _, p, _, _, _)| p.crown == CrownKind::Death)
         .unwrap_or(false);
-    let (gold_owned, gold_steroids) = player_inv_q
+    let (gold_owned, gold_steroids) = player_q
         .single()
-        .map(|(inv, race)| {
+        .map(|(_, _, _, _, _, inv, race)| {
             (
                 inv.weapons.iter().copied().collect(),
                 race.race == RaceId::Steroids,
@@ -3408,6 +3423,8 @@ pub fn apply_explosions(
                 }
                 spawn_prop_death_effect(
                     &mut commands,
+                    &catalog,
+                    decide.particles,
                     center,
                     death_effect,
                     legacy_explosive,
@@ -3489,7 +3506,8 @@ pub fn apply_explosions(
         }
 
         if boom.hits_player
-            && let Ok((player_e, ppos, mut health, player, vel_opt)) = player_q.single_mut()
+            && let Ok((player_e, ppos, mut health, player, vel_opt, _, _)) =
+                player_q.single_mut()
             && ppos.0.distance(pos) < boom.radius + PLAYER_RADIUS
             && health.invuln.is_finished()
             && !hit_opt.as_ref().is_some_and(|hit| hit.contains(&player_e))

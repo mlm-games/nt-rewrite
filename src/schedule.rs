@@ -397,6 +397,9 @@ pub fn build_sim_schedule() -> Schedule {
                 environment::tick_proximity_mines
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
+                environment::tick_motes
+                    .in_set(NtSimSet::Combat)
+                    .run_if(gameplay_active),
                 combat::tick_hazard_clouds
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),

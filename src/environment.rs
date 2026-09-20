@@ -16,7 +16,9 @@ use crate::comps_a::{
     ARENA_H, ARENA_W, DamageSource, GameCleanup, Health, LevelCleanup, Player, Projectile, Team,
     Velocity,
 };
-use crate::comps_b::{Dash, Enemy, PickupLifetime, Prop, PropSprites};
+use crate::comps_b::{
+    Dash, Enemy, FxAngle, Mote, MoteScale, MoteStrip, PickupLifetime, Prop, PropSprites,
+};
 use crate::enemy_data::enemy_def;
 use crate::secrets::SecretTriggers;
 use crate::spatial::Pos;
@@ -431,6 +433,17 @@ pub struct PropDeathEffect {
     pub explosion: Option<ExplosionPayload>,
     pub hazard: Option<EnvironmentHazardSpec>,
     pub ground_flames: u8,
+    pub dust_ring: u8,
+    pub feather_burst: Option<FeatherBurst>,
+}
+
+/// Visual-only petal/leaf/money scatter (GML `Feather` with a tinted
+/// sprite: Bush leaves, MoneyPile bills). Real sprite motes now —
+/// see [`Mote`].
+#[derive(Clone, Copy, Debug)]
+pub struct FeatherBurst {
+    pub count: u8,
+    pub strip: MoteStrip,
 }
 
 impl PropDeathEffect {
@@ -442,6 +455,7 @@ impl PropDeathEffect {
             }),
             hazard: Some(EnvironmentHazardSpec::toxic_barrel()),
             ground_flames: 4,
+            ..Default::default()
         }
     }
 
@@ -453,6 +467,7 @@ impl PropDeathEffect {
             }),
             hazard: None,
             ground_flames: 6,
+            ..Default::default()
         }
     }
 
@@ -464,6 +479,7 @@ impl PropDeathEffect {
             }),
             hazard: Some(EnvironmentHazardSpec::mine_fire()),
             ground_flames: 4,
+            ..Default::default()
         }
     }
 
@@ -475,6 +491,7 @@ impl PropDeathEffect {
             }),
             hazard: None,
             ground_flames: 4,
+            ..Default::default()
         }
     }
 
@@ -486,6 +503,7 @@ impl PropDeathEffect {
             }),
             hazard: None,
             ground_flames: 6,
+            ..Default::default()
         }
     }
 
@@ -497,6 +515,34 @@ impl PropDeathEffect {
             }),
             hazard: None,
             ground_flames: 6,
+            ..Default::default()
+        }
+    }
+
+    pub fn dust_ring() -> Self {
+        Self {
+            dust_ring: 10,
+            ..Default::default()
+        }
+    }
+
+    pub fn leaves() -> Self {
+        Self {
+            feather_burst: Some(FeatherBurst {
+                count: 5,
+                strip: MoteStrip::Leaf,
+            }),
+            ..Default::default()
+        }
+    }
+
+    pub fn money() -> Self {
+        Self {
+            feather_burst: Some(FeatherBurst {
+                count: 10,
+                strip: MoteStrip::Money,
+            }),
+            ..Default::default()
         }
     }
 }
@@ -520,6 +566,8 @@ pub fn spawn_prop_corpse(
 
 pub fn spawn_prop_death_effect(
     mut commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
+    particles_on: bool,
     pos: glam::Vec2,
     explicit: Option<PropDeathEffect>,
     legacy_explosive: bool,
@@ -580,6 +628,117 @@ pub fn spawn_prop_death_effect(
             spawn_environment_hazard(commands, pos + off, EnvironmentHazardSpec::ground_flame());
         }
     }
+
+    if effect.dust_ring > 0 {
+        spawn_motes(
+            commands,
+            catalog,
+            particles_on,
+            pos,
+            MoteStrip::Dust,
+            effect.dust_ring as usize,
+        );
+    }
+
+    if let Some(feather) = effect.feather_burst {
+        spawn_motes(
+            commands,
+            catalog,
+            particles_on,
+            pos,
+            feather.strip,
+            feather.count as usize,
+        );
+    }
+}
+
+/// GML `Dust`/`Smoke`/`Feather`/`Curse` spawner (sim half): one
+/// `GroundPhysics` + `FxAngle` + `Mote` + `MoteScale` + `SpriteAnim`
+/// entity per mote, `PickupLifetime` expiry. Speed/friction/spin/grow
+/// laws are verbatim from the `Create_0` handlers (speeds converted
+/// px/step → px/s at 30 Hz); the step integration lives in
+/// [`tick_motes`]. `strip_override` replaces the default strip
+/// (feather callers pass Leaf/Money/Raven per spawn).
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_motes(
+    commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
+    particles_on: bool,
+    pos: glam::Vec2,
+    strip: MoteStrip,
+    count: usize,
+) {
+    if !particles_on {
+        return;
+    }
+    let mut rng = rand::rng();
+    for _ in 0..count {
+        let (speed_lo, speed_hi, friction, life, scale0, spin_max, sway) = match strip {
+            MoteStrip::Dust => (0.0, 2.0, 0.3, 0.6, 0.7, 4.0, false),
+            MoteStrip::Smoke => (0.5, 1.5, 0.1, 2.0, 0.8, 4.0, false),
+            MoteStrip::Leaf | MoteStrip::Money | MoteStrip::Raven => {
+                (1.8, 3.0, 0.0, 5.5, 1.0, 3.0, true)
+            }
+            MoteStrip::Curse => (0.2, 0.7, 0.005, 3.0, 1.0, 0.0, false),
+        };
+        let a = rng.random_range(0.0..std::f32::consts::TAU);
+        let dir = glam::Vec2::new(a.cos(), a.sin());
+        let mut vel = dir * rng.random_range(speed_lo..speed_hi) * 30.0;
+        if sway {
+            vel.y -= rng.random_range(0.9..1.2) * 30.0;
+        }
+        let spin = if spin_max > 0.0 {
+            rng.random_range(1.0..spin_max) * if rng.random_bool(0.5) { 1.0 } else { -1.0 }
+        } else {
+            0.0
+        };
+        let grow = match strip {
+            MoteStrip::Dust => rng.random_range(0.05..0.10),
+            MoteStrip::Smoke => rng.random_range(0.0..0.005),
+            _ => 0.0,
+        };
+        let grow_decay = match strip {
+            MoteStrip::Dust => 0.02,
+            MoteStrip::Smoke => 0.001,
+            _ => 0.0,
+        };
+        let path: &'static str = match strip {
+            MoteStrip::Dust => "images/sprDust.png",
+            MoteStrip::Smoke => "images/sprSmoke.png",
+            MoteStrip::Leaf => "images/sprLeaf.png",
+            MoteStrip::Money => "images/sprMoney.png",
+            MoteStrip::Raven => "images/sprRavenFeather.png",
+            MoteStrip::Curse => "images/sprCurse.png",
+        };
+        let mut ec = commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            crate::comps_b::GroundPhysics {
+                vel,
+                rotspeed: rng.random_range(0.7..1.0)
+                    * if rng.random_bool(0.5) { 1.0 } else { -1.0 },
+            },
+            FxAngle(rng.random_range(0.0..std::f32::consts::TAU)),
+            Mote {
+                friction,
+                spin,
+                grow,
+                grow_decay,
+                sway,
+            },
+            MoteScale(scale0),
+            strip,
+            Pos(pos),
+            PickupLifetime {
+                timer: GTimer::from_seconds(life, TimerMode::Once),
+            },
+        ));
+        if let Some(def) = catalog.def(path) {
+            let mut anim = SpriteAnim::new(path, def);
+            anim.frame = rng.random_range(0..def.frames.max(1));
+            ec.insert(anim);
+        }
+    }
 }
 
 /// Floor mine trigger (bevy `environment.rs:467-509` sim half:
@@ -597,6 +756,50 @@ impl Default for ProximityMine {
         Self {
             trigger_radius: 54.0,
             payload: PropDeathEffect::mine(),
+        }
+    }
+}
+
+/// GML `Dust/Step_0` + `Smoke/Step_0` + `Feather/Step_0` + `Curse`
+/// integration (sim half): flat-friction slide + spin + grow/decay on
+/// `MoteScale`, feather fall-sway (`x += 0.35*sin(fall/7)`,
+/// `y += 0.3`, `speed *= 0.9` over 0.2, `image_speed = 0` at rest).
+/// `PickupLifetime` expiry is handled by `tick_hit_effects`; scale <= 0
+/// despawns like GML's `image_xscale < 0` kill.
+pub fn tick_motes(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mut q: Query<(
+        Entity,
+        &mut Pos,
+        &mut crate::comps_b::GroundPhysics,
+        &mut FxAngle,
+        &mut Mote,
+        &mut MoteScale,
+    )>,
+) {
+    let dt = time.delta_secs;
+    for (e, mut pos, mut ground, mut angle, mut mote, mut scale) in &mut q {
+        if mote.sway {
+            pos.0.x += 0.35 * (30.0 * dt).sin() * 30.0 * dt;
+            pos.0.y += 0.3 * 30.0 * dt;
+            let sp = ground.vel.length();
+            if sp > 0.2 * 30.0 {
+                ground.vel *= 0.9_f32.powf(dt * 30.0);
+            } else {
+                ground.vel = glam::Vec2::ZERO;
+            }
+        } else if mote.friction > 0.0 {
+            crate::comps_a::apply_gml_friction(&mut ground.vel, mote.friction, dt);
+        }
+        pos.0 += ground.vel * dt;
+        angle.0 += mote.spin * dt;
+        if mote.grow_decay > 0.0 {
+            scale.0 += mote.grow * dt * 30.0;
+            mote.grow -= mote.grow_decay * dt * 30.0;
+            if scale.0 < 0.0 {
+                commands.entity(e).despawn();
+            }
         }
     }
 }
@@ -648,6 +851,7 @@ pub fn tick_fog(
 pub fn tick_proximity_mines(
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
+    save: Res<crate::savedata_part::SaveData>,
     mut trauma: ResMut<repame_fx::Trauma>,
     mines: Query<(Entity, &Pos, &ProximityMine, Option<&PropSprites>), With<Prop>>,
     targets: Query<(&Pos, &Team), Without<ProximityMine>>,
@@ -664,7 +868,15 @@ pub fn tick_proximity_mines(
         if let Some(ps) = sprites.copied() {
             spawn_prop_corpse(&mut commands, &catalog, center, &ps);
         }
-        spawn_prop_death_effect(&mut commands, center, Some(mine.payload), false, None);
+        spawn_prop_death_effect(
+            &mut commands,
+            &catalog,
+            save.settings.particles,
+            center,
+            Some(mine.payload),
+            false,
+            None,
+        );
         trauma.add(0.20);
         commands.entity(mine_e).despawn();
     }
