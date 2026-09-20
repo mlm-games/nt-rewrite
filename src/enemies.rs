@@ -1875,11 +1875,16 @@ pub fn show_enemy_fire(
     });
 }
 
-/// Bevy `derive_fire_path` verbatim: idle strip -> fire strip.
+/// GML `spr_fire` table (per-kind `Create_0.gml`): idle strip -> fire
+/// strip. Mimics are intentionally absent: their `*Fire` strip is the
+/// `spr_walk` strip (`Mimic/Create_0.gml:7`), already covered by
+/// `derive_walk_path`, and routing it through the `FireAnim` oneshot
+/// would drop the walk strip on restore (`walk: None`).
 pub fn derive_fire_path(idle: &'static str) -> Option<&'static str> {
     match idle {
         "images/sprBanditBossIdle.png" => Some("images/sprBanditBossFire.png"),
         "images/sprCrabIdle.png" => Some("images/sprCrabFire.png"),
+        "images/sprCrownGuardianIdle.png" => Some("images/sprCrownGuardianFire.png"),
         "images/sprExploGuardianIdle.png" => Some("images/sprExploGuardianFire.png"),
         "images/sprFireBallerIdle.png" => Some("images/sprFireBallerFire.png"),
         "images/sprSuperFireBallerIdle.png" => Some("images/sprSuperFireBallerFire.png"),
@@ -1898,9 +1903,6 @@ pub fn derive_fire_path(idle: &'static str) -> Option<&'static str> {
         "images/sprTurretIdle.png" => Some("images/sprTurretFire.png"),
         "images/sprTurtleIdle.png" => Some("images/sprTurtleFire.png"),
         "images/sprWolfIdle.png" => Some("images/sprWolfFire.png"),
-        "images/sprMimicIdle.png" => Some("images/sprMimicFire.png"),
-        "images/sprSuperMimicIdle.png" => Some("images/sprSuperMimicFire.png"),
-        "images/sprWepMimicIdle.png" => Some("images/sprWepMimicFire.png"),
         _ => None,
     }
 }
