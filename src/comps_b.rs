@@ -1071,11 +1071,38 @@ pub struct PlayerDying {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct ScreenEnd;
 
-#[derive(Component, Clone, Copy, Debug)]
 /// GML `Campfire` title actor verbatim (`objects/Campfire/Create_0`:
 /// 1M hp, size 1, campfire idle/hurt/dead strips). Sim keeps the marker
 /// + position; art/health-detail stays renderer-owned.
+#[derive(Component, Clone, Copy, Debug)]
 pub struct TitleCampfire;
+
+/// GML camper menu-strip name verbatim (`scrCampfireMenuCreate`:
+/// `spr<Name>Menu`, `_name` from `scrRaceGetStringID(race, true)` —
+/// capitalized race name + `Menu`). Falls back to `sprMutant<gml>Menu`
+/// then `sprDefault` per `scr_race_get_sprite`. BigDog campers sleep
+/// (`sprScrapBossSleep`, set inline in `scrCampfireMenuCreate`).
+pub fn camper_menu_strip(gml: usize) -> &'static str {
+    match gml {
+        1 => "images/sprFishMenu.png",
+        2 => "images/sprCrystalMenu.png",
+        3 => "images/sprEyesMenu.png",
+        4 => "images/sprMeltingMenu.png",
+        5 => "images/sprPlantMenu.png",
+        6 => "images/sprVenuzMenu.png",
+        7 => "images/sprSteroidsMenu.png",
+        8 => "images/sprRobotMenu.png",
+        9 => "images/sprChickenMenu.png",
+        10 => "images/sprRebelMenu.png",
+        11 => "images/sprHorrorMenu.png",
+        12 => "images/sprRogueMenu.png",
+        13 => "images/sprScrapBossSleep.png",
+        14 => "images/sprSkeletonMenu.png",
+        15 => "images/sprFrogMenu.png",
+        16 => "images/sprCuzMenu.png",
+        _ => "images/sprDefault.png",
+    }
+}
 
 #[derive(Component, Clone, Copy, Debug)]
 /// GML `LogMenu` seat marker (spawned at campfire `y-32`).
@@ -1085,10 +1112,16 @@ pub struct TitleLogMenu;
 /// GML `CampChar` title actor verbatim: wandering mutant around the
 /// campfire. `race_gml` is the GML race id (0..16), `fixed` marks the
 /// four hand-placed starters (Fish/Crystal/Eyes/Melting) that skip the
-/// scatter pass.
+/// scatter pass. `swap` tracks the `Other_7` select/deselect two-step:
+/// `None` = settled on the end strip, `Some(true)` = playing `spr_to`
+/// toward `spr_menu` (selected), `Some(false)` = playing `spr_from`
+/// toward `spr_slct` (deselected). The render arm flips `swap` on
+/// selection change and holds the transition strip until the oneshot
+/// finishes, then parks on the end strip — verbatim two-step.
 pub struct TitleCampChar {
     pub race_gml: usize,
     pub fixed: bool,
+    pub swap: Option<bool>,
 }
 
 #[derive(Component, Clone, Copy, Debug)]

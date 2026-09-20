@@ -1846,10 +1846,13 @@ pub fn setup_title_campfire(world: &mut World) {
     }
     // `MenuGen/Create_0:38-40` FloorMakers verbatim: 4 makers at
     // `choose(0,32,64,96,128)` px each axis, `goal = 50` under MenuGen.
-    // The 12 patches + fill already exceed 50 floors, so every maker
-    // lays exactly its spawn cell on the first step (`Floor > goal`
-    // arm) — up to 4 satellite cells, duplicates popping themselves
-    // (`Floor/Create_0` overlap arm, matched by `seen` here).
+    // In GML the makers keep walking until Floor > goal, so the camp
+    // ends up far larger than the 12 patches + fill (~50+ floors in a
+    // random walk around the origin). The port pre-seeds the same
+    // coverage directly: random-walk from the patch area until 55+
+    // cells so campers scattered up to ~200px from the fire still
+    // stand on floor (GML `move_contact_solid` would slide them onto
+    // it; the port clamps to the nearest cell instead).
     for _ in 0..4 {
         let c = (
             rng.random_range(0..=4),
@@ -1857,6 +1860,19 @@ pub fn setup_title_campfire(world: &mut World) {
         );
         if seen.insert(c) {
             floors.push(c);
+        }
+    }
+    while floors.len() < 55 {
+        let idx = rng.random_range(0..floors.len());
+        let (cx, cy) = floors[idx];
+        let (nx, ny) = match rng.random_range(0..4) {
+            0 => (cx + 1, cy),
+            1 => (cx - 1, cy),
+            2 => (cx, cy + 1),
+            _ => (cx, cy - 1),
+        };
+        if seen.insert((nx, ny)) {
+            floors.push((nx, ny));
         }
     }
 
@@ -2050,44 +2066,70 @@ pub fn setup_title_campfire(world: &mut World) {
             // sleepers. Positions were computed above (dressing gates on
             // them); only unlocked races got campers (locked return
             // `noone` in GML). Every camper pops a `PortalClear`
-            // (`MenuGen/Alarm_1`).
-            commands.spawn((
+            // (`MenuGen/Alarm_1`). Actors carry their idle `SpriteAnim`
+            // (`sprCampfire` 4f @ 0.4, `sprLogMenu`, per-race `*Menu`,
+            // `sprTV`) so `animate_sprites` + the campfire render arm
+            // draw them like any world instance.
+            let mut campfire_e = commands.spawn((
                 GameCleanup,
                 LevelCleanup,
                 crate::comps_b::TitleCampfire,
                 Pos(camp_px),
             ));
-            commands.spawn((
+            // GML `Campfire/Create_0`: 1-in-200 bear cameo (+ `alarm[6]`
+            // music cue, audio-side).
+            let campfire_idle = if rng.random_range(0.0..200.0) < 1.0 {
+                "images/sprCampfireBear.png"
+            } else {
+                "images/sprCampfire.png"
+            };
+            if let Some(def) = catalog.def(campfire_idle) {
+                campfire_e.insert(SpriteAnim::new(campfire_idle, def));
+            }
+            let mut logmenu_e = commands.spawn((
                 GameCleanup,
                 LevelCleanup,
                 crate::comps_b::TitleLogMenu,
                 Pos(glam::Vec2::new(64.0, 32.0)),
             ));
+            if let Some(def) = catalog.def("images/sprLogMenu.png") {
+                logmenu_e.insert(SpriteAnim::new("images/sprLogMenu.png", def));
+            }
             // GML race ids: Fish 1, Crystal 2, Eyes 3, Melting 4.
             for (gml, at) in fixed_campers {
-                commands.spawn((
+                let mut e = commands.spawn((
                     GameCleanup,
                     LevelCleanup,
                     crate::comps_b::TitleCampChar {
                         race_gml: gml,
                         fixed: true,
+                        swap: None,
                     },
                     Pos(at),
                 ));
+                let strip = crate::comps_b::camper_menu_strip(gml);
+                if let Some(def) = catalog.def(strip) {
+                    e.insert(SpriteAnim::new(strip, def));
+                }
             }
             // Scattered Plant..Cuz from the precomputed positions
             // above (the distance law ran there, against the full
             // camper list, like GML).
             for (gml, at) in scattered {
-                commands.spawn((
+                let mut e = commands.spawn((
                     GameCleanup,
                     LevelCleanup,
                     crate::comps_b::TitleCampChar {
                         race_gml: gml,
                         fixed: false,
+                        swap: None,
                     },
                     Pos(at),
                 ));
+                let strip = crate::comps_b::camper_menu_strip(gml);
+                if let Some(def) = catalog.def(strip) {
+                    e.insert(SpriteAnim::new(strip, def));
+                }
             }
             // Scatter-overflow clears (one per failed try past 50).
             for clear_at in scatter_clears {
@@ -2108,7 +2150,7 @@ pub fn setup_title_campfire(world: &mut World) {
             // chicken arm verbatim: TV at `x + orandom(2), y + orandom(4)
             // - 32`, clears at `(x, y + 16)` and `(x, y)` rescaled 0.5).
             if let Some(at) = chicken_at {
-                commands.spawn((
+                let mut tv_e = commands.spawn((
                     GameCleanup,
                     LevelCleanup,
                     crate::comps_b::TitleTv,
@@ -2117,6 +2159,9 @@ pub fn setup_title_campfire(world: &mut World) {
                         at.y - 32.0 + rng.random_range(-4.0..4.0),
                     )),
                 ));
+                if let Some(def) = catalog.def("images/sprTV.png") {
+                    tv_e.insert(SpriteAnim::new("images/sprTV.png", def));
+                }
                 for off in [glam::Vec2::new(0.0, 16.0), glam::Vec2::ZERO] {
                     commands.spawn((
                         GameCleanup,

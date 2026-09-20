@@ -779,7 +779,7 @@ pub fn tick_motes(
         &mut MoteScale,
     ), Without<crate::comps_a::WallTile>>,
     walls: Query<(&crate::comps_a::WallCell, &Pos), With<crate::comps_a::WallTile>>,
-    frame: Res<crate::state::CurrentFrame>,
+    _frame: Res<crate::state::CurrentFrame>,
 ) {
     let dt = time.delta_secs;
     let wall_cells: Vec<((i32, i32), glam::Vec2)> =

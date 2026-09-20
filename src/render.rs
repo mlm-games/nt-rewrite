@@ -51,7 +51,8 @@ use crate::comps_b::{
     Beam, BossBrain, BossPhase, ChestKind, Corpse, Enemy, EnemyBrain, FxAngle, GroundDecalTint,
     HazardCloud, Mote, MoteScale, OpenedChest, Pickup, PickupKind, PickupLifetime, Portal,
     PortalClear, PortalShock, PortalStrike, Prop, PropSprites, StaticFx, SwingFx, Telekinesis,
-    ThroneCarpet, ThroneSit, TitleCampChar, TitleCampfire, WeaponVisual, YvCouch,
+    ThroneCarpet, ThroneSit, TitleCampChar, TitleCampfire, TitleLogMenu, TitleTv, WeaponVisual,
+    YvCouch,
 };
 use crate::data::{
     AreaId, CrownKind, EnemyKind, HazardKind, MutationId, RaceId, UltraMutationId, WeaponId,
@@ -1881,7 +1882,7 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                 *frame,
                 Vec2::new(*wx as f32 * 16.0, *wy as f32 * 16.0 - 8.0),
                 [1.0; 4],
-                GRID_OVERLAP,
+                0.0,
             ) {
                 out.push(s);
             }
@@ -2008,6 +2009,112 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             let frames = strip_frames(assets, path).max(1);
             let frame = (couch.frame.floor() as i32).clamp(0, frames as i32 - 1);
             if let Some(s) = assets.sprite_for(path, frame, pos.0, false, 0.0, [1.0; 4]) {
+                out.push(s);
+            }
+        }
+    }
+
+    // Title campfire actors (GML `Campfire`/`LogMenu`/`CampChar`/`TV`
+    // instances from `scrCampfireMenuCreate`): drawn from the live
+    // `SpriteAnim` like any world instance. Campers run the
+    // `CampChar/Other_7` two-step verbatim: on selection change the arm
+    // flips `swap` and re-paths the anim to the transition strip as a
+    // oneshot (`spr_to` when newly selected, `spr_from` when
+    // deselected); while the oneshot runs the transition draws, and on
+    // finish the arm parks on the end strip (`spr_menu`/`spr_slct`) and
+    // clears `swap`. Missing transition strips fall back to the end
+    // strip immediately, like GML's `sprite_exists` guard.
+    {
+        let selected = world
+            .get_resource::<SelectedCharacter>()
+            .map(|s| s.0 as usize)
+            .unwrap_or(0);
+        let mut q = world.query::<(
+            Entity,
+            &Pos,
+            &mut SpriteAnim,
+            Option<&TitleCampfire>,
+            Option<&TitleLogMenu>,
+            Option<&mut TitleCampChar>,
+            Option<&TitleTv>,
+        )>();
+        // Collect swap flips first: the scan only reads, the anim
+        // re-path needs `&mut World` below.
+        let mut flips: Vec<(Entity, String, bool)> = Vec::new();
+        for (e, _pos, anim, fire, log, camp, tv) in q.iter(world) {
+            if fire.is_none() && log.is_none() && camp.is_none() && tv.is_none() {
+                continue;
+            }
+            if let Some(c) = camp {
+                let want_selected = c.race_gml == selected;
+                let base = crate::comps_b::camper_menu_strip(c.race_gml);
+                let stem = base
+                    .trim_start_matches("images/")
+                    .trim_end_matches(".png");
+                let end_stem = if want_selected { "Select" } else { "Selected" };
+                let end = format!("images/{stem}{end_stem}.png");
+                let trans_stem = if want_selected { "Select" } else { "Deselect" };
+                let trans = format!("images/{stem}{trans_stem}.png");
+                let on_end = anim.path == end;
+                let on_trans = anim.path == trans;
+                let want_swap = if want_selected { Some(true) } else { Some(false) };
+                if c.swap != want_swap && !on_end && !on_trans {
+                    // Selection changed since last settle: start the
+                    // transition if it exists, else jump to the end.
+                    if assets.catalog.def(&trans).is_some() {
+                        flips.push((e, trans, want_selected));
+                    } else if assets.catalog.def(&end).is_some() {
+                        flips.push((e, end, want_selected));
+                    }
+                } else if c.swap.is_some() && anim.finished && (on_trans || on_end) {
+                    // Transition oneshot done: park on the end strip.
+                    if !on_end && assets.catalog.def(&end).is_some() {
+                        flips.push((e, end, want_selected));
+                    }
+                }
+            }
+        }
+        for (e, path, want_selected) in flips {
+            if let Some(def) = assets.catalog.def(&path) {
+                let is_end = path.ends_with("Selected.png") || path.ends_with("Select.png");
+                world.entity_mut(e).insert(SpriteAnim::oneshot(path, def));
+                if let Some(mut c) = world.get_mut::<TitleCampChar>(e) {
+                    // Jumped straight to the end (no transition
+                    // strip): settled immediately.
+                    c.swap = if is_end { None } else { Some(want_selected) };
+                }
+            } else if let Some(mut c) = world.get_mut::<TitleCampChar>(e) {
+                c.swap = None;
+            }
+        }
+        let mut q = world.query::<(
+            &Pos,
+            &SpriteAnim,
+            Option<&TitleCampfire>,
+            Option<&TitleLogMenu>,
+            Option<&TitleCampChar>,
+            Option<&TitleTv>,
+        )>();
+        for (pos, anim, fire, log, camp, tv) in q.iter(world) {
+            if fire.is_none() && log.is_none() && camp.is_none() && tv.is_none() {
+                continue;
+            }
+            if camp.is_some() {
+                if let Some(s) = assets.sprite_for(
+                    &anim.path,
+                    anim.frame as i32,
+                    pos.0,
+                    false,
+                    0.0,
+                    [1.0; 4],
+                ) {
+                    out.push(s);
+                }
+                continue;
+            }
+            if let Some(s) =
+                assets.sprite_for(&anim.path, anim.frame as i32, pos.0, false, 0.0, [1.0; 4])
+            {
                 out.push(s);
             }
         }
@@ -9432,6 +9539,47 @@ mod title_cam_tests {
         }
         assert!((cam.x - (64.0 - 213.0)).abs() < 1.0, "x={}", cam.x);
         assert!((cam.y - (32.0 - 120.0)).abs() < 1.0, "y={}", cam.y);
+    }
+
+    /// `CampChar/Other_7` two-step parity: flipping selection starts
+    /// the transition oneshot (`spr_to`/`spr_from`), finishing it parks
+    /// on the end strip (`spr_menu`/`spr_slct`) and clears `swap`.
+    #[test]
+    fn camper_swap_two_step_parity() {
+        use crate::comps_b::{TitleCampChar, TitleCampfire};
+        let mut world = World::new();
+        world.insert_resource(crate::savedata_part::SaveData::default());
+        crate::setup::setup_title_campfire(&mut world);
+        world.insert_resource(SelectedCharacter(RaceId::Random));
+        let dir = crate::resolve_assets_dir().expect("assets for parity test");
+        let assets = RenderAssets::load(&dir).expect("catalog loads");
+        // Settle: every camper parks on its deselected end strip.
+        let mut campers: Vec<(bevy_ecs::prelude::Entity, usize)> = world
+            .query::<(bevy_ecs::prelude::Entity, &TitleCampChar)>()
+            .iter(&world)
+            .map(|(e, c)| (e, c.race_gml))
+            .collect();
+        campers.sort_by_key(|(_, g)| *g);
+        assert!(!campers.is_empty(), "camp actors spawn");
+        // Drive one frame so swaps settle.
+        crate::render::world_instances(&mut world, &assets);
+        for (e, gml) in &campers {
+            let camp = world.get::<TitleCampChar>(*e).unwrap();
+            let _ = gml;
+            assert!(
+                camp.swap.is_none(),
+                "settled camper must not be mid-swap"
+            );
+        }
+        // Fish camper entity still present with its menu strip.
+        let fish = campers.iter().find(|(_, g)| *g == 1).expect("fish");
+        let anim = world.get::<crate::anim::SpriteAnim>(fish.0).unwrap();
+        assert!(
+            anim.path.ends_with("Selected.png") || anim.path.ends_with("Menu.png"),
+            "unselected fish parks deselected, got {}",
+            anim.path
+        );
+        let _ = TitleCampfire;
     }
 }
 
