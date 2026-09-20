@@ -1598,6 +1598,9 @@ pub fn tick_portal_shock(
                     }
                 }
                 ChestKind::RadMaggot => {
+                    // GML `RadMaggotChest/Destroy_0` (same chain as the
+                    // touch-open path in `pickups.rs`): explosion plus
+                    // the delayed 20-`RadMaggot` wave.
                     commands.spawn((
                         GameCleanup,
                         LevelCleanup,
@@ -1611,6 +1614,25 @@ pub fn tick_portal_shock(
                         },
                         Pos(cpos),
                     ));
+                    {
+                        let mut rng = rand::rng();
+                        for _ in 0..20 {
+                            let a = rng.random_range(0.0..std::f32::consts::TAU);
+                            let d = glam::Vec2::new(a.cos(), a.sin());
+                            let s = rng.random_range(0.0..5.0) * 30.0;
+                            commands.spawn(crate::combat::PendingEnemySpawn {
+                                kind: crate::data::EnemyKind::RadMaggot,
+                                pos: cpos
+                                    + glam::Vec2::new(
+                                        rng.random_range(-4.0..4.0),
+                                        rng.random_range(-4.0..4.0),
+                                    )
+                                    + d * s * 0.05,
+                                difficulty: 1.0,
+                                loops: run.loop_count,
+                            });
+                        }
+                    }
                 }
                 ChestKind::Idpd => {
                     for _ in 0..8 {

@@ -1025,8 +1025,14 @@ pub fn collect_pickups(
                     audio.play_pickup(&mut cues);
                 }
                 ChestKind::RadMaggot => {
-                    // GML `RadMaggotChest`: the trapped cache detonates
-                    // when opened.
+                    // GML `RadMaggotChest/Destroy_0`: on hp kill, a
+                    // `RadMaggotExplosion` (Create: 6 smoke + 3
+                    // `AcidStreak`; Alarm_0, 8 ticks later: 20
+                    // `RadMaggot` at `random(5)` px/tick) plus 4 smoke,
+                    // an `ExploderExplo` pop, and the inherited corpse.
+                    // No timer exists here, so the delayed maggot wave
+                    // rides `PendingEnemySpawn` (same-tick spawn keeps
+                    // the count exact; the 8-tick delay is visual).
                     commands.spawn((
                         GameCleanup,
                         LevelCleanup,
@@ -1040,6 +1046,36 @@ pub fn collect_pickups(
                         },
                         Pos(pickup_pos_value),
                     ));
+                    {
+                        let mut rng = rand::rng();
+                        crate::effects::spawn_burst(
+                            &mut commands,
+                            &mut rng,
+                            pickup_pos_value,
+                            10,
+                            [0.6, 0.6, 0.62, 0.7],
+                            (60.0, 150.0),
+                        );
+                    }
+                    {
+                        let mut rng = rand::rng();
+                        for _ in 0..20 {
+                            let a = rng.random_range(0.0..std::f32::consts::TAU);
+                            let d = glam::Vec2::new(a.cos(), a.sin());
+                            let s = rng.random_range(0.0..5.0) * 30.0;
+                            commands.spawn(crate::combat::PendingEnemySpawn {
+                                kind: crate::data::EnemyKind::RadMaggot,
+                                pos: pickup_pos_value
+                                    + glam::Vec2::new(
+                                        rng.random_range(-4.0..4.0),
+                                        rng.random_range(-4.0..4.0),
+                                    )
+                                    + d * s * 0.05,
+                                difficulty: 1.0,
+                                loops: run.loop_count,
+                            });
+                        }
+                    }
                     trauma.add(0.3);
                     audio.play_pickup(&mut cues);
                 }
