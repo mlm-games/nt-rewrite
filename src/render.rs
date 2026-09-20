@@ -6802,6 +6802,9 @@ pub fn bloom_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInst
     {
         return out;
     }
+    // GML `scrDrawBloom` has no Slash/Shank arm — melee swings get no
+    // bloom halo there. Skipping slashes here too: a 2x additive copy
+    // of the 48px left-anchored arc reads as a second, offset swing.
     let mut q = world.query::<(
         &Pos,
         &Projectile,
@@ -6811,17 +6814,15 @@ pub fn bloom_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInst
         Option<&crate::comps_a::ProjectileVisual>,
     )>();
     for (pos, proj, vel, team, slash, visual) in q.iter(world) {
+        if slash.is_some() {
+            continue;
+        }
         let path = projectile_art(proj, team, slash, visual);
         let frame = projectile_frame(assets, path, &proj.life);
-        // Same latched-direction law as the body pass below: slashes
-        // freeze at spawn but keep `slash.dir`.
-        let rotation = match slash {
-            Some(s) => s.dir.y.atan2(s.dir.x),
-            None => vel
-                .filter(|v| v.0.length_squared() > 1e-6)
-                .map(|v| v.0.y.atan2(v.0.x))
-                .unwrap_or(0.0),
-        };
+        let rotation = vel
+            .filter(|v| v.0.length_squared() > 1e-6)
+            .map(|v| v.0.y.atan2(v.0.x))
+            .unwrap_or(0.0);
         if let Some(mut s) =
             assets.sprite_scaled_rotated(path, frame, pos.0, 2.0, rotation, [1.0, 1.0, 1.0, 0.1])
         {
