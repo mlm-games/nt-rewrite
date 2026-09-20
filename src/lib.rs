@@ -88,7 +88,7 @@ use crate::comps_a::{NT_CAM_SCALE, Player, Projectile, WallCell, WallTile};
 use crate::comps_b::{Enemy, Pickup, Prop};
 use crate::data::AreaId;
 use crate::input::{
-    GamepadState, KeyCode, MouseState, NtInput, sample_gamepads, sample_touch,
+    GamepadState, KeyCode, MouseState, NtInput, sample_gamepads_mapped, sample_touch,
 };
 use crate::render::{
     ATLAS_PAGES, ATLAS_SIZE, CamPoi, CamStepInput, GmlCamera, RenderAssets, Z_BLOOM, Z_CROSSHAIR,
@@ -1673,7 +1673,7 @@ impl App {
             crate::input::sample_keyboard_mapped(&held, &just, &mouse, Some(&keymap), &mut input);
             let pads = self.staging.borrow_mut().take_pads();
             self.pad_live = self.staging.borrow().pad_live;
-            sample_gamepads(&pads, &mut input);
+            sample_gamepads_mapped(&pads, Some(&keymap), &mut input);
             {
                 let d = repose_core::locals::effective_density_scale().max(1e-6);
                 let contacts = self.staging.borrow_mut().touch_contacts(d);

@@ -121,6 +121,11 @@ impl NtInput {
         self.cycle_weapon = dir;
     }
 
+    /// Drain the peek-only interact pulse (Cleanup tail, live play).
+    pub(crate) fn clear_interact_pulse(&mut self) {
+        self.interact_pressed = false;
+    }
+
     pub fn clear_transient(&mut self) {
         self.move_axis = Vec2::ZERO;
         self.aim_axis = Vec2::ZERO;
@@ -145,6 +150,18 @@ pub fn dead_zone(value: Vec2) -> Vec2 {
 /// Drop pulses at the end of every tick (bevy `clear_input_pulses`).
 pub fn clear_input_pulses(mut input: ResMut<NtInput>) {
     input.clear_transient();
+}
+
+/// Drain the peek-only interact pulse after every live-play consumer
+/// ran (`collect_pickups`, `tick_throne_sit` peek it; nothing takes
+/// it). Without this one E tap stays true forever and re-equips
+/// nearby guns each tick. Folded into `clear_input_when_inactive`'s
+/// (state, input) params so no second `ResMut<NtInput>` conflicts.
+fn drain_interact_pulse(state: &crate::state::AppState, input: &mut NtInput) {
+    use crate::state::AppState;
+    if *state == AppState::InGame {
+        input.clear_interact_pulse();
+    }
 }
 
 /// Minimal backend-neutral key codes covering every key bevy
@@ -617,15 +634,33 @@ fn entry_pressed(
 
 /// Backend-neutral port of bevy `sample_input`'s per-gamepad loop.
 /// Nonzero dead-zoned sticks overwrite the axes (left = move, right =
-/// aim); triggers/south/east OR into held/pulses; D-pad edges replace
-/// the weapon slot. Returns this pad's cycle step (North = +1); the
-/// caller applies the bevy overwrite law (last pad wins, added once —
-/// see `sample_gamepads`).
+/// aim); the remapped pad rows (default: Fire/Swap = RightShoulder,
+/// Spec = LeftShoulder, Pick = South) OR into held/pulses; D-pad edges
+/// replace the weapon slot. Triggers keep their hardcoded bevy role
+/// (RT = fire, LT = spec/ability) alongside the rows. Returns this
+/// pad's cycle step (North = +1); the caller applies the bevy overwrite
+/// law (last pad wins, added once — see `sample_gamepads`).
 ///
 /// Stick Y arrives screen-down (gilrs/SDL convention matches this
 /// port's y-down world), so unlike the y-up bevy build no flip is
 /// applied: stick-up (−y) moves north.
-pub fn sample_gamepad(pad: &GamepadState, output: &mut NtInput) -> i8 {
+pub fn sample_gamepad(
+    pad: &GamepadState,
+    keymap: Option<&crate::keymap::InputMapState>,
+    output: &mut NtInput,
+) -> i8 {
+    sample_gamepad_mapped(pad, keymap, output)
+}
+
+/// [`sample_gamepad`] with an explicit remap table (`None` = bevy
+/// hardcoded behavior verbatim). Pad-side `Pad` entries read the
+/// snapshot below; keyboard/mouse/axis entries on the pad side are
+/// inert here (they belong to the keyboard sampler).
+pub fn sample_gamepad_mapped(
+    pad: &GamepadState,
+    keymap: Option<&crate::keymap::InputMapState>,
+    output: &mut NtInput,
+) -> i8 {
     let left = dead_zone(pad.left_stick);
     let right = dead_zone(pad.right_stick);
 
@@ -651,6 +686,26 @@ pub fn sample_gamepad(pad: &GamepadState, output: &mut NtInput) -> i8 {
     spec_held_now |= pad.left_trigger_held;
     spec_pressed_now |= pad.left_trigger_pressed;
     interact_pressed |= pad.south_pressed || pad.east_pressed;
+
+    if let Some(state) = keymap {
+        use crate::keymap::NtAction;
+        let map = &state.session.map;
+        let (fire_row, spec_row, swap_row, pick_row) = (
+            map.gamepad(&NtAction::Fire),
+            map.gamepad(&NtAction::Spec),
+            map.gamepad(&NtAction::Swap),
+            map.gamepad(&NtAction::Pick),
+        );
+        fire_held |= pad_held(&fire_row, pad);
+        fire_pressed |= pad_pressed(&fire_row, pad);
+        spec_held_now |= pad_held(&spec_row, pad);
+        spec_pressed_now |= pad_pressed(&spec_row, pad);
+        ability_pressed |= pad_pressed(&spec_row, pad);
+        interact_pressed |= pad_pressed(&pick_row, pad);
+        if pad_pressed(&swap_row, pad) {
+            cycle_weapon = cycle_weapon.saturating_add(1);
+        }
+    }
 
     if pad.dpad_left_pressed {
         weapon_slot = Some(0);
@@ -687,11 +742,53 @@ pub fn sample_gamepad(pad: &GamepadState, output: &mut NtInput) -> i8 {
 /// so the last pad with a North edge wins), and the step is
 /// `saturating_add`ed exactly once after the loop.
 pub fn sample_gamepads(pads: &[GamepadState], output: &mut NtInput) {
+    sample_gamepads_mapped(pads, None, output)
+}
+
+/// [`sample_gamepads`] with the live remap table: pad rows consult the
+/// saved bindings (Fire/Swap shoulders, Pick south, ...), triggers
+/// keep their hardcoded role underneath.
+pub fn sample_gamepads_mapped(
+    pads: &[GamepadState],
+    keymap: Option<&crate::keymap::InputMapState>,
+    output: &mut NtInput,
+) {
     let mut cycle_weapon = 0_i8;
     for pad in pads {
-        cycle_weapon = sample_gamepad(pad, output);
+        cycle_weapon = sample_gamepad_mapped(pad, keymap, output);
     }
     output.cycle_weapon = output.cycle_weapon.saturating_add(cycle_weapon);
+}
+
+/// Pad-side `Pad` entry -> snapshot held channel. Anything else is
+/// inert (keyboard/mouse/axis rows belong to other samplers).
+fn pad_held(entry: &repame_input::KeymapEntry, pad: &GamepadState) -> bool {
+    use repame_input::KeymapEntry;
+    use repose_core::input::GamepadButton;
+    match entry {
+        KeymapEntry::Pad(GamepadButton::RightShoulder) => pad.right_shoulder_held,
+        KeymapEntry::Pad(GamepadButton::LeftShoulder) => pad.left_shoulder_held,
+        _ => pad_pressed(entry, pad),
+    }
+}
+
+/// Pad-side `Pad` entry -> snapshot press edge. Anything else is inert.
+fn pad_pressed(entry: &repame_input::KeymapEntry, pad: &GamepadState) -> bool {
+    use repame_input::KeymapEntry;
+    use repose_core::input::GamepadButton;
+    match entry {
+        KeymapEntry::Pad(GamepadButton::South) => pad.south_pressed,
+        KeymapEntry::Pad(GamepadButton::East) => pad.east_pressed,
+        KeymapEntry::Pad(GamepadButton::West) => pad.west_pressed,
+        KeymapEntry::Pad(GamepadButton::North) => pad.north_pressed,
+        KeymapEntry::Pad(GamepadButton::LeftShoulder) => pad.left_shoulder_pressed,
+        KeymapEntry::Pad(GamepadButton::RightShoulder) => pad.right_shoulder_pressed,
+        KeymapEntry::Pad(GamepadButton::DPadLeft) => pad.dpad_left_pressed,
+        KeymapEntry::Pad(GamepadButton::DPadUp) => pad.dpad_up_pressed,
+        KeymapEntry::Pad(GamepadButton::DPadRight) => pad.dpad_right_pressed,
+        KeymapEntry::Pad(GamepadButton::DPadDown) => pad.dpad_down_pressed,
+        _ => false,
+    }
 }
 
 /// Backend-neutral port of bevy `sample_input`'s touch zones.
@@ -759,6 +856,8 @@ pub fn clear_input_when_inactive(
     let overlay_open = overlay.is_some_and(|o| *o != crate::state::OverlayMenu::None);
     if paused.0 || overlay_open || *state != AppState::InGame {
         input.clear_transient();
+    } else {
+        drain_interact_pulse(&state, &mut input);
     }
 }
 

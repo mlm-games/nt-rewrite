@@ -476,7 +476,10 @@ pub fn build_sim_schedule() -> Schedule {
                 // pulses/axes when paused or out of game, after all
                 // consumers ran (this also subsumes `OnExit(InGame)
                 // clear_input_pulses` — the next tick outside InGame
-                // clears anything left).
+                // clears anything left). Live play drains the peek-only
+                // interact pulse in the same system (E tap would latch
+                // forever: `collect_pickups`/`tick_throne_sit` peek it,
+                // nothing takes it).
                 crate::input::clear_input_when_inactive.in_set(NtSimSet::Cleanup),
             )
                 .chain(),

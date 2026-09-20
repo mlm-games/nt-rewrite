@@ -164,13 +164,20 @@ impl KeyBindings {
             let Some(action) = NtAction::from_name(&row.action) else {
                 continue;
             };
-            if !row.keyboard.is_empty() {
+            // Empty string = explicitly cleared: the bind stays dead,
+            // never resurrected from defaults. Absent rows (old saves)
+            // keep defaults via the seeded map above.
+            if row.keyboard.is_empty() {
+                map.set_keyboard(action, repame_input::KeymapEntry::None);
+            } else {
                 map.set_keyboard(
                     action,
                     repame_input::decode_keymap_entry(&row.keyboard),
                 );
             }
-            if !row.gamepad.is_empty() {
+            if row.gamepad.is_empty() {
+                map.set_gamepad(action, repame_input::KeymapEntry::None);
+            } else {
                 map.set_gamepad(action, repame_input::decode_keymap_entry(&row.gamepad));
             }
         }
@@ -276,6 +283,17 @@ mod tests {
             back.keyboard(&NtAction::Fire),
             KeymapEntry::Mouse(PointerButton::Primary)
         );
+    }
+
+    #[test]
+    fn cleared_bind_stays_dead_through_save_rows() {
+        let mut map = default_keymap();
+        map.set_keyboard(NtAction::Swap, KeymapEntry::None);
+        map.set_gamepad(NtAction::Swap, KeymapEntry::None);
+        let saved = KeyBindings::from_keymap(&map);
+        let back = saved.to_keymap();
+        assert_eq!(back.keyboard(&NtAction::Swap), KeymapEntry::None);
+        assert_eq!(back.gamepad(&NtAction::Swap), KeymapEntry::None);
     }
 
     #[test]
