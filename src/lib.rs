@@ -4153,3 +4153,65 @@ mod cursor_staging_tests {
         assert!(app.capture_armed(), "capture must arm after the row click");
     }
 }
+
+/// Android entry (`cargo rapk`), repadio-shaped: the lib target owns
+/// `android_main` (a bin target's symbol never lands in the `.so` the
+/// NativeActivity loader opens). Boot threads the internal data path
+/// through save + asset lookups since cwd is `/` on device.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "C" fn android_main(
+    android_app: winit::platform::android::activity::AndroidApp,
+) {
+    repose_core::locals::set_theme_default(repose_core::locals::Theme::default());
+    let files_dir = android_app.internal_data_path();
+    let mut app = App::new();
+    if let Some(dir) = files_dir.as_ref() {
+        if app.load_assets_from(&dir.join("assets")).is_ok() {
+            eprintln!("nt: assets loaded from {}", dir.join("assets").display());
+        } else if let Ok(found) = app.load_assets() {
+            eprintln!("nt: assets loaded from {}", found.display());
+        } else {
+            eprintln!("nt: running without assets; placeholder renderer");
+        }
+    } else {
+        eprintln!("nt: no internal data path; trying default asset search");
+        let _ = app.load_assets();
+    }
+    let save_path = match files_dir {
+        Some(dir) => dir.join(crate::savedata_part::save_file_name()),
+        None => crate::savedata_part::save_file_path(),
+    };
+    let save = app.load_save(&save_path);
+    eprintln!(
+        "nt: save loaded from {} (version {})",
+        save_path.display(),
+        save.version
+    );
+    let mut audio = repame_audio::Audio::noop();
+    let mut last = std::time::Instant::now();
+    if let Err(e) = repame_shell::run_android(android_app, move |sched, ctx| {
+        // `App::view` runs the poll/store/feed pipeline (keyboard repair,
+        // menu actions, click routing, pad sampling, touch zones) around
+        // the fixed-step advance, then builds the sprite/HUD/menu view —
+        // same order as desktop. Android controller buttons land in the
+        // runner's pad map via the platform `AndroidBackend`, which
+        // forwards South/East/Start/DPad as synthetic keys (Space, Esc,
+        // Enter, arrows) into the normal key path — repadio-shaped, no
+        // game-side pad bridge needed.
+        let view = root_view(sched, ctx, &mut app, {
+            let now = std::time::Instant::now();
+            let dt = now
+                .duration_since(last)
+                .min(std::time::Duration::from_secs_f32(0.25));
+            last = now;
+            dt
+        });
+        for cue in app.drain_audio_cues() {
+            audio.play(cue.name);
+        }
+        view
+    }) {
+        eprintln!("nt: android run failed: {e:?}");
+    }
+}

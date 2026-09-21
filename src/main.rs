@@ -1,27 +1,55 @@
-//! Desktop entry: 1280x720 window, assets when present, placeholders
-//! otherwise (`NT_ASSETS` overrides the search; see `nt_rewrite` docs).
-//! Hardware gamepads drain through `repame-shell`'s [`GamepadPoller`]
-//! into backend-neutral [`GamepadState`] snapshots (bevy `sample_input`
-//! pad-section parity); touch arrives as viewport `PickEvent`s.
+//! Entry: desktop window plus Android NativeActivity (`cargo rapk`).
+//! Assets when present, placeholders otherwise (`NT_ASSETS` overrides the
+//! search; see `nt_rewrite` docs). Hardware gamepads drain through
+//! `repame-shell`'s [`GamepadPoller`] into backend-neutral [`GamepadState`]
+//! snapshots (bevy `sample_input` pad-section parity); touch arrives as
+//! viewport `PickEvent`s.
 
 use std::time::{Duration, Instant};
 
 use nt_rewrite::{App, root_view};
-use repame_shell::{GamepadPoller, PadBank};
 
-fn main() -> anyhow::Result<()> {
+fn boot() -> App {
+    boot_at(None)
+}
+
+fn boot_at(files_dir: Option<std::path::PathBuf>) -> App {
     let mut app = App::new();
+    #[cfg(target_os = "android")]
+    if let Some(dir) = files_dir.as_ref() {
+        if app.load_assets_from(&dir.join("assets")).is_ok() {
+            eprintln!("nt: assets loaded from {}", dir.join("assets").display());
+        } else if let Ok(found) = app.load_assets() {
+            eprintln!("nt: assets loaded from {}", found.display());
+        } else {
+            eprintln!("nt: running without assets; placeholder renderer");
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = &files_dir;
+    #[cfg(not(target_os = "android"))]
     match app.load_assets() {
         Ok(dir) => eprintln!("nt: assets loaded from {}", dir.display()),
         Err(e) => eprintln!("nt: running without assets ({e}); placeholder renderer"),
     }
-    let save_path = nt_rewrite::savedata_part::save_file_path();
+    let save_path = match files_dir {
+        Some(dir) => dir.join(nt_rewrite::savedata_part::save_file_name()),
+        None => nt_rewrite::savedata_part::save_file_path(),
+    };
     let save = app.load_save(&save_path);
     eprintln!(
         "nt: save loaded from {} (version {})",
         save_path.display(),
         save.version
     );
+    app
+}
+
+#[cfg(not(target_os = "android"))]
+fn main() -> anyhow::Result<()> {
+    use repame_shell::{GamepadPoller, PadBank};
+
+    let mut app = boot();
     let mut poller = GamepadPoller::new();
     let mut bank = PadBank::default();
     let mut audio = repame_audio::Audio::noop();
@@ -43,3 +71,6 @@ fn main() -> anyhow::Result<()> {
         view
     })
 }
+
+#[cfg(target_os = "android")]
+fn main() {}

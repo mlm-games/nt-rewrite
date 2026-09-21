@@ -37,6 +37,9 @@ repose-text = { path = "../Repos/repose/crates/repose-text", version = "0.30" }
 anyhow = "1"
 log = "0.4"
 
+[target.'cfg(target_os = "android")'.dependencies]
+winit = "0.30"
+
 [patch.crates-io]
 repose-core = { path = "../Repos/repose/crates/repose-core" }
 repose-ui = { path = "../Repos/repose/crates/repose-ui" }
@@ -51,6 +54,29 @@ repose-navigation = { path = "../Repos/repose/crates/repose-navigation" }
 repose-material = { path = "../Repos/repose/crates/repose-material" }
 repose-docking = { path = "../Repos/repose/crates/repose-docking" }
 repose-macros = { path = "../Repos/repose/crates/repose-macros" }
+
+[lib]
+name = "nt_rewrite"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "nt-rewrite"
+path = "src/main.rs"
+
+[package.metadata.android]
+package = "org.mlm.nt"
+apk_name = "nt"
+build_targets = ["aarch64-linux-android"]
+resources = "packaging/res"
+
+[package.metadata.android.application]
+label = "Nuclear Throne"
+icon = "@mipmap/ic_launcher"
+
+[package.metadata.android.sdk]
+min_sdk_version = 26
+target_sdk_version = 35
 
 [dev-dependencies]
 insta = "1.44.1"
