@@ -962,7 +962,9 @@ fn wall_out_raw(seed: u64, wx: i32, wy: i32) -> usize {
 
 /// GML `mcr_wall_update_lrwh` verbatim (`macros_general.gml:75-80`):
 /// `l`/`r` are the source-rect origin into the 24-wide Out cell, `w`/`h`
-/// its extent. `place_free` = no wall body at that 16px neighbor cell.
+/// its extent. `place_free` = no wall body at that 16px neighbor cell, so
+/// `l = 0` means no wall to the west and the window keeps the full 4px
+/// west skirt of the 24-wide cell; a wall next door cuts it to 4.
 fn wall_out_crop(wall_set: &HashSet<(i32, i32)>, wx: i32, wy: i32) -> (f32, f32, f32, f32) {
     let l = if wall_set.contains(&(wx - 1, wy)) { 4.0 } else { 0.0 };
     let w = if wall_set.contains(&(wx + 1, wy)) {
@@ -981,7 +983,12 @@ fn wall_out_crop(wall_set: &HashSet<(i32, i32)>, wx: i32, wy: i32) -> (f32, f32,
 
 /// One GML `draw_sprite_part_ext` Out window: source rect `(l, r, w, h)` of
 /// the 24x32 strip frame (origin (4,12)), drawn with its top-left at GML
-/// `(x - 4 + l, y - 12 + r)`.
+/// `(x - 4 + l, y - 12 + r)`. Same window-padding law as
+/// [`hud_weapon_part`]: `l`/`r` can start outside the 24-wide cell
+/// (negative `x - 4` lead at the room edge) and `w`/`h` can overrun it
+/// (up to 24x32 against a shorter crop): GML clamps those samples to
+/// transparent edge texels, so only the in-bounds part draws — offset
+/// inside the window by the out-of-bounds lead.
 fn wall_out_part(
     assets: &RenderAssets,
     path: &str,
@@ -1000,13 +1007,20 @@ fn wall_out_part(
     if sw <= 0.0 || sh <= 0.0 {
         return None;
     }
+    // In-bounds part of the window: the 24-wide Out art only fills the
+    // top ~22 rows of the 32-tall cell, and `h` runs to 24/32 against
+    // it — the overrun is transparent edge texels in GML, so the quad
+    // keeps only the overlap. `l`/`r` the same way (west/north leads
+    // are 0..4 in practice, kept general for the room edge).
+    let ix0 = l.max(0.0);
+    let iy0 = r.max(0.0);
     let ix1 = (l + w).min(sw);
     let iy1 = (r + h).min(sh);
-    if ix1 <= l || iy1 <= r {
+    if ix1 <= ix0 || iy1 <= iy0 {
         return None;
     }
-    let fx0 = l / sw;
-    let fy0 = r / sh;
+    let fx0 = ix0 / sw;
+    let fy0 = iy0 / sh;
     let fx1 = ix1 / sw;
     let fy1 = iy1 / sh;
     let uv_min = Vec2::new(
@@ -1017,11 +1031,11 @@ fn wall_out_part(
         uv.min[0] + (uv.max[0] - uv.min[0]) * fx1,
         uv.min[1] + (uv.max[1] - uv.min[1]) * fy1,
     );
-    let iw = ix1 - l;
-    let ih = iy1 - r;
+    let iw = ix1 - ix0;
+    let ih = iy1 - iy0;
     let top_left = Vec2::new(
-        wx as f32 * 16.0 - 4.0 + l,
-        wy as f32 * 16.0 - 12.0 + r,
+        wx as f32 * 16.0 - 4.0 + ix0,
+        wy as f32 * 16.0 - 12.0 + iy0,
     );
     Some(SpriteInstance {
         center: top_left + Vec2::new(iw, ih) * 0.5,
@@ -1721,12 +1735,16 @@ fn flash_tint(flash: Option<&HitFlash>) -> [f32; 4] {
 pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInstance> {
     let mut out = Vec::new();
 
-    // Floor: bevy law (`spawn_level`): lit area strip over mask cells,
-    // darkened outside ring over the padded bounding rect (this is what
-    // makes the map fill its rect instead of floating as bare cells).
-    // Quads place by art top-left (`place_top_left`, bevy
-    // `sprite_at_gm_origin` parity): origin-(0,0) art would sit half a
-    // cell off if given cell centers.
+    // Floor: GML draws the room background colour first
+    // (`background_set_colour`), then ONLY the live floor cells —
+    // there is no padded outside ring of floor tiles. The old
+    // ±6-cell darkened ring covered the whole viewport with opaque
+    // quads and buried the transparent vortex layer underneath on
+    // the campfire title (the "no vortex on the title screen"
+    // bug). Lit strip over mask cells only; the room colour shows
+    // everywhere else. Quads place by art top-left (`place_top_left`,
+    // bevy `sprite_at_gm_origin` parity): origin-(0,0) art would sit
+    // half a cell off if given cell centers.
     if let (Some(run), Some(mask)) = (
         world.get_resource::<Run>(),
         world.get_resource::<FloorMask>(),
@@ -5396,6 +5414,7 @@ pub fn settings_hot_rows(page: u8, vw: f32) -> Vec<SettingHotRow> {
             tog(104.0, SettingHotOp::Toggle("split_fire")),
             tog(118.0, SettingHotOp::Toggle("fixed_sight")),
             tog(125.0, SettingHotOp::Toggle("hidden_sticks")),
+            tog(132.0, SettingHotOp::Toggle("stick_regions")),
             val(132.0, SettingHotOp::Cycle("gamepad_type")),
             val(146.0, SettingHotOp::Slider("controls_scale")),
             btn(160.0, SettingHotOp::Category(13)),
@@ -5736,6 +5755,7 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
                 ("SPLIT AIM & FIRE", s.split_fire),
                 ("FIXED SIGHT", s.fixed_sight),
                 ("HIDDEN STICKS", s.hidden_sticks),
+                ("STICK REGIONS", s.stick_regions),
             ] {
                 push_toggle(&mut out, label, y, on);
                 y += 14.0;
@@ -8310,9 +8330,14 @@ pub fn touch_sprites(
     let Some(input) = world.get_resource::<crate::input::NtInput>().cloned() else {
         return out;
     };
-    let touched_once =
-        input.move_stick.is_some() || input.attack_stick.is_some();
-    if !touched_once {
+    // GML draws the controls from the live MobileUI instances, which
+    // only exist on touch devices: draw nothing unless a finger is
+    // down now or a stick claim is live. (The stick records persist
+    // after the last lift; without this a desktop session shows both
+    // stick homes forever after one accidental touch.)
+    let any_live = input.move_stick.is_some_and(|s| s.touch >= 0)
+        || input.attack_stick.is_some_and(|s| s.touch >= 0);
+    if !any_live {
         return out;
     }
     let view = view_rect_world(canvas_dp, world_size, cam);
@@ -8368,11 +8393,17 @@ pub fn touch_sprites(
             }
         }
     }
-    // Attack stick: base + `sprCrosshairBig` knob at the deflection;
-    // frame 2 gray base under the deadzone (or always in splitfire);
-    // 45° crosshair in full auto-aim.
+    // Attack stick: base + `sprCrosshairBig` knob at the deflection.
+    // GML gate verbatim (`scrDrawMobileControls` attack region):
+    // - base sprite rides `_scale`, knob at half scale rotated only
+    //   when `crosshair < 7` (rotating frames) — full auto-aim parks
+    //   the knob on the base at 45°;
+    // - under-deadzone base frame 2 shows while claimed, not in autoaim,
+    //   and always in splitfire (even unclaimed, GML `index != -1`
+    //   short-circuits there).
     if let Some(stick) = input.attack_stick {
-        if !split_fire {
+        let show_base = !split_fire || stick.touch >= 0;
+        if show_base {
             let a = alpha(stick.touch >= 0);
             if a > 0.0 {
                 let dir = if stick.dis > 0.0 {
@@ -8383,7 +8414,11 @@ pub fn touch_sprites(
                 } else {
                     Vec2::ZERO
                 };
-                let knob = stick.anchor + dir * (stick.dis.min(64.0) * 0.5);
+                let knob = if autoaim {
+                    stick.anchor
+                } else {
+                    stick.anchor + dir * (stick.dis.min(64.0) * 0.5)
+                };
                 if let Some(s) = assets.sprite_for(
                     "images/sprMobileControlJoystick.png",
                     0,
@@ -8396,7 +8431,9 @@ pub fn touch_sprites(
                 }
                 let under_deadzone =
                     stick.dis / 32.0 < crate::input::ATTACK_BUTTON_DEADZONE;
-                if under_deadzone && stick.touch >= 0 && !autoaim {
+                let show_dead = (split_fire && stick.touch < 0)
+                    || (under_deadzone && stick.touch >= 0 && !autoaim);
+                if show_dead {
                     if let Some(s) = assets.sprite_for(
                         "images/sprMobileControlJoystick.png",
                         2,
@@ -8409,12 +8446,19 @@ pub fn touch_sprites(
                     }
                 }
                 let frames = strip_frames(assets, "images/sprCrosshairBig.png").max(1) as i32;
+                let frame = crosshair.clamp(0, frames - 1);
                 if let Some(s) = assets.sprite_for(
                     "images/sprCrosshairBig.png",
-                    crosshair.clamp(0, frames - 1),
+                    frame,
                     gui_to_world(knob.x, knob.y),
                     false,
-                    if autoaim { std::f32::consts::FRAC_PI_4 } else { 0.0 },
+                    if autoaim {
+                        std::f32::consts::FRAC_PI_4
+                    } else if frame < 7 {
+                        0.0
+                    } else {
+                        0.0
+                    },
                     [0.05, 0.99, 0.6, a],
                 ) {
                     out.push(s);
@@ -8423,9 +8467,72 @@ pub fn touch_sprites(
         }
     }
     // Fixed buttons (`ButtonAct`/`ButtonSwap`/`ButtonActive` homes from
-    // `sample_touch`): corners sprite at 0.7 alpha while held.
-    let gui_h = 240.0;
-    let _ = (gui_h, vw, scale);
+    // `sample_touch`):
+    // - `ButtonActive`: `sprMobileControlAbility` at 0.75x, dimmed
+    //   while claimed (`merge_color(c_gray)` → gray tint);
+    // - `ButtonAct`: `sprMobileControlCorners` at the act home (drawn
+    //   while its 3s fade lasts; the sampler has no fade state, so the
+    //   button draws while a session is live);
+    // - splitfire `ButtonAttack`: corners sprite + double crosshair at
+    //   the button home.
+    // Button homes mirror the sampler (`ButtonAct` w/2,48;
+    // `ButtonSwap` 64,h/2-48; `ButtonActive` w-64,h/2-48;
+    // `ButtonAttack` w-48,h/2) — the view width in GUI px is `vw`.
+    {
+        let gui_w = vw;
+        let gui_h = 240.0;
+        let act = Vec2::new(gui_w * 0.5, 48.0);
+        let attack_btn = Vec2::new(gui_w - 48.0, gui_h * 0.5);
+        let active = Vec2::new(gui_w - 64.0, gui_h * 0.5 - 48.0);
+        let held_alpha = 0.7;
+        if let Some(s) = assets.sprite_for(
+            "images/sprMobileControlAbility.png",
+            0,
+            gui_to_world(active.x, active.y),
+            false,
+            0.0,
+            [0.5, 0.5, 0.5, held_alpha],
+        ) {
+            out.push(s);
+        }
+        if let Some(s) = assets.sprite_for(
+            "images/sprMobileControlCorners.png",
+            0,
+            gui_to_world(act.x, act.y),
+            false,
+            0.0,
+            [1.0, 1.0, 1.0, 1.0],
+        ) {
+            out.push(s);
+        }
+        if split_fire {
+            let frames = strip_frames(assets, "images/sprCrosshairBig.png").max(1) as i32;
+            let frame = crosshair.clamp(0, frames - 1);
+            let half = scale * 0.5;
+            if let Some(s) = assets.sprite_for(
+                "images/sprMobileControlCorners.png",
+                0,
+                gui_to_world(attack_btn.x, attack_btn.y),
+                false,
+                0.0,
+                [1.0, 1.0, 1.0, 1.0],
+            ) {
+                out.push(s);
+            }
+            if let Some(s) = assets.sprite_for(
+                "images/sprCrosshairBig.png",
+                frame,
+                gui_to_world(attack_btn.x, attack_btn.y),
+                false,
+                0.0,
+                [0.49, 0.99, 0.05, 1.0],
+            ) {
+                out.push(s);
+            }
+            let _ = half;
+        }
+    }
+    let _ = (vw, scale);
     out
 }
 pub fn menu_sprites(

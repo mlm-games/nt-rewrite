@@ -88,17 +88,17 @@ use crate::comps_a::{NT_CAM_SCALE, Player, Projectile, WallCell, WallTile};
 use crate::comps_b::{Enemy, Pickup, Prop};
 use crate::data::AreaId;
 use crate::input::{
-    GamepadState, KeyCode, MouseState, NtInput, sample_gamepads_mapped, sample_touch,
+    GamepadState, KeyCode, MouseState, NtInput, sample_gamepads_mapped,
 };
 use crate::render::{
     ATLAS_PAGES, ATLAS_SIZE, CamPoi, CamStepInput, GmlCamera, RenderAssets, Z_BLOOM, Z_CROSSHAIR,
     Z_FAINTED, Z_FOG, Z_FX, Z_HUD, Z_MENU, Z_PORTAL_INDICATOR, Z_SHADOW, Z_SIDEART,
-    Z_SPIRAL_FIGURES, Z_SPLASH, background_color, bloom_sprites, cam_viewdist_for,
+    Z_SPIRAL_FIGURES, Z_SPLASH, Z_TOUCH, background_color, bloom_sprites, cam_viewdist_for,
     crosshair_sprites, decode_png, fainted_bar_sprites, fog_sprites, fx_instances, fx_texts,
     gml_camera_step, gml_view_scale, gml_view_size, hud_gui_texts_dp, hud_sprites, menu_gui_texts,
     menu_gui_texts_dp, menu_gui_texts_vw, menu_sprites, portal_indicator_sprites, shadow_sprites,
     sideart_sprites, spiral_figures, splash_sprites, stamp_z, title_cam_focus, title_camera_step,
-    view_rect_world, world_camera,
+    touch_sprites, view_rect_world, world_camera,
     world_instances,
 };
 use crate::schedule::build_sim_schedule;
@@ -256,6 +256,10 @@ pub struct App {
     /// every frame so it can't answer "is a pad in use" outside
     /// `feed_input`; this carries that fact to the cursor gate.
     pad_live: bool,
+    /// Live touch finger ids last frame: viewport lifts bypass
+    /// `App::touch_up`, so ids missing this frame latch the release
+    /// edge in `feed_input`.
+    last_touch_ids: Vec<i64>,
     /// Viewport width in screen px for the touch button zones (bevy
     /// reads `window.width()`; refreshed from the frame geometry).
     view_width: f32,
@@ -353,6 +357,7 @@ impl App {
             restart_edge: false,
             interact_edge: false,
             pad_live: false,
+            last_touch_ids: Vec::new(),
             view_width: 1280.0,
             view_viewport_dp: [1280.0, 720.0],
             view_density: 1.0,
@@ -1411,7 +1416,18 @@ impl App {
     }
 
     pub fn touch_up(&mut self, id: u64) {
+        // GML reads press/release edges off the live touch slot, but
+        // the shell drops contacts on lift — latch the lifted finger's
+        // id here and consume it next `sample_touch` (swapped attack
+        // edges, release-driven consumers like the Plant auto-snare).
+        // Lift routing reads `NtInput`'s claims: the attack finger id
+        // means fire, anything else means no edge. Stale ids (stick
+        // already released) latch nothing.
         self.staging.borrow_mut().touch_up(id);
+        self.sim
+            .world
+            .resource_mut::<NtInput>()
+            .note_touch_released(id as i64);
     }
 
     /// Sync event-staged levels against the platform snapshot
@@ -1654,12 +1670,18 @@ impl App {
         {
             self.sim.world.init_resource::<InputMapState>();
             let keymap = self.sim.world.resource::<InputMapState>().clone();
-            let (touch_scale, touch_split_fire) = self
+            let (touch_scale, touch_split_fire, touch_stick_regions) = self
                 .sim
                 .world
                 .get_resource::<crate::savedata_part::SaveData>()
-                .map(|s| (s.settings.controls_scale, s.settings.split_fire))
-                .unwrap_or((0.5, false));
+                .map(|s| {
+                    (
+                        s.settings.controls_scale,
+                        s.settings.split_fire,
+                        s.settings.stick_regions,
+                    )
+                })
+                .unwrap_or((0.5, false, false));
             let mut input = self.sim.world.resource_mut::<NtInput>();
             // Menu screens own Space/arrows: strip their edges before the
             // gameplay sampler so one press can't both confirm a menu
@@ -1682,13 +1704,41 @@ impl App {
             sample_gamepads_mapped(&pads, Some(&keymap), &mut input);
             {
                 let d = repose_core::locals::effective_density_scale().max(1e-6);
+                // Viewport lifts bypass `App::touch_up` (staging-only
+                // closure): any contact count drop since last frame is
+                // a lift — latch the missing finger ids against the
+                // stick claims (`note_touch_released` drops stale ids)
+                // and run the sampler on every tick, empty or not, so
+                // claims release and lift edges fire on the lift frame.
                 let contacts = self.staging.borrow_mut().touch_contacts(d);
-                if !contacts.is_empty() {
-                    sample_touch(
+                let live: std::collections::HashSet<i64> =
+                    contacts.iter().map(|c| c.id as i64).collect();
+                // GML spawns touch objects on mobile only: on desktop
+                // there are no sticks, so the sampler must not run —
+                // it zeroes `move_axis`/`aim_axis` and would eat the
+                // keyboard vote every frame. Run only while fingers
+                // are down, a claim is live, or a lift edge is
+                // pending; the lift frame still runs once (prior ids
+                // / latched lifts) so claims release and edges fire.
+                let had = !self.last_touch_ids.is_empty();
+                for id in self.last_touch_ids.drain(..) {
+                    if !live.contains(&id) {
+                        input.note_touch_released(id);
+                    }
+                }
+                self.last_touch_ids = live.into_iter().collect();
+                let need_touch = !contacts.is_empty()
+                    || had
+                    || !input.touch_lifted.is_empty()
+                    || input.move_stick.is_some_and(|s| s.touch >= 0)
+                    || input.attack_stick.is_some_and(|s| s.touch >= 0);
+                if need_touch {
+                    crate::input::sample_touch_full(
                         &contacts,
                         self.view_width / d,
                         touch_scale,
                         touch_split_fire,
+                        touch_stick_regions,
                         &mut input,
                     );
                 }
@@ -2310,6 +2360,35 @@ impl App {
             };
             stamp_z(&mut h, Z_HUD);
             s.extend(h);
+            // Touch controls (`scrDrawMobileControls`, `TopCont/Draw_64`
+            // tail): sticks + buttons over the HUD, under splash/menus.
+            // GML skips while pausing/quitting; the port additionally
+            // requires live play (menus have no sticks).
+            let touch_paused = self
+                .sim
+                .world
+                .get_resource::<crate::state::Paused>()
+                .is_some_and(|p| p.0);
+            let touch_overlay = self
+                .sim
+                .world
+                .get_resource::<OverlayMenu>()
+                .copied()
+                .unwrap_or_default();
+            let touch_live = playing
+                && !touch_paused
+                && touch_overlay == OverlayMenu::None;
+            if touch_live {
+                let mut t = touch_sprites(
+                    &mut self.sim.world,
+                    assets,
+                    viewport_dp,
+                    world_size,
+                    &self.cam,
+                );
+                stamp_z(&mut t, Z_TOUCH);
+                s.extend(t);
+            }
             // Boot reel (`Vlambeer/Draw_0` + `Logo/Draw_0`).
             if menu_kind == Some(MenuOverlay::Splash) {
                 let mut splash = splash_sprites(&mut self.sim.world, assets, view);
@@ -2638,7 +2717,9 @@ impl App {
                     PickEvent::TouchMove { id, screen } => {
                         staging.touch_move(id, Vec2::new(screen[0], screen[1]))
                     }
-                    PickEvent::TouchUp { id } => staging.touch_up(id),
+                    PickEvent::TouchUp { id } => {
+                        staging.touch_up(id);
+                    }
                 }
             })
         } else {
@@ -2671,7 +2752,9 @@ impl App {
                     PickEvent::TouchMove { id, screen } => {
                         staging.touch_move(id, Vec2::new(screen[0], screen[1]))
                     }
-                    PickEvent::TouchUp { id } => staging.touch_up(id),
+                    PickEvent::TouchUp { id } => {
+                        staging.touch_up(id);
+                    }
                 }
             })
         };

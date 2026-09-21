@@ -1268,6 +1268,14 @@ pub fn wall_top_left(wx: i32, wy: i32) -> Vec2 {
 }
 
 pub(crate) fn build_walls(_run: &Run, floors: &[(i32, i32)], plan: &mut LevelPlan) {
+    // GML `mcr_floor_make_walls` verbatim: the probes are the 12 cells
+    // of the 16px ring around the 32px floor tile, i.e. half-open
+    // [x-16, x+48) x [y-16, y+48) in floor-px minus the 2x2 floor block
+    // itself: corners (-1,-1), (2,-1), (-1,2), (2,2) are single cells,
+    // the other 8 come in wall/floor pairs (two 16px halves each).
+    // `position_meeting` tests the point, not the cell, so the diagonal
+    // corners probe, the pairs probe both halves, and every probe only
+    // fires where the owning 32px tile is not floor.
     let floor_set: std::collections::HashSet<(i32, i32)> = floors.iter().copied().collect();
 
     for &(cx, cy) in floors {

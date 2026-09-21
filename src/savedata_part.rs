@@ -442,6 +442,14 @@ pub struct SettingsData {
     pub split_fire: bool,
     #[serde(default)]
     pub fixed_sight: bool,
+    /// GML `UberCont.opt_stickregions` (`StickRegions`): sticks
+    /// reposition to the press point (`scrStickRegions`). Off = free
+    /// touches go to the plain tap zones (left half move, right half
+    /// fire) instead of chasing the stick homes.
+    #[serde(default)]
+    pub stick_regions: bool,
+    #[serde(default)]
+    pub hidden_sticks: bool,
     #[serde(default = "default_controls_scale")]
     pub controls_scale: f32,
     #[serde(default = "default_true")]
@@ -517,6 +525,8 @@ impl Default for SettingsData {
             volume_controls: false,
             split_fire: false,
             fixed_sight: false,
+            stick_regions: false,
+            hidden_sticks: false,
             controls_scale: 0.5,
             show_tutorial: true,
             player_color_hex: String::new(),

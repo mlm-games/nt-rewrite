@@ -457,9 +457,14 @@ pub fn build_sim_schedule() -> Schedule {
                 progression::tick_portal_shock
                     .in_set(NtSimSet::Progression)
                     .run_if(gameplay_active),
-                progression::tick_portal_clear
-                    .in_set(NtSimSet::Progression)
-                    .run_if(gameplay_active),
+                // GML parity: `PortalClear` is a 5-step wall-blaster
+                // (`MenuGen/Alarm_1` pops one per campfire camper and it
+                // only ever meets `Floor`s, which die to anything), so it
+                // must also tick + despawn on the Title campfire — not
+                // just behind the `InGame` gameplay gate. Without this the
+                // clears never finish and their 64px white discs sit on
+                // the camp forever (the "white circle" bug).
+                progression::tick_portal_clear.in_set(NtSimSet::Progression),
                 progression::portal_attract
                     .in_set(NtSimSet::Progression)
                     .run_if(gameplay_active),

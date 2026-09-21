@@ -1358,6 +1358,15 @@ fn apply_setting_toggle(save: &mut SaveData, key: &str) -> bool {
         "volume_controls" => s.volume_controls = !s.volume_controls,
         "split_fire" => s.split_fire = !s.split_fire,
         "fixed_sight" => s.fixed_sight = !s.fixed_sight,
+        "hidden_sticks" => s.hidden_sticks = !s.hidden_sticks,
+        // GML `scrOptionsUpdate:105` forces hidden sticks on with
+        // stick regions (the repositioning sticks never sit at home).
+        "stick_regions" => {
+            s.stick_regions = !s.stick_regions;
+            if s.stick_regions {
+                s.hidden_sticks = true;
+            }
+        }
         "show_tutorial" => s.show_tutorial = !s.show_tutorial,
         key if key.starts_with("cprefs_") => {
             let idx: usize = key

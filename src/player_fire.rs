@@ -454,7 +454,10 @@ pub fn player_fire(
     cooldown.burst_timer_b.tick(dt);
 
     let fire_held = input.fire_held;
-    let fire_pressed = input.take_fire_pressed();
+    // GML `JoystickAttack` swaps edges by design: the attack finger's
+    // lift lands in `fire_released`, which counts as the shot edge
+    // (`press_fire` on release) alongside the normal press edge.
+    let fire_pressed = input.take_fire_pressed() || input.take_fire_released();
     let spec_held = input.spec_held;
     let spec_pressed = input.take_spec_pressed();
 
@@ -2029,7 +2032,7 @@ pub fn player_ability(
             &mut Player,
             &mut Health,
             &mut Velocity,
-            &AimDir,
+            &mut AimDir,
             &mut Inventory,
             &RaceState,
             Option<&mut Shield>,
@@ -2037,6 +2040,7 @@ pub fn player_ability(
         ),
         (With<Player>, Without<Enemy>),
     >,
+    walls: Query<(Entity, &WallCell, &Pos), With<WallTile>>,
     mut enemies: Query<(Entity, &Pos, &mut Health), (With<Enemy>, Without<Player>)>,
 ) {
     let Ok((
@@ -2045,7 +2049,7 @@ pub fn player_ability(
         mut player,
         mut health,
         mut vel,
-        aim,
+        mut aim,
         mut inv,
         race_state,
         shield,
@@ -2058,6 +2062,60 @@ pub fn player_ability(
     let fire = input.take_ability_pressed();
     if race_state.race == RaceId::Steroids {
         return;
+    }
+    // GML `scrControlAutoSnare` verbatim: Plant auto-fires the snare
+    // off EITHER fire edge (press or release) when the aim ray hits an
+    // unsnared enemy within half a view (213px) with clear walls. The
+    // shot aims itself at the victim (`scrPowers` runs with the snapped
+    // `gunangle`, restored after): the port writes the snapped aim for
+    // this tick and the next `player_aim` pass re-steers from live
+    // input. Touch routes through the same take-once `fire_pressed`
+    // (press edge) / `fire_released` (attack-finger lift) channels as
+    // desktop, so this covers touch AND desktop identically — no
+    // touch-only latch needed here. (No `scr_player_pref(my_player,
+    // "plant")` gate in the port: no per-race pref store exists; Plant
+    // always snares.)
+    {
+        let press_edge = input.peek_fire_pressed();
+        let release_edge = input.take_touch_released_fire();
+        if race_state.race == RaceId::Plant
+            && player.ability == AbilityKind::Snare
+            && (press_edge || release_edge)
+        {
+            let from = ppos.0;
+            let dir = aim.0;
+            let mut victim: Option<(glam::Vec2, f32)> = None;
+            for (_, epos, _) in &enemies {
+                let to = epos.0 - from;
+                let along = to.dot(dir);
+                if along < 0.0 || along > 213.0 {
+                    continue;
+                }
+                let side = (to - dir * along).length();
+                if side > 12.0 {
+                    continue;
+                }
+                if victim.is_none_or(|(_, bd)| along < bd) {
+                    victim = Some((epos.0, along));
+                }
+            }
+            if let Some((vpos, _)) = victim
+                && !walls_block_snare(&walls, from, vpos)
+            {
+                let snapped = (vpos - from).normalize_or_zero();
+                aim.0 = snapped;
+                player_ability_snare(
+                    &mut commands,
+                    from,
+                    snapped,
+                    &player,
+                    &mut trauma,
+                    &mut chroma,
+                    &mut cues,
+                );
+                return;
+            }
+        }
     }
     if !fire {
         return;
@@ -2078,6 +2136,55 @@ pub fn player_ability(
     } else {
         player.ultra_ability_mult
     };
+
+/// GML Plant snare arm shared by the tap ability and
+/// `scrControlAutoSnare`: spawns the `SnareZone` 70px along the aim.
+#[allow(clippy::too_many_arguments)]
+fn player_ability_snare(
+    commands: &mut Commands,
+    pos: glam::Vec2,
+    aim_v: glam::Vec2,
+    player: &Player,
+    trauma: &mut Trauma,
+    chroma: &mut ChromaticAberration,
+    cues: &mut Queue<AudioCue>,
+) {
+    let ability_mult = if player.throne_butt {
+        player.ultra_ability_mult * 1.35
+    } else {
+        player.ultra_ability_mult
+    };
+    commands.spawn((
+        LevelCleanup,
+        SnareZone {
+            timer: GTimer::from_seconds(2.5 * ability_mult.clamp(1.0, 2.0), TimerMode::Once),
+            radius: 110.0 * ability_mult.clamp(1.0, 1.8),
+            slow: (0.35 / ability_mult).clamp(0.12, 0.35),
+        },
+        Pos(pos + aim_v * 70.0),
+    ));
+    cue(cues, "sndAmmoPickup", 0.5, 0.15);
+    let _ = (trauma, chroma);
+}
+
+/// GML wall segment test for the auto-snare ray (`collision_line`
+/// against `Wall`): true when any wall cell center comes within 8px of
+/// the from→to segment.
+fn walls_block_snare(
+    walls: &Query<(Entity, &WallCell, &Pos), With<WallTile>>,
+    from: glam::Vec2,
+    to: glam::Vec2,
+) -> bool {
+    let d = to - from;
+    let len2 = d.length_squared().max(1e-6);
+    for (_, _, wpos) in walls {
+        let t = ((wpos.0 - from).dot(d) / len2).clamp(0.0, 1.0);
+        if (wpos.0 - (from + d * t)).length() < 8.0 {
+            return true;
+        }
+    }
+    false
+}
 
     match ability {
         AbilityKind::Flip => {
@@ -2136,16 +2243,15 @@ pub fn player_ability(
             cue(&mut cues, "sndExplosionL", 0.9, 0.04);
         }
         AbilityKind::Snare => {
-            commands.spawn((
-                LevelCleanup,
-                SnareZone {
-                    timer: GTimer::from_seconds(2.5 * ability_mult.clamp(1.0, 2.0), TimerMode::Once),
-                    radius: 110.0 * ability_mult.clamp(1.0, 1.8),
-                    slow: (0.35 / ability_mult).clamp(0.12, 0.35),
-                },
-                Pos(pos + aim_v * 70.0),
-            ));
-            cue(&mut cues, "sndAmmoPickup", 0.5, 0.15);
+            player_ability_snare(
+                &mut commands,
+                pos,
+                aim_v,
+                &player,
+                &mut trauma,
+                &mut chroma,
+                &mut cues,
+            );
         }
         AbilityKind::PopPop => {
             let charges = if player.throne_butt
