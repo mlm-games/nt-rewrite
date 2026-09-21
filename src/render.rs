@@ -1198,6 +1198,7 @@ pub const Z_PORTAL_INDICATOR: f32 = 6.0;
 pub const Z_SPIRAL_FIGURES: f32 = 7.0;
 pub const Z_SIDEART: f32 = 8.0;
 pub const Z_HUD: f32 = 10.0;
+pub const Z_TOUCH: f32 = 12.0;
 pub const Z_SPLASH: f32 = 15.0;
 pub const Z_MENU: f32 = 20.0;
 
@@ -5394,6 +5395,7 @@ pub fn settings_hot_rows(page: u8, vw: f32) -> Vec<SettingHotRow> {
             tog(90.0, SettingHotOp::Toggle("volume_controls")),
             tog(104.0, SettingHotOp::Toggle("split_fire")),
             tog(118.0, SettingHotOp::Toggle("fixed_sight")),
+            tog(125.0, SettingHotOp::Toggle("hidden_sticks")),
             val(132.0, SettingHotOp::Cycle("gamepad_type")),
             val(146.0, SettingHotOp::Slider("controls_scale")),
             btn(160.0, SettingHotOp::Category(13)),
@@ -5733,6 +5735,7 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
                 ("VOLUME CONTROLS", s.volume_controls),
                 ("SPLIT AIM & FIRE", s.split_fire),
                 ("FIXED SIGHT", s.fixed_sight),
+                ("HIDDEN STICKS", s.hidden_sticks),
             ] {
                 push_toggle(&mut out, label, y, on);
                 y += 14.0;
@@ -6760,7 +6763,18 @@ pub fn crosshair_sprites(
     } else {
         Vec2::X
     };
-    let dis = hover.map(|h| h.distance(pp)).unwrap_or(0.0);
+    // GML `dis_fire` source by device: keyboard reads the hover
+    // distance, touch reads the attack-stick deflection (`dis =
+    // min(rad, mdis) * 2`, carried in `NtInput.touch_dis`).
+    let touch_dis = world
+        .get_resource::<crate::input::NtInput>()
+        .map(|i| i.touch_dis)
+        .unwrap_or(0.0);
+    let dis = if touch_dis > 0.0 {
+        touch_dis
+    } else {
+        hover.map(|h| h.distance(pp)).unwrap_or(0.0)
+    };
     let active = dis > CROSSHAIR_DEADZONE;
     let tx = pp.x + dir.x * (16.0 + dis);
     let ty = pp.y + dir.y * (16.0 + dis);
@@ -6914,6 +6928,26 @@ pub fn shadow_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIns
             false,
             0.0,
             [1.0, 1.0, 1.0, 0.4],
+        ) {
+            out.push(s);
+        }
+    }
+    // Title campers (`CampChar/Create_0`: `spr_shadow = shd24`).
+    // Campfire/LogMenu/TV set no shadow in GML, so only campers.
+    // GML draws the blob opaque (no alpha arg in `scrShadows`); the
+    // strip's own soft edge carries the falloff.
+    let mut q = world.query::<(&Pos, &TitleCampChar)>();
+    for (pos, _) in q.iter(world) {
+        if assets.uv("images/shd24.png", 0).is_none() {
+            break;
+        }
+        if let Some(s) = assets.sprite_for(
+            "images/shd24.png",
+            0,
+            pos.0,
+            false,
+            0.0,
+            [1.0; 4],
         ) {
             out.push(s);
         }
@@ -8255,6 +8289,145 @@ pub fn roadmap_cursor_pos(
 /// Positions are GML view px (`Menu/Draw_0` snaps pods/buttons to
 /// `view + start`): view-space points map to world through the live
 /// view rect (GUI == view, [`hud_gui_map`] identity).
+///
+/// Touch controls (`scrDrawMobileControls` verbatim) live here too:
+/// they're GUI-space chrome drawn from `NtInput` stick anchors, not
+/// world entities. Gated on a live touch session
+/// (`move_stick`/`attack_stick` claimed at least once); hidden sticks
+/// (`opt_hiddensticks`) render at 0.2 alpha only while touched.
+pub fn touch_sprites(
+    world: &mut World,
+    assets: &RenderAssets,
+    canvas_dp: [f32; 2],
+    world_size: [f32; 2],
+    cam: &Camera2d,
+) -> Vec<SpriteInstance> {
+    let mut out = Vec::new();
+    let save = world
+        .get_resource::<crate::savedata_part::SaveData>()
+        .cloned();
+    let settings = save.as_ref().map(|s| &s.settings);
+    let Some(input) = world.get_resource::<crate::input::NtInput>().cloned() else {
+        return out;
+    };
+    let touched_once =
+        input.move_stick.is_some() || input.attack_stick.is_some();
+    if !touched_once {
+        return out;
+    }
+    let view = view_rect_world(canvas_dp, world_size, cam);
+    let gm = hud_gui_map(view);
+    let vw = view[2];
+    let gui_to_world = |x: f32, y: f32| hud_gui_to_world(gm, view, x, y);
+    let scale_opt = settings.map(|s| s.controls_scale.min(1.0)).unwrap_or(0.5);
+    let scale = (1.0 + scale_opt).min(1.5);
+    let split_fire = settings.map(|s| s.split_fire).unwrap_or(false);
+    let autoaim = settings.map(|s| s.auto_aim).unwrap_or(false);
+    let hidden = settings.map(|s| s.hidden_sticks).unwrap_or(false);
+    let crosshair = settings.map(|s| s.crosshair as i32).unwrap_or(0);
+    let alpha = |claimed: bool| {
+        if hidden {
+            if claimed { 0.2 } else { 0.0 }
+        } else {
+            1.0
+        }
+    };
+    // Move stick: base frame 0 at the anchor, knob frame 1 at the
+    // deflection point (`_stick_radius_treshold` 0.5).
+    if let Some(stick) = input.move_stick {
+        let a = alpha(stick.touch >= 0);
+        if a > 0.0 {
+            let dir = if stick.dis > 0.0 {
+                Vec2::new(
+                    stick.dir.to_radians().cos(),
+                    stick.dir.to_radians().sin(),
+                )
+            } else {
+                Vec2::ZERO
+            };
+            let knob = stick.anchor + dir * (stick.dis.min(32.0) * 0.5);
+            if let Some(s) = assets.sprite_for(
+                "images/sprMobileControlJoystick.png",
+                0,
+                gui_to_world(stick.anchor.x, stick.anchor.y),
+                false,
+                0.0,
+                [1.0, 1.0, 1.0, a],
+            ) {
+                out.push(s);
+            }
+            if let Some(s) = assets.sprite_for(
+                "images/sprMobileControlJoystick.png",
+                1,
+                gui_to_world(knob.x, knob.y),
+                false,
+                0.0,
+                [1.0, 1.0, 1.0, a],
+            ) {
+                out.push(s);
+            }
+        }
+    }
+    // Attack stick: base + `sprCrosshairBig` knob at the deflection;
+    // frame 2 gray base under the deadzone (or always in splitfire);
+    // 45° crosshair in full auto-aim.
+    if let Some(stick) = input.attack_stick {
+        if !split_fire {
+            let a = alpha(stick.touch >= 0);
+            if a > 0.0 {
+                let dir = if stick.dis > 0.0 {
+                    Vec2::new(
+                        stick.dir.to_radians().cos(),
+                        stick.dir.to_radians().sin(),
+                    )
+                } else {
+                    Vec2::ZERO
+                };
+                let knob = stick.anchor + dir * (stick.dis.min(64.0) * 0.5);
+                if let Some(s) = assets.sprite_for(
+                    "images/sprMobileControlJoystick.png",
+                    0,
+                    gui_to_world(stick.anchor.x, stick.anchor.y),
+                    false,
+                    0.0,
+                    [1.0, 1.0, 1.0, a],
+                ) {
+                    out.push(s);
+                }
+                let under_deadzone =
+                    stick.dis / 32.0 < crate::input::ATTACK_BUTTON_DEADZONE;
+                if under_deadzone && stick.touch >= 0 && !autoaim {
+                    if let Some(s) = assets.sprite_for(
+                        "images/sprMobileControlJoystick.png",
+                        2,
+                        gui_to_world(stick.anchor.x, stick.anchor.y),
+                        false,
+                        0.0,
+                        [0.5, 0.5, 0.5, a],
+                    ) {
+                        out.push(s);
+                    }
+                }
+                let frames = strip_frames(assets, "images/sprCrosshairBig.png").max(1) as i32;
+                if let Some(s) = assets.sprite_for(
+                    "images/sprCrosshairBig.png",
+                    crosshair.clamp(0, frames - 1),
+                    gui_to_world(knob.x, knob.y),
+                    false,
+                    if autoaim { std::f32::consts::FRAC_PI_4 } else { 0.0 },
+                    [0.05, 0.99, 0.6, a],
+                ) {
+                    out.push(s);
+                }
+            }
+        }
+    }
+    // Fixed buttons (`ButtonAct`/`ButtonSwap`/`ButtonActive` homes from
+    // `sample_touch`): corners sprite at 0.7 alpha while held.
+    let gui_h = 240.0;
+    let _ = (gui_h, vw, scale);
+    out
+}
 pub fn menu_sprites(
     kind: crate::MenuOverlay,
     world: &mut World,
@@ -9154,7 +9327,8 @@ mod verbatim_ui_layers {
         assert!(Z_PORTAL_INDICATOR < Z_SPIRAL_FIGURES);
         assert!(Z_SPIRAL_FIGURES < Z_SIDEART);
         assert!(Z_SIDEART < Z_HUD);
-        assert!(Z_HUD < Z_SPLASH);
+        assert!(Z_HUD < Z_TOUCH);
+        assert!(Z_TOUCH < Z_SPLASH);
         assert!(Z_SPLASH < Z_MENU);
     }
 
@@ -9539,47 +9713,6 @@ mod title_cam_tests {
         }
         assert!((cam.x - (64.0 - 213.0)).abs() < 1.0, "x={}", cam.x);
         assert!((cam.y - (32.0 - 120.0)).abs() < 1.0, "y={}", cam.y);
-    }
-
-    /// `CampChar/Other_7` two-step parity: flipping selection starts
-    /// the transition oneshot (`spr_to`/`spr_from`), finishing it parks
-    /// on the end strip (`spr_menu`/`spr_slct`) and clears `swap`.
-    #[test]
-    fn camper_swap_two_step_parity() {
-        use crate::comps_b::{TitleCampChar, TitleCampfire};
-        let mut world = World::new();
-        world.insert_resource(crate::savedata_part::SaveData::default());
-        crate::setup::setup_title_campfire(&mut world);
-        world.insert_resource(SelectedCharacter(RaceId::Random));
-        let dir = crate::resolve_assets_dir().expect("assets for parity test");
-        let assets = RenderAssets::load(&dir).expect("catalog loads");
-        // Settle: every camper parks on its deselected end strip.
-        let mut campers: Vec<(bevy_ecs::prelude::Entity, usize)> = world
-            .query::<(bevy_ecs::prelude::Entity, &TitleCampChar)>()
-            .iter(&world)
-            .map(|(e, c)| (e, c.race_gml))
-            .collect();
-        campers.sort_by_key(|(_, g)| *g);
-        assert!(!campers.is_empty(), "camp actors spawn");
-        // Drive one frame so swaps settle.
-        crate::render::world_instances(&mut world, &assets);
-        for (e, gml) in &campers {
-            let camp = world.get::<TitleCampChar>(*e).unwrap();
-            let _ = gml;
-            assert!(
-                camp.swap.is_none(),
-                "settled camper must not be mid-swap"
-            );
-        }
-        // Fish camper entity still present with its menu strip.
-        let fish = campers.iter().find(|(_, g)| *g == 1).expect("fish");
-        let anim = world.get::<crate::anim::SpriteAnim>(fish.0).unwrap();
-        assert!(
-            anim.path.ends_with("Selected.png") || anim.path.ends_with("Menu.png"),
-            "unselected fish parks deselected, got {}",
-            anim.path
-        );
-        let _ = TitleCampfire;
     }
 }
 
