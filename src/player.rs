@@ -128,12 +128,99 @@ pub fn player_move(
 /// `AimDir` at the cursor without knowing about pointers. With no
 /// deflection the last aim is kept (bevy only overwrote aim when a
 /// cursor ray hit). `Sprite` flips skipped.
-pub fn player_aim(input: Res<NtInput>, mut player_q: Query<&mut AimDir, With<Player>>) {
+///
+/// Touch aim assist (GML `Player/Step_0:334` — `KeyCont.aimassist`,
+/// default on for touch): when the touch attack stick deflects and the
+/// held weapon takes assist (non-melee, `!wep_naim`), the heading snaps
+/// toward the nearest visible enemy within 35° inside the forward
+/// 0.67w × 0.5h window — hard snap while firing, eased otherwise
+/// (`angle_lerp(gunangle, dir, 1 - diff/35)`). Props count at 4x
+/// distance + 64 (`instance_is(self, prop)` penalty); walls block.
+pub fn player_aim(
+    input: Res<NtInput>,
+    save: Res<crate::savedata_part::SaveData>,
+    mut player_q: Query<&mut AimDir, With<Player>>,
+    inv_q: Query<&Inventory, With<Player>>,
+    enemies: Query<(&Pos, &crate::comps_a::Hitbox), (With<Enemy>, Without<Player>)>,
+    walls: Query<&Pos, With<crate::comps_a::WallTile>>,
+    player_pos: Query<&Pos, With<Player>>,
+) {
     let Ok(mut aim) = player_q.single_mut() else {
         return;
     };
     if input.aim_axis != Vec2::ZERO {
         aim.0 = input.aim_axis.normalize_or_zero();
+    }
+    if !save.settings.aim_assist || input.touch_dis <= 0.0 {
+        return;
+    }
+    let Ok(inv) = inv_q.single() else {
+        return;
+    };
+    let def = crate::weapon_runtime::weapon_runtime_def(inv.weapons[inv.current]);
+    if def.melee.is_some() {
+        return;
+    }
+    let wid = inv.weapons[inv.current];
+    if crate::weapons_data::WEAPONS
+        .iter()
+        .find(|w| crate::data::WeaponId(w.id) == wid)
+        .is_some_and(|w| w.wep_naim)
+    {
+        return;
+    }
+    let Ok(ppos) = player_pos.single() else {
+        return;
+    };
+    let firing = input.fire_held;
+    let mut best: Option<(f32, glam::Vec2)> = None;
+    for (epos, hit) in &enemies {
+        let d = epos.0 - ppos.0;
+        let dist = d.length().max(1.0);
+        if dist > 426.0 {
+            continue;
+        }
+        let mut blocked = false;
+        for wpos in &walls {
+            let w = wpos.0 - ppos.0;
+            let t = (w.dot(d) / d.length_squared()).clamp(0.0, 1.0);
+            if (w - d * t).length() < 8.0 + hit.radius {
+                blocked = true;
+                break;
+            }
+        }
+        if blocked {
+            continue;
+        }
+        let mut score = dist;
+        if hit.radius < 6.0 {
+            score = 64.0 + dist * 4.0;
+        }
+        if best.is_none_or(|(bd, _)| score < bd) {
+            best = Some((score, d / dist));
+        }
+    }
+    let Some((_, dir)) = best else {
+        return;
+    };
+    let cur = aim.0.y.atan2(aim.0.x).to_degrees();
+    let want = dir.y.atan2(dir.x).to_degrees();
+    let mut diff = (want - cur) % 360.0;
+    if diff > 180.0 {
+        diff -= 360.0;
+    }
+    if diff < -180.0 {
+        diff += 360.0;
+    }
+    if diff.abs() > 35.0 {
+        return;
+    }
+    if firing {
+        aim.0 = dir;
+    } else {
+        let t = 1.0 - diff.abs() / 35.0;
+        let a = (cur + diff * t).to_radians();
+        aim.0 = glam::Vec2::new(a.cos(), a.sin());
     }
 }
 

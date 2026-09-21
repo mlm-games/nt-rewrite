@@ -1846,13 +1846,10 @@ pub fn setup_title_campfire(world: &mut World) {
     }
     // `MenuGen/Create_0:38-40` FloorMakers verbatim: 4 makers at
     // `choose(0,32,64,96,128)` px each axis, `goal = 50` under MenuGen.
-    // In GML the makers keep walking until Floor > goal, so the camp
-    // ends up far larger than the 12 patches + fill (~50+ floors in a
-    // random walk around the origin). The port pre-seeds the same
-    // coverage directly: random-walk from the patch area until 55+
-    // cells so campers scattered up to ~200px from the fire still
-    // stand on floor (GML `move_contact_solid` would slide them onto
-    // it; the port clamps to the nearest cell instead).
+    // The 12 patches + fill already exceed 50 floors, so every maker
+    // lays exactly its spawn cell on the first step (`Floor > goal`
+    // arm) — up to 4 satellite cells, duplicates popping themselves
+    // (`Floor/Create_0` overlap arm, matched by `seen` here).
     for _ in 0..4 {
         let c = (
             rng.random_range(0..=4),
@@ -1860,19 +1857,6 @@ pub fn setup_title_campfire(world: &mut World) {
         );
         if seen.insert(c) {
             floors.push(c);
-        }
-    }
-    while floors.len() < 55 {
-        let idx = rng.random_range(0..floors.len());
-        let (cx, cy) = floors[idx];
-        let (nx, ny) = match rng.random_range(0..4) {
-            0 => (cx + 1, cy),
-            1 => (cx - 1, cy),
-            2 => (cx, cy + 1),
-            _ => (cx, cy - 1),
-        };
-        if seen.insert((nx, ny)) {
-            floors.push((nx, ny));
         }
     }
 

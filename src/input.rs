@@ -16,6 +16,16 @@ pub struct NtInput {
     pub move_axis: Vec2,
     pub aim_axis: Vec2,
     pub fire_held: bool,
+    /// GML `JoystickAttack.dis` (px deflection, `min(rad, mdis) * 2`):
+    /// trigger distance for the touch attack stick. Mouse/keyboard
+    /// leave 0; touch aims read it for spread/crosshair distance.
+    pub touch_dis: f32,
+    /// GML `JoystickMove` stick anchor (GUI px). `None` until the first
+    /// touch claims the move stick; persists while claimed.
+    pub move_stick: Option<TouchStick>,
+    /// GML `JoystickAttack` stick anchor (GUI px). Lerps toward the
+    /// claiming touch at 0.8 (`scrStickRegions`).
+    pub attack_stick: Option<TouchStick>,
 
     fire_pressed: bool,
     ability_pressed: bool,
@@ -32,7 +42,30 @@ pub struct NtInput {
     /// `cycle_weapon`; consumed by `tick_menus`.
     menu_nav_v: i8,
     menu_nav_h: i8,
+    touch_released_swap: bool,
+    touch_released_fire: bool,
 }
+
+/// GML `MobileUI` stick claim verbatim: GUI-px anchor, claimed touch
+/// id (`index`, -1 = free), deflection (`dis`, px from anchor), heading
+/// (`dir`, degrees), and the move-stick direction-hold ramp
+/// (`current_move_direction_time`: +1/tick within 10° of the held
+/// heading, −3/tick otherwise).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TouchStick {
+    pub anchor: Vec2,
+    pub touch: i32,
+    pub dis: f32,
+    pub dir: f32,
+    pub hold_time: f32,
+}
+
+/// GML `JoystickAttack/Create_0` verbatim.
+pub const ATTACK_BUTTON_DEADZONE: f32 = 0.4125;
+/// GML stick radius (`JoystickMove/Create_0`, `JoystickAttack/Create_0`).
+pub const TOUCH_STICK_RADIUS: f32 = 32.0;
+/// GML `ButtonAct`/`ButtonSwap` radius (`rad = 25`).
+pub const TOUCH_BUTTON_RADIUS: f32 = 25.0;
 
 impl Default for NtInput {
     fn default() -> Self {
@@ -40,6 +73,9 @@ impl Default for NtInput {
             move_axis: Vec2::ZERO,
             aim_axis: Vec2::ZERO,
             fire_held: false,
+            touch_dis: 0.0,
+            move_stick: None,
+            attack_stick: None,
             fire_pressed: false,
             ability_pressed: false,
             interact_pressed: false,
@@ -49,6 +85,8 @@ impl Default for NtInput {
             cycle_weapon: 0,
             menu_nav_v: 0,
             menu_nav_h: 0,
+            touch_released_swap: false,
+            touch_released_fire: false,
         }
     }
 }
@@ -131,6 +169,7 @@ impl NtInput {
         self.aim_axis = Vec2::ZERO;
         self.fire_held = false;
         self.fire_pressed = false;
+        self.touch_dis = 0.0;
         self.ability_pressed = false;
         self.interact_pressed = false;
         self.spec_pressed = false;
@@ -139,6 +178,18 @@ impl NtInput {
         self.cycle_weapon = 0;
         self.menu_nav_v = 0;
         self.menu_nav_h = 0;
+        self.touch_released_swap = false;
+        self.touch_released_fire = false;
+    }
+
+    /// Shell `TouchUp` latch: GML reads press/release edges off the
+    /// live touch index, but the shell drops contacts on lift — so the
+    /// release edge is staged here and consumed next `sample_touch`.
+    /// `swap` = weapon-swap stick/button finger lifted, `fire` = attack
+    /// stick/button finger lifted.
+    pub fn note_touch_released(&mut self, swap: bool, fire: bool) {
+        self.touch_released_swap |= swap;
+        self.touch_released_fire |= fire;
     }
 }
 
@@ -792,51 +843,286 @@ fn pad_pressed(entry: &repame_input::KeymapEntry, pad: &GamepadState) -> bool {
 }
 
 /// Backend-neutral port of bevy `sample_input`'s touch zones.
-/// `window_width` is the viewport width in screen px. Top-right
-/// 96px corners are the ability button (outer) and weapon-cycle
-/// button (inner); other fresh touches on the right half fire;
-/// held contacts become virtual sticks (`(pos - start)` unflipped —
-/// screen y-down IS world y-down here, so drag-up (−y) steers north,
-/// /56px, clamped, dead-zoned): left half steers move, right half
-/// holds fire and steers aim. Contacts starting in the top button
-/// strip never become sticks.
-pub fn sample_touch(contacts: &[TouchContact], window_width: f32, output: &mut NtInput) {
+///
+/// GML law sources (`JoystickMove/Other_10`, `JoystickAttack/Other_10`,
+/// `ButtonAct/Swap/Active/Attack/Other_10`, `get_nearest_touch`):
+/// - Sticks capture within `rad * 1.75 * (controls_scale + 0.5)`
+///   (`rad` 32); touches nearer another claimed stick lose.
+/// - Move stick snaps to the touch point; attack stick lerps toward it
+///   at 0.8 (`scrStickRegions`).
+/// - Move: `moving = min(1, hold_ramp + dis/rad)`, direction hold ramp
+///   `current_move_direction_time` (+1/tick within 10° of the held
+///   direction, −3/tick otherwise, normalized `(t−10)/20`).
+/// - Attack deflects `dis = min(rad, mdis) * 2` (Crystal TB: half view
+///   range scaled); fires only past `ATTACK_BUTTON_DEADZONE` 0.4125.
+///   Press/release edges are swapped by design (press on release).
+/// - Right-half touches outside any stick/button are plain fire taps.
+/// - Top-right 96px corners are the ability button (outer) and
+///   weapon-cycle button (inner); contacts starting in the top button
+///   strip never become sticks.
+///
+/// Port adaptations: `TouchContact` carries no release edge (the shell
+/// drops the contact on lift), so press/release edges derive from
+/// `just_pressed` + a one-tick released latch kept in `NtInput`
+/// (`note_touch_released`, fed by the shell on `TouchUp`); held
+/// channels read live contacts. Stick anchors + claim ids persist in
+/// `NtInput` across ticks (GML `x/y` + `index` on the stick objects).
+pub fn sample_touch(
+    contacts: &[TouchContact],
+    window_width: f32,
+    scale: f32,
+    split_fire: bool,
+    output: &mut NtInput,
+) {
     let width = window_width;
+    let capture = TOUCH_STICK_RADIUS * 1.75 * (scale + 0.5);
+    let btn_capture = TOUCH_BUTTON_RADIUS * (scale + 0.5);
 
-    for touch in contacts.iter().filter(|t| t.just_pressed) {
-        let start = touch.start;
+    // Default stick anchors from the GUI size (`JoystickMove/Create_0`,
+    // `JoystickAttack/Create_0`: move `(view-max)/2 + 64, h - 64`,
+    // attack `w + (max-w)/2 - 64, h - 64`). The view here is the GUI
+    // width; `global.view_width_max` is the widened cap — the port
+    // centers on `width` directly (no widen split).
+    let gui_h = 240.0;
+    let move_home = Vec2::new(64.0, gui_h - 64.0);
+    let attack_home = Vec2::new(width - 64.0, gui_h - 64.0);
+    // `ButtonAct` (w/2, 48), `ButtonSwap` ((w-max)/2+64, h/2-48),
+    // `ButtonActive` (w+(max-w)/2-64, h/2-48), `ButtonAttack`
+    // (w+(max-w)/2-48, h/2) — same centering simplification.
+    let act_home = Vec2::new(width * 0.5, 48.0);
+    let swap_home = Vec2::new(64.0, gui_h * 0.5 - 48.0);
+    let active_home = Vec2::new(width - 64.0, gui_h * 0.5 - 48.0);
+    let attack_btn_home = Vec2::new(width - 48.0, gui_h * 0.5);
 
-        if start.y < 96.0 && start.x >= width - 96.0 {
-            output.ability_pressed |= true;
-        } else if start.y < 96.0 && start.x >= width - 192.0 {
+    // Claim ids: index into `contacts`, -1 = free (GML `index`).
+    // Contacts are anonymous here (no per-finger id in `TouchContact`),
+    // so claims key on the contact's start point.
+    let mut move_stick = output.move_stick.unwrap_or(TouchStick {
+        anchor: move_home,
+        touch: -1,
+        ..Default::default()
+    });
+    move_stick.anchor = if move_stick.touch < 0 {
+        move_home
+    } else {
+        move_stick.anchor
+    };
+    let mut attack_stick = output.attack_stick.unwrap_or(TouchStick {
+        anchor: attack_home,
+        touch: -1,
+        ..Default::default()
+    });
+
+    let claimed = |idx: i32| -> Option<&TouchContact> {
+        if idx < 0 {
+            return None;
+        }
+        contacts.get(idx as usize)
+    };
+    // Nearest free contact within `rad` of `at`, preferring one no
+    // other claimant holds (`get_nearest_touch` + MobileUI exclusion).
+    let nearest_free = |at: Vec2, rad: f32, held: &[i32]| -> Option<usize> {
+        let mut best: Option<(usize, f32)> = None;
+        for (i, c) in contacts.iter().enumerate() {
+            if held.contains(&(i as i32)) {
+                continue;
+            }
+            let d = c.pos.distance(at);
+            if d <= rad && best.is_none_or(|(_, bd)| d < bd) {
+                best = Some((i, d));
+            }
+        }
+        best.map(|(i, _)| i)
+    };
+
+    // Fixed buttons first (they steal touches from sticks):
+    // ability outer corner, cycle inner corner, act, swap, active,
+    // attack button in splitfire.
+    for (i, c) in contacts.iter().enumerate() {
+        let _ = (i, c);
+    }
+    let mut held: Vec<i32> = Vec::new();
+    if move_stick.touch >= 0 {
+        held.push(move_stick.touch);
+    }
+    if attack_stick.touch >= 0 {
+        held.push(attack_stick.touch);
+    }
+
+    // Ability corner (outer top-right): press edge only.
+    if contacts.iter().any(|c| {
+        c.just_pressed && c.start.y < 96.0 && c.start.x >= width - 96.0
+    }) {
+        output.ability_pressed = true;
+    }
+    // Cycle corner (inner top-right) folds into the swap-button
+    // claim below (same GML gesture).
+    // Act button (`ButtonAct/Other_10`): press_pick on press edge.
+    let act_idx = nearest_free(act_home, btn_capture, &held);
+    if let Some(i) = act_idx {
+        held.push(i as i32);
+        if contacts[i].just_pressed {
+            output.press_interact();
+        }
+    }
+    // Swap button (`ButtonSwap/Other_10`): hold/press/release edges.
+    // The top-right cycle corner counts as a swap-button tap (same
+    // `get_nearest_touch(rad)` claim in GML — the corner tap below and
+    // the button claim are one gesture).
+    let swap_idx = nearest_free(swap_home, btn_capture, &held).or_else(|| {
+        contacts.iter().position(|c| {
+            c.just_pressed && c.start.y < 96.0 && c.start.x >= width - 192.0
+        })
+    });
+    if let Some(i) = swap_idx {
+        held.push(i as i32);
+        if contacts[i].just_pressed {
             output.cycle_weapon = output.cycle_weapon.saturating_add(1);
-        } else if start.x >= width * 0.5 {
-            output.fire_pressed |= true;
+        }
+    } else if output.touch_released_swap {
+        output.cycle_weapon = output.cycle_weapon.saturating_add(1);
+    }
+    // Active button (`ButtonActive/Other_10`): spec edges.
+    let active_idx = nearest_free(active_home, btn_capture, &held);
+    if let Some(i) = active_idx {
+        held.push(i as i32);
+        if contacts[i].just_pressed {
+            output.spec_held = true;
+        }
+    }
+    // Splitfire attack button (`ButtonAttack/Other_10`): raw fire edges.
+    if split_fire {
+        let btn_idx = nearest_free(attack_btn_home, TOUCH_STICK_RADIUS * (scale + 0.5), &held);
+        if let Some(i) = btn_idx {
+            held.push(i as i32);
+            output.fire_held = true;
+            if contacts[i].just_pressed {
+                output.press_fire();
+            }
+        }
+        if output.touch_released_fire {
+            output.fire_held = false;
         }
     }
 
-    for touch in contacts {
-        let start = touch.start;
-
-        if start.y < 96.0 && start.x >= width - 192.0 {
-            continue;
+    // Move stick (`JoystickMove/Other_10`): snap anchor to the touch
+    // (`scrStickRegions` move arm: `x = mx, y = my`), `dis/rad`
+    // magnitude + direction-hold ramp into `moving`.
+    if move_stick.touch < 0 {
+        if let Some(i) = nearest_free(move_home, capture, &held) {
+            let c = &contacts[i];
+            if c.start.x < width * 0.5 {
+                move_stick.touch = i as i32;
+                move_stick.anchor = c.start;
+                move_stick.dis = 0.0;
+                move_stick.dir = 0.0;
+                held.push(i as i32);
+            }
         }
+    }
+    output.move_axis = Vec2::ZERO;
+    if let Some(c) = claimed(move_stick.touch) {
+        let d = c.pos - move_stick.anchor;
+        let dis = d.length();
+        if dis > 0.0 {
+            let dir_deg = d.y.atan2(d.x).to_degrees();
+            let prev = move_stick.dir;
+            let mut diff = (dir_deg - prev) % 360.0;
+            if diff > 180.0 {
+                diff -= 360.0;
+            }
+            if diff < -180.0 {
+                diff += 360.0;
+            }
+            if diff.abs() < 10.0 {
+                if move_stick.hold_time < 30.0 {
+                    move_stick.hold_time += 1.0;
+                }
+            } else if move_stick.hold_time > 0.0 {
+                move_stick.hold_time = (move_stick.hold_time - 3.0).max(0.0);
+            }
+            move_stick.dir = dir_deg;
+            let same = (move_stick.hold_time - 10.0).max(0.0) / 20.0;
+            let moving = (same + dis / TOUCH_STICK_RADIUS).min(1.0);
+            if moving > 0.0 {
+                output.move_axis = d.normalize_or_zero() * moving;
+            }
+            move_stick.dis = dis;
+        } else {
+            move_stick.dis = 0.0;
+        }
+    } else {
+        if move_stick.touch >= 0 {
+            move_stick.touch = -1;
+            move_stick.anchor = move_home;
+        }
+        if move_stick.hold_time > 0.0 {
+            move_stick.hold_time = (move_stick.hold_time - 3.0).max(0.0);
+        }
+    }
+    output.move_stick = Some(move_stick);
 
-        let screen_delta = touch.pos - start;
-        let stick = screen_delta / 56.0;
-        let stick = dead_zone(stick.clamp_length_max(1.0));
-
-        if start.x < width * 0.5 {
-            if stick != Vec2::ZERO {
-                output.move_axis = stick;
+    // Attack stick (`JoystickAttack/Other_10`): anchor lerps toward the
+    // touch at 0.8, `dis = min(rad, mdis) * 2`, fires past the 0.4125
+    // deadzone with swapped press/release edges. Aim follows the stick
+    // heading; `touch_dis` carries the deflection for spread. The claim
+    // measures from the touch *start* (`scrStickRegions` runs on press,
+    // before any drag): a finger that starts 6px off-home must not
+    // claim through the lerp gap.
+    if attack_stick.touch < 0 && !split_fire {
+        if let Some(i) = nearest_free(attack_stick.anchor, capture, &held) {
+            let c = &contacts[i];
+            if c.start.x >= width * 0.5
+                && c.start.y >= 96.0
+                && c.start.distance(attack_stick.anchor) <= TOUCH_STICK_RADIUS
+            {
+                attack_stick.touch = i as i32;
+            }
+        }
+    }
+    output.touch_dis = 0.0;
+    if !split_fire {
+        if let Some(c) = claimed(attack_stick.touch) {
+            // `scrStickRegions` attack arm: the anchor chases the
+            // touch (`x = lerp(x, mx, 0.8)`), so the deflection is
+            // measured from the *pre-lerp* anchor — the stick trails
+            // the finger and `dis` reads the chase gap.
+            let mdis = attack_stick.anchor.distance(c.pos).min(TOUCH_STICK_RADIUS);
+            let d = c.pos - attack_stick.anchor;
+            attack_stick.anchor += d * 0.8;
+            if d.length_squared() > 0.0 {
+                let dir_deg = d.y.atan2(d.x).to_degrees();
+                attack_stick.dir = dir_deg;
+                output.aim_axis = d.normalize_or_zero();
+            }
+            let dis = mdis * 2.0;
+            attack_stick.dis = dis;
+            output.touch_dis = dis;
+            if dis / TOUCH_STICK_RADIUS > ATTACK_BUTTON_DEADZONE {
+                output.fire_held = true;
+                if c.just_pressed {
+                    output.press_fire();
+                }
+            }
+            if output.touch_released_fire {
+                output.fire_held = false;
             }
         } else {
-            output.fire_held = true;
-            if stick != Vec2::ZERO {
-                output.aim_axis = stick;
+            if attack_stick.touch >= 0 {
+                attack_stick.touch = -1;
+            }
+            attack_stick.dis = 0.0;
+            if output.touch_released_fire {
+                output.fire_held = false;
             }
         }
+    } else {
+        attack_stick.touch = -1;
+        attack_stick.dis = 0.0;
     }
+    output.attack_stick = Some(attack_stick);
+    output.touch_released_swap = false;
+    output.touch_released_fire = false;
 
     output.move_axis = output.move_axis.clamp_length_max(1.0);
     output.aim_axis = output.aim_axis.clamp_length_max(1.0);
@@ -868,6 +1154,96 @@ mod keymap_tests {
     use repame_input::{KeymapDevice, KeymapEntry};
     use repose_core::input::{Key, Modifiers, PointerButton};
     use repose_core::shortcuts::KeyChord;
+
+    fn contact(start: [f32; 2], pos: [f32; 2], just_pressed: bool) -> TouchContact {
+        TouchContact {
+            start: Vec2::from(start),
+            pos: Vec2::from(pos),
+            just_pressed,
+        }
+    }
+
+    #[test]
+    fn move_stick_magnitude_ramps_with_deflection() {
+        let mut out = NtInput::default();
+        sample_touch(
+            &[contact([40.0, 200.0], [40.0, 200.0], true)],
+            320.0,
+            0.5,
+            false,
+            &mut out,
+        );
+        sample_touch(
+            &[contact([40.0, 200.0], [40.0, 168.0], false)],
+            320.0,
+            0.5,
+            false,
+            &mut out,
+        );
+        assert!(out.move_axis.length() > 0.9, "got {:?}", out.move_axis);
+        assert!(out.move_axis.y < 0.0);
+        assert!(!out.fire_held);
+    }
+
+    #[test]
+    fn attack_stick_deadzone_gates_fire() {
+        let mut out = NtInput::default();
+        // Touch starts on the stick home and drags 6px: aims without
+        // firing (0.4125 deadzone on dis/rad).
+        sample_touch(
+            &[contact([256.0, 176.0], [256.0, 176.0], true)],
+            320.0,
+            0.5,
+            false,
+            &mut out,
+        );
+        sample_touch(
+            &[contact([256.0, 176.0], [262.0, 176.0], false)],
+            320.0,
+            0.5,
+            false,
+            &mut out,
+        );
+        assert!(!out.fire_held, "grazing the stick must not fire");
+        assert!(out.aim_axis.x > 0.0);
+        // Full 32px drag saturates dis and fires.
+        sample_touch(
+            &[contact([256.0, 176.0], [288.0, 176.0], false)],
+            320.0,
+            0.5,
+            false,
+            &mut out,
+        );
+        assert!(out.fire_held);
+        assert!(out.touch_dis > 0.0);
+    }
+
+    #[test]
+    fn split_fire_button_fires_without_stick() {
+        let mut out = NtInput::default();
+        sample_touch(
+            &[contact([280.0, 120.0], [280.0, 120.0], true)],
+            320.0,
+            0.5,
+            true,
+            &mut out,
+        );
+        assert!(out.fire_held);
+        assert_eq!(out.touch_dis, 0.0);
+    }
+
+    #[test]
+    fn act_button_pulses_interact() {
+        let mut out = NtInput::default();
+        sample_touch(
+            &[contact([160.0, 48.0], [160.0, 48.0], true)],
+            320.0,
+            0.5,
+            false,
+            &mut out,
+        );
+        assert!(out.take_interact_pressed());
+    }
 
     fn chord(c: char) -> KeymapEntry {
         KeymapEntry::Key(KeyChord::new(Key::Character(c), Modifiers::default()))

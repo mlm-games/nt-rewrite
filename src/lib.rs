@@ -1654,6 +1654,12 @@ impl App {
         {
             self.sim.world.init_resource::<InputMapState>();
             let keymap = self.sim.world.resource::<InputMapState>().clone();
+            let (touch_scale, touch_split_fire) = self
+                .sim
+                .world
+                .get_resource::<crate::savedata_part::SaveData>()
+                .map(|s| (s.settings.controls_scale, s.settings.split_fire))
+                .unwrap_or((0.5, false));
             let mut input = self.sim.world.resource_mut::<NtInput>();
             // Menu screens own Space/arrows: strip their edges before the
             // gameplay sampler so one press can't both confirm a menu
@@ -1678,7 +1684,13 @@ impl App {
                 let d = repose_core::locals::effective_density_scale().max(1e-6);
                 let contacts = self.staging.borrow_mut().touch_contacts(d);
                 if !contacts.is_empty() {
-                    sample_touch(&contacts, self.view_width / d, &mut input);
+                    sample_touch(
+                        &contacts,
+                        self.view_width / d,
+                        touch_scale,
+                        touch_split_fire,
+                        &mut input,
+                    );
                 }
             }
         }
