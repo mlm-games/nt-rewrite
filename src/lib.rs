@@ -2312,7 +2312,13 @@ impl App {
             // center), not the world camera — GML draws figures at
             // `view + cont.x/y` (view-local coords), independent of
             // the room camera.
-            let vortex_mounted_later = self.assets.is_some()
+            // Temporary Android kill-switch: the fullscreen vortex pass
+            // is implicated in the mode-4 Adreno KGSL kill, so while
+            // that is investigated the spiral figures stay off too —
+            // flat room colour everywhere, desktop keeps GML parity.
+            let vortex_off = cfg!(target_os = "android");
+            let vortex_mounted_later = !vortex_off
+                && self.assets.is_some()
                 && !self.vortex_tex.is_empty()
                 && !matches!(
                     menu_kind,
@@ -2568,8 +2574,13 @@ impl App {
         // mounts. Correlated on-device: gating Splash stopped the mode-4
         // errno-35 + LMK signal-9 kill, and MainMenu mounts the same
         // pass successfully — cold-mount-equals-death is unproven.
+        // Temporary Android kill-switch while the KGSL kill is
+        // investigated: no fullscreen pass at all (flat room colour
+        // stands in via `background` below); desktop keeps GML parity.
         let splash = menu_kind == Some(MenuOverlay::Splash);
-        let mut vortex_layer = if self.assets.is_some()
+        let vortex_off = cfg!(target_os = "android");
+        let mut vortex_layer = if !vortex_off
+            && self.assets.is_some()
             && !self.vortex_tex.is_empty()
             && !splash
             && (self.spiral.alive || !self.spiral.is_done())
