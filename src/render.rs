@@ -80,6 +80,7 @@ pub const MAX_LOOK: f32 = 48.0;
 pub struct RenderAssets {
     catalog: AnimCatalog,
     uploads: Vec<AtlasUpload>,
+    uploads_gen: u64,
     atlas_size: u32,
     layers: u32,
 }
@@ -134,9 +135,12 @@ impl RenderAssets {
             uploads.push(AtlasUpload::from_write(&write, rgba));
         }
         let layers = catalog.atlas().page_count().max(1);
+        static UPLOADS_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let generation = UPLOADS_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(Self {
             catalog,
             uploads,
+            uploads_gen: generation,
             atlas_size: desc.size,
             layers,
         })
@@ -145,7 +149,7 @@ impl RenderAssets {
     /// Full production load: `assets_dir` holds `images/anims.json` +
     /// the strip PNGs (e.g. `../nt-recreated-bevy/assets`).
     pub fn load(assets_dir: &Path) -> anyhow::Result<Self> {
-        let json = std::fs::read_to_string(assets_dir.join("images").join("anims.json"))?;
+        let json = crate::render::read_asset_json(&assets_dir.join("images").join("anims.json"))?;
         Self::build(
             &json,
             assets_dir,
@@ -171,7 +175,7 @@ impl RenderAssets {
         size: u32,
         max_pages: u32,
     ) -> anyhow::Result<Self> {
-        let json = std::fs::read_to_string(assets_dir.join("images").join("anims.json"))?;
+        let json = crate::render::read_asset_json(&assets_dir.join("images").join("anims.json"))?;
         let raw: HashMap<String, serde_json::Value> = serde_json::from_str(&json)?;
         let want: std::collections::HashSet<String> = names
             .iter()
@@ -207,13 +211,21 @@ impl RenderAssets {
         BatchDesc {
             layer_size: self.atlas_size,
             layers: self.layers,
+            uploads_gen: self.uploads_gen,
             ..Default::default()
         }
     }
 
-    /// One-shot GPU uploads (atlas blits). Empties the queue.
+    /// Retained atlas blits, replayed every frame. The GPU viewport is
+    /// rebuilt per frame, and early Android frames die in surface
+    /// negotiation before any `prepare` runs — a fire-once drain loses
+    /// the atlas forever while canvas text (upload-free) keeps
+    /// rendering. The sprite batch skips `write_texture` for the
+    /// resident generation (see `BatchDesc::uploads_gen`), but the
+    /// replay still clones the blit `Vec` every frame — the CPU clone
+    /// cost remains, only the GPU bandwidth is saved.
     pub fn take_uploads(&mut self) -> Vec<AtlasUpload> {
-        std::mem::take(&mut self.uploads)
+        self.uploads.iter().cloned().collect()
     }
 
     pub(crate) fn sprite_for(
@@ -341,10 +353,101 @@ impl RenderAssets {
 }
 
 pub(crate) fn decode_png(path: &Path) -> anyhow::Result<(u32, u32, Vec<u8>)> {
-    let img = image::ImageReader::open(path)?.decode()?;
+    let bytes = read_asset_bytes(path)?;
+    let img = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()?
+        .decode()?;
     let rgba = img.to_rgba8();
     let (w, h) = (rgba.width(), rgba.height());
     Ok((w, h, rgba.into_raw()))
+}
+
+/// JSON asset text, same portable lookup as [`read_asset_bytes`].
+pub(crate) fn read_asset_json(path: &Path) -> anyhow::Result<String> {
+    Ok(String::from_utf8(read_asset_bytes(path)?)?)
+}
+
+/// Asset bytes, portable across desktop (plain files) and Android
+/// (APK `assets/`, read through the NDK `AAssetManager` — plain
+/// `std::fs` paths never resolve inside the APK). Paths are matched by
+/// their `images/…` / `fonts/…` tail so both the dev checkout layout
+/// (`<dir>/images/anims.json`) and the APK layout (`assets/…`)
+/// resolve to the same entry.
+#[cfg(target_os = "android")]
+struct SendPtr(*mut std::ffi::c_void);
+#[cfg(target_os = "android")]
+unsafe impl Send for SendPtr {}
+#[cfg(target_os = "android")]
+unsafe impl Sync for SendPtr {}
+
+#[cfg(target_os = "android")]
+static APK_ASSET_MGR: std::sync::OnceLock<SendPtr> = std::sync::OnceLock::new();
+
+/// Cache the APK `AAssetManager` pointer for [`read_asset_bytes`].
+/// Call once from `android_main` with
+/// `android_app.asset_manager().ptr()`. `init` is idempotent across
+/// Activity recreations (first pointer wins; the manager is `'static`
+/// per android-activity, so any generation's pointer stays valid).
+/// Replaces the old `ndk_context::android_context` lookup, which
+/// asserts single-init and panics on recreation.
+#[cfg(target_os = "android")]
+pub fn init_apk_assets(mgr: ndk::asset::AssetManager) {
+    let _ = APK_ASSET_MGR.set(SendPtr(mgr.ptr().as_ptr().cast()));
+}
+
+#[cfg(target_os = "android")]
+fn read_asset_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
+    use std::ffi::CString;
+    if let Some(holder) = APK_ASSET_MGR.get() {
+        let mgr_ptr = holder.0;
+        if !mgr_ptr.is_null() {
+            let tail = asset_tail(path);
+            let mgr = unsafe {
+                ndk::asset::AssetManager::from_ptr(
+                    std::ptr::NonNull::new(mgr_ptr.cast())
+                        .ok_or_else(|| anyhow::anyhow!("null AssetManager"))?,
+                )
+            };
+            let name = CString::new(tail.clone())?;
+            // Streaming opens mmap the entry; `buffer()` returns None on
+            // compressed entries, so fall back to a full read.
+            if let Some(mut asset) = mgr.open(&name) {
+                match asset.buffer() {
+                    Ok(buf) => return Ok(buf.to_vec()),
+                    Err(_) => {
+                        use std::io::Read as _;
+                        let mut out = Vec::with_capacity(asset.length());
+                        asset.read_to_end(&mut out)?;
+                        return Ok(out);
+                    }
+                }
+            }
+            return Err(anyhow::anyhow!("apk asset missing: {tail}"));
+        }
+    }
+    Ok(std::fs::read(path)?)
+}
+
+/// Fs read on desktop; on Android falls back to fs too (covers
+/// `NT_ASSETS`-style absolute overrides when present).
+#[cfg(not(target_os = "android"))]
+fn read_asset_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
+    Ok(std::fs::read(path)?)
+}
+
+/// Tail of an asset path from the first `images`/`fonts` segment, so
+/// `…/assets/images/anims.json` and `images/anims.json` both address
+/// the APK's `assets/images/anims.json` entry.
+fn asset_tail(path: &Path) -> String {
+    let parts: Vec<String> = path
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    let start = parts
+        .iter()
+        .position(|p| p == "images" || p == "fonts")
+        .unwrap_or(0);
+    parts[start..].join("/")
 }
 
 /// Crop one horizontal-strip cell `[x, y, w, h]` out of a full strip.

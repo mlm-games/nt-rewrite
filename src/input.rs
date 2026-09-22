@@ -1250,12 +1250,30 @@ pub fn sample_touch_full(
 
     output.move_axis = output.move_axis.clamp_length_max(1.0);
     output.aim_axis = output.aim_axis.clamp_length_max(1.0);
+    // A bare tap (no stick/button claim — menus, splash advance) is a
+    // fire edge: GML `Vlambeer/Draw_0` advances on any press
+    // (`mouse_ui_clicked`, `keyboard_anykey`, gamepad anykey) with no
+    // touch object involved. The stick/button claims above only fire
+    // for claimed fingers, so an unclaimed tap would otherwise vanish.
+    if !output.fire_pressed
+        && !output.fire_released
+        && !output.touch_released_fire
+        && contacts.iter().any(|c| c.just_pressed)
+    {
+        output.fire_released = true;
+    }
 }
 
 /// Drop everything when the sim isn't live (paused, overlay open, or out
 /// of game — bevy `clear_input_when_inactive` parity plus the overlay
 /// conjunct: an overlay opened without the `Paused` flag must still
 /// swallow gameplay pulses like ability/spec).
+///
+/// Menu states (Splash/Loading/MainMenu/Title) deliberately keep their
+/// advance edges: `feed_input` stages the tap into
+/// fire/interact/spec/ability pulses, the sim tick runs, then
+/// `tick_menus` consumes them. Clearing here would eat the tap before
+/// the menu tick ever sees it (the stuck-splash-4 bug).
 pub fn clear_input_when_inactive(
     paused: Res<crate::state::Paused>,
     state: Res<crate::state::AppState>,
@@ -1265,6 +1283,10 @@ pub fn clear_input_when_inactive(
     use crate::state::AppState;
     let overlay_open = overlay.is_some_and(|o| *o != crate::state::OverlayMenu::None);
     if paused.0 || overlay_open || *state != AppState::InGame {
+        if matches!(*state, AppState::Splash | AppState::Loading) {
+            drain_interact_pulse(&state, &mut input);
+            return;
+        }
         input.clear_transient();
     } else {
         drain_interact_pulse(&state, &mut input);

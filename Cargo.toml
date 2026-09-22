@@ -39,6 +39,7 @@ log = "0.4"
 
 [target.'cfg(target_os = "android")'.dependencies]
 winit = "0.30"
+ndk = "0.9"
 
 [patch.crates-io]
 repose-core = { path = "../Repos/repose/crates/repose-core" }
@@ -68,6 +69,7 @@ path = "src/main.rs"
 package = "org.mlm.nt"
 apk_name = "nt"
 build_targets = ["aarch64-linux-android"]
+assets = "packaging/assets"
 resources = "packaging/res"
 
 [package.metadata.android.application]

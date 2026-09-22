@@ -126,7 +126,14 @@ impl VortexPass {
         }
     }
 
-    /// Queue art uploads (load / area-switch frames only).
+    /// Queue art uploads. The pass keeps no history: `FullscreenPass`
+    /// only uploads what each `prepare` hands it, and a fresh pass
+    /// object is built every mounted frame, so every mounted frame
+    /// must carry the textures — not just the first. Unlike the sprite
+    /// batch (which gen-skips resident atlas blits), the fullscreen
+    /// path has no generation check (`fullscreen.rs` only skips texture
+    /// *creation* on same w/h) — the per-frame `rgba.clone()` +
+    /// `write_texture` run while mounted.
     pub fn extend_textures(&mut self, textures: impl IntoIterator<Item = VortexTexture>) {
         self.textures.extend(textures);
     }

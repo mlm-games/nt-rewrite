@@ -379,9 +379,13 @@ impl App {
     }
 
     /// Load the full art catalog from an explicit dir (tests + shells).
+    /// `dir` is a prefix only: on Android every file resolves through
+    /// the APK `assets/` table by its `images/…` tail
+    /// (`read_asset_bytes`), so `<files>/assets` works without copying
+    /// a single PNG to internal storage.
     pub fn load_assets_from(&mut self, dir: &Path) -> anyhow::Result<()> {
         let assets = RenderAssets::load(dir)?;
-        let json = std::fs::read_to_string(dir.join("images").join("anims.json"))?;
+        let json = crate::render::read_asset_json(&dir.join("images").join("anims.json"))?;
         let catalog = AnimCatalog::from_json(
             &json,
             AtlasDesc {
@@ -2130,17 +2134,9 @@ impl App {
             let menu = self.sim.world.resource_mut::<MenuState>();
             menu_overlay_kind(state, overlay, &menu, run_game_over)
         };
-        // GML `Vlambeer/Alarm_0`: the `SpiralCont` exists only once the
-        // reel reaches the `Logo` phase (`mode >= 3` fires the alarm
-        // that creates cont + `Logo` and destroys the `Vlambeer` card;
-        // the port's mode 4 is that logo phase). Modes 0-3 are black +
-        // text with no spiral caller.
-        let logo_live = menu_kind != Some(MenuOverlay::Splash)
-            || self
-                .sim
-                .world
-                .get_resource::<crate::state::SplashState>()
-                .is_some_and(|s| s.mode >= 4);
+        // GML `Vlambeer/Create_0`: the `SpiralCont` exists from room
+        // start — modes 0-3 are black + text with the spiral behind,
+        // not a flat clear (`Alarm_0` only adds the `Logo` sprite).
         let paused = self
             .sim
             .world
@@ -2318,8 +2314,10 @@ impl App {
             // the room camera.
             let vortex_mounted_later = self.assets.is_some()
                 && !self.vortex_tex.is_empty()
-                && !matches!(menu_kind, Some(MenuOverlay::Title))
-                && logo_live
+                && !matches!(
+                    menu_kind,
+                    Some(MenuOverlay::Title) | Some(MenuOverlay::Splash)
+                )
                 && (self.spiral.alive || !self.spiral.is_done());
             if vortex_mounted_later {
                 let gui_view = gml_view_size(viewport_dp);
@@ -2563,16 +2561,17 @@ impl App {
                 self.vortex_tex_area = Some(gml_area);
             }
         }
-        // Logo/Splash mounts only once the `Logo` exists (gated on
-        // `logo_live` above). Title mounts while its entry drain plays
-        // out (GML `Menu/Draw_0` draws the leftover motes transparently
-        // over the camp; once done the flat camp shows). Every other
-        // caller in the list mounts unconditionally (caller list
-        // documented at the figure gate above).
-        let splash_gated = !logo_live;
+        // The vortex layer mounts only where a GML spiral caller
+        // exists. Splash modes 0-4 draw flat black + text/logo with no
+        // `SpiralCont` on screen (`Vlambeer` destroys itself at mode 3,
+        // the `Logo` phase draws `sprLogo` + glow only), so Splash never
+        // mounts. Correlated on-device: gating Splash stopped the mode-4
+        // errno-35 + LMK signal-9 kill, and MainMenu mounts the same
+        // pass successfully — cold-mount-equals-death is unproven.
+        let splash = menu_kind == Some(MenuOverlay::Splash);
         let mut vortex_layer = if self.assets.is_some()
             && !self.vortex_tex.is_empty()
-            && !splash_gated
+            && !splash
             && (self.spiral.alive || !self.spiral.is_done())
         {
             let mut pass = VortexPass::new(snap);
@@ -4164,26 +4163,43 @@ pub extern "C" fn android_main(
     android_app: winit::platform::android::activity::AndroidApp,
 ) {
     repose_core::locals::set_theme_default(repose_core::locals::Theme::default());
+    crate::render::init_apk_assets(android_app.asset_manager());
     let files_dir = android_app.internal_data_path();
     let mut app = App::new();
     if let Some(dir) = files_dir.as_ref() {
-        if app.load_assets_from(&dir.join("assets")).is_ok() {
-            eprintln!("nt: assets loaded from {}", dir.join("assets").display());
-        } else if let Ok(found) = app.load_assets() {
-            eprintln!("nt: assets loaded from {}", found.display());
-        } else {
-            eprintln!("nt: running without assets; placeholder renderer");
+        match app.load_assets_from(&dir.join("assets")) {
+            Ok(()) => {
+                log::info!("nt: assets loaded from {}", dir.join("assets").display());
+            }
+            Err(e) => {
+                log::warn!("nt: files/assets load failed: {e:?}; trying default search");
+                match app.load_assets() {
+                    Ok(found) => {
+                        log::info!("nt: assets loaded from {}", found.display());
+                    }
+                    Err(e2) => {
+                        log::error!("nt: running without assets: {e2:?}; placeholder renderer");
+                    }
+                }
+            }
         }
     } else {
-        eprintln!("nt: no internal data path; trying default asset search");
-        let _ = app.load_assets();
+        log::warn!("nt: no internal data path; trying default asset search");
+        match app.load_assets() {
+            Ok(found) => {
+                log::info!("nt: assets loaded from {}", found.display());
+            }
+            Err(e) => {
+                log::error!("nt: running without assets: {e:?}; placeholder renderer");
+            }
+        }
     }
     let save_path = match files_dir {
         Some(dir) => dir.join(crate::savedata_part::save_file_name()),
         None => crate::savedata_part::save_file_path(),
     };
     let save = app.load_save(&save_path);
-    eprintln!(
+    log::info!(
         "nt: save loaded from {} (version {})",
         save_path.display(),
         save.version
@@ -4212,6 +4228,6 @@ pub extern "C" fn android_main(
         }
         view
     }) {
-        eprintln!("nt: android run failed: {e:?}");
+        log::error!("nt: android run failed: {e:?}");
     }
 }

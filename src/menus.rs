@@ -1467,7 +1467,12 @@ pub fn tick_menus(world: &mut World) {
             let pressed = {
                 world.init_resource::<NtInput>();
                 let mut input = world.resource_mut::<NtInput>();
+                // GML `mouse_ui_clicked`: touch RELEASE edge counts as
+                // the click (`device_mouse_check_button_released`), so
+                // the tap-to-advance reads the release channels too.
                 input.take_fire_pressed()
+                    || input.take_fire_released()
+                    || input.take_touch_released_fire()
                     || input.take_interact_pressed()
                     || input.take_spec_pressed()
                     || input.take_ability_pressed()
