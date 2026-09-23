@@ -4581,6 +4581,7 @@ pub extern "C" fn android_main(
     android_app: winit::platform::android::activity::AndroidApp,
 ) {
     rlobkit_app_events::android_log::init(env!("CARGO_PKG_NAME"), "warn");
+    rlobkit_app_events::system_bars::set_immersive_sticky(true);
     repose_core::locals::set_theme_default(repose_core::locals::Theme::default());
     crate::render::init_apk_assets(android_app.asset_manager());
     let files_dir = android_app.internal_data_path();
