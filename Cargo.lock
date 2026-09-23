@@ -4122,6 +4122,7 @@ version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "195477c5d36d849078c635ee90ca338c55d0fd61303ff19756e38888586d7f23"
 dependencies = [
+ "jni",
  "log",
  "paranoid-android",
  "tracing",
