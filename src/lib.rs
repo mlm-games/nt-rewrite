@@ -1249,6 +1249,25 @@ impl App {
             .is_some_and(|s| s.armed())
     }
 
+    /// Focus-preview capture entry: the live root `on_preview_key_event`
+    /// closure routes here BEFORE the runtime shortcut dispatch, so
+    /// Esc/Enter/R rebind while a capture is armed (the runtime would
+    /// otherwise consume them as pause/restart/confirm and `handle_key`
+    /// below never runs). Returns true when the event was consumed as
+    /// capture input. Non-armed events return false so normal dispatch
+    /// proceeds untouched.
+    pub fn preview_capture_key(&mut self, ke: &KeyEvent) -> bool {
+        if !matches!(ke.event_type, KeyEventType::Down) || ke.is_repeat || !self.capture_armed() {
+            return false;
+        }
+        if let Some(key) = ke.physical {
+            self.capture_physical_press(key);
+        } else {
+            self.capture_key_press(&ke.key);
+        }
+        true
+    }
+
     /// Resolve the pending capture with a mouse button (viewport press
     /// path). GML only captures `mb_left`/`mb_right` for the keyboard
     /// side; gamepad-side captures resolve from pad edges in
@@ -3225,12 +3244,23 @@ impl App {
         } else {
             repose_core::CursorIcon::Default
         });
-        // Runtime-owned shortcuts (Esc/R/Enter -> pause/restart/confirm):
-        // `handle_key`/`dispatch_action` resolve against
-        // `ReposeRuntime::shortcuts` first. The runner owns the runtime,
-        // so prime the process-global maps it falls back to — idempotent,
-        // same bindings every call.
-        repame_shell::install_map(nt_shortcuts::map());
+        // Game shortcuts (Esc/R/Enter -> pause/restart/confirm), composed
+        // once per frame (mount-once under the hood).
+        let shortcut_edges = self.shortcut_edges.clone();
+        repame_shell::install_game_shortcuts(
+            &shortcut_edges,
+            nt_shortcuts::PAUSE,
+            nt_shortcuts::RESTART,
+            nt_shortcuts::CONFIRM,
+        );
+        // REMAP capture preview: while a rebind is armed, the next key
+        // press resolves the capture here (tunnel phase) before the
+        // runtime shortcut dispatch can consume Esc/Enter/R as
+        // pause/restart/confirm. `App` is borrowed through a raw
+        // pointer: the closure only touches staged input through it,
+        // like the viewport `PickEvent` closures below.
+        let capture_app: *mut App = self as *mut App;
+        let capture_preview = move |ke: KeyEvent| unsafe { (*capture_app).preview_capture_key(&ke) };
         let focus = remember(FocusRequester::new);
         let fr_positioned = (*focus).clone();
         let focus_staging = self.staging.clone();
@@ -3239,6 +3269,7 @@ impl App {
             .fill_max_size()
             .focusable(true)
             .focus_requester((*focus).clone())
+            .on_preview_key_event(capture_preview)
             .on_globally_positioned(move |_| {
                 fr_positioned.request_focus();
             })
