@@ -1623,8 +1623,7 @@ impl App {
         // second `touch_contacts` call there would see cleared edges —
         // every press would arrive one frame late as a hold with no
         // edge, so sticks never claimed and buttons never pulsed.
-        let density_snap = repose_core::locals::effective_density_scale().max(1e-6);
-        let touch_contacts_snap = staging.touch_contacts(density_snap);
+        let touch_contacts_snap = staging.touch_contacts();
         drop(staging);
         let state = self
             .sim

@@ -1014,18 +1014,32 @@ pub fn sample_touch_full(
     // of `at`, skipping contacts another element claims
     // (`get_nearest_touch` + MobileUI exclusion; the GML nearest-MobileUI
     // tiebreak collapses because a claimed id is excluded everywhere).
+    // Press-edge priority: a `just_pressed` contact wins over a held one
+    // (`scrStickRegions`/`get_nearest_touch` run on the press edge, so the
+    // tapping finger owns the tap). Without this a finger parked near a
+    // button (pressed in a dead zone, drifted in, never claimed) steals a
+    // live tap on that button: it is nearer, takes the claim, pulses
+    // nothing, and the real tap goes unclaimed.
     let nearest_free = |at: Vec2, rad: f32, held: &[i64]| -> Option<usize> {
-        let mut best: Option<(usize, f32)> = None;
+        let mut best_pressed: Option<(usize, f32)> = None;
+        let mut best_held: Option<(usize, f32)> = None;
         for (i, c) in contacts.iter().enumerate() {
             if held.contains(&(c.id as i64)) {
                 continue;
             }
             let d = c.pos.distance(at);
-            if d <= rad && best.is_none_or(|(_, bd)| d < bd) {
-                best = Some((i, d));
+            if d <= rad {
+                let best = if c.just_pressed {
+                    &mut best_pressed
+                } else {
+                    &mut best_held
+                };
+                if best.is_none_or(|(_, bd)| d < bd) {
+                    *best = Some((i, d));
+                }
             }
         }
-        best.map(|(i, _)| i)
+        best_pressed.or(best_held).map(|(i, _)| i)
     };
 
     // Fixed buttons first (they steal touches from sticks):
@@ -1537,6 +1551,137 @@ mod keymap_tests {
         assert!(out.move_axis.length() > 0.5);
         assert!(out.fire_held);
         assert!(out.touch_dis > 0.0);
+    }
+
+    #[test]
+    fn staggered_claims_move_then_attack_each_drive() {
+        let mut out = NtInput::default();
+        sample_touch_full(
+            &[contact_id(1, [40.0, 200.0], [40.0, 200.0], true)],
+            320.0,
+            0.5,
+            false,
+            true,
+            &mut out,
+        );
+        sample_touch_full(
+            &[contact_id(1, [40.0, 200.0], [40.0, 200.0], false)],
+            320.0,
+            0.5,
+            false,
+            true,
+            &mut out,
+        );
+        sample_touch_full(
+            &[
+                contact_id(1, [40.0, 200.0], [40.0, 200.0], false),
+                contact_id(2, [256.0, 176.0], [256.0, 176.0], true),
+            ],
+            320.0,
+            0.5,
+            false,
+            true,
+            &mut out,
+        );
+        assert_eq!(out.attack_stick.map(|s| s.touch), Some(2));
+        sample_touch_full(
+            &[
+                contact_id(1, [40.0, 200.0], [40.0, 168.0], false),
+                contact_id(2, [256.0, 176.0], [288.0, 176.0], false),
+            ],
+            320.0,
+            0.5,
+            false,
+            true,
+            &mut out,
+        );
+        assert!(out.move_axis.length() > 0.5, "move finger drives walk");
+        assert!(out.fire_held, "attack finger drives fire");
+        assert!(out.touch_dis > 0.0);
+    }
+
+    #[test]
+    fn act_button_tap_picks_up_while_sticks_held() {
+        let mut out = NtInput::default();
+        // Both sticks claimed and held deflected (same frames the
+        // staggered test covers): the act tap still pulses interact —
+        // the weapon-pickup press the player reports missing while
+        // both sticks are held.
+        sample_touch_full(
+            &[contact_id(1, [40.0, 200.0], [40.0, 200.0], true)],
+            320.0,
+            0.5,
+            false,
+            true,
+            &mut out,
+        );
+        sample_touch_full(
+            &[
+                contact_id(1, [40.0, 200.0], [40.0, 200.0], false),
+                contact_id(2, [256.0, 176.0], [256.0, 176.0], true),
+            ],
+            320.0,
+            0.5,
+            false,
+            true,
+            &mut out,
+        );
+        sample_touch_full(
+            &[
+                contact_id(1, [40.0, 200.0], [40.0, 168.0], false),
+                contact_id(2, [256.0, 176.0], [288.0, 176.0], false),
+                contact_id(3, [160.0, 48.0], [160.0, 48.0], true),
+            ],
+            320.0,
+            0.5,
+            false,
+            true,
+            &mut out,
+        );
+        assert!(out.take_interact_pressed(), "third-finger act tap must pulse");
+        assert!(out.move_axis.length() > 0.5, "move claim survives");
+        assert!(out.fire_held, "attack claim survives");
+    }
+
+    #[test]
+    fn tapping_finger_wins_button_over_parked_finger() {
+        let mut out = NtInput::default();
+        sample_touch_full(
+            &[contact_id(1, [40.0, 200.0], [40.0, 200.0], true)],
+            320.0,
+            0.5,
+            false,
+            true,
+            &mut out,
+        );
+        // Finger 1 holds the move stick well deflected; finger 2 taps the
+        // swap button at its home. Finger 1's hold position sits inside
+        // the button capture radius and is nearer, but the press edge owns
+        // the tap: exactly one cycle, and the stick keeps its claim.
+        sample_touch_full(
+            &[
+                contact_id(1, [40.0, 200.0], [52.0, 92.0], false),
+                contact_id(2, [64.0, 72.0], [64.0, 72.0], true),
+            ],
+            320.0,
+            0.5,
+            false,
+            true,
+            &mut out,
+        );
+        assert_eq!(out.take_cycle_weapon(), 1);
+        assert_eq!(out.move_stick.map(|s| s.touch), Some(1));
+        assert!(out.move_axis.length() > 0.1);
+        sample_touch_full(
+            &[contact_id(1, [40.0, 200.0], [52.0, 92.0], false)],
+            320.0,
+            0.5,
+            false,
+            true,
+            &mut out,
+        );
+        assert_eq!(out.take_cycle_weapon(), 0, "lift pulses nothing");
+        assert!(out.move_axis.length() > 0.1, "stick survives swap tap");
     }
 
     #[test]
