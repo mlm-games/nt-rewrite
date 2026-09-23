@@ -906,6 +906,9 @@ fn pad_pressed(entry: &repame_input::KeymapEntry, pad: &GamepadState) -> bool {
 /// - `ButtonAct` pulses interact on the press edge; `ButtonActive`
 ///   holds spec while held plus press/release edges every tick;
 ///   `ButtonAttack` (splitfire) mirrors held/press/release raw.
+/// - Unclaimed taps stage NOTHING (no fire edge): GML menus advance
+///   on `mouse_ui_clicked` and gameplay fires only through the stick
+///   deadzone — a bare tap only ever steers aim (lib.rs), never fires.
 ///
 /// Port adaptations: `TouchContact` carries the stable shell finger id
 /// (GML touch slot), so stick claims key on it; lift edges arrive via
@@ -1091,32 +1094,62 @@ pub fn sample_touch_full(
         }
     }
 
-    // Move stick (`JoystickMove/Other_10`): press-edge reposition
-    // anywhere in the left half under `opt_stickregions`
-    // (`scrStickRegions` move arm, gated on
-    // `device_mouse_check_button_pressed` — a free touch beats the
-    // `get_nearest_touch` result). Without stick regions the stick
-    // never moves and claims only touches already on it; a free left
-    // touch that misses the home capture falls through (no plain-tap
-    // move zone in GML — `KeyCont.moving` just stays 0). The touch
-    // claims by its start here: the press frame's `pos == start`, so
-    // the claim is the pressed finger wherever it landed in the left
-    // half.
+    // Move stick (`JoystickMove/Other_10`): claims the press-edge
+    // touch nearest the anchor within the GML capture radius
+    // (`get_touch_radius`: sticks x1.75, then x(scale+0.5)).
+    // Without `opt_stickregions` the anchor never moves — but ANY
+    // press on the correct half still claims by proximity to the
+    // anchor, exactly like GML `index = get_nearest_touch(rad)`.
+    // With `opt_stickregions`, `scrStickRegions` first snaps the
+    // anchor to a free press anywhere on the stick's half
+    // (attack anchor chases with lerp 0.8), then the claim below
+    // picks it up.
+    if stick_regions {
+        for c in contacts.iter().filter(|c| c.just_pressed) {
+            let left_half = c.start.x <= width * 0.5;
+            if left_half == (move_stick.touch >= 0)
+                || held.contains(&(c.id as i64))
+            {
+                continue;
+            }
+            let anchor = if left_half {
+                &mut move_stick.anchor
+            } else {
+                &mut attack_stick.anchor
+            };
+            let in_claim = contacts.iter().any(|o| {
+                o.just_pressed && (o.id as i64) != c.id as i64 && {
+                    let r = TOUCH_STICK_RADIUS * 1.75 * (scale + 0.5);
+                    o.start.distance(*anchor) <= r
+                }
+            });
+            if in_claim {
+                continue;
+            }
+            if c.start.y < 96.0 || c.start.x < 20.0 || c.start.x > width - 20.0 {
+                continue;
+            }
+            if left_half {
+                move_stick.anchor = c.start;
+            } else {
+                attack_stick.anchor += (c.start - attack_stick.anchor) * 0.8;
+            }
+        }
+        move_stick.anchor.x = move_stick.anchor.x.clamp(20.0, width - 20.0);
+        attack_stick.anchor.x = attack_stick.anchor.x.clamp(20.0, width - 20.0);
+    }
     if move_stick.touch < 0 {
         if let Some(i) = contacts.iter().position(|c| {
             c.just_pressed
                 && c.start.x < width * 0.5
                 && !held.contains(&(c.id as i64))
-                && (stick_regions || {
+                && {
                     let r = TOUCH_STICK_RADIUS * 1.75 * (scale + 0.5);
                     c.start.distance(move_stick.anchor) <= r
-                })
+                }
         }) {
             let c = &contacts[i];
             move_stick.touch = c.id as i64;
-            if stick_regions {
-                move_stick.anchor = c.start;
-            }
             move_stick.dis = 0.0;
             move_stick.dir = 0.0;
             held.push(c.id as i64);
@@ -1132,24 +1165,11 @@ pub fn sample_touch_full(
         let dis = d.length();
         if dis > 0.0 {
             let dir_deg = d.y.atan2(d.x).to_degrees();
-            let prev = move_stick.dir;
-            let mut diff = (dir_deg - prev) % 360.0;
-            if diff > 180.0 {
-                diff -= 360.0;
-            }
-            if diff < -180.0 {
-                diff += 360.0;
-            }
-            if diff.abs() < 10.0 {
-                if move_stick.hold_time < 30.0 {
-                    move_stick.hold_time += 1.0;
-                }
-            } else if move_stick.hold_time > 0.0 {
-                move_stick.hold_time = (move_stick.hold_time - 3.0).max(0.0);
-            }
             move_stick.dir = dir_deg;
-            let same = (move_stick.hold_time - 10.0).max(0.0) / 20.0;
-            let moving = (same + dis / TOUCH_STICK_RADIUS).min(1.0);
+            // GML `KeyCont.moving = min(1, same + dis / rad)`: `same`
+            // is a direction-hold bonus, but `dis / rad` alone drives
+            // from the first frame — no 10-tick wait before walking.
+            let moving = (dis / TOUCH_STICK_RADIUS).min(1.0);
             if moving > 0.0 {
                 output.move_axis = d.normalize_or_zero() * moving;
             }
@@ -1188,15 +1208,12 @@ pub fn sample_touch_full(
                 && c.start.x >= width * 0.5
                 && c.start.y >= 96.0
                 && !held.contains(&(c.id as i64))
-                && (stick_regions || {
+                && {
                     let r = TOUCH_STICK_RADIUS * 1.75 * (scale + 0.5);
                     c.start.distance(attack_stick.anchor) <= r
-                })
+                }
         }) {
             let c = &contacts[i];
-            if stick_regions {
-                attack_stick.anchor += (c.start - attack_stick.anchor) * 0.8;
-            }
             attack_stick.touch = c.id as i64;
             held.push(c.id as i64);
         }
@@ -1250,18 +1267,13 @@ pub fn sample_touch_full(
 
     output.move_axis = output.move_axis.clamp_length_max(1.0);
     output.aim_axis = output.aim_axis.clamp_length_max(1.0);
-    // A bare tap (no stick/button claim — menus, splash advance) is a
-    // fire edge: GML `Vlambeer/Draw_0` advances on any press
-    // (`mouse_ui_clicked`, `keyboard_anykey`, gamepad anykey) with no
-    // touch object involved. The stick/button claims above only fire
-    // for claimed fingers, so an unclaimed tap would otherwise vanish.
-    if !output.fire_pressed
-        && !output.fire_released
-        && !output.touch_released_fire
-        && contacts.iter().any(|c| c.just_pressed)
-    {
-        output.fire_released = true;
-    }
+    // GML `scrCreateMobileControls` parity: the sticks always exist
+    // (`JoystickMove/Create_0`, `JoystickAttack/Create_0`), so keep
+    // idle homes in the resource for the renderer even with no finger
+    // down. `touch` stays -1 (free) and `dis` 0 — this never fires,
+    // it only anchors the drawn homes.
+    output.move_stick = Some(move_stick);
+    output.attack_stick = Some(attack_stick);
 }
 
 /// Drop everything when the sim isn't live (paused, overlay open, or out

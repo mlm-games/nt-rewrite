@@ -277,6 +277,7 @@ pub struct App {
     menu_actions: Vec<UiAction>,
     // -- last-frame diagnostics (headless-observable) --
     last_sprite_count: usize,
+    last_touch_count: usize,
     last_bg_alpha: f32,
 }
 
@@ -364,6 +365,7 @@ impl App {
             view_world_size: [426.0, 240.0],
             menu_actions: Vec::new(),
             last_sprite_count: 0,
+            last_touch_count: 0,
             last_bg_alpha: 1.0,
         }
     }
@@ -513,6 +515,14 @@ impl App {
 
     pub fn last_sprite_count(&self) -> usize {
         self.last_sprite_count
+    }
+
+    /// Touch chrome sprite count for device logs: proves the sticks /
+    /// buttons drew (GML `scrDrawMobileControls` parity) without a
+    /// screenshot. Set every `view` alongside `last_sprite_count`
+    /// (0 when the touch-device gate is off).
+    pub fn last_touch_count(&self) -> usize {
+        self.last_touch_count
     }
 
     pub fn last_bg_alpha(&self) -> f32 {
@@ -799,6 +809,31 @@ impl App {
             return;
         }
         let rest = self.cam.center;
+        // Cursor-lean source by device (GML `scrHandleInputs` law):
+        // touch aim comes from the attack stick (`dir_fire`/`dis_fire`
+        // off `JoystickAttack`), never from a cursor point. The port's
+        // sampler already wrote this frame's `aim_axis` from the stick
+        // heading, and `touch_dis` carries the deflection — use those.
+        // Keyboard/mouse keeps the live-cursor unprojection (bevy
+        // `player_aim` parity). The old code read the cursor on touch
+        // too, so every tap re-aimed the gun AND leaned the camera at
+        // the tap point while the shot went stick-side.
+        #[cfg(target_os = "android")]
+        let (aim_dir, aim_dis) = {
+            let world = &mut self.sim.world;
+            let input = world.resource::<NtInput>();
+            let axis = input.aim_axis;
+            let dis = input.touch_dis;
+            let player = player_pos(world).unwrap_or(rest);
+            let _ = player;
+            if axis.length_squared() > 1e-6 {
+                (axis.normalize_or_zero(), dis)
+            } else {
+                (Vec2::X, 0.0)
+            }
+        };
+        #[cfg(not(target_os = "android"))]
+        let step_in = {
         // (`cursor_to_world` borrows `self.cam` only, so resolve the
         // live cursor before the `world` borrow below.)
         let live_hover = self.live_cursor_world();
@@ -851,7 +886,7 @@ impl App {
             .unwrap_or(0.0);
         self.gml_cam.shake = shake_px;
         let mut rng = rand::rng();
-        let step_in = CamStepInput {
+        CamStepInput {
             player,
             aim_dir,
             aim_dis,
@@ -861,6 +896,39 @@ impl App {
             timescale: 0.0,
             jx: rng.random_range(-1.0..1.0),
             jy: rng.random_range(-1.0..1.0),
+        }
+        };
+        #[cfg(target_os = "android")]
+        let step_in = {
+        let world = &mut self.sim.world;
+        let player = player_pos(world).unwrap_or(rest);
+        let wep = world
+            .query::<(&Pos, &crate::comps_a::Player, &crate::comps_a::Inventory)>()
+            .iter(world)
+            .next()
+            .map(|(_, _, inv)| inv.weapons[0])
+            .unwrap_or(crate::data::WeaponId::NONE);
+        let shake_scale = world
+            .get_resource::<crate::savedata_part::SaveData>()
+            .map(|s| s.settings.screenshake.clamp(0.0, 2.0))
+            .unwrap_or(1.0);
+        let shake_px = world
+            .get_resource::<repame_fx::Trauma>()
+            .map(|t| t.amount * t.max_translation_px)
+            .unwrap_or(0.0);
+        self.gml_cam.shake = shake_px;
+        let mut rng = rand::rng();
+        CamStepInput {
+            player,
+            aim_dir,
+            aim_dis,
+            viewdist: cam_viewdist_for(wep),
+            poi: nearest_poi(world, player),
+            shake_scale,
+            timescale: 0.0,
+            jx: rng.random_range(-1.0..1.0),
+            jy: rng.random_range(-1.0..1.0),
+        }
         };
         const STEP_DT: f32 = 1.0 / SIM_HZ as f32;
         let vw_vh = self.view_world_size;
@@ -1513,6 +1581,14 @@ impl App {
         let staging_clicks = staging.take_clicks();
         let staging_lmb = staging.lmb_held;
         let staging_rmb = staging.rmb_held;
+        // Touch contacts MUST be snapshotted in the same borrow as the
+        // clicks: `touch_contacts` clears `touch_new` (the sampler's
+        // `just_pressed` edge). The sampler runs ~40 lines below but a
+        // second `touch_contacts` call there would see cleared edges —
+        // every press would arrive one frame late as a hold with no
+        // edge, so sticks never claimed and buttons never pulsed.
+        let density_snap = repose_core::locals::effective_density_scale().max(1e-6);
+        let touch_contacts_snap = staging.touch_contacts(density_snap);
         drop(staging);
         let state = self
             .sim
@@ -1641,8 +1717,9 @@ impl App {
             .get_resource::<AppState>()
             .copied()
             .unwrap_or_default();
-        let mouse_down_edge = !staging_clicks.is_empty();
-        let mouse_down = (mouse_down_edge || staging_lmb)
+        let touch_only_device = cfg!(target_os = "android");
+        let mouse_down_edge = !staging_clicks.is_empty() && !touch_only_device;
+        let mouse_down = (mouse_down_edge || (staging_lmb && !touch_only_device))
             && !menu_open
             && !game_over
             && !offer_open
@@ -1707,14 +1784,17 @@ impl App {
             self.pad_live = self.staging.borrow().pad_live;
             sample_gamepads_mapped(&pads, Some(&keymap), &mut input);
             {
-                let d = repose_core::locals::effective_density_scale().max(1e-6);
+                // Contacts were snapshotted alongside the clicks above
+                // (`touch_contacts_snap`): re-calling `touch_contacts`
+                // here would clear `touch_new` AFTER the snapshot and
+                // hand the sampler dead `just_pressed` edges.
                 // Viewport lifts bypass `App::touch_up` (staging-only
                 // closure): any contact count drop since last frame is
                 // a lift — latch the missing finger ids against the
                 // stick claims (`note_touch_released` drops stale ids)
                 // and run the sampler on every tick, empty or not, so
                 // claims release and lift edges fire on the lift frame.
-                let contacts = self.staging.borrow_mut().touch_contacts(d);
+                let contacts = touch_contacts_snap.clone();
                 let live: std::collections::HashSet<i64> =
                     contacts.iter().map(|c| c.id as i64).collect();
                 // GML spawns touch objects on mobile only: on desktop
@@ -1737,9 +1817,36 @@ impl App {
                     || input.move_stick.is_some_and(|s| s.touch >= 0)
                     || input.attack_stick.is_some_and(|s| s.touch >= 0);
                 if need_touch {
+                    // GML `device_mouse_*_to_gui` reads GUI px (view px,
+                    // e.g. 534x240 on this phone), not css-dp: convert the
+                    // dp-space contacts into GUI space through the live
+                    // GML view size before the sampler compares them to
+                    // the stick/button homes.
+                    let gml_view = crate::render::gml_view_size(self.view_viewport_dp);
+                    let vw = self.view_viewport_dp;
+                    let sx = if vw[0] > 1e-6 {
+                        gml_view[0] / vw[0]
+                    } else {
+                        1.0
+                    };
+                    let sy = if vw[1] > 1e-6 {
+                        gml_view[1] / vw[1]
+                    } else {
+                        1.0
+                    };
+                    let gui_contacts: Vec<crate::input::TouchContact> = contacts
+                        .iter()
+                        .map(|c| crate::input::TouchContact {
+                            id: c.id,
+                            start: Vec2::new(c.start.x * sx, c.start.y * sy),
+                            pos: Vec2::new(c.pos.x * sx, c.pos.y * sy),
+                            just_pressed: c.just_pressed,
+                        })
+                        .collect();
+                    let gui_width = gml_view[0];
                     crate::input::sample_touch_full(
-                        &contacts,
-                        self.view_width / d,
+                        &gui_contacts,
+                        gui_width,
                         touch_scale,
                         touch_split_fire,
                         touch_stick_regions,
@@ -1818,25 +1925,39 @@ impl App {
             if let Some(pp) = player_pos {
                 // Live cursor, unprojected through this frame's camera
                 // (see `cursor_px`): valid even when the pointer hasn't
-                // moved since the camera did.
-                let aim_hover = self.live_cursor_world();
-                if let Some(hover) = aim_hover {
-                    let mut input = self.sim.world.resource_mut::<NtInput>();
-                    if input.aim_axis == Vec2::ZERO {
-                        let dir = hover - pp;
-                        if dir.length_squared() > 1e-6 {
-                            input.aim_axis = dir.normalize_or_zero();
+                // moved since the camera did. Desktop-only: on Android
+                // there is no cursor — aim comes from the attack stick
+                // (sampler above), and any staged hover is a finger
+                // drag, not a pointer.
+                if !cfg!(target_os = "android") {
+                    let aim_hover = self.live_cursor_world();
+                    if let Some(hover) = aim_hover {
+                        let mut input = self.sim.world.resource_mut::<NtInput>();
+                        if input.aim_axis == Vec2::ZERO {
+                            let dir = hover - pp;
+                            if dir.length_squared() > 1e-6 {
+                                input.aim_axis = dir.normalize_or_zero();
+                            }
                         }
                     }
                 }
                 if let Some(click) = staging_clicks.last().copied() {
-                    let mut input = self.sim.world.resource_mut::<NtInput>();
-                    let dir = click.world - pp;
-                    if dir.length_squared() > 1e-6 {
-                        input.aim_axis = dir.normalize_or_zero();
+                    // Desktop click-to-fire only. On Android a bare tap
+                    // is NOTHING: GML gameplay never reads a tap point
+                    // (`JoystickAttack` aims/fires solely off its claimed
+                    // stick; taps advance only splash/menus via
+                    // `mouse_ui_clicked`). The tap already fed the
+                    // sampler as a rebuilt contact above, so stick zones
+                    // still claim taps that land on them.
+                    if !cfg!(target_os = "android") {
+                        let mut input = self.sim.world.resource_mut::<NtInput>();
+                        let dir = click.world - pp;
+                        if dir.length_squared() > 1e-6 {
+                            input.aim_axis = dir.normalize_or_zero();
+                        }
+                        input.fire_held = true;
+                        input.press_fire();
                     }
-                    input.fire_held = true;
-                    input.press_fire();
                 }
             }
         } else if menu_open {
@@ -2381,8 +2502,20 @@ impl App {
                 .unwrap_or_default();
             let touch_live = playing
                 && !touch_paused
-                && touch_overlay == OverlayMenu::None;
-            if touch_live {
+                && touch_overlay == OverlayMenu::None
+                && self
+                    .sim
+                    .world
+                    .get_resource::<crate::savedata_part::SaveData>()
+                    .is_none_or(|s| !s.settings.gamepad_enabled);
+            let gamepad_live = playing
+                && self
+                    .sim
+                    .world
+                    .get_resource::<crate::savedata_part::SaveData>()
+                    .is_some_and(|s| s.settings.gamepad_enabled)
+                && self.pad_live;
+            if touch_live || gamepad_live {
                 let mut t = touch_sprites(
                     &mut self.sim.world,
                     assets,
@@ -2391,7 +2524,10 @@ impl App {
                     &self.cam,
                 );
                 stamp_z(&mut t, Z_TOUCH);
+                self.last_touch_count = t.len();
                 s.extend(t);
+            } else {
+                self.last_touch_count = 0;
             }
             // Boot reel (`Vlambeer/Draw_0` + `Logo/Draw_0`).
             if menu_kind == Some(MenuOverlay::Splash) {
@@ -2720,7 +2856,9 @@ impl App {
                     } => {
                         staging.pick_up(button);
                     }
-                    PickEvent::Hover { world, screen } => staging.stage_hover(world, screen),
+                    PickEvent::Hover { world, screen } => {
+                        staging.stage_hover(world, screen);
+                    }
                     PickEvent::TouchDown { id, screen } => {
                         staging.touch_down(id, Vec2::new(screen[0], screen[1]))
                     }
@@ -2755,7 +2893,9 @@ impl App {
                     } => {
                         staging.pick_up(button);
                     }
-                    PickEvent::Hover { world, screen } => staging.stage_hover(world, screen),
+                    PickEvent::Hover { world, screen } => {
+                        staging.stage_hover(world, screen);
+                    }
                     PickEvent::TouchDown { id, screen } => {
                         staging.touch_down(id, Vec2::new(screen[0], screen[1]))
                     }
@@ -2835,10 +2975,8 @@ impl App {
         let staging = self.staging.clone();
         let root_mod = root_mod
             .on_pointer_move(move |ev: PointerEvent| {
-                if matches!(ev.kind, repose_core::input::PointerKind::Mouse) {
-                    let p = ev.position_in_window();
-                    staging.borrow_mut().cursor_move(Vec2::new(p.x, p.y));
-                }
+                let p = ev.position_in_window();
+                staging.borrow_mut().cursor_move(Vec2::new(p.x, p.y));
             });
 
         // HUD overlay (GML `scrDrawPlayerHUD` + `scrDrawMiscHUD`
@@ -4173,6 +4311,9 @@ mod cursor_staging_tests {
 pub extern "C" fn android_main(
     android_app: winit::platform::android::activity::AndroidApp,
 ) {
+    android_logger::init_once(
+        android_logger::Config::default().with_max_level(log::LevelFilter::Trace),
+    );
     repose_core::locals::set_theme_default(repose_core::locals::Theme::default());
     crate::render::init_apk_assets(android_app.asset_manager());
     let files_dir = android_app.internal_data_path();
@@ -4236,6 +4377,81 @@ pub extern "C" fn android_main(
         });
         for cue in app.drain_audio_cues() {
             audio.play(cue.name);
+        }
+        // Touch-chrome verdict (logcat, ~1/s): sprites pushed this
+        // frame + touch batch size + state. Proves the sticks/buttons
+        // drew without a screenshot.
+        {
+            use std::time::{Duration, Instant};
+            static LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+            let tick = LAST.lock().map(|mut g| {
+                let now = Instant::now();
+                let due = g.is_none_or(|t| now.duration_since(t) >= Duration::from_secs(1));
+                if due {
+                    *g = Some(now);
+                }
+                due
+            });
+            if tick.unwrap_or(false) {
+                let input_dbg = app
+                    .sim
+                    .world
+                    .get_resource::<crate::input::NtInput>()
+                    .map(|i| {
+                        format!(
+                            "mvA=({:.2},{:.2}) aimA=({:.2},{:.2}) fire={} fpress={} spec={} pick={} dis={:.1}",
+                            i.move_axis.x,
+                            i.move_axis.y,
+                            i.aim_axis.x,
+                            i.aim_axis.y,
+                            i.fire_held,
+                            i.peek_fire_pressed(),
+                            i.spec_held,
+                            i.peek_interact_pressed(),
+                            i.touch_dis,
+                        )
+                    })
+                    .unwrap_or_else(|| "no-input".to_string());
+                let state = app
+                    .sim
+                    .world
+                    .get_resource::<crate::state::AppState>()
+                    .copied()
+                    .unwrap_or_default();
+                let mv = app
+                    .sim
+                    .world
+                    .get_resource::<crate::input::NtInput>()
+                    .and_then(|i| i.move_stick)
+                    .map(|s| (s.anchor.x, s.anchor.y, s.touch, s.dis))
+                    .unwrap_or((-1.0, -1.0, -99, -1.0));
+                let at = app
+                    .sim
+                    .world
+                    .get_resource::<crate::input::NtInput>()
+                    .and_then(|i| i.attack_stick)
+                    .map(|s| (s.anchor.x, s.anchor.y, s.touch, s.dis))
+                    .unwrap_or((-1.0, -1.0, -99, -1.0));
+                let vw = app.view_viewport_dp;
+                let ws = app.view_world_size;
+                log::info!(
+                    "nt: touch sprites={} touch_batch={} state={state:?} move=({:.0},{:.0},t{},d{:.0}) atk=({:.0},{:.0},t{},d{:.0}) vw=({:.0},{:.0}) ws=({:.0},{:.0}) {input_dbg}",
+                    app.last_sprite_count(),
+                    app.last_touch_count(),
+                    mv.0,
+                    mv.1,
+                    mv.2,
+                    mv.3,
+                    at.0,
+                    at.1,
+                    at.2,
+                    at.3,
+                    vw[0],
+                    vw[1],
+                    ws[0],
+                    ws[1],
+                );
+            }
         }
         view
     }) {

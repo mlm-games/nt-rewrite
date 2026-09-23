@@ -6417,6 +6417,7 @@ pub fn hud_sprites(
                 .map(|s| s.0)
                 .unwrap_or(RaceId::Fish);
             let vw = view[2];
+            let gui_to_world = |x: f32, y: f32| hud_gui_to_world(gm, view, x, y);
             let step = (vw / (n as f32 + 1.0)).floor().min(32.0);
             let scale = (step / 32.0).max(0.65);
             let half = (step as i32 / 2) as f32;
@@ -8405,6 +8406,46 @@ pub fn roadmap_cursor_pos(
     (mx, my)
 }
 
+/// GUI-space sprite placed from a GML `draw_sprite_ext` call verbatim:
+/// same strip-origin law as [`hud_gui_place`] plus a rotation channel
+/// (touch crosshair auto-aim tilt, swap-button weapon tilt).
+pub fn place_touch_sprite_rot(
+    assets: &RenderAssets,
+    path: &str,
+    frame: i32,
+    gx: f32,
+    gy: f32,
+    mul: f32,
+    rotation: f32,
+    tint: [f32; 4],
+    map: HudGuiMap,
+    view: [f32; 4],
+) -> Option<SpriteInstance> {
+    let (uv, def) = assets.uv(path, frame)?;
+    let anchor = def.anchor();
+    let size = Vec2::new(def.w as f32 * mul * map.s, def.h as f32 * mul * map.s);
+    let top_left = hud_gui_to_world(
+        map,
+        view,
+        gx - def.xorigin * mul,
+        gy - def.yorigin * mul,
+    );
+    Some(SpriteInstance {
+        center: top_left + Vec2::new(anchor[0] * size.x, anchor[1] * size.y),
+        rotation,
+        size,
+        anchor: Vec2::new(anchor[0], anchor[1]),
+        flip_x: false,
+        flip_y: false,
+        uv_min: Vec2::new(uv.min[0], uv.min[1]),
+        uv_max: Vec2::new(uv.max[0], uv.max[1]),
+        color: tint_to_linear(tint),
+        page: uv.page,
+        z: 0.0,
+        blend: SpriteBlend::Alpha,
+    })
+}
+
 /// Menu art sprites (`Menu/Draw_0`, portrait, loadout, logo, and
 /// game-over splats verbatim where the UI framework cannot draw them):
 /// char pods (`sprCharSelect` frame = race, locked gray), GO button,
@@ -8433,14 +8474,18 @@ pub fn touch_sprites(
     let Some(input) = world.get_resource::<crate::input::NtInput>().cloned() else {
         return out;
     };
-    // GML draws the controls from the live MobileUI instances, which
-    // only exist on touch devices: draw nothing unless a finger is
-    // down now or a stick claim is live. (The stick records persist
-    // after the last lift; without this a desktop session shows both
-    // stick homes forever after one accidental touch.)
-    let any_live = input.move_stick.is_some_and(|s| s.touch >= 0)
-        || input.attack_stick.is_some_and(|s| s.touch >= 0);
-    if !any_live {
+    // GML `TopCont/Draw_64` gate verbatim: the controls draw from the
+    // live `MobileUI` instances, which exist only on touch devices
+    // (never under `opt_keyboard`/`opt_gamepad`). The port's device
+    // read is the gamepad flag (a live pad means no touch chrome);
+    // Android always draws (GML defaults `opt_keyboard` to `desktop`,
+    // false on Android). Binds the whole chrome (sticks at home +
+    // act/swap/ability/splitfire art), not just live claims — GML
+    // draws the homes at all times in a run.
+    let gamepad = save
+        .as_ref()
+        .is_some_and(|s| s.settings.gamepad_enabled);
+    if gamepad {
         return out;
     }
     let view = view_rect_world(canvas_dp, world_size, cam);
@@ -8461,8 +8506,20 @@ pub fn touch_sprites(
         }
     };
     // Move stick: base frame 0 at the anchor, knob frame 1 at the
-    // deflection point (`_stick_radius_treshold` 0.5).
-    if let Some(stick) = input.move_stick {
+    // deflection point (`_stick_radius_treshold` 0.5). Anchors always
+    // exist (GML homes from `Create_0`); the sampler only fills the
+    // claim/deflection once a finger lands.
+    let move_stick = input.move_stick.unwrap_or(crate::input::TouchStick {
+        anchor: Vec2::new(64.0, 240.0 - 64.0),
+        touch: -1,
+        ..Default::default()
+    });
+    let attack_stick = input.attack_stick.unwrap_or(crate::input::TouchStick {
+        anchor: Vec2::new(vw - 64.0, 240.0 - 64.0),
+        touch: -1,
+        ..Default::default()
+    });
+    for stick in [&move_stick, &attack_stick] {
         let a = alpha(stick.touch >= 0);
         if a > 0.0 {
             let dir = if stick.dis > 0.0 {
@@ -8474,37 +8531,20 @@ pub fn touch_sprites(
                 Vec2::ZERO
             };
             let knob = stick.anchor + dir * (stick.dis.min(32.0) * 0.5);
-            if let Some(s) = assets.sprite_for(
-                "images/sprMobileControlJoystick.png",
-                0,
-                gui_to_world(stick.anchor.x, stick.anchor.y),
-                false,
-                0.0,
-                [1.0, 1.0, 1.0, a],
-            ) {
+            if let Some(s) = hud_gui_place(assets, "images/sprMobileControlJoystick.png", 0, stick.anchor.x, stick.anchor.y, scale, [1.0, 1.0, 1.0, a], gm, view) {
                 out.push(s);
             }
-            if let Some(s) = assets.sprite_for(
-                "images/sprMobileControlJoystick.png",
-                1,
-                gui_to_world(knob.x, knob.y),
-                false,
-                0.0,
-                [1.0, 1.0, 1.0, a],
-            ) {
+            if let Some(s) = hud_gui_place(assets, "images/sprMobileControlJoystick.png", 1, knob.x, knob.y, scale, [1.0, 1.0, 1.0, a], gm, view) {
                 out.push(s);
             }
         }
     }
-    // Attack stick: base + `sprCrosshairBig` knob at the deflection.
-    // GML gate verbatim (`scrDrawMobileControls` attack region):
-    // - base sprite rides `_scale`, knob at half scale rotated only
-    //   when `crosshair < 7` (rotating frames) — full auto-aim parks
-    //   the knob on the base at 45°;
-    // - under-deadzone base frame 2 shows while claimed, not in autoaim,
-    //   and always in splitfire (even unclaimed, GML `index != -1`
-    //   short-circuits there).
-    if let Some(stick) = input.attack_stick {
+    // Attack crosshair: `sprCrosshairBig` knob at the deflection
+    // (GML `scrDrawMobileControls` attack region: rotating frames when
+    // `crosshair < 7`, parked at 45° under full auto-aim; frame 2
+    // under-deadzone marker while claimed, always in splitfire).
+    {
+        let stick = &attack_stick;
         let show_base = !split_fire || stick.touch >= 0;
         if show_base {
             let a = alpha(stick.touch >= 0);
@@ -8522,47 +8562,32 @@ pub fn touch_sprites(
                 } else {
                     stick.anchor + dir * (stick.dis.min(64.0) * 0.5)
                 };
-                if let Some(s) = assets.sprite_for(
-                    "images/sprMobileControlJoystick.png",
-                    0,
-                    gui_to_world(stick.anchor.x, stick.anchor.y),
-                    false,
-                    0.0,
-                    [1.0, 1.0, 1.0, a],
-                ) {
-                    out.push(s);
-                }
                 let under_deadzone =
                     stick.dis / 32.0 < crate::input::ATTACK_BUTTON_DEADZONE;
                 let show_dead = (split_fire && stick.touch < 0)
                     || (under_deadzone && stick.touch >= 0 && !autoaim);
                 if show_dead {
-                    if let Some(s) = assets.sprite_for(
-                        "images/sprMobileControlJoystick.png",
-                        2,
-                        gui_to_world(stick.anchor.x, stick.anchor.y),
-                        false,
-                        0.0,
-                        [0.5, 0.5, 0.5, a],
-                    ) {
+                    if let Some(s) = hud_gui_place(assets, "images/sprMobileControlJoystick.png", 2, stick.anchor.x, stick.anchor.y, scale, [0.5, 0.5, 0.5, a], gm, view) {
                         out.push(s);
                     }
                 }
                 let frames = strip_frames(assets, "images/sprCrosshairBig.png").max(1) as i32;
                 let frame = crosshair.clamp(0, frames - 1);
-                if let Some(s) = assets.sprite_for(
+                let knob_rot = if autoaim {
+                    std::f32::consts::FRAC_PI_4
+                } else {
+                    0.0
+                };
+                if let Some(s) = place_touch_sprite_rot(
+                    assets,
                     "images/sprCrosshairBig.png",
                     frame,
-                    gui_to_world(knob.x, knob.y),
-                    false,
-                    if autoaim {
-                        std::f32::consts::FRAC_PI_4
-                    } else if frame < 7 {
-                        0.0
-                    } else {
-                        0.0
-                    },
+                    knob.x, knob.y,
+                    scale * 0.5,
+                    knob_rot,
                     [0.05, 0.99, 0.6, a],
+                    gm,
+                    view,
                 ) {
                     out.push(s);
                 }
@@ -8585,51 +8610,71 @@ pub fn touch_sprites(
         let gui_w = vw;
         let gui_h = 240.0;
         let act = Vec2::new(gui_w * 0.5, 48.0);
+        let swap_home = Vec2::new(64.0, gui_h * 0.5 - 48.0);
         let attack_btn = Vec2::new(gui_w - 48.0, gui_h * 0.5);
         let active = Vec2::new(gui_w - 64.0, gui_h * 0.5 - 48.0);
         let held_alpha = 0.7;
-        if let Some(s) = assets.sprite_for(
-            "images/sprMobileControlAbility.png",
-            0,
-            gui_to_world(active.x, active.y),
-            false,
-            0.0,
-            [0.5, 0.5, 0.5, held_alpha],
-        ) {
+        if let Some(s) = hud_gui_place(assets, "images/sprMobileControlAbility.png", 0, active.x, active.y, scale * 0.75, [0.5, 0.5, 0.5, held_alpha], gm, view) {
             out.push(s);
         }
-        if let Some(s) = assets.sprite_for(
-            "images/sprMobileControlCorners.png",
-            0,
-            gui_to_world(act.x, act.y),
-            false,
-            0.0,
-            [1.0, 1.0, 1.0, 1.0],
-        ) {
+        if let Some(s) = hud_gui_place(assets, "images/sprMobileControlCorners.png", 0, act.x, act.y, scale, [1.0, 1.0, 1.0, 1.0], gm, view) {
             out.push(s);
+        }
+        // Swap button (`ButtonSwap` region in `scrDrawMobileControls`):
+        // dark disc + the current weapon sprite over the backup
+        // (vanilla GML draws wep white / bwep gray, tilted 45°).
+        {
+            let black = [0.0, 0.0, 0.0, 37.0 / 255.0];
+            if let Some(s) = hud_gui_place(assets, "images/sprMobileControlJoystick.png", 0, swap_home.x, swap_home.y, scale, black, gm, view) {
+                out.push(s);
+            }
+            let (wep, bwep) = world
+                .query::<(&Player, &crate::comps_a::Inventory)>()
+                .iter(world)
+                .next()
+                .map(|(_, inv)| {
+                    (
+                        inv.weapons[inv.current.min(inv.weapons.len() - 1)],
+                        inv.weapons[inv
+                            .weapon_slots
+                            .saturating_sub(1)
+                            .min(inv.weapons.len() - 1)],
+                    )
+                })
+                .unwrap_or((crate::data::WeaponId::NONE, crate::data::WeaponId::NONE));
+            let draw_gun = |id: crate::data::WeaponId, tint: [f32; 4], out: &mut Vec<SpriteInstance>| {
+                let meta = crate::weapon_runtime::weapon_meta(id);
+                let stem = if meta.wep_sprt.is_empty() || meta.wep_sprt == "mskNone" {
+                    "sprRevolver"
+                } else {
+                    meta.wep_sprt
+                };
+                let path = format!("images/{stem}.png");
+                if let Some(s) = place_touch_sprite_rot(
+                    assets,
+                    &path,
+                    0,
+                    swap_home.x, swap_home.y + 10.0,
+                    scale + 0.5,
+                    45.0_f32.to_radians(),
+                    tint,
+                    gm,
+                    view,
+                ) {
+                    out.push(s);
+                }
+            };
+            draw_gun(bwep, [0.7, 0.7, 0.7, 1.0], &mut out);
+            draw_gun(wep, [1.0, 1.0, 1.0, 1.0], &mut out);
         }
         if split_fire {
             let frames = strip_frames(assets, "images/sprCrosshairBig.png").max(1) as i32;
             let frame = crosshair.clamp(0, frames - 1);
             let half = scale * 0.5;
-            if let Some(s) = assets.sprite_for(
-                "images/sprMobileControlCorners.png",
-                0,
-                gui_to_world(attack_btn.x, attack_btn.y),
-                false,
-                0.0,
-                [1.0, 1.0, 1.0, 1.0],
-            ) {
+            if let Some(s) = hud_gui_place(assets, "images/sprMobileControlCorners.png", 0, attack_btn.x, attack_btn.y, scale * 0.5, [1.0, 1.0, 1.0, 1.0], gm, view) {
                 out.push(s);
             }
-            if let Some(s) = assets.sprite_for(
-                "images/sprCrosshairBig.png",
-                frame,
-                gui_to_world(attack_btn.x, attack_btn.y),
-                false,
-                0.0,
-                [0.49, 0.99, 0.05, 1.0],
-            ) {
+            if let Some(s) = hud_gui_place(assets, "images/sprCrosshairBig.png", frame, attack_btn.x, attack_btn.y, scale * 0.5, [0.49, 0.99, 0.05, 1.0], gm, view) {
                 out.push(s);
             }
             let _ = half;
