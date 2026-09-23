@@ -4581,9 +4581,7 @@ mod cursor_staging_tests {
 pub extern "C" fn android_main(
     android_app: winit::platform::android::activity::AndroidApp,
 ) {
-    android_logger::init_once(
-        android_logger::Config::default().with_max_level(log::LevelFilter::Trace),
-    );
+    rlobkit_app_events::android_log::init(env!("CARGO_PKG_NAME"), "warn");
     repose_core::locals::set_theme_default(repose_core::locals::Theme::default());
     crate::render::init_apk_assets(android_app.asset_manager());
     let files_dir = android_app.internal_data_path();
