@@ -1264,12 +1264,17 @@ pub fn flush_queued_cues(
 /// emitted as backend-neutral [`ResolvedReactiveCue`]s. The actual
 /// spawn/playback is backend-owned.
 pub fn play_reactive_audio_requests(
-    time: Res<SimTime>,
-    channels: Res<AudioChannels>,
-    mut state: ResMut<ReactiveAudioState>,
-    mut requests: ResMut<Queue<ReactiveAudioRequest>>,
-    mut out: ResMut<Queue<ResolvedReactiveCue>>,
+    time: Option<Res<SimTime>>,
+    channels: Option<Res<AudioChannels>>,
+    mut state: Option<ResMut<ReactiveAudioState>>,
+    mut requests: Option<ResMut<Queue<ReactiveAudioRequest>>>,
+    mut out: Option<ResMut<Queue<ResolvedReactiveCue>>>,
 ) {
+    let (Some(time), Some(channels), Some(mut state), Some(mut requests), Some(mut out)) =
+        (time, channels, state, requests, out)
+    else {
+        return;
+    };
     let now = time.elapsed_secs as f32;
     let bus = channels.master.clamp(0.0, 1.0) * channels.sfx.clamp(0.0, 1.0);
 

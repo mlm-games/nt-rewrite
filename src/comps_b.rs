@@ -632,6 +632,7 @@ pub struct LilHunterDie {
     pub trn: f32,
     pub bounces: u8,
     pub target: Option<Entity>,
+    pub ticks: u32,
 }
 
 /// GML `TrapFire` marker (`sprFireLilHunter` step-0 ring / death ring):
@@ -1076,6 +1077,145 @@ pub struct ScreenEnd;
 /// + position; art/health-detail stays renderer-owned.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct TitleCampfire;
+
+/// GML camper strip table verbatim (`CampChar` instance vars as set by
+/// `scrCampfireMenuCreateCharacter` + the BigDog inline override +
+/// the Frog `Step_0` far/near rewrite): `slct` is the deselected end
+/// (`spr_slct`), `to`/`menu` the selected transition/end
+/// (`spr_to`/`spr_menu`), `from` the deselect transition (`spr_from`).
+/// Normal races use the `<Name>Menu` family; BigDog sleeps
+/// (`Sleep`/`Intro`/`Idle`/`SleepHurt`); Frog walks near the fire and
+/// sits far away (`Walk`/`GoSit`/`Sit`: `menu` doubles as the sit end,
+/// `from` is unused). Skeleton/Frog ship no `Select`/`Selected`
+/// strips, so their selected half falls back to `sprMutant<gml>Idle`
+/// — the `_default` arg of `scr_race_get_sprite` (`scrRaces.gml:74`).
+/// Ends loop, transitions are oneshots.
+pub struct CamperStrips {
+    pub slct: &'static str,
+    pub to: &'static str,
+    pub menu: &'static str,
+    pub from: &'static str,
+}
+
+pub fn camper_strips(gml: usize, frog_far: bool) -> CamperStrips {
+    if gml == 13 {
+        return CamperStrips {
+            slct: "images/sprScrapBossSleep.png",
+            to: "images/sprScrapBossIntro.png",
+            menu: "images/sprScrapBossIdle.png",
+            from: "images/sprScrapBossSleepHurt.png",
+        };
+    }
+    if gml == 15 {
+        if frog_far {
+            return CamperStrips {
+                slct: "images/sprMutant15Sit.png",
+                to: "images/sprMutant15Sit.png",
+                menu: "images/sprMutant15Sit.png",
+                from: "images/sprMutant15Sit.png",
+            };
+        }
+        return CamperStrips {
+            slct: "images/sprFrogMenu.png",
+            to: "images/sprMutant15Idle.png",
+            menu: "images/sprMutant15Idle.png",
+            from: "images/sprFrogMenuDeselect.png",
+        };
+    }
+    let (slct, to, menu, from) = match gml {
+        1 => (
+            "images/sprFishMenu.png",
+            "images/sprFishMenuSelect.png",
+            "images/sprFishMenuSelected.png",
+            "images/sprFishMenuDeselect.png",
+        ),
+        2 => (
+            "images/sprCrystalMenu.png",
+            "images/sprCrystalMenuSelect.png",
+            "images/sprCrystalMenuSelected.png",
+            "images/sprCrystalMenuDeselect.png",
+        ),
+        3 => (
+            "images/sprEyesMenu.png",
+            "images/sprEyesMenuSelect.png",
+            "images/sprEyesMenuSelected.png",
+            "images/sprEyesMenuDeselect.png",
+        ),
+        4 => (
+            "images/sprMeltingMenu.png",
+            "images/sprMeltingMenuSelect.png",
+            "images/sprMeltingMenuSelected.png",
+            "images/sprMeltingMenuDeselect.png",
+        ),
+        5 => (
+            "images/sprPlantMenu.png",
+            "images/sprPlantMenuSelect.png",
+            "images/sprPlantMenuSelected.png",
+            "images/sprPlantMenuDeselect.png",
+        ),
+        6 => (
+            "images/sprVenuzMenu.png",
+            "images/sprVenuzMenuSelect.png",
+            "images/sprVenuzMenuSelected.png",
+            "images/sprVenuzMenuDeselect.png",
+        ),
+        7 => (
+            "images/sprSteroidsMenu.png",
+            "images/sprSteroidsMenuSelect.png",
+            "images/sprSteroidsMenuSelected.png",
+            "images/sprSteroidsMenuDeselect.png",
+        ),
+        8 => (
+            "images/sprRobotMenu.png",
+            "images/sprRobotMenuSelect.png",
+            "images/sprRobotMenuSelected.png",
+            "images/sprRobotMenuDeselect.png",
+        ),
+        9 => (
+            "images/sprChickenMenu.png",
+            "images/sprChickenMenuSelect.png",
+            "images/sprChickenMenuSelected.png",
+            "images/sprChickenMenuDeselect.png",
+        ),
+        10 => (
+            "images/sprRebelMenu.png",
+            "images/sprRebelMenuSelect.png",
+            "images/sprRebelMenuSelected.png",
+            "images/sprRebelMenuDeselect.png",
+        ),
+        11 => (
+            "images/sprHorrorMenu.png",
+            "images/sprHorrorMenuSelect.png",
+            "images/sprHorrorMenuSelected.png",
+            "images/sprHorrorMenuDeselect.png",
+        ),
+        12 => (
+            "images/sprRogueMenu.png",
+            "images/sprRogueMenuSelect.png",
+            "images/sprRogueMenuSelected.png",
+            "images/sprRogueMenuDeselect.png",
+        ),
+        14 => (
+            "images/sprSkeletonMenu.png",
+            "images/sprMutant14Idle.png",
+            "images/sprMutant14Idle.png",
+            "images/sprSkeletonMenuDeselect.png",
+        ),
+        16 => (
+            "images/sprCuzMenu.png",
+            "images/sprCuzMenuSelect.png",
+            "images/sprCuzMenuSelected.png",
+            "images/sprCuzMenuDeselect.png",
+        ),
+        _ => (
+            "images/sprDefault.png",
+            "images/sprDefault.png",
+            "images/sprDefault.png",
+            "images/sprDefault.png",
+        ),
+    };
+    CamperStrips { slct, to, menu, from }
+}
 
 /// GML camper menu-strip name verbatim (`scrCampfireMenuCreate`:
 /// `spr<Name>Menu`, `_name` from `scrRaceGetStringID(race, true)` —

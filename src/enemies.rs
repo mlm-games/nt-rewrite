@@ -2338,11 +2338,11 @@ pub fn spawn_lil_hunter_die(
             LevelCleanup,
             team,
             LilHunterDie {
-                // GML `trn = ((random(5) + 5) * choose(1, -1))`.
                 trn: (rng.random_range(0.0..5.0) + 5.0)
                     * if rng.random_bool(0.5) { 1.0 } else { -1.0 },
                 bounces: 0,
                 target,
+                ticks: 0,
             },
             Velocity(dir * 2.0 * 30.0),
             Pos(pos),
@@ -2416,6 +2416,11 @@ pub fn tick_lil_hunter_die(
     let dt = time.delta_secs;
     let mut rng = rand::rng();
     for (e, mut pos, mut vel, mut die, angle) in &mut q {
+        die.ticks += 1;
+        if die.ticks > 15 * 30 {
+            commands.entity(e).despawn();
+            continue;
+        }
         spawn_burst(
             &mut commands,
             &mut rng,

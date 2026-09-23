@@ -3992,7 +3992,7 @@ dependencies = [
 
 [[package]]
 name = "repose-app"
-version = "0.30.17"
+version = "0.30.18"
 dependencies = [
  "log",
  "repose-core",
@@ -4003,7 +4003,7 @@ dependencies = [
 
 [[package]]
 name = "repose-canvas"
-version = "0.30.17"
+version = "0.30.18"
 dependencies = [
  "lyon_path",
  "lyon_tessellation",
@@ -4013,7 +4013,7 @@ dependencies = [
 
 [[package]]
 name = "repose-core"
-version = "0.30.17"
+version = "0.30.18"
 dependencies = [
  "accesskit",
  "log",
@@ -4027,7 +4027,7 @@ dependencies = [
 
 [[package]]
 name = "repose-devtools"
-version = "0.30.17"
+version = "0.30.18"
 dependencies = [
  "repose-core",
  "web-time",
@@ -4036,7 +4036,7 @@ dependencies = [
 
 [[package]]
 name = "repose-macros"
-version = "0.30.17"
+version = "0.30.18"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4045,7 +4045,7 @@ dependencies = [
 
 [[package]]
 name = "repose-navigation"
-version = "0.30.17"
+version = "0.30.18"
 dependencies = [
  "log",
  "repose-core",
@@ -4056,7 +4056,7 @@ dependencies = [
 
 [[package]]
 name = "repose-platform"
-version = "0.30.17"
+version = "0.30.18"
 dependencies = [
  "accesskit",
  "accesskit_winit",
@@ -4088,7 +4088,7 @@ dependencies = [
 
 [[package]]
 name = "repose-render-wgpu"
-version = "0.30.17"
+version = "0.30.18"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -4106,7 +4106,7 @@ dependencies = [
 
 [[package]]
 name = "repose-text"
-version = "0.30.17"
+version = "0.30.18"
 dependencies = [
  "font-awl",
  "js-sys",
@@ -4123,7 +4123,7 @@ dependencies = [
 
 [[package]]
 name = "repose-tree"
-version = "0.30.17"
+version = "0.30.18"
 dependencies = [
  "log",
  "rapidhash",
@@ -4136,7 +4136,7 @@ dependencies = [
 
 [[package]]
 name = "repose-ui"
-version = "0.30.17"
+version = "0.30.18"
 dependencies = [
  "log",
  "repose-core",
@@ -6288,8 +6288,8 @@ dependencies = [
 
 [[patch.unused]]
 name = "repose-docking"
-version = "0.30.17"
+version = "0.30.18"
 
 [[patch.unused]]
 name = "repose-material"
-version = "0.30.17"
+version = "0.30.18"

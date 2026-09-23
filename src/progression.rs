@@ -1699,21 +1699,22 @@ pub fn tick_portal_clear(
     let dt = time.delta_secs;
     for (clear_e, clear_pos, mut clear) in &mut clears {
         clear.timer.tick(dt);
-        let center = clear_pos.0;
-        for (cell, wpos) in &walls {
-            if wpos.0.distance(center) < 48.0 {
-                commands.spawn((
-                    GameCleanup,
-                    LevelCleanup,
-                    crate::comps_a::PendingWallBreak {
-                        cell: (cell.0, cell.1),
-                        pos: wpos.0,
-                        spawn_floor: true,
-                    },
-                ));
+        let done = clear.timer.just_finished();
+        if done {
+            let center = clear_pos.0;
+            for (cell, wpos) in &walls {
+                if wpos.0.distance(center) < 48.0 {
+                    commands.spawn((
+                        GameCleanup,
+                        LevelCleanup,
+                        crate::comps_a::PendingWallBreak {
+                            cell: (cell.0, cell.1),
+                            pos: wpos.0,
+                            spawn_floor: true,
+                        },
+                    ));
+                }
             }
-        }
-        if clear.timer.just_finished() {
             commands.entity(clear_e).despawn();
         }
     }

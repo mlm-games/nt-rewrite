@@ -28,6 +28,7 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 
 use bevy_ecs::prelude::*;
 use glam::Vec2;
@@ -76,10 +77,10 @@ pub const ATLAS_PAGES: u32 = 16;
 /// API while the GML law drives the camera.
 pub const MAX_LOOK: f32 = 48.0;
 
-/// Packed atlas + decoded strip pixels + one-shot GPU uploads.
+/// Packed atlas + decoded strip pixels + retained GPU uploads.
 pub struct RenderAssets {
     catalog: AnimCatalog,
-    uploads: Vec<AtlasUpload>,
+    uploads_shared: Arc<[AtlasUpload]>,
     uploads_gen: u64,
     atlas_size: u32,
     layers: u32,
@@ -138,8 +139,8 @@ impl RenderAssets {
         static UPLOADS_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let generation = UPLOADS_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(Self {
+            uploads_shared: Arc::from(uploads),
             catalog,
-            uploads,
             uploads_gen: generation,
             atlas_size: desc.size,
             layers,
@@ -216,16 +217,12 @@ impl RenderAssets {
         }
     }
 
-    /// Retained atlas blits, replayed every frame. The GPU viewport is
-    /// rebuilt per frame, and early Android frames die in surface
-    /// negotiation before any `prepare` runs — a fire-once drain loses
-    /// the atlas forever while canvas text (upload-free) keeps
-    /// rendering. The sprite batch skips `write_texture` for the
-    /// resident generation (see `BatchDesc::uploads_gen`), but the
-    /// replay still clones the blit `Vec` every frame — the CPU clone
-    /// cost remains, only the GPU bandwidth is saved.
-    pub fn take_uploads(&mut self) -> Vec<AtlasUpload> {
-        self.uploads.iter().cloned().collect()
+    /// Retained atlas blits shared with the GPU viewport. Cloning the
+    /// `Arc` is cheap; the batch uploads a generation once and skips
+    /// `write_texture` for repeats (see `BatchDesc::uploads_gen`), so
+    /// lost early frames on Android just retry next frame.
+    pub fn take_uploads(&self) -> Arc<[AtlasUpload]> {
+        self.uploads_shared.clone()
     }
 
     pub(crate) fn sprite_for(
@@ -2139,13 +2136,12 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
     // Title campfire actors (GML `Campfire`/`LogMenu`/`CampChar`/`TV`
     // instances from `scrCampfireMenuCreate`): drawn from the live
     // `SpriteAnim` like any world instance. Campers run the
-    // `CampChar/Other_7` two-step verbatim: on selection change the arm
-    // flips `swap` and re-paths the anim to the transition strip as a
-    // oneshot (`spr_to` when newly selected, `spr_from` when
-    // deselected); while the oneshot runs the transition draws, and on
-    // finish the arm parks on the end strip (`spr_menu`/`spr_slct`) and
-    // clears `swap`. Missing transition strips fall back to the end
-    // strip immediately, like GML's `sprite_exists` guard.
+    // `CampChar/Other_7` two-step verbatim: on animation end the arm
+    // re-paths to the transition strip (`spr_to` when newly selected,
+    // `spr_from` when deselected), then on the next end parks on the
+    // end strip (`spr_menu`/`spr_slct`) and holds. Transitions are
+    // oneshots; ends loop. Missing strips fall back to the `sprMutant`
+    // idle — the `_default` arg of `scr_race_get_sprite` — like GML.
     {
         let selected = world
             .get_resource::<SelectedCharacter>()
@@ -2163,34 +2159,77 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
         // Collect swap flips first: the scan only reads, the anim
         // re-path needs `&mut World` below.
         let mut flips: Vec<(Entity, String, bool)> = Vec::new();
+        let fire_pos: Option<Vec2> = world
+            .query::<(&Pos, &TitleCampfire)>()
+            .iter(world)
+            .next()
+            .map(|(p, _)| p.0);
         for (e, _pos, anim, fire, log, camp, tv) in q.iter(world) {
             if fire.is_none() && log.is_none() && camp.is_none() && tv.is_none() {
                 continue;
             }
             if let Some(c) = camp {
+                // GML `CampChar/Other_7` ends come from the instance
+                // vars: `spr_menu`/`spr_to` when selected, `spr_slct`/
+                // `spr_from` when not. BigDog sleeps (`Sleep` idle,
+                // `Idle` end); the far Frog sits (`Sit` everywhere);
+                // the near Frog idles on `sprMutant15Idle` — `Step_0`
+                // forces `Walk` directly every step while near, which
+                // needs no arm here.
+                let frog_far = c.race_gml == 15
+                    && fire_pos.is_some_and(|f| _pos.0.distance(f) > 600.0);
+                let strips = crate::comps_b::camper_strips(c.race_gml, frog_far);
                 let want_selected = c.race_gml == selected;
-                let base = crate::comps_b::camper_menu_strip(c.race_gml);
-                let stem = base
-                    .trim_start_matches("images/")
-                    .trim_end_matches(".png");
-                let end_stem = if want_selected { "Select" } else { "Selected" };
-                let end = format!("images/{stem}{end_stem}.png");
-                let trans_stem = if want_selected { "Select" } else { "Deselect" };
-                let trans = format!("images/{stem}{trans_stem}.png");
+                let (end, trans) = if want_selected {
+                    (strips.menu, strips.to)
+                } else {
+                    (strips.slct, strips.from)
+                };
+                let want_swap = if want_selected { Some(true) } else { Some(false) };
+                let end_exists = assets.catalog.def(end).is_some();
+                let trans_exists = assets.catalog.def(trans).is_some();
+                let (end, has_trans) = if end_exists {
+                    (end, trans_exists)
+                } else if trans_exists {
+                    (trans, true)
+                } else {
+                    (strips.slct, false)
+                };
+                let end = end.to_string();
+                let trans = trans.to_string();
                 let on_end = anim.path == end;
                 let on_trans = anim.path == trans;
-                let want_swap = if want_selected { Some(true) } else { Some(false) };
+                // GML `CampChar/Step_0` Frog arm verbatim: the far Frog
+                // rewrites all four strips to `Sit`, so the sitting
+                // camper never enters the two-step — it jumps straight
+                // to the end. The `Walk`/`GoSit` switch below is the
+                // `sprite_index == Walk -> GoSit, speed = 0` half; the
+                // `GoSit -> Sit on animation_end` half runs in the
+                // `c.swap.is_some() && anim.finished` arm (GoSit is a
+                // oneshot transition to the Sit end).
+                if c.race_gml == 15 && frog_far && !on_end {
+                    flips.push((e, end, want_selected));
+                    continue;
+                }
+                if c.race_gml == 15
+                    && !frog_far
+                    && anim.path == "images/sprMutant15Walk.png"
+                    && assets.catalog.def("images/sprMutant15GoSit.png").is_some()
+                {
+                    flips.push((e, "images/sprMutant15GoSit.png".to_string(), want_selected));
+                    continue;
+                }
                 if c.swap != want_swap && !on_end && !on_trans {
                     // Selection changed since last settle: start the
                     // transition if it exists, else jump to the end.
-                    if assets.catalog.def(&trans).is_some() {
+                    if has_trans && end != trans {
                         flips.push((e, trans, want_selected));
-                    } else if assets.catalog.def(&end).is_some() {
+                    } else {
                         flips.push((e, end, want_selected));
                     }
                 } else if c.swap.is_some() && anim.finished && (on_trans || on_end) {
                     // Transition oneshot done: park on the end strip.
-                    if !on_end && assets.catalog.def(&end).is_some() {
+                    if !on_end {
                         flips.push((e, end, want_selected));
                     }
                 }
@@ -2198,12 +2237,29 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
         }
         for (e, path, want_selected) in flips {
             if let Some(def) = assets.catalog.def(&path) {
-                let is_end = path.ends_with("Selected.png") || path.ends_with("Select.png");
-                world.entity_mut(e).insert(SpriteAnim::oneshot(path, def));
+                // Ends are the `spr_menu`/`spr_slct` strips (looping);
+                // transitions are the `spr_to`/`spr_from` strips
+                // (oneshots). Frog sit settling is an end even though
+                // `GoSit` reads like a transition: GML parks on it
+                // (`Sit` == `from` == `to` == `menu` out far, and the
+                // near-arm `GoSit -> Sit on animation_end` lands on
+                // the Sit end through the same path).
+                let frog_settle = path == "images/sprMutant15Sit.png"
+                    || path == "images/sprMutant15GoSit.png";
+                let transition = !frog_settle
+                    && (path.ends_with("Select.png")
+                        || path.ends_with("Deselect.png")
+                        || path == "images/sprScrapBossIntro.png"
+                        || path == "images/sprScrapBossSleepHurt.png");
+                if transition {
+                    world.entity_mut(e).insert(SpriteAnim::oneshot(path, def));
+                } else {
+                    world.entity_mut(e).insert(SpriteAnim::new(path, def));
+                }
                 if let Some(mut c) = world.get_mut::<TitleCampChar>(e) {
                     // Jumped straight to the end (no transition
                     // strip): settled immediately.
-                    c.swap = if is_end { None } else { Some(want_selected) };
+                    c.swap = if transition { Some(want_selected) } else { None };
                 }
             } else if let Some(mut c) = world.get_mut::<TitleCampChar>(e) {
                 c.swap = None;

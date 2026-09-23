@@ -2828,7 +2828,7 @@ impl App {
             let geom = GeomHandle::new();
             let uploads = self
                 .assets
-                .as_mut()
+                .as_ref()
                 .map(|a| a.take_uploads())
                 .unwrap_or_default();
             let desc: BatchDesc = self

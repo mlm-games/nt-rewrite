@@ -264,6 +264,8 @@ pub fn handle_throne_room_props(
         }
 
         if let Some(statue) = statue {
+            if counted.is_none() {
+                commands.entity(e).insert(CountedGenerator);
             let center = pos.0;
             for i in 0..statue.guardian_count {
                 let ang = i as f32 * std::f32::consts::TAU / statue.guardian_count as f32;
@@ -274,6 +276,7 @@ pub fn handle_throne_room_props(
                     difficulty: 1.0,
                     loops: run.loop_count,
                 });
+            }
             }
         }
     }

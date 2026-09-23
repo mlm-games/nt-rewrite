@@ -3535,7 +3535,7 @@ pub fn apply_explosions(
             }
         }
 
-        if death_crown {
+        if death_crown && hit_opt.is_none() {
             let mut rng = rand::rng();
             for _ in 0..3 {
                 let ang = rng.random_range(0.0..std::f32::consts::TAU);

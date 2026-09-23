@@ -102,6 +102,7 @@ pub fn in_game(state: Res<AppState>) -> bool {
 /// stepping).
 pub fn build_sim_schedule() -> Schedule {
     use crate::anim;
+    use crate::audio;
     use crate::boss_ai;
     use crate::combat;
     use crate::crown;
@@ -198,6 +199,8 @@ pub fn build_sim_schedule() -> Schedule {
             (
                 effects::tick_fired_weapons.in_set(NtSimSet::Always),
                 effects::step_fx.in_set(NtSimSet::Always),
+                audio::flush_queued_cues.in_set(NtSimSet::Always),
+                audio::play_reactive_audio_requests.in_set(NtSimSet::Always),
                 effects::tick_hitstop_slowmo.in_set(NtSimSet::Always),
             )
                 .chain(),

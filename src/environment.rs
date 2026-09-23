@@ -226,7 +226,7 @@ impl EnvironmentHazardSpec {
             kind: EnvironmentHazardKind::Fire,
             radius: 14.0,
             damage: 1,
-            duration: 12.0,
+            duration: 2.5,
             tick: 0.5,
             hurts_player: true,
             hurts_enemies: true,
@@ -778,29 +778,20 @@ pub fn tick_motes(
         &mut Mote,
         &mut MoteScale,
     ), Without<crate::comps_a::WallTile>>,
-    walls: Query<(&crate::comps_a::WallCell, &Pos), With<crate::comps_a::WallTile>>,
-    _frame: Res<crate::state::CurrentFrame>,
+    floor: Option<Res<crate::comps_a::FloorMask>>,
 ) {
     let dt = time.delta_secs;
-    let wall_cells: Vec<((i32, i32), glam::Vec2)> =
-        walls.iter().map(|(c, p)| ((c.0, c.1), p.0)).collect();
+    let floor = floor.as_deref();
     let bounce = |pos: glam::Vec2, vel: &mut glam::Vec2, keep: f32| {
-        for ((cx, cy), wp) in &wall_cells {
-            let half = 8.0;
-            let closest = glam::Vec2::new(
-                pos.x.clamp(wp.x - half, wp.x + half),
-                pos.y.clamp(wp.y - half, wp.y + half),
-            );
-            if pos.distance(closest) > 4.0 {
-                continue;
-            }
-            let _ = (cx, cy);
-            if (pos.x - closest.x).abs() > (pos.y - closest.y).abs() {
-                vel.x = -vel.x * keep;
-            } else {
-                vel.y = -vel.y * keep;
-            }
-            break;
+        let Some(floor) = floor else { return };
+        if floor.is_walkable(pos) {
+            return;
+        }
+        let center = floor.cell_center(floor.world_to_cell(pos));
+        if (pos.x - center.x).abs() > (pos.y - center.y).abs() {
+            vel.x = -vel.x * keep;
+        } else {
+            vel.y = -vel.y * keep;
         }
     };
     for (e, mut pos, mut ground, mut angle, mut mote, mut scale) in &mut q {
