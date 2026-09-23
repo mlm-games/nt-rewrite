@@ -815,27 +815,22 @@ impl App {
         }
         let rest = self.cam.center;
         // Cursor-lean source by device (GML `scrHandleInputs` law):
-        // touch aim comes from the attack stick (`dir_fire`/`dis_fire`
-        // off `JoystickAttack`), never from a cursor point. The port's
-        // sampler already wrote this frame's `aim_axis` from the stick
-        // heading, and `touch_dis` carries the deflection — use those.
+        // touch aim comes from the attack stick (`dir_fire`/`vdis`
+        // off `JoystickAttack`), never from a cursor point. The stick
+        // latches its heading on release (GML `dir_fire` is never
+        // zeroed; `vdis` decays at 2 px/tick), so the lean glides home
+        // instead of snapping.
         // Keyboard/mouse keeps the live-cursor unprojection (bevy
         // `player_aim` parity). The old code read the cursor on touch
         // too, so every tap re-aimed the gun AND leaned the camera at
         // the tap point while the shot went stick-side.
         #[cfg(target_os = "android")]
         let (aim_dir, aim_dis) = {
-            let world = &mut self.sim.world;
-            let input = world.resource::<NtInput>();
-            let axis = input.aim_axis;
+            let input = self.sim.world.resource::<NtInput>();
             let dis = input.touch_dis;
-            let player = player_pos(world).unwrap_or(rest);
-            let _ = player;
-            if axis.length_squared() > 1e-6 {
-                (axis.normalize_or_zero(), dis)
-            } else {
-                (Vec2::X, 0.0)
-            }
+            let dir_deg = input.attack_stick.map(|s| s.dir).unwrap_or(0.0);
+            let rad = dir_deg.to_radians();
+            (Vec2::new(rad.cos(), rad.sin()), dis)
         };
         #[cfg(not(target_os = "android"))]
         let step_in = {
