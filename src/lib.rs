@@ -1491,11 +1491,13 @@ impl App {
     }
 
     pub fn touch_down(&mut self, id: u64, screen: Vec2) {
-        self.staging.borrow_mut().touch_down(id, screen);
+        let d = repose_core::locals::effective_density_scale().max(1e-6);
+        self.staging.borrow_mut().touch_down(id, screen / d);
     }
 
     pub fn touch_move(&mut self, id: u64, screen: Vec2) {
-        self.staging.borrow_mut().touch_move(id, screen);
+        let d = repose_core::locals::effective_density_scale().max(1e-6);
+        self.staging.borrow_mut().touch_move(id, screen / d);
     }
 
     pub fn touch_up(&mut self, id: u64) {
@@ -2150,12 +2152,12 @@ impl App {
             return None;
         }
         let px = self.polled_pointer_px?;
-        let vw = self.view_viewport_dp;
-        let k = (vw[1].max(1.0) / 240.0).max(1e-6);
+        let d = self.view_density.max(1e-6);
+        let k = (self.view_viewport_dp[1].max(1.0) / 240.0).max(1e-6);
         if !k.is_finite() {
             return None;
         }
-        Some([px.x / k, px.y / k])
+        Some([px.x / d / k, px.y / d / k])
     }
 
     /// GML `mouse_ui_hovered` Step parity, run once per `feed_input`
@@ -3152,10 +3154,12 @@ impl App {
                     }
                     PickEvent::Hover { .. } => {}
                     PickEvent::TouchDown { id, screen } => {
-                        staging.touch_down(id, Vec2::new(screen[0], screen[1]))
+                        let d = repose_core::locals::effective_density_scale().max(1e-6);
+                        staging.touch_down(id, Vec2::new(screen[0] / d, screen[1] / d))
                     }
                     PickEvent::TouchMove { id, screen } => {
-                        staging.touch_move(id, Vec2::new(screen[0], screen[1]))
+                        let d = repose_core::locals::effective_density_scale().max(1e-6);
+                        staging.touch_move(id, Vec2::new(screen[0] / d, screen[1] / d))
                     }
                     PickEvent::TouchUp { id } => {
                         staging.touch_up(id);
@@ -3187,10 +3191,12 @@ impl App {
                     }
                     PickEvent::Hover { .. } => {}
                     PickEvent::TouchDown { id, screen } => {
-                        staging.touch_down(id, Vec2::new(screen[0], screen[1]))
+                        let d = repose_core::locals::effective_density_scale().max(1e-6);
+                        staging.touch_down(id, Vec2::new(screen[0] / d, screen[1] / d))
                     }
                     PickEvent::TouchMove { id, screen } => {
-                        staging.touch_move(id, Vec2::new(screen[0], screen[1]))
+                        let d = repose_core::locals::effective_density_scale().max(1e-6);
+                        staging.touch_move(id, Vec2::new(screen[0] / d, screen[1] / d))
                     }
                     PickEvent::TouchUp { id } => {
                         staging.touch_up(id);
