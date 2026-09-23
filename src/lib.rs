@@ -2,7 +2,7 @@
 //!
 //! Strangler layout: `sim/` (components, resources, systems),
 //! `render/` (snapshot producers), `ui/`, `audio.rs`, `save.rs`,
-//! `input.rs` land here slice by slice from `../nt-recreated-bevy`.
+//! `input.rs` land here slice by slice from the GML input scripts.
 //!
 //! Playable view wiring (this module):
 //! - [`App`] owns the fixed-step [`Sim`] world, the full sim [`Schedule`]
@@ -20,12 +20,9 @@
 //! Assets resolution ([`resolve_assets_dir`], in order):
 //! 1. `$NT_ASSETS` (must contain `images/anims.json`),
 //! 2. `<exe-dir>/assets`,
-//! 3. `<cwd>/assets`,
-//! 4. `<cwd>/../nt-recreated-bevy/assets` (dev checkout convenience).
-//! Use `cargo run` from the crate dir with the bevy checkout beside it, or
-//! set `NT_ASSETS=/path/to/assets` explicitly:
-//! `NT_ASSETS=../nt-recreated-bevy/assets cargo run`.
-//! Loading is explicit ([`App::load_assets`], called by `main.rs`), so
+//! 3. `<cwd>/assets`.
+//! Use `cargo run` from the crate dir, or set `NT_ASSETS=/path/to/assets`
+//! explicitly. Loading is explicit ([`App::load_assets`], called by `main.rs`), so
 //! [`App::new`] never touches disk and headless tests stay fast. Without
 //! assets the game still runs: placeholder quads stand in for sprites and
 //! no system depends on art.
@@ -3556,9 +3553,9 @@ fn init_schedule_resources(world: &mut World) {
     world.init_resource::<crate::keymap::InputMapState>();
 }
 
-/// Resolve the art dir: `$NT_ASSETS` -> exe-dir `assets` -> cwd `assets` ->
-/// dev-checkout `../nt-recreated-bevy/assets`. Returns `None` when no dir
-/// holds `images/anims.json` (placeholder path stays active).
+/// Resolve the art dir: `$NT_ASSETS` -> exe-dir `assets` -> cwd `assets`.
+/// Returns `None` when no dir holds `images/anims.json` (placeholder path
+/// stays active).
 pub fn resolve_assets_dir() -> Option<PathBuf> {
     let has_catalog = |p: &Path| p.join("images").join("anims.json").is_file();
     if let Ok(p) = std::env::var("NT_ASSETS") {
@@ -3577,10 +3574,9 @@ pub fn resolve_assets_dir() -> Option<PathBuf> {
         }
     }
     if let Ok(cwd) = std::env::current_dir() {
-        for cand in [cwd.join("assets"), cwd.join("../nt-recreated-bevy/assets")] {
-            if has_catalog(&cand) {
-                return Some(cand);
-            }
+        let cand = cwd.join("assets");
+        if has_catalog(&cand) {
+            return Some(cand);
         }
     }
     None

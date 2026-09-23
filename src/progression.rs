@@ -1,5 +1,5 @@
 //! Level/mutation/portal progression. Port of
-//! `nt-recreated-bevy/src/game/progression.rs` minus the three deferred
+//! `progression.rs` GML port minus the three deferred
 //! items (`setup_run`, `begin_between_floor_skill_picks` as a public
 //! system, `starting_ammo_for` — reasons in the module docs below).
 //!

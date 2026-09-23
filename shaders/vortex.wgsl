@@ -1,4 +1,4 @@
-// Portal vortex (ported from nt-recreated-bevy `assets/shaders/vortex.wgsl`,
+// Portal vortex (ported from the former bevy prototype's vortex shader,
 // itself a direct transcription of `scrDrawSpiral.gml`).
 // Rendered as ONE fullscreen quad: each wisp is a transformed sample of the
 // real spiral art; growth/alpha/lightning follow the GameMaker laws.

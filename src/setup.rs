@@ -1,7 +1,7 @@
 //! Floor setup: mask building + entity spawning from plans.
 //!
 //! Save-phase extension: loadout-driven run setup. Bevy `setup_run`
-//! (`nt-recreated-bevy/src/game/progression.rs:48-260`) resolves the
+//! (GML level-flow scripts) resolves the
 //! save loadout (character stats, `start_crown` stamp, skins, starting
 //! weapons via `sanitize_weapon_id` + `starting_ammo_for`) and spawns
 //! the player; that logic lands here as pure helpers

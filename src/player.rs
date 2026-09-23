@@ -104,7 +104,7 @@ pub fn player_move(
 
 // ---------------------------------------------------------------------------
 // SIM-side player systems: headless port of the non-render half of
-// `nt-recreated-bevy/src/game/player.rs`.
+// the GML player scripts.
 // PORTED (pure sim): `player_aim` (stick path verbatim + shell-fed
 // mouse path), `weapon_switch` (timers untouched, bevy parity),
 // `tick_player_timers`, `ally_ai`, `tick_hold_abilities`,

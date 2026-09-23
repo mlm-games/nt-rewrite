@@ -1,5 +1,5 @@
 //! Headless menu/state-machine layer. State-only port of
-//! `nt-recreated-bevy/src/app.rs` (`process_ui_actions`,
+//! the former bevy app (`process_ui_actions`,
 //! `handle_pause_input`, `handle_mutation_keys`, `handle_death_restart`)
 //! and `src/menus/` (character select, loadout select, mutation choice,
 //! pause, settings, unlock popups, game-over data). No rendering: repose

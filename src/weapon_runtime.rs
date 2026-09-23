@@ -1,5 +1,5 @@
 //! Weapon runtime definitions: pure-data port of
-//! `nt-recreated-bevy/src/game/weapon_runtime.rs`, plus the `WeaponDef` /
+//! `weapon_runtime.rs` game data, plus the `WeaponDef` /
 //! `MeleeDef` structs and the legacy `weapon_def` table from bevy
 //! `content.rs` (~lines 832-1223).
 //!

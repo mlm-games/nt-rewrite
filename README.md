@@ -2,7 +2,7 @@
 
 Nuclear Throne recreation running on repame via repose.
 
-Migration target for `../nt-recreated-bevy` (bevy 0.20-dev): sim systems
+Nuclear Throne recreation (formerly migrated from a bevy prototype): sim systems
 port module-by-module into `repame-sim` schedules at the same 30 Hz fixed
  step; world rendering goes through `repame-sprite` (atlas + GPU batch)
  and the in-crate `vortex_pass` portal background; UI stays repose views.

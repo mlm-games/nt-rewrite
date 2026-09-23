@@ -1,4 +1,4 @@
-//! Mechanical port of pure-data items from nt-recreated-bevy (keep semantics byte-identical).
+//! Save-data items (keep semantics byte-identical).
 //! Sources:
 //! - `src/save.rs`: `SAVE_VERSION`, `SaveData`, `SettingsData` (+ `default_*` helpers, `Default` impls)
 //! - `src/game/components.rs`: `RaceLoadout` (imported by `src/save.rs` as
@@ -1458,8 +1458,8 @@ pub fn check_progress_unlocks(
 // ---------------------------------------------------------------------------
 // Save file IO. Headless replacement for the bevy build's game_utils
 // `SavePlugin::<SaveData>` (`SaveManager::new("com", "nt-recreated",
-// "nt-recreated-bevy", "save.ron", SAVE_VERSION)`, see
-// nt-recreated-bevy `src/app.rs`).
+// "save.ron", SAVE_VERSION)`, see
+// the former bevy `src/app.rs`).
 //
 // Fidelity compromise (save path location): without the `directories`
 // crate and without RON in this crate, the sim keeps it simple and
@@ -1514,7 +1514,7 @@ pub fn load_or_default(path: &Path) -> SaveData {
 }
 
 // ---------------------------------------------------------------------------
-// Skin unlocks. Port of `nt-recreated-bevy/src/game/skin_unlocks.rs`
+// Skin unlocks. Port of the GML skin-unlock scripts
 // (all 8 items): area, robot-weapon, crystal-damage and global checks
 // plus their tick systems. Transforms: `AreaId` -> `crate::data::AreaId`,
 // components -> `crate::comps_a`, `RaceId`/`SkinLetter` ->

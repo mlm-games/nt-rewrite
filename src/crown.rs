@@ -1,4 +1,4 @@
-//! Crown effects. Port of `nt-recreated-bevy/src/game/crown.rs` (all 10
+//! Crown effects. Port of the GML crown scripts (all 10
 //! functions): spawn-time stat application, per-tick Life / Protection /
 //! Love / Curses / Luck / Love-convert behaviors, floor-start bonuses,
 //! toast names, and pedestal pickup.

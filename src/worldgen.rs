@@ -1,6 +1,6 @@
 //! Level-generation core, mechanically ported from
-//! `nt-recreated-bevy/src/game/world.rs` (plus `is_secret_area` from
-//! `nt-recreated-bevy/src/game/secret_areas.rs`).
+//! `world.rs` floor generation (plus `is_secret_area` from
+//! the GML secret-area scripts).
 //!
 //! Scope: `LevelPlan`, `PropKind`, `ChestSpawn`, `Maker` + `step_delta`,
 //! `rng_choose`, `turn_table`, `gml_area`, `gml_area_from_run`,

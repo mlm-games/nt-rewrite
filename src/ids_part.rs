@@ -1,4 +1,4 @@
-//! nt id enums: byte-exact port of /home/ymsr/Documents/nt-recreated-bevy/src/game/content.rs. DO NOT EDIT BY HAND; fix upstream and re-port.
+//! nt id enums: byte-exact port of the GML weapon/enemy tables via `weapons_data.rs` / `enemy_data.rs`.
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u16)]

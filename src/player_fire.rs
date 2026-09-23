@@ -1,7 +1,7 @@
 //! Player combat: firing, melee, abilities, and ability-field ticks.
 //!
 //! Headless port of the COMBAT half of
-//! `nt-recreated-bevy/src/game/player.rs`: `player_fire`,
+//! the GML player scripts: `player_fire`,
 //! `fire_burst_volley`, `fire_one_gun`, `apply_weapon_mutation_mods`,
 //! `spawn_pellets`, `slash_life_secs`, `flip_melee_angle`, `melee_attack`,
 //! `pay_fire_cost`, `spawn_beam_shot`, `spawn_player_projectile`,

@@ -1,7 +1,7 @@
 //! App states and run flags. Mirrors the bevy `AppState` machine; the
 //! shell driver (not shown) transitions these, systems gate on them.
 //!
-//! State-layer port of `nt-recreated-bevy/src/app.rs` (transition laws
+//! App state layer (transition laws
 //! only, no rendering) plus `src/screens/mod.rs` (loading law):
 //! - `AppState` boot order Splash -> MainMenu -> Loading -> Title ->
 //!   InGame (same as the bevy build).

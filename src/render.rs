@@ -148,7 +148,7 @@ impl RenderAssets {
     }
 
     /// Full production load: `assets_dir` holds `images/anims.json` +
-    /// the strip PNGs (e.g. `../nt-recreated-bevy/assets`).
+    /// the strip PNGs (e.g. `./assets`).
     pub fn load(assets_dir: &Path) -> anyhow::Result<Self> {
         let json = crate::render::read_asset_json(&assets_dir.join("images").join("anims.json"))?;
         Self::build(

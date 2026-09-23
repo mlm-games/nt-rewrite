@@ -1,6 +1,6 @@
 //! Headless sim schedule: bevy `FixedUpdate` order without the engine.
 //!
-//! Mirrors `nt-recreated-bevy/src/game/mod.rs` (`NtSimSet::Always` →
+//! Mirrors the former bevy `game/mod.rs` (`NtSimSet::Always` →
 //! `Input` → `Combat` → `Progression` → `Cleanup`) as one chained
 //! tuple, so bevy `.before()`/`.after()` edges hold by position
 //! (`update_carpet_occupancy` before `boss_ai`, `handle_throne_room_props`

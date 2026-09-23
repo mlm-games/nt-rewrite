@@ -1,6 +1,6 @@
 //! Secret-area trigger state and detectors. `SecretTriggers` is a
 //! verbatim port (no engine types); the observer/detect systems below
-//! mirror `nt-recreated-bevy/src/game/secret_areas.rs` with positions
+//! mirror the GML secret-area scripts with positions
 //! as [`Pos`] and the boss check via `enemy_def(kind).boss`.
 //!
 //! Already-ported elsewhere (not duplicated here):
