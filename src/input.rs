@@ -55,9 +55,11 @@ pub struct NtInput {
 
 /// GML `MobileUI` stick claim verbatim: GUI-px anchor, claimed touch
 /// id (`index`, -1 = free), deflection (`dis`, px from anchor), heading
-/// (`dir`, degrees), and the move-stick direction-hold ramp
+/// (`dir`, degrees), the move-stick direction-hold ramp
 /// (`current_move_direction_time`: +1/tick within 10° of the held
-/// heading, −3/tick otherwise).
+/// heading, −3/tick otherwise), and the attack-stick smoothed view
+/// deflection (`vdis`, which decays toward `dis` at 2 px/tick on
+/// release and feeds the camera lean, not the raw `dis`).
 ///
 /// Touch ids here are the shell finger ids (`TouchContact.id`, GML
 /// touch slot 0-4): claims key on the stable finger, never on the
@@ -69,12 +71,29 @@ pub struct TouchStick {
     pub dis: f32,
     pub dir: f32,
     pub hold_time: f32,
+    /// GML `JoystickAttack.vdis`: smoothed view deflection for the
+    /// camera lean. Chases `dis` at `mdis / rad * 0.4` while held
+    /// (`vdis = lerp(vdis, dis, mdis / rad * 0.4)`), decays toward it
+    /// at 2 px/tick after release (`approach(vdis, dis, 2)`).
+    pub vdis: f32,
 }
 
 /// GML `JoystickAttack/Create_0` verbatim.
 pub const ATTACK_BUTTON_DEADZONE: f32 = 0.4125;
 /// GML stick radius (`JoystickMove/Create_0`, `JoystickAttack/Create_0`).
 pub const TOUCH_STICK_RADIUS: f32 = 32.0;
+/// GML `approach` verbatim (also in `menus.rs` for the game-over
+/// anim): move `v` toward `target` by `delta` without overshooting.
+/// The attack stick's `vdis` decay uses it (`approach(vdis, dis, 2)`).
+fn approach(v: f32, target: f32, delta: f32) -> f32 {
+    if v < target {
+        (v + delta).min(target)
+    } else if v > target {
+        (v - delta).max(target)
+    } else {
+        target
+    }
+}
 /// GML `ButtonAct`/`ButtonSwap` radius (`rad = 25`).
 pub const TOUCH_BUTTON_RADIUS: f32 = 25.0;
 
@@ -1228,6 +1247,11 @@ pub fn sample_touch_full(
         if raw.length() > TOUCH_STICK_RADIUS * 3.0 {
             attack_stick.touch = -1;
             attack_stick.dis = 0.0;
+            // GML `vdis` keeps chasing the now-zero `dis` at 2
+            // px/tick (the release arm below): the camera lean eases
+            // out instead of snapping home on release.
+            attack_stick.vdis = approach(attack_stick.vdis, 0.0, 2.0);
+            output.touch_dis = attack_stick.vdis;
         } else {
             let mdis = raw.length().min(TOUCH_STICK_RADIUS);
             if raw.length_squared() > 0.0 {
@@ -1237,7 +1261,13 @@ pub fn sample_touch_full(
             }
             let dis = mdis * 2.0;
             attack_stick.dis = dis;
-            output.touch_dis = dis;
+            // GML `vdis = lerp(vdis, dis, mdis / rad * 0.4)` while
+            // held: the camera lean eases toward the deflection, so a
+            // fresh full-deflection press leans in over a few ticks
+            // instead of snapping a full screen on the press frame.
+            let t = (mdis / TOUCH_STICK_RADIUS * 0.4).clamp(0.0, 1.0);
+            attack_stick.vdis += (dis - attack_stick.vdis) * t;
+            output.touch_dis = attack_stick.vdis;
             if !split_fire && dis / TOUCH_STICK_RADIUS > ATTACK_BUTTON_DEADZONE {
                 output.fire_held = true;
                 // Edges are swapped by design (`Other_10` comment):
@@ -1251,11 +1281,16 @@ pub fn sample_touch_full(
     } else {
         // GML `index = -1` on `!device_mouse_check_button(...)` (the
         // finger lifted). The lift frame reports `press_fire`
-        // (swapped edges); `fire_held` drops.
+        // (swapped edges); `fire_held` drops. `vdis` keeps chasing
+        // the now-zero `dis` at 2 px/tick (`approach(vdis, dis, 2)`
+        // runs unconditionally in `Other_10`), so the camera lean
+        // glides home instead of snapping on release.
         if attack_stick.touch >= 0 {
             attack_stick.touch = -1;
         }
         attack_stick.dis = 0.0;
+        attack_stick.vdis = approach(attack_stick.vdis, 0.0, 2.0);
+        output.touch_dis = attack_stick.vdis;
         if attack_lifted {
             output.fire_held = false;
             output.fire_released = true;
@@ -1426,7 +1461,11 @@ mod keymap_tests {
         // Lift: claim releases and the swapped press edge fires (the
         // finger id stages through `note_touch_released`, like the
         // shell `TouchUp` path — the contact itself is already gone).
+        // `vdis` keeps chasing zero at 2 px/tick (GML `approach`), so
+        // the camera lean glides home instead of snapping.
         let attack_id = out.attack_stick.map(|s| s.touch).unwrap_or(-1);
+        let attack_vdis = out.attack_stick.map(|s| s.vdis).unwrap_or(0.0);
+        assert!(attack_vdis > 40.0, "vdis must chase the held dis, got {attack_vdis}");
         let mut lifted = NtInput::default();
         lifted.move_stick = out.move_stick;
         lifted.attack_stick = out.attack_stick;
@@ -1434,6 +1473,15 @@ mod keymap_tests {
         sample_touch_full(&[], 320.0, 0.5, false, true, &mut lifted);
         assert!(lifted.attack_stick.is_some_and(|s| s.touch < 0));
         assert!(lifted.take_fire_released(), "lift must report press_fire");
+        let decayed = lifted.touch_dis;
+        assert!(
+            decayed < attack_vdis && decayed > 0.0,
+            "lift must decay vdis one 2px step, not zero it ({attack_vdis} -> {decayed})"
+        );
+        for _ in 0..40 {
+            sample_touch_full(&[], 320.0, 0.5, false, true, &mut lifted);
+        }
+        assert_eq!(lifted.touch_dis, 0.0, "vdis must settle at zero");
     }
 
     #[test]

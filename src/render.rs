@@ -6858,18 +6858,16 @@ pub fn crosshair_sprites(
     // is_gamepad(index)` — the lerped world crosshair is skipped ONLY
     // for a keyboard-driven local player (the raw `Draw_75` cursor
     // covers their aim). Device facts: `keyboard[index] = opt_keyboard
-    // && !opt_gamepad`, `gamepad[index] = opt_gamepad`. So a local
-    // player draws the lerped crosshair UNLESS keyboard mode is on and
-    // gamepad mode is off (`opt_keyboard && !opt_gamepad`). Gamepad
-    // enabled (either flag combo) draws — including keyboard+pad
-    // hybrids, where `is_gamepad(index)` is true. The old
-    // gamepad-setting-only gate hid the fading lerped crosshair from
-    // every default keyboard user; the menu-crosshair path in lib.rs
-    // stays keyboard-only and draws the raw cursor over it.
-    let keyboard_local = world
-        .get_resource::<crate::savedata_part::SaveData>()
-        .map(|s| !s.settings.gamepad_enabled)
-        .unwrap_or(true);
+    // && !opt_gamepad`, `gamepad[index] = opt_gamepad`. `opt_keyboard`
+    // defaults to `desktop` and the Android OS-change forces it false
+    // (`scrOptionsUpdate`), so a touch local is never keyboard-driven:
+    // it always draws the lerped crosshair — that IS the GML Android
+    // cursor — while `Draw_75` never fires there.
+    let keyboard_local = !cfg!(target_os = "android")
+        && world
+            .get_resource::<crate::savedata_part::SaveData>()
+            .map(|s| !s.settings.gamepad_enabled)
+            .unwrap_or(true);
     if keyboard_local {
         return out;
     }
@@ -6888,13 +6886,19 @@ pub fn crosshair_sprites(
         Vec2::X
     };
     // GML `dis_fire` source by device: keyboard reads the hover
-    // distance, touch reads the attack-stick deflection (`dis =
-    // min(rad, mdis) * 2`, carried in `NtInput.touch_dis`).
+    // distance, touch reads the attack-stick SMOOTHED deflection
+    // (`vdis`, carried in `NtInput.touch_dis`). `vdis` eases toward
+    // `dis` while held and decays at 2 px/tick after release
+    // (`JoystickAttack/Other_10`), so the crosshair glides home
+    // instead of snapping to the player on lift.
     let touch_dis = world
         .get_resource::<crate::input::NtInput>()
         .map(|i| i.touch_dis)
         .unwrap_or(0.0);
-    let dis = if touch_dis > 0.0 {
+    let touch_live = world
+        .get_resource::<crate::input::NtInput>()
+        .is_some_and(|i| i.attack_stick.is_some_and(|s| s.touch >= 0));
+    let dis = if touch_dis > 0.0 || touch_live {
         touch_dis
     } else {
         hover.map(|h| h.distance(pp)).unwrap_or(0.0)
