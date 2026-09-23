@@ -2793,8 +2793,11 @@ impl App {
             s.extend(h);
             // Touch controls (`scrDrawMobileControls`, `TopCont/Draw_64`
             // tail): sticks + buttons over the HUD, under splash/menus.
-            // GML skips while pausing/quitting; the port additionally
-            // requires live play (menus have no sticks).
+            // GML gate verbatim (`TopCont/Draw_64:23`): `drawcontrols`
+            // (off during cinematic/throne-sit/unlock) + live player +
+            // touch device (`!opt_keyboard && !opt_gamepad`) + not the
+            // layout editor. The port additionally requires live play
+            // (menus/game-over have no sticks).
             let touch_paused = self
                 .sim
                 .world
@@ -2807,13 +2810,34 @@ impl App {
                 .copied()
                 .unwrap_or_default();
             let touch_live = playing
+                && state == AppState::InGame
+                && !game_over
+                && self
+                    .sim
+                    .world
+                    .query::<&crate::comps_a::Player>()
+                    .iter(&self.sim.world)
+                    .next()
+                    .is_some()
                 && !touch_paused
                 && touch_overlay == OverlayMenu::None
                 && self
                     .sim
                     .world
+                    .get_resource::<crate::state::menus::MenuState>()
+                    .is_none_or(|m| m.unlock_queue.is_empty())
+                && self
+                    .sim
+                    .world
+                    .query::<(&Pos, &crate::comps_b::ThroneSit)>()
+                    .iter(&self.sim.world)
+                    .next()
+                    .is_none()
+                && self
+                    .sim
+                    .world
                     .get_resource::<crate::savedata_part::SaveData>()
-                    .is_none_or(|s| !s.settings.gamepad_enabled);
+                    .is_none_or(|s| !s.settings.gamepad_enabled && !s.settings.keyboard_enabled);
             let gamepad_live = playing
                 && self
                     .sim
