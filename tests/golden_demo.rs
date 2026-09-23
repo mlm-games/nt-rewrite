@@ -42,7 +42,7 @@ use nt_rewrite::spatial::Pos;
 use nt_rewrite::state::{AppState, Paused};
 use nt_rewrite::App;
 use repose_core::input::{Key, KeyEvent, KeyEventType, Modifiers, PhysicalKey};
-use repose_core::shortcuts::{Action, KeyChord, handle, resolve_action};
+use repose_core::shortcuts::{Action, KeyChord};
 use repose_core::Scheduler;
 
 const DT: Duration = Duration::from_millis(33);
@@ -168,7 +168,8 @@ fn run_tape() -> Vec<TickSnap> {
             player_pos + glam::Vec2::new(60.0, 0.0),
         );
     }
-    nt_rewrite::nt_shortcuts::install(&nt_rewrite::nt_shortcuts::edges_handle(&app));
+    nt_rewrite::nt_shortcuts::install_map_once();
+    let nt_state = nt_rewrite::nt_shortcuts::test_state(&app);
     let mut hw = Hardware::default();
     let mut out = Vec::with_capacity(TICKS);
     // Release bookkeeping: key-up must hit BOTH the App level set
@@ -250,8 +251,8 @@ fn run_tape() -> Vec<TickSnap> {
                 // must not re-toggle while down).
                 app.stage_key(&key_event(Key::Escape, PhysicalKey::Escape));
                 let chord = KeyChord::new(Key::Escape, Modifiers::default());
-                let action = resolve_action(chord).expect("Esc must resolve");
-                assert!(handle(action), "pause shortcut must dispatch");
+                let action = nt_state.resolve_action(&chord).expect("Esc must resolve");
+                assert!(nt_state.handle(action), "pause shortcut must dispatch");
             }
             181 => {
                 app.stage_key(&key_up(Key::Escape, PhysicalKey::Escape));
@@ -259,8 +260,8 @@ fn run_tape() -> Vec<TickSnap> {
             190 => {
                 app.stage_key(&key_event(Key::Escape, PhysicalKey::Escape));
                 let chord = KeyChord::new(Key::Escape, Modifiers::default());
-                let action = resolve_action(chord).expect("Esc must resolve");
-                assert!(handle(action), "resume shortcut must dispatch");
+                let action = nt_state.resolve_action(&chord).expect("Esc must resolve");
+                assert!(nt_state.handle(action), "resume shortcut must dispatch");
                 let _ = Action::Custom("unused".into());
             }
             191 => {

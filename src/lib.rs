@@ -73,7 +73,7 @@ use repame_sprite::{
 use repose_canvas::Embedded;
 use repose_core::PaddingValues;
 use repose_core::input::{
-    Key, KeyEvent, KeyEventType, PhysicalKey, PointerButton, PointerEvent,
+    Key, KeyEvent, KeyEventType, PhysicalKey, PointerButton,
 };
 use repose_core::prelude::{AlignItems, Modifier};
 use repose_core::{
@@ -248,6 +248,13 @@ pub struct App {
     window_focused: bool,
     staging: std::rc::Rc<std::cell::RefCell<repame_shell::Staging>>,
     shortcut_edges: repame_shell::SharedEdges,
+    /// Last mouse position in window-physical px, copied from
+    /// `Scheduler::pointer_pos_px` at the top of every `view` (the
+    /// runtime maintains it on mouse move/press/release, bypassing
+    /// focus dispatch). Drives [`App::live_cursor_world`]; `None`
+    /// until the first mouse move. Stored because `feed_input` and
+    /// the fixed-step camera run without the `Scheduler` at hand.
+    polled_pointer_px: Option<Vec2>,
     pause_edge: bool,
     restart_edge: bool,
     interact_edge: bool,
@@ -354,6 +361,7 @@ impl App {
             window_focused: true,
             staging: repame_shell::Staging::shared(),
             shortcut_edges: repame_shell::shared_edges(),
+            polled_pointer_px: None,
             pause_edge: false,
             restart_edge: false,
             interact_edge: false,
@@ -1066,7 +1074,7 @@ impl App {
 }
 
 pub mod nt_shortcuts {
-    use repame_shell::{SharedEdges, shared_edges};
+    use repose_core::shortcuts::{Action, ShortcutMap, ShortcutState};
 
     use super::App;
 
@@ -1074,42 +1082,63 @@ pub mod nt_shortcuts {
     pub const RESTART: &str = "nt.restart";
     pub const CONFIRM: &str = "nt.confirm";
 
-    pub fn map() -> repose_core::shortcuts::ShortcutMap {
+    pub fn map() -> ShortcutMap {
         repame_shell::game_shortcut_map(PAUSE, RESTART, CONFIRM)
     }
 
-    pub fn shared() -> SharedEdges {
-        shared_edges()
+    pub fn state(app: &App) -> ShortcutState {
+        let mut state = ShortcutState::new();
+        state.default_map = map();
+        let inner = app.shortcut_edges.clone();
+        state.handler = Some(std::rc::Rc::new(move |action| {
+            let mut e = inner.borrow_mut();
+            match action {
+                Action::Custom(key) if key.as_ref() == PAUSE => {
+                    e.pause = true;
+                    true
+                }
+                Action::Custom(key) if key.as_ref() == RESTART => {
+                    e.restart = true;
+                    true
+                }
+                Action::Custom(key) if key.as_ref() == CONFIRM => {
+                    e.confirm = true;
+                    true
+                }
+                _ => false,
+            }
+        }));
+        state
     }
 
-    pub fn install(edges: &SharedEdges) {
-        // `#[test]` threads share one process: install the map into the
-        // shared default every call.
-        repame_shell::install_map(map());
-        repame_shell::install_handler_into(edges, PAUSE, RESTART, CONFIRM);
-    }
-
-    pub fn drain(app: &mut App, edges: &SharedEdges) {
-        let (pause, restart, confirm) = repame_shell::take_shortcut_edges(edges);
+    pub fn drain(app: &mut App) {
+        let (pause, restart, confirm) = repame_shell::take_shortcut_edges(&app.shortcut_edges);
         app.pause_edge |= pause;
         app.restart_edge |= restart;
         app.interact_edge |= confirm;
     }
 
-    /// Borrow the live shortcut edges (golden demo drives Esc through
-    /// the installed handler exactly like the runtime dispatch does).
-    pub fn edges_handle(app: &App) -> SharedEdges {
-        app.shortcut_edges.clone()
+    /// Prime the process-global maps the runner falls back to
+    /// (idempotent, same bindings every call). Live `view` calls this
+    /// once per frame; tests call it once per tape.
+    pub fn install_map_once() {
+        repame_shell::install_map(map());
+    }
+
+    /// Test-owned shortcut state wired to `app`'s edges: `resolve` +
+    /// `handle` on this replace the global install + global dispatch
+    /// in tests, so parallel tests never share shortcut state.
+    pub fn test_state(app: &App) -> ShortcutState {
+        state(app)
     }
 }
 
 impl App {
-    /// Stage one shell key event (called from the root `on_key_event`
-    /// handler; see the module docs for the mapping table). Character
-    /// keys are matched by physical position (`KeyW`, not `'w'`), so
-    /// non-US layouts move the same way GML's `ord("W")` does on a US
-    /// board.
-    fn handle_key(&mut self, ke: &KeyEvent) {
+    /// Shared key-event entry: the live root `on_key_event` closure and
+    /// the golden demo route here. Character keys match by physical
+    /// position (`KeyW`, not `'w'`), so non-US layouts move the same
+    /// way GML's `ord("W")` does on a US board.
+    pub fn handle_key(&mut self, ke: &KeyEvent) {
         let down = matches!(ke.event_type, KeyEventType::Down);
         if down && !ke.is_repeat && self.capture_armed() {
             if let Some(key) = ke.physical {
@@ -1186,6 +1215,16 @@ impl App {
     pub fn set_window_focused(&mut self, focused: bool) {
         self.staging.borrow_mut().set_window_focused(focused);
         self.window_focused = self.staging.borrow().window_focused;
+    }
+
+    pub fn stage_key(&mut self, ke: &KeyEvent) {
+        self.handle_key(ke);
+    }
+
+    /// Release half of `stage_physical_key`: clears the staging level so
+    /// the release path matches hardware key-up exactly.
+    pub fn staging_key_up(&mut self, key: PhysicalKey) {
+        self.staging.borrow_mut().stage_physical(key, false, false);
     }
 
     fn stage_code(&mut self, code: KeyCode, down: bool, _is_repeat: bool) {
@@ -1304,58 +1343,30 @@ impl App {
         self.staging.borrow_mut().pick_up(button);
     }
 
-    /// Public for the golden demo walkthrough (`tests/golden_demo.rs`),
-    /// which drives the same path as the live viewport closures.
-    pub fn cursor_move(&mut self, phys_px: Vec2) {
-        self.staging.borrow_mut().cursor_move(phys_px);
+    /// Polls the runtime-owned cursor position:
+    /// [`App::view`] copies `Scheduler::pointer_pos_px` into
+    /// `polled_pointer_px` every frame (GML `mouse_x`/`mouse_y`
+    /// parity: no focus dispatch, no hit regions, no staleness
+    /// clock). Unprojected through this frame's camera, so aim
+    /// stays glued to the on-screen pointer as the camera moves
+    /// (bevy `player_aim` `viewport_to_world_2d` parity); `None`
+    /// until the first mouse move.
+    pub fn stage_pointer_px(&mut self, phys_px: Option<[f32; 2]>) {
+        self.polled_pointer_px = phys_px.map(|[x, y]| Vec2::new(x, y));
     }
 
-    /// Public for the golden demo walkthrough (`tests/golden_demo.rs`).
-    pub fn stage_hover(&mut self, world: Vec2, screen: [f32; 2]) {
-        self.staging.borrow_mut().stage_hover(world, screen);
-    }
-
-    /// Public for the golden demo walkthrough: focus-routed key event
-    /// into shared staging, same entry the live root `on_key_event`
-    /// closure calls.
-    pub fn stage_key(&mut self, ke: &KeyEvent) {
-        self.staging.borrow_mut().handle_key(ke);
-    }
-
-    /// Release half of `stage_physical_key`: clears the staging level so
-    /// the release path matches hardware key-up exactly.
-    pub fn staging_key_up(&mut self, key: PhysicalKey) {
-        self.staging.borrow_mut().stage_physical(key, false, false);
-    }
-
-    /// Live cursor in world coords: staged window-physical px
-    /// unprojected through this frame's camera (`Camera2d::dp_to_world_pt`
-    /// over the dp viewport extent — bevy `player_aim`
-    /// `viewport_to_world_2d` parity). `None` until the first pointer
-    /// move; callers fall back to the last viewport `Hover` world point
-    /// (touch/pen never stage cursor moves).
-    /// The px sources win outright while fresh (they re-unproject every
-    /// frame, so aim stays glued to the on-screen pointer instead of
-    /// sliding on the ground as the camera moves); once both go stale
-    /// the baked hover point takes over so the cursor never freezes on
-    /// an old camera. `hover_px` is the primary source — the viewport
-    /// `Hover` fires on every free move, while root `cursor_move` runs
-    /// almost exclusively while a button is held (capture-path
-    /// dispatch reaches ancestors) and its px goes stale ~30 frames
-    /// after the last drag.
+    /// Live cursor in world coords: polled window-physical px
+    /// unprojected through this frame's camera. Pure viewport math
+    /// lives in [`repame_sprite::unproject_px`]; the NT wrappings
+    /// (`Option` polling, NT's dp-viewport fields) stay here.
     fn live_cursor_world(&self) -> Option<Vec2> {
-        let staging = self.staging.borrow();
-        let aim = &staging.aim;
-        if let Some(px) = aim.live_px() {
-            return self.px_to_world(Some(px)).or_else(|| aim.baked());
-        }
-        aim.baked().or_else(|| self.px_to_world(None))
+        self.px_to_world(self.polled_pointer_px)
     }
 
     /// Unproject one window-physical px point through this frame's
     /// camera. Pure viewport math lives in
     /// [`repame_sprite::unproject_px`]; the NT wrappings (`Option`
-    /// staging, NT's dp-viewport fields) stay here.
+    /// polling, NT's dp-viewport fields) stay here.
     fn px_to_world(&self, px: Option<Vec2>) -> Option<Vec2> {
         let px = px?;
         let d = self.view_density.max(1e-6);
@@ -1559,7 +1570,7 @@ impl App {
             }
             self.staging.borrow_mut().capture_armed = self.capture_armed();
         }
-        nt_shortcuts::drain(self, &self.shortcut_edges.clone());
+        nt_shortcuts::drain(self);
         // Staging owns held levels; translate physical edges into the
         // sampler's `KeyCode` space here. The old `App.held` level set
         // is gone — levels below read staging directly.
@@ -2138,6 +2149,11 @@ impl App {
 
     pub fn view(&mut self, sched: &mut Scheduler, _ctx: &RenderContext, dt: Duration) -> View {
         request_frame();
+        // Runtime-owned cursor position (GML `mouse_x`/`mouse_y` parity):
+        // `ReposeRuntime` maintains it on mouse move/press/release outside
+        // focus dispatch, so one poll replaces the root `cursor_move` +
+        // viewport `Hover` dual staging (and its 30-frame stale clock).
+        self.polled_pointer_px = sched.pointer_pos_px.map(|(x, y)| Vec2::new(x, y));
         // Touch button zones read the viewport width (bevy
         // `window.width()`); shells must stage contacts in the same px
         // space as `sched.size`.
@@ -2856,9 +2872,7 @@ impl App {
                     } => {
                         staging.pick_up(button);
                     }
-                    PickEvent::Hover { world, screen } => {
-                        staging.stage_hover(world, screen);
-                    }
+                    PickEvent::Hover { .. } => {}
                     PickEvent::TouchDown { id, screen } => {
                         staging.touch_down(id, Vec2::new(screen[0], screen[1]))
                     }
@@ -2893,9 +2907,7 @@ impl App {
                     } => {
                         staging.pick_up(button);
                     }
-                    PickEvent::Hover { world, screen } => {
-                        staging.stage_hover(world, screen);
-                    }
+                    PickEvent::Hover { .. } => {}
                     PickEvent::TouchDown { id, screen } => {
                         staging.touch_down(id, Vec2::new(screen[0], screen[1]))
                     }
@@ -2929,12 +2941,16 @@ impl App {
         } else {
             repose_core::CursorIcon::Default
         });
-        let edges = self.shortcut_edges.clone();
-        nt_shortcuts::install(&edges);
-        let staging = self.staging.clone();
+        // Runtime-owned shortcuts (Esc/R/Enter -> pause/restart/confirm):
+        // `handle_key`/`dispatch_action` resolve against
+        // `ReposeRuntime::shortcuts` first. The runner owns the runtime,
+        // so prime the process-global maps it falls back to — idempotent,
+        // same bindings every call.
+        repame_shell::install_map(nt_shortcuts::map());
         let focus = remember(FocusRequester::new);
         let fr_positioned = (*focus).clone();
         let focus_staging = self.staging.clone();
+        let key_staging = self.staging.clone();
         let root_mod = Modifier::new()
             .fill_max_size()
             .focusable(true)
@@ -2946,38 +2962,14 @@ impl App {
                 focus_staging.borrow_mut().set_window_focused(focused);
             })
             .on_key_event(move |ke: KeyEvent| {
-                let mut staging = staging.borrow_mut();
-                // Preview-less capture: Esc/Enter/R are shortcut-owned,
-                // so plain `handle_key` never sees them — stash those as
-                // capture input too while armed, else Esc can never
-                // rebind and R/Enter resolve to the wrong key.
-                if matches!(ke.event_type, KeyEventType::Down)
-                    && !ke.is_repeat
-                    && staging.capture_armed
-                    && matches!(
-                        ke.key,
-                        Key::Escape | Key::Enter | Key::Character('r') | Key::Character('R')
-                    )
-                {
-                    staging.capture_pending_key = Some(ke.key.clone());
-                    return true;
-                }
-                staging.handle_key(&ke);
+                key_staging.borrow_mut().handle_key(&ke);
                 false
             });
         // Right mouse button (GML `mb_right` ability / menu Back): the
         // viewport `PickEvent` button stages `rmb_down`/`lmb_down`
-        // directly, so only the held latches (`rmb_held` for spec
-        // hold, `lmb_held` for autofire) are repaired here from the
-        // raw events. The cursor move stays (free moves dispatch only
-        // to the topmost region, so the root handler alone misses
-        // them — see `stage_hover`).
-        let staging = self.staging.clone();
-        let root_mod = root_mod
-            .on_pointer_move(move |ev: PointerEvent| {
-                let p = ev.position_in_window();
-                staging.borrow_mut().cursor_move(Vec2::new(p.x, p.y));
-            });
+        // directly, so nothing else is needed here — the runtime-owned
+        // `Scheduler::pointer_pos_px` already tracks the cursor every
+        // frame outside focus dispatch.
 
         // HUD overlay (GML `scrDrawPlayerHUD` + `scrDrawMiscHUD`
         // verbatim): Silkscreen rows at 320x240 GUI positions over the
@@ -3829,40 +3821,14 @@ pub fn root_view(sched: &mut Scheduler, ctx: &RenderContext, app: &mut App, dt: 
 mod cursor_staging_tests {
     use super::*;
 
-    /// Reported bug verbatim: after any click-drag, free mouse moves
-    /// stopped moving the crosshair — it only followed while dragging.
-    /// Root cause: repose dispatches free moves ONLY to the topmost
-    /// region, so the root's `cursor_move` (the `cursor_px` source)
-    /// runs almost exclusively on capture-path (button-held) moves,
-    /// while viewport `Hover` fires on free moves. The viewport hover
-    /// px now feeds the same live unprojection, so a stale drag-era
-    /// root px can never shadow it. The px sources win only while fresh
-    /// (re-unprojected every frame, so aim stays glued to the pointer
-    /// instead of sliding on the ground); once stale the baked hover
-    /// point takes over.
     #[test]
-    fn fresh_px_wins_stale_px_yields_to_hover() {
+    fn polled_px_unprojects_through_live_camera() {
         let mut app = App::new_with_seed(4242);
-        // Hover stages the baked point AND its raw px; the drag-era
-        // root px is fresh too. Unprojection through the live camera
-        // must not return the stale baked point.
-        app.stage_hover(Vec2::new(10.0, 10.0), [0.0, 0.0]);
-        app.cursor_move(Vec2::new(100.0, 100.0));
+        app.stage_pointer_px(Some([0.0, 0.0]));
         let live = app.live_cursor_world().expect("cursor staged");
         assert!(
             (live - Vec2::new(10.0, 10.0)).length() > 1.0,
-            "fresh px must unproject through the live camera, got {live:?}"
-        );
-        // Root px goes stale (no root moves for a while, e.g. free
-        // mouse play): the viewport hover px stays fresh and keeps
-        // owning aim — the cursor never freezes on an old camera.
-        for _ in 0..40 {
-            app.stage_hover(Vec2::new(10.0, 10.0), [50.0, 50.0]);
-        }
-        let live = app.live_cursor_world().expect("hover staged");
-        assert!(
-            (live - Vec2::new(10.0, 10.0)).length() > 1.0,
-            "fresh hover px must keep unprojecting, got {live:?}"
+            "polled px must unproject through the live camera, got {live:?}"
         );
     }
 
@@ -3877,12 +3843,11 @@ mod cursor_staging_tests {
     #[test]
     fn hover_px_tracks_moved_camera() {
         let mut app = App::new_with_seed(4242);
-        app.stage_hover(Vec2::new(10.0, 10.0), [640.0, 360.0]);
+        app.stage_pointer_px(Some([640.0, 360.0]));
         let before = app.live_cursor_world().expect("cursor staged");
         // Pan the camera 100 world units right; the pointer hasn't
-        // moved (same screen px, fresh hover).
+        // moved (same screen px, still polled).
         app.cam.center += Vec2::new(100.0, 0.0);
-        app.stage_hover(Vec2::new(10.0, 10.0), [640.0, 360.0]);
         let after = app.live_cursor_world().expect("cursor staged");
         let shift = (after - before).length();
         assert!(
@@ -3900,48 +3865,42 @@ mod cursor_staging_tests {
     #[test]
     fn global_shortcut_map_binds_pause_restart_confirm() {
         use repose_core::input::{Key, Modifiers};
-        use repose_core::shortcuts::{Action, KeyChord, resolve_action};
-        let map = nt_shortcuts::map();
+        use repose_core::shortcuts::Action;
+        let state = nt_shortcuts::state(&App::new_with_seed(4242));
         for (key, want) in [
             (Key::Escape, nt_shortcuts::PAUSE),
             (Key::Character('r'), nt_shortcuts::RESTART),
             (Key::Enter, nt_shortcuts::CONFIRM),
         ] {
-            let chord = KeyChord::new(key.clone(), Modifiers::default());
+            let chord = repose_core::shortcuts::KeyChord::new(key, Modifiers::default());
             assert_eq!(
-                map.action_for(&chord),
+                state.default_map.action_for(&chord),
                 Some(Action::Custom(want.into())),
                 "map must bind {want}"
             );
-            // Installing wires the map into the process-global default map
-            // (installed once) plus the handler into fresh edges, so the
-            // runtime's `resolve_action` (the `dispatch_action` path) sees
-            // the chord even with no compose scope mounted.
-            let app = App::new_with_seed(4242);
-            nt_shortcuts::install(&app.shortcut_edges);
             assert_eq!(
-                resolve_action(KeyChord::new(key, Modifiers::default())),
+                state.resolve_action(&chord),
                 Some(Action::Custom(want.into())),
-                "installed map must resolve {want}"
+                "state must resolve {want} without a global install"
             );
         }
     }
 
     #[test]
     fn installed_shortcut_handler_stages_edges() {
-        use repose_core::shortcuts::{Action, handle};
-        let app = App::new_with_seed(4242);
-        nt_shortcuts::install(&app.shortcut_edges);
-        assert!(handle(Action::Custom(nt_shortcuts::PAUSE.into())));
-        let (pause, _, _) = repame_shell::take_shortcut_edges(&app.shortcut_edges);
-        assert!(pause);
-        assert!(handle(Action::Custom(nt_shortcuts::RESTART.into())));
-        let (_, restart, _) = repame_shell::take_shortcut_edges(&app.shortcut_edges);
-        assert!(restart);
-        assert!(handle(Action::Custom(nt_shortcuts::CONFIRM.into())));
-        let (_, _, confirm) = repame_shell::take_shortcut_edges(&app.shortcut_edges);
-        assert!(confirm);
-        assert!(!handle(Action::Custom("nt.unknown".into())));
+        use repose_core::shortcuts::Action;
+        let mut app = App::new_with_seed(4242);
+        let state = nt_shortcuts::state(&app);
+        assert!(state.handle(Action::Custom(nt_shortcuts::PAUSE.into())));
+        nt_shortcuts::drain(&mut app);
+        assert!(app.pause_edge);
+        assert!(state.handle(Action::Custom(nt_shortcuts::RESTART.into())));
+        nt_shortcuts::drain(&mut app);
+        assert!(app.restart_edge);
+        assert!(state.handle(Action::Custom(nt_shortcuts::CONFIRM.into())));
+        nt_shortcuts::drain(&mut app);
+        assert!(app.interact_edge);
+        assert!(!state.handle(Action::Custom("nt.unknown".into())));
     }
 
     /// E-key interact regression: the KeyE edge staged through
@@ -4031,9 +3990,8 @@ mod cursor_staging_tests {
     #[test]
     fn focus_key_resolves_capture_and_pause() {
         use repose_core::input::{Key, KeyEvent, KeyEventType, Modifiers, PhysicalKey};
-        use repose_core::shortcuts::{Action, handle};
         let mut app = App::new_with_seed(4242);
-        nt_shortcuts::install(&app.shortcut_edges);
+        let state = nt_shortcuts::state(&app);
         app.staging.borrow_mut().handle_key(&KeyEvent {
             key: Key::Escape,
             modifiers: Modifiers::default(),
@@ -4046,9 +4004,10 @@ mod cursor_staging_tests {
             !app.pause_edge,
             "Escape KeyEvent alone must not stage pause_edge"
         );
-        assert!(handle(Action::Custom(nt_shortcuts::PAUSE.into())));
-        let edges = app.shortcut_edges.clone();
-        nt_shortcuts::drain(&mut app, &edges);
+        assert!(state.handle(repose_core::shortcuts::Action::Custom(
+            nt_shortcuts::PAUSE.into()
+        )));
+        nt_shortcuts::drain(&mut app);
         assert!(app.pause_edge, "shortcut handler must stage pause_edge");
         crate::state::menus::apply_menu_action(
             &mut app.sim.world,
