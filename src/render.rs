@@ -7232,8 +7232,9 @@ pub fn go_button_pos(wh: [f32; 2], count: usize, bbox_h: f32) -> [f32; 2] {
 // Title click routing (GML campfire pods + GO + loadout zones).
 // ---------------------------------------------------------------------------
 
-/// Character-pod hit size (bevy `title_screen` hover law: 16x24 at the
-/// layout origin).
+/// Character-pod hit size (GML `CharSelect` sprite bbox: the pods are
+/// `sprCharSelect` cells drawn at the layout origin; `title_click_action`
+/// and the hover sync share these so both agree with the sprite bbox).
 pub const TITLE_POD_W: f32 = 16.0;
 /// Character-pod hit height.
 pub const TITLE_POD_H: f32 = 24.0;

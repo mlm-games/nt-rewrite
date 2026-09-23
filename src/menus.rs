@@ -336,16 +336,23 @@ pub struct MenuState {
     /// Settings page + drill stack (bevy `settings_page[_stack]`).
     pub settings_page: u8,
     pub settings_page_stack: Vec<u8>,
-    /// Main-menu keyboard cursor over the 5 labels (GML gamepad_sel /
-    /// bevy `main_menu_hover` parity; 0 PLAY .. 4 QUIT).
+    /// Main-menu keyboard cursor over the 5 labels (GML `UberCont.gamepad_sel`
+    /// over the live `MainMenuButton` instances, mirrored here for the
+    /// keyboard path; the mouse path never writes it — GML mouse hover
+    /// owns `hover` per instance, gamepad owns `gamepad_sel`).
     pub main_menu_cursor: usize,
     /// PLAY-submenu open (GML `PlayButton` rows replace the main-menu
     /// buttons until one fires or BackButton/Escape closes).
     pub play_submenu: bool,
-    /// PLAY-submenu keyboard cursor over [`play_rows`].
+    /// PLAY-submenu keyboard cursor over [`play_rows`] (same split as the
+    /// main menu: keyboard nav mirrors `gamepad_sel` here, mouse owns
+    /// per-instance `hover` and never touches it).
     pub play_cursor: usize,
     /// Settings keyboard cursor over the page's actionable rows
-    /// (`settings_hot_rows` order in `render.rs`; GML `pointed_item`).
+    /// (`settings_hot_rows` order in `render.rs`; GML `pointed_item`
+    /// when `mouse_active` is false — i.e. the keyboard-driven value.
+    /// Mouse moves own `pointed_item` directly while `mouse_active` and
+    /// never write this; `tick_settings_nav` only runs off it).
     pub settings_cursor: usize,
     /// Pending unlock popups (producer deferred; see module docs).
     pub unlock_queue: Vec<UnlockPopup>,
@@ -382,12 +389,18 @@ pub struct MenuState {
     pub unlock_hint: String,
     pub unlock_hint_pop: f32,
     pub unlock_hint_t: f32,
+    /// Last hovered pause/game-over label (stateless stand-in for GML's
+    /// per-instance `hover` bools; gates the `sndHover` sting so it fires
+    /// on entry, not every frame the pointer rests on a row).
+    pub hover_label: String,
     /// GML `Menu.weekly` verbatim: weekly runs bypass race locks and hide
     /// the pod roster treatment (`can = unlocked || weekly_run`).
     pub weekly_run_menu: bool,
     /// GML `CharSelect.tooltip` verbatim: true only while the cursor pod
-    /// is pointed (mouse hover) or gamepad-selected. Headless defaults
-    /// to false (no pointer), so the pod name tooltip row stays hidden.
+    /// is pointed (mouse per-instance hover) or keyboard/gamepad-selected.
+    /// The mouse path writes this from the GUI hover point in `feed_input`
+    /// (mirroring `CharSelect/Draw_0`'s `point_in_rectangle` check +
+    /// `selected` sync); keyboard pod moves set it directly.
     pub title_pod_pointed: bool,
 }
 
@@ -426,6 +439,7 @@ impl Default for MenuState {
             unlock_hint: String::new(),
             unlock_hint_pop: 0.0,
             unlock_hint_t: 0.0,
+            hover_label: String::new(),
             weekly_run_menu: false,
             title_pod_pointed: false,
         }
@@ -584,6 +598,28 @@ pub(crate) fn emit_denied(world: &mut World) {
     world
         .resource_mut::<Queue<crate::audio::AudioCue>>()
         .push(denied_sfx());
+}
+
+/// Emit a mouse-enter hover sting (`sndHover`), shared by the per-frame
+/// `mouse_ui_hovered` sync in `lib.rs` (`tick_menu_hover`) and any
+/// keyboard path that lands on a new row.
+pub(crate) fn emit_hover(world: &mut World) {
+    emit_sfx(world, hover_sfx());
+}
+
+/// Pause/GameOver hover: GML keeps per-instance `hover` bools, but the
+/// port's rows are stateless — sting only when the pointed label changes.
+pub(crate) fn emit_hover_if_changed(world: &mut World, label: &str) {
+    let changed = world
+        .get_resource::<MenuState>()
+        .map(|m| m.hover_label.as_str() != label)
+        .unwrap_or(true);
+    if changed {
+        if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+            menu.hover_label = label.to_string();
+        }
+        emit_hover(world);
+    }
 }
 
 /// Emit the bevy `SettingsBack` pop one-shot (`sndClickBack` 0.6). The

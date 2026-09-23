@@ -1536,6 +1536,13 @@ impl App {
         for action in self.menu_actions.drain(..) {
             apply_menu_action(&mut self.sim.world, action);
         }
+        // GML per-frame mouse sync: `mouse_ui_hovered` runs inside every
+        // button's Step (not on click), so hover/cursor state must refresh
+        // even with no click staged. The GUI point comes from the polled
+        // pointer (`Scheduler::pointer_pos_px` -> `polled_pointer_px`,
+        // copied at the top of `view`); touch/gamepad frames keep the
+        // keyboard cursors untouched (GML `!is_gamepad()` guard).
+        self.tick_menu_hover();
         let was_armed = self.capture_armed();
         {
             let (pending_physical, pending_key, pending_mouse) = {
@@ -2124,6 +2131,277 @@ impl App {
             crownsize,
             skinsize,
         )
+    }
+
+    /// GUI-space cursor for the menu hover sync: the polled
+    /// window-physical px mapped through the live GUI law (`k = h/240`,
+    /// full live width). `None` until the first mouse move, or while
+    /// touch/gamepad owns the device (GML `mouse_active` /
+    /// `!is_gamepad()` guards — a gamepad-driven frame must not clear
+    /// mouse hover, and touch has no cursor).
+    fn menu_gui_point(&self) -> Option<[f32; 2]> {
+        let gamepad = self
+            .sim
+            .world
+            .get_resource::<crate::savedata_part::SaveData>()
+            .is_some_and(|s| s.settings.gamepad_enabled)
+            && self.pad_live;
+        if gamepad || !self.staging.borrow().touch_active.is_empty() {
+            return None;
+        }
+        let px = self.polled_pointer_px?;
+        let vw = self.view_viewport_dp;
+        let k = (vw[1].max(1.0) / 240.0).max(1e-6);
+        if !k.is_finite() {
+            return None;
+        }
+        Some([px.x / k, px.y / k])
+    }
+
+    /// GML `mouse_ui_hovered` Step parity, run once per `feed_input`
+    /// before any click routes: each visible menu owns per-instance
+    /// `hover` state that the mouse sets by collision and clears on
+    /// leave, with `sndHover` on entry (`MainMenuButton/Step_0`,
+    /// `PlayButton/Step_0`, `PauseButton/Step_0`, `CharSelect/Draw_0`,
+    /// `SkillIcon/Mouse_4`, `GoButton/Draw_0`, `MenuOptions/Other_10`
+    /// `pointed_item`). The render layer already highlights the live
+    /// cursor, so visual hover follows the mouse with no click needed;
+    /// clicks then confirm whatever is pointed. Keyboard/gamepad paths
+    /// never write here — gamepad owns `gamepad_sel` via
+    /// `scrGamepadUIControl`, keyboard owns the `*_cursor` fields.
+    fn tick_menu_hover(&mut self) {
+        let Some([gx, gy]) = self.menu_gui_point() else {
+            return;
+        };
+        let vw = crate::render::gml_view_size(self.view_viewport_dp)[0];
+        let state = self
+            .sim
+            .world
+            .get_resource::<AppState>()
+            .copied()
+            .unwrap_or_default();
+        let overlay = self
+            .sim
+            .world
+            .get_resource::<OverlayMenu>()
+            .copied()
+            .unwrap_or_default();
+        let game_over = self
+            .sim
+            .world
+            .get_resource::<crate::comps_a::Run>()
+            .is_some_and(|r| r.game_over);
+        let kind = menu_overlay_kind(
+            state,
+            overlay,
+            &self.sim.world.resource::<MenuState>(),
+            game_over,
+        );
+        let Some(kind) = kind else { return };
+        match kind {
+            // GML main-menu rows are separate `MainMenuButton` instances
+            // (one per label); the PLAY submenu swaps them for
+            // `PlayButton` instances. The mouse points rows by collision
+            // (`mouse_ui_hovered`), the keyboard mirrors `gamepad_sel`
+            // into the cursor — both highlight through the same color.
+            MenuOverlay::MainMenu => {
+                let in_submenu = self
+                    .sim
+                    .world
+                    .get_resource::<MenuState>()
+                    .is_some_and(|m| m.play_submenu);
+                let rows = crate::render::menu_gui_texts_vw(kind, &mut self.sim.world, vw);
+                for (i, t) in rows.iter().enumerate() {
+                    if menu_button_action(kind, &t.text, None).is_none() {
+                        continue;
+                    }
+                    let (hx, hy) = if t.text == "BACK" {
+                        (16.0, 20.0)
+                    } else {
+                        (t.gx, t.gy)
+                    };
+                    if (gx - hx).abs() <= 60.0 && (gy - hy).abs() <= 11.0 {
+                        let update = {
+                            let menu = self.sim.world.resource::<MenuState>();
+                            if in_submenu {
+                                menu.play_cursor != i
+                            } else {
+                                menu.main_menu_cursor != i
+                            }
+                        };
+                        if update {
+                            if let Some(mut menu) =
+                                self.sim.world.get_resource_mut::<MenuState>()
+                            {
+                                if in_submenu {
+                                    menu.play_cursor = i;
+                                } else {
+                                    menu.main_menu_cursor = i;
+                                }
+                            }
+                            crate::state::menus::emit_hover(&mut self.sim.world);
+                        }
+                        break;
+                    }
+                }
+            }
+            // GML `MenuOptions/Other_10`: while `mouse_active` the pointed
+            // row owns `pointed_item` by `point_in_rectangle`; keyboard
+            // arrows clear `mouse_active` and own it instead.
+            MenuOverlay::Settings => {
+                let page = self
+                    .sim
+                    .world
+                    .get_resource::<MenuState>()
+                    .map(|m| m.settings_page)
+                    .unwrap_or(0);
+                let rows = crate::render::settings_hot_rows(page, vw);
+                if let Some((idx, _)) = rows
+                    .iter()
+                    .enumerate()
+                    .find(|(_, r)| (gy - r.gy).abs() <= 7.0 && (gx - r.cx).abs() <= r.hw)
+                {
+                    let cur = self
+                        .sim
+                        .world
+                        .get_resource::<MenuState>()
+                        .map(|m| m.settings_cursor)
+                        .unwrap_or(0);
+                    if cur != idx {
+                        if let Some(mut menu) = self.sim.world.get_resource_mut::<MenuState>() {
+                            menu.settings_cursor = idx;
+                        }
+                        crate::state::menus::emit_hover(&mut self.sim.world);
+                    }
+                }
+            }
+            // GML `CharSelect/Draw_0`: `point_in_rectangle` on the pod
+            // bbox syncs `selected` to the pointed pod and raises the
+            // name tooltip; leaving every bbox clears it.
+            MenuOverlay::Title => {
+                if overlay == OverlayMenu::Settings || overlay == OverlayMenu::Credits {
+                    return;
+                }
+                let roster = crate::state::menus::visible_roster(
+                    self.sim.world.get_resource::<crate::savedata_part::SaveData>(),
+                );
+                let slot_h = self
+                    .assets
+                    .as_ref()
+                    .and_then(|a| a.native_size("images/sprCharSelect.png").map(|s| s.y))
+                    .unwrap_or(20.0);
+                let pods = crate::render::char_pod_layout([vw, 240.0], roster.len(), slot_h);
+                let mut pointed: Option<usize> = None;
+                for (i, pos) in pods.iter().enumerate() {
+                    if gx >= pos[0]
+                        && gx <= pos[0] + crate::render::TITLE_POD_W
+                        && gy >= pos[1]
+                        && gy <= pos[1] + crate::render::TITLE_POD_H
+                    {
+                        pointed = Some(i);
+                        break;
+                    }
+                }
+                match pointed {
+                    Some(i) => {
+                        let cur = self
+                            .sim
+                            .world
+                            .get_resource::<MenuState>()
+                            .map(|m| m.title_cursor)
+                            .unwrap_or(0);
+                        if cur != i {
+                            if let Some(mut menu) =
+                                self.sim.world.get_resource_mut::<MenuState>()
+                            {
+                                menu.title_cursor = i;
+                                menu.title_pod_pointed = true;
+                            }
+                            crate::state::menus::emit_hover(&mut self.sim.world);
+                        } else if let Some(mut menu) =
+                            self.sim.world.get_resource_mut::<MenuState>()
+                        {
+                            menu.title_pod_pointed = true;
+                        }
+                    }
+                    None => {
+                        if let Some(mut menu) = self.sim.world.get_resource_mut::<MenuState>() {
+                            menu.title_pod_pointed = false;
+                        }
+                    }
+                }
+            }
+            // GML `SkillIcon/Mouse_4`: first click on an unselected card
+            // only highlights (with `sndHover`); the second commits.
+            // Pointing here mirrors the highlight half so the render
+            // layer shows it before any click.
+            MenuOverlay::Mutation => {
+                let n = self
+                    .sim
+                    .world
+                    .get_resource::<crate::comps_a::PendingUltra>()
+                    .map(|u| u.choices.len())
+                    .or_else(|| {
+                        self.sim
+                            .world
+                            .get_resource::<crate::comps_a::PendingMutation>()
+                            .map(|p| p.choices.len())
+                    })
+                    .unwrap_or(0);
+                if n == 0 {
+                    return;
+                }
+                let step = (vw / (n as f32 + 1.0)).floor().min(32.0);
+                let scale = (step / 32.0).max(0.65);
+                let half = (step as i32 / 2) as f32;
+                let xview_shift = if n >= 10 { -12.0 } else { 0.0 };
+                let start_x = vw * 0.5 + xview_shift - (n as f32 - 1.0) * half;
+                let icon_y = 240.0 - 21.0;
+                let hw = 24.0 * scale * 0.5;
+                let top = icon_y - 16.0 * scale;
+                let hh = 32.0 * scale;
+                for i in 0..n {
+                    let cx = start_x + i as f32 * step;
+                    if (gx - cx).abs() <= hw && gy >= top && gy <= top + hh {
+                        let cur = self
+                            .sim
+                            .world
+                            .get_resource::<MenuState>()
+                            .and_then(|m| m.mutation_selected);
+                        if cur != Some(i) {
+                            if let Some(mut menu) =
+                                self.sim.world.get_resource_mut::<MenuState>()
+                            {
+                                menu.mutation_selected = Some(i);
+                            }
+                            crate::state::menus::emit_hover(&mut self.sim.world);
+                        }
+                        break;
+                    }
+                }
+            }
+            // GML `PauseButton/Step_0`: same collision hover law as the
+            // main menu (entry stings `sndHover`); the port's rows are
+            // stateless so the sting gates on the pointed label.
+            MenuOverlay::Pause | MenuOverlay::GameOver => {
+                let rows = crate::render::menu_gui_texts_vw(kind, &mut self.sim.world, vw);
+                let confirm = self
+                    .sim
+                    .world
+                    .get_resource::<MenuState>()
+                    .and_then(|m| m.pause_confirm);
+                for t in &rows {
+                    if menu_button_action(kind, &t.text, confirm).is_none() {
+                        continue;
+                    }
+                    if (gx - t.gx).abs() <= 60.0 && (gy - t.gy).abs() <= 11.0 {
+                        crate::state::menus::emit_hover_if_changed(&mut self.sim.world, &t.text);
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Build this frame's view: stage input, advance the sim, snapshot
