@@ -5630,7 +5630,22 @@ pub fn settings_hot_rows(page: u8, vw: f32) -> Vec<SettingHotRow> {
             rows.push(btn(200.0, SettingHotOp::Back));
             rows
         }
-        16 => vec![btn(200.0, SettingHotOp::Back)],
+        16 => {
+            // GML `Controls_Experimental` verbatim (`Other_20.gml:786`):
+            // KEYBOARD MODE (`options_keyboard`), STICK REGIONS
+            // (`controls_stickregions`), HIDE JOYSTICKS
+            // (`controls_hiddensticks`, hidden while regions are on —
+            // the repositioning sticks never sit at home). The
+            // regions-on gate lives in the text layer (which owns the
+            // world borrow); the hot rows keep every row so keyboard
+            // nav and mouse hit-testing agree on indices.
+            vec![
+                tog(48.0, SettingHotOp::Toggle("keyboard_enabled")),
+                tog(66.0, SettingHotOp::Toggle("stick_regions")),
+                tog(84.0, SettingHotOp::Toggle("hidden_sticks")),
+                btn(200.0, SettingHotOp::Back),
+            ]
+        }
         5 => {
             let mut rows: Vec<SettingHotRow> = crate::state::menus::AVAILABLE_LANGUAGES
                 .iter()
@@ -6032,8 +6047,16 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
         }
         16 => {
+            // GML `Controls_Experimental` verbatim: KEYBOARD MODE
+            // (`options_keyboard`), STICK REGIONS, HIDE JOYSTICKS
+            // (hidden while regions are on — the repositioning sticks
+            // never sit at home).
             out.push(gui_center("EXPERIMENTAL", cx, 24.0, GUI_MID));
-            out.push(gui_center("KEYBOARD MODE - WIP", cx, 80.0, GUI_GRAY));
+            push_toggle(&mut out, "KEYBOARD MODE", 48.0, s.keyboard_enabled);
+            push_toggle(&mut out, "STICK REGIONS", 66.0, s.stick_regions);
+            if !s.stick_regions {
+                push_toggle(&mut out, "HIDE JOYSTICKS", 84.0, s.hidden_sticks);
+            }
             out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
         }
         5 => {
@@ -10073,5 +10096,48 @@ mod remap_page_tests {
                 "row {i} must arm a remap capture, got {action:?}"
             );
         }
+    }
+
+    /// GML `Controls_Experimental` parity (`Other_20.gml:786`): no WIP
+    /// placeholder — KEYBOARD MODE + STICK REGIONS + HIDE JOYSTICKS,
+    /// text rows and hot rows agreeing. Hide-joysticks hides while
+    /// stick regions are on (`Other_20.gml:806`).
+    #[test]
+    fn experimental_page_has_three_switches_no_wip() {
+        let mut world = World::new();
+        world.insert_resource(crate::savedata_part::SaveData::default());
+        world.init_resource::<crate::state::menus::MenuState>();
+        world.resource_mut::<crate::state::menus::MenuState>().settings_page = 16;
+        let texts = settings_gui_texts(&mut world, 320.0);
+        assert!(
+            texts.iter().all(|t| t.text != "KEYBOARD MODE - WIP"),
+            "WIP placeholder must be gone"
+        );
+        for label in ["KEYBOARD MODE", "STICK REGIONS", "HIDE JOYSTICKS"] {
+            assert!(
+                texts.iter().any(|t| t.text == label),
+                "{label} row must draw"
+            );
+        }
+        let rows = settings_hot_rows(16, 320.0);
+        assert_eq!(rows.len(), 4, "3 switches + back");
+        for (i, row) in rows.iter().enumerate().take(3) {
+            let action = settings_hot_action(&mut world, 16, i, 0);
+            assert!(
+                matches!(action, Some(UiAction::SettingToggle(_))),
+                "row {i} must toggle, got {action:?}"
+            );
+        }
+        // Regions on: hide-joysticks text hides, hot rows keep every
+        // row so nav/mouse indices agree.
+        world
+            .resource_mut::<crate::savedata_part::SaveData>()
+            .settings
+            .stick_regions = true;
+        let texts = settings_gui_texts(&mut world, 320.0);
+        assert!(
+            texts.iter().all(|t| t.text != "HIDE JOYSTICKS"),
+            "hide-joysticks must hide while regions are on"
+        );
     }
 }

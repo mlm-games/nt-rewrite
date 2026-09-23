@@ -430,6 +430,13 @@ pub struct SettingsData {
     pub pixel_mode: u8,
     #[serde(default)]
     pub gamepad_enabled: bool,
+    /// GML `options_keyboard` (`scrOptionsUpdate:22`: `save_get_option(
+    /// "options", "keyboard", desktop)`; Android OS-change forces false).
+    /// GML device law (`InputHandling:225`): `keyboard = opt_keyboard
+    /// && !opt_gamepad`, `gamepad = opt_gamepad`, `touch = !(gamepad ||
+    /// keyboard)`. Desktop defaults true, Android false.
+    #[serde(default = "default_true")]
+    pub keyboard_enabled: bool,
     #[serde(default)]
     pub gamepad_type: u8,
     #[serde(default)]
@@ -519,6 +526,10 @@ impl Default for SettingsData {
             sideart: 0,
             pixel_mode: 1,
             gamepad_enabled: false,
+            #[cfg(target_os = "android")]
+            keyboard_enabled: false,
+            #[cfg(not(target_os = "android"))]
+            keyboard_enabled: true,
             gamepad_type: 0,
             aim_assist: false,
             auto_aim: false,

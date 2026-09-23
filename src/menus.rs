@@ -1389,6 +1389,10 @@ fn apply_setting_toggle(save: &mut SaveData, key: &str) -> bool {
         "fullscreen" => s.fullscreen = !s.fullscreen,
         "widescreen" => s.widescreen = !s.widescreen,
         "gamepad_enabled" => s.gamepad_enabled = !s.gamepad_enabled,
+        // GML `options_keyboard` (`Controls_Experimental` KEYBOARD MODE).
+        // GML `InputHandling:225` device law: turning keyboard off while
+        // gamepad is off drops to touch (`touch = !(gamepad||keyboard)`).
+        "keyboard_enabled" => s.keyboard_enabled = !s.keyboard_enabled,
         "aim_assist" => s.aim_assist = !s.aim_assist,
         "auto_aim" => s.auto_aim = !s.auto_aim,
         "volume_controls" => s.volume_controls = !s.volume_controls,
@@ -1895,23 +1899,53 @@ fn tick_settings_nav(world: &mut World, nav_v: i8, nav_h: i8, confirm: bool) {
         .get_resource::<MenuState>()
         .map(|m| m.settings_page)
         .unwrap_or(0);
+    // GML `Other_20.gml:806` parity: hide-joysticks has no row while
+    // stick regions are on. The nav skips the hidden index so arrows
+    // never land on an undrawn row.
+    let hidden: Option<usize> = (page == 16
+        && world
+            .get_resource::<SaveData>()
+            .is_some_and(|s| s.settings.stick_regions))
+    .then(|| {
+        crate::render::settings_hot_rows(page, 320.0)
+            .iter()
+            .position(|r| matches!(r.op, crate::render::SettingHotOp::Toggle("hidden_sticks")))
+    })
+    .flatten();
     let n = crate::render::settings_hot_rows(page, 320.0).len();
     if n == 0 {
         return;
     }
+    let step = |cur: usize, dv: i16| -> usize {
+        let mut next = cur;
+        for _ in 0..n {
+            next = (next as i16 + dv).rem_euclid(n as i16) as usize;
+            if Some(next) != hidden {
+                break;
+            }
+        }
+        next
+    };
     if nav_v != 0 {
         if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
             let cur = menu.settings_cursor.min(n - 1);
-            menu.settings_cursor = (cur as i16 + nav_v as i16).rem_euclid(n as i16) as usize;
+            menu.settings_cursor = step(cur, nav_v as i16);
         }
         emit_sfx(world, hover_sfx());
     }
     // Re-clamp after page jumps (cursor resets to 0 on drill, but a
-    // language set keeps the page with new length).
-    let cursor = world
+    // language set keeps the page with new length). A cursor parked on
+    // the regions-hidden row steps off it.
+    let mut cursor = world
         .get_resource::<MenuState>()
         .map(|m| m.settings_cursor.min(n - 1))
         .unwrap_or(0);
+    if Some(cursor) == hidden {
+        cursor = step(cursor, 1);
+        if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+            menu.settings_cursor = cursor;
+        }
+    }
     if nav_h != 0 {
         if let Some(action) = crate::render::settings_hot_action(world, page, cursor, nav_h) {
             apply_menu_action(world, action);
