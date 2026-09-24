@@ -11,9 +11,7 @@
 //! `boss_for_floor_and_loop`, `is_secret_area`, plus the `run_for` test
 //! helper and the oracle tests that only touch ported items.
 //!
-//! Enemy tables (`apply_loop_elite_substitutions`,
-//! `loop_elite_candidates`, `default_area_enemies`), wall helpers
-//! (`walls_cover_tile`, `populate_throne_room`, `trim_chests`,
+//! Wall helpers (`walls_cover_tile`, `populate_throne_room`, `trim_chests`,
 //! `big_bandit_count`) and the full `populate` live here too.
 //!
 //! Transform notes:
@@ -54,11 +52,20 @@ pub struct LevelPlan {
     pub props: Vec<(PropKind, Vec2)>,
     pub chests: Vec<ChestSpawn>,
     pub enemies: Vec<(EnemyKind, Vec2)>,
+    pub population_events: Vec<PopulationEvent>,
     pub boss: Option<EnemyKind>,
 
     pub boss_count: u32,
 
     pub styleb: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum PopulationEvent {
+    Enemy { kind: EnemyKind, pos: Vec2 },
+    Prop { kind: PropKind, pos: Vec2 },
+    Chest(ChestSpawn),
+    PortalClear { pos: Vec2, scale: f32 },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -383,6 +390,7 @@ pub fn generate_level(run: &Run) -> LevelPlan {
         props: Vec::new(),
         chests: Vec::new(),
         enemies: Vec::new(),
+        population_events: Vec::new(),
         boss: None,
         boss_count: 1,
         styleb,
@@ -825,13 +833,14 @@ fn generate_palace_last(run: &Run) -> LevelPlan {
         props: Vec::new(),
         chests: Vec::new(),
         enemies: Vec::new(),
+        population_events: Vec::new(),
         boss: None,
         boss_count: 1,
         styleb: false,
     };
     let mut seen = HashSet::new();
     for fy in 0..48 {
-        let diy = fy as i32 * 32;
+        let diy = (fy as i32 - 24) * 32;
         for fx in 0..8 {
             if diy < -43 && (fx == 0 || fx == 7) {
                 continue;
@@ -863,6 +872,7 @@ fn generate_campfire(run: &Run) -> LevelPlan {
         props: Vec::new(),
         chests: Vec::new(),
         enemies: Vec::new(),
+        population_events: Vec::new(),
         boss: None,
         boss_count: 1,
         styleb: false,
@@ -916,6 +926,7 @@ fn generate_hq_last(run: &Run) -> LevelPlan {
         props: Vec::new(),
         chests: Vec::new(),
         enemies: Vec::new(),
+        population_events: Vec::new(),
         boss: None,
         boss_count: 1,
         styleb: true,
@@ -954,6 +965,29 @@ fn generate_hq_last(run: &Run) -> LevelPlan {
     plan
 }
 
+fn rebuild_population_events(plan: &mut LevelPlan, base_events: &[PopulationEvent]) {
+    let mut events: Vec<PopulationEvent> = base_events
+        .iter()
+        .copied()
+        .filter(|event| !matches!(event, PopulationEvent::Chest(_)))
+        .collect();
+    events.extend(plan.chests.iter().copied().map(PopulationEvent::Chest));
+    let base_enemy_count = events
+        .iter()
+        .filter(|event| matches!(event, PopulationEvent::Enemy { .. }))
+        .count();
+    if plan.enemies.len() >= base_enemy_count {
+        events.extend(
+            plan.enemies
+                .iter()
+                .skip(base_enemy_count)
+                .copied()
+                .map(|(kind, pos)| PopulationEvent::Enemy { kind, pos }),
+        );
+    }
+    plan.population_events = events;
+}
+
 // world.rs:1904-1927, verbatim (Open Mind mutation: two bonus chests,
 // skipped for chest-less areas). Seeded: GML draws from the Generation
 // stream, so callers pass the run seed.
@@ -977,6 +1011,22 @@ pub fn apply_open_mind_bonus(plan: &mut LevelPlan, area: AreaId, floor_in_area: 
             _ => plan.chests.push(ChestSpawn::Rad(pos)),
         }
     }
+    let mut base_events: Vec<PopulationEvent> = plan.population_events.clone();
+    if base_events.is_empty() {
+        base_events.extend(
+            plan.enemies
+                .iter()
+                .copied()
+                .map(|(kind, pos)| PopulationEvent::Enemy { kind, pos }),
+        );
+        base_events.extend(
+            plan.props
+                .iter()
+                .copied()
+                .map(|(kind, pos)| PopulationEvent::Prop { kind, pos }),
+        );
+    }
+    rebuild_population_events(plan, &base_events);
 }
 
 /// GML `scrPopChests` input: everything the permutation pass reads.
@@ -1023,6 +1073,26 @@ pub fn apply_chest_permutations(plan: &mut LevelPlan, ctx: ChestPermuteCtx) -> C
     use rand::{RngExt, SeedableRng};
     let mut rng = StdRng::seed_from_u64(ctx.seed);
     let mut out = ChestPermuteOut { horror: false };
+    let mut base_events: Vec<PopulationEvent> = plan
+        .population_events
+        .iter()
+        .copied()
+        .filter(|event| !matches!(event, PopulationEvent::Chest(_)))
+        .collect();
+    if base_events.is_empty() {
+        base_events.extend(
+            plan.enemies
+                .iter()
+                .copied()
+                .map(|(kind, pos)| PopulationEvent::Enemy { kind, pos }),
+        );
+        base_events.extend(
+            plan.props
+                .iter()
+                .copied()
+                .map(|(kind, pos)| PopulationEvent::Prop { kind, pos }),
+        );
+    }
 
     // Snapshot base-kind positions (customs from earlier passes ride
     // along untouched).
@@ -1044,8 +1114,11 @@ pub fn apply_chest_permutations(plan: &mut LevelPlan, ctx: ChestPermuteCtx) -> C
     // guardian (+4 Bandits, GML `Create_0`) watches the proto chest.
     if ctx.area == AreaId::Vault || ctx.area == AreaId::CrownVault {
         plan.chests.clear();
+        let mut events = base_events.clone();
         for (k, p) in customs {
-            plan.chests.push(ChestSpawn::Custom(k, p));
+            let chest = ChestSpawn::Custom(k, p);
+            plan.chests.push(chest);
+            events.push(PopulationEvent::Chest(chest));
         }
         if let Some(p) = weapons
             .iter()
@@ -1056,15 +1129,26 @@ pub fn apply_chest_permutations(plan: &mut LevelPlan, ctx: ChestPermuteCtx) -> C
             })
             .copied()
         {
-            plan.chests.push(ChestSpawn::Custom(ChestKind::Proto, p));
-            plan.enemies
-                .push((EnemyKind::ProtoStatue, p + Vec2::new(0.0, 64.0)));
+            let chest = ChestSpawn::Custom(ChestKind::Proto, p);
+            plan.chests.push(chest);
+            events.push(PopulationEvent::Chest(chest));
+            let statue = (EnemyKind::ProtoStatue, p + Vec2::new(0.0, 64.0));
+            plan.enemies.push(statue);
+            events.push(PopulationEvent::Enemy {
+                kind: statue.0,
+                pos: statue.1,
+            });
             for i in 0..4 {
                 let a = i as f32 * std::f32::consts::TAU / 4.0;
-                plan.enemies
-                    .push((EnemyKind::Bandit, p + Vec2::new(a.cos(), a.sin()) * 48.0));
+                let enemy = (EnemyKind::Bandit, p + Vec2::new(a.cos(), a.sin()) * 48.0);
+                plan.enemies.push(enemy);
+                events.push(PopulationEvent::Enemy {
+                    kind: enemy.0,
+                    pos: enemy.1,
+                });
             }
         }
+        plan.population_events = events;
         return out;
     }
 
@@ -1074,6 +1158,7 @@ pub fn apply_chest_permutations(plan: &mut LevelPlan, ctx: ChestPermuteCtx) -> C
         for (k, p) in customs {
             plan.chests.push(ChestSpawn::Custom(k, p));
         }
+        rebuild_population_events(plan, &base_events);
         return out;
     }
 
@@ -1103,76 +1188,92 @@ pub fn apply_chest_permutations(plan: &mut LevelPlan, ctx: ChestPermuteCtx) -> C
 
     // GML `scrReplacePropWithChest`: a missing base kind converts the
     // furthest eligible prop past 160 px (statues/decals excluded).
-    let top_up = |v: &mut Vec<Vec2>, keep: usize| {
+    let mut top_up = |v: &mut Vec<Vec2>, keep: usize| {
         if keep == 0 || !v.is_empty() {
             return;
         }
-        let mut best: Option<(Vec2, f32)> = None;
-        for (kind, at) in &plan.props {
+        let mut best: Option<(usize, Vec2, f32)> = None;
+        for (index, &(kind, at)) in plan.props.iter().enumerate() {
             match kind {
                 PropKind::ThroneStatue | PropKind::YVStatue | PropKind::GroundDecal => continue,
                 _ => {}
             }
             let d = at.length_squared();
-            if d > 160.0 * 160.0 && best.is_none_or(|(_, bd)| d > bd) {
-                best = Some((*at, d));
+            if d > 160.0 * 160.0 && best.is_none_or(|(_, _, bd)| d > bd) {
+                best = Some((index, at, d));
             }
         }
-        if let Some((at, _)) = best {
+        if let Some((index, at, _)) = best {
+            let (kind, _) = plan.props.remove(index);
+            if let Some(event_index) = base_events.iter().position(|event| {
+                matches!(
+                    event,
+                    PopulationEvent::Prop {
+                        kind: event_kind,
+                        pos: event_pos,
+                    } if *event_kind == kind && *event_pos == at
+                )
+            }) {
+                base_events.remove(event_index);
+            }
             v.push(at);
         }
     };
     top_up(&mut weapons, 1 + wb);
     top_up(&mut ammos, 1 + ab);
     top_up(&mut rads, 1 + rb);
+    drop(top_up);
 
     // Rad permutations, in GML order.
-    let mut rad_out: Vec<ChestSpawn> = Vec::new();
+    let mut rad_out: Vec<(ChestSpawn, Option<(EnemyKind, Vec2)>)> = Vec::new();
     for p in rads {
         if ctx.rogue_in_run {
-            rad_out.push(ChestSpawn::Custom(ChestKind::Rogue, p));
+            rad_out.push((ChestSpawn::Custom(ChestKind::Rogue, p), None));
             continue;
         }
         if ctx.noradch > 0 {
             if ctx.noradch >= 2 && !ctx.horror_done && !out.horror {
-                plan.enemies.push((EnemyKind::HostileHorror, p));
+                rad_out.push((ChestSpawn::Rad(p), Some((EnemyKind::HostileHorror, p))));
                 out.horror = true;
             } else {
-                rad_out.push(ChestSpawn::Custom(ChestKind::RadBig, p));
+                rad_out.push((ChestSpawn::Custom(ChestKind::RadBig, p), None));
             }
             continue;
         }
         if ctx.player_half_health && rng.random_range(0.0..2.0) < 1.0 {
-            rad_out.push(ChestSpawn::Custom(ChestKind::Health, p));
+            rad_out.push((ChestSpawn::Custom(ChestKind::Health, p), None));
             continue;
         }
         if plan.styleb && ctx.area == AreaId::Desert && rng.random_range(0.0..3.0) < 1.0 {
-            rad_out.push(ChestSpawn::Custom(ChestKind::RadMaggot, p));
+            rad_out.push((ChestSpawn::Custom(ChestKind::RadMaggot, p), None));
         } else {
-            rad_out.push(ChestSpawn::Rad(p));
+            rad_out.push((ChestSpawn::Rad(p), None));
         }
     }
 
     // Base survivors.
-    let mut final_chests: Vec<ChestSpawn> = weapons.into_iter().map(ChestSpawn::Weapon).collect();
-    final_chests.extend(ammos.into_iter().map(ChestSpawn::Ammo));
+    let mut final_chests: Vec<(ChestSpawn, Option<(EnemyKind, Vec2)>)> = weapons
+        .into_iter()
+        .map(|p| (ChestSpawn::Weapon(p), None))
+        .collect();
+    final_chests.extend(ammos.into_iter().map(|p| (ChestSpawn::Ammo(p), None)));
     final_chests.extend(rad_out);
     for (k, p) in customs {
-        final_chests.push(ChestSpawn::Custom(k, p));
+        final_chests.push((ChestSpawn::Custom(k, p), None));
     }
 
     // Crown Life: every Rad becomes Health. Crown Love: every non-Proto,
     // non-Rogue chest plus every Rad becomes Ammo.
     if ctx.crown_life {
-        for c in final_chests.iter_mut() {
-            if matches!(c, ChestSpawn::Rad(_)) {
-                let p = c.pos();
+        for (c, _) in final_chests.iter_mut() {
+            if matches!(&*c, ChestSpawn::Rad(_)) {
+                let p = (*c).pos();
                 *c = ChestSpawn::Custom(ChestKind::Health, p);
             }
         }
     }
     if ctx.crown_love {
-        for c in final_chests.iter_mut() {
+        for (c, _) in final_chests.iter_mut() {
             let p = c.pos();
             match *c {
                 ChestSpawn::Custom(ChestKind::Proto, _)
@@ -1187,34 +1288,61 @@ pub fn apply_chest_permutations(plan: &mut LevelPlan, ctx: ChestPermuteCtx) -> C
     let sewers_gate = (ctx.area != AreaId::Desert && ctx.area != AreaId::Campfire) || ctx.loops > 0;
     let mut no_big_yet = !final_chests
         .iter()
-        .any(|c| matches!(c, ChestSpawn::Custom(ChestKind::BigWeapon, _)));
+        .any(|entry| matches!(entry.0, ChestSpawn::Custom(ChestKind::BigWeapon, _)));
     let mut swapped: Vec<ChestSpawn> = Vec::with_capacity(final_chests.len());
-    for c in final_chests {
+    let mut phase_events: Vec<PopulationEvent> = Vec::with_capacity(final_chests.len());
+    let mut phase_enemies: Vec<(EnemyKind, Vec2)> = Vec::new();
+    for (c, rad_enemy) in final_chests {
+        if let Some((kind, pos)) = rad_enemy {
+            phase_enemies.push((kind, pos));
+            phase_events.push(PopulationEvent::Enemy { kind, pos });
+            continue;
+        }
         match c {
             ChestSpawn::Ammo(p) if sewers_gate && rng.random_range(0.0..11.0) < 1.0 => {
-                plan.enemies.push((EnemyKind::Mimic, p));
+                phase_enemies.push((EnemyKind::Mimic, p));
+                phase_events.push(PopulationEvent::Enemy {
+                    kind: EnemyKind::Mimic,
+                    pos: p,
+                });
             }
             ChestSpawn::Weapon(p)
                 if rng.random_range(0.0..4.0) < ctx.nochest as f32 && no_big_yet =>
             {
                 no_big_yet = false;
-                swapped.push(ChestSpawn::Custom(ChestKind::BigWeapon, p));
+                let chest = ChestSpawn::Custom(ChestKind::BigWeapon, p);
+                swapped.push(chest);
+                phase_events.push(PopulationEvent::Chest(chest));
             }
             ChestSpawn::Weapon(p)
                 if ctx.same_weapons_for > 4
                     && rng.random_range(0.0..100.0) < (ctx.same_weapons_for - 4) as f32 =>
             {
-                plan.enemies.push((EnemyKind::WepMimic, p));
+                phase_enemies.push((EnemyKind::WepMimic, p));
+                phase_events.push(PopulationEvent::Enemy {
+                    kind: EnemyKind::WepMimic,
+                    pos: p,
+                });
             }
             ChestSpawn::Custom(ChestKind::Health, p)
                 if sewers_gate && rng.random_range(0.0..51.0) < 1.0 =>
             {
-                plan.enemies.push((EnemyKind::SuperMimic, p));
+                phase_enemies.push((EnemyKind::SuperMimic, p));
+                phase_events.push(PopulationEvent::Enemy {
+                    kind: EnemyKind::SuperMimic,
+                    pos: p,
+                });
             }
-            other => swapped.push(other),
+            other => {
+                swapped.push(other);
+                phase_events.push(PopulationEvent::Chest(other));
+            }
         }
     }
     plan.chests = swapped;
+    plan.enemies.extend(phase_enemies);
+    let mut events = base_events;
+    events.extend(phase_events);
     // GML hardmode desert 1-1: every player gets a BigWeaponChest
     // (`hardmode && loops - hardmode <= 0`).
     if ctx.hardmode
@@ -1222,9 +1350,11 @@ pub fn apply_chest_permutations(plan: &mut LevelPlan, ctx: ChestPermuteCtx) -> C
         && ctx.area == AreaId::Desert
         && ctx.subarea == 1
     {
-        plan.chests
-            .push(ChestSpawn::Custom(ChestKind::BigWeapon, ctx.player_pos));
+        let chest = ChestSpawn::Custom(ChestKind::BigWeapon, ctx.player_pos);
+        plan.chests.push(chest);
+        events.push(PopulationEvent::Chest(chest));
     }
+    plan.population_events = events;
     out
 }
 
@@ -1340,37 +1470,84 @@ fn populate(
     floors: &[(i32, i32)],
     walls: &std::collections::HashSet<(i32, i32)>,
     plan: &mut LevelPlan,
-    mut rng: &mut StdRng,
+    rng: &mut StdRng,
 ) {
     let area = gml_area_from_run(run);
     let boss_sub = is_boss_subarea_run(run);
 
     let hard = game_hard(run);
-    let enemy_min = (3.0 + hard / 1.5).floor().max(3.0) as usize;
+    let enemy_cap = 3.0 + hard / 1.5;
+    let rf_route = ((run.floor.max(1) - 1) % 15) + 1;
+    let skip_enemies =
+        (boss_sub && rf_route == 15) || (run.area == AreaId::HQ && run.floor_in_area >= 3);
 
     let mut prop_tiles: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
-
-    let small_walls_allowed = !boss_sub
-        && !matches!(
-            run.area,
-            AreaId::HQ | AreaId::Vault | AreaId::CrownVault | AreaId::Labs | AreaId::Campfire
+    for chest in &plan.chests {
+        let pos = chest.pos();
+        prop_tiles.insert((
+            ((pos.x - TILE * 0.5) / TILE).floor() as i32,
+            ((pos.y - TILE * 0.5) / TILE).floor() as i32,
+        ));
+    }
+    for &(_, pos) in &plan.props {
+        prop_tiles.insert((
+            ((pos.x - TILE * 0.5) / TILE).floor() as i32,
+            ((pos.y - TILE * 0.5) / TILE).floor() as i32,
+        ));
+    }
+    let mut population_events: Vec<PopulationEvent> = plan
+        .enemies
+        .iter()
+        .copied()
+        .map(|(kind, pos)| PopulationEvent::Enemy { kind, pos })
+        .chain(
+            plan.props
+                .iter()
+                .copied()
+                .map(|(kind, pos)| PopulationEvent::Prop { kind, pos }),
         )
-        && !(((run.floor.max(1) - 1) % 15) + 1 == 15 && run.area == AreaId::Palace);
+        .collect();
+
     for &(cx, cy) in floors {
         let (px, py) = cell_center_i(cx, cy);
         let dist_sq = px * px + py * py;
-
-        if small_walls_allowed && rng.random::<f32>() * 5.0 < 1.0 && dist_sq > 100.0 * 100.0 {
-            let sx = px + rng.random_range(-8.0..8.0);
-            // Dead draws, kept verbatim: the bevy source draws (and
-            // discards) here, and the RNG sequence must not shift.
-            let _sy = py + rng.random_range(-8.0..8.0);
-            let _wx = (sx / WALL_PX).floor() as i32;
-            let sy = py + rng.random_range(-8.0..8.0);
-            let wx = (sx / WALL_PX).floor() as i32;
-            let wy = (sy / WALL_PX).floor() as i32;
-            plan.small_walls.push((wx as i16, wy as i16));
-            prop_tiles.insert((cx, cy));
+        let place_free = !prop_tiles.contains(&(cx, cy));
+        let wall_blocked = walls_cover_tile(walls, cx, cy)
+            || plan.small_walls.iter().any(|&(wx, wy)| {
+                (wx as i32).div_euclid(2) == cx && (wy as i32).div_euclid(2) == cy
+            });
+        if !skip_enemies
+            && rng.random::<f32>() * (10.0 + hard) < hard
+            && dist_sq > 120.0 * 120.0
+            && place_free
+        {
+            let props_before = plan.props.len();
+            let enemies_before = plan.enemies.len();
+            scr_pop_enemies(
+                run,
+                area,
+                plan.styleb,
+                &mut plan.enemies,
+                &mut plan.props,
+                &mut prop_tiles,
+                rng,
+                Vec2::new(px, py),
+                (cx, cy),
+                wall_blocked,
+            );
+            record_population_delta(
+                &mut population_events,
+                props_before,
+                &plan.props,
+                enemies_before,
+                &plan.enemies,
+            );
+        }
+        if rng.random::<f32>() * 6.0 < 1.0 {
+            plan.details.push(Vec2::new(
+                px + rng.random_range(-14.0..14.0),
+                py + rng.random_range(-14.0..14.0),
+            ));
         }
     }
 
@@ -1391,13 +1568,6 @@ fn populate(
 
     for &(cx, cy) in floors {
         let (px, py) = cell_center_i(cx, cy);
-
-        if rng.random::<f32>() * 6.0 < 1.0 {
-            plan.details.push(Vec2::new(
-                px + rng.random_range(-14.0..14.0),
-                py + rng.random_range(-14.0..14.0),
-            ));
-        }
 
         if bone_chance > 0.0
             && side_solid(walls, cx, cy, -1)
@@ -1425,6 +1595,103 @@ fn populate(
         }
     }
 
+    let outer_spawn_dist = if area == 5 && run.floor_in_area == 3 {
+        150.0
+    } else {
+        120.0
+    };
+    if !skip_enemies {
+        for &(cx, cy) in floors {
+            let (px, py) = cell_center_i(cx, cy);
+            let dist_sq = px * px + py * py;
+            let place_free = !prop_tiles.contains(&(cx, cy));
+            let wall_blocked = walls_cover_tile(walls, cx, cy)
+                || plan.small_walls.iter().any(|&(wx, wy)| {
+                    (wx as i32).div_euclid(2) == cx && (wy as i32).div_euclid(2) == cy
+                });
+            if (plan.enemies.len() as f32) < enemy_cap
+                && dist_sq > outer_spawn_dist * outer_spawn_dist
+                && place_free
+            {
+                let props_before = plan.props.len();
+                let enemies_before = plan.enemies.len();
+                scr_pop_enemies(
+                    run,
+                    area,
+                    plan.styleb,
+                    &mut plan.enemies,
+                    &mut plan.props,
+                    &mut prop_tiles,
+                    rng,
+                    Vec2::new(px, py),
+                    (cx, cy),
+                    wall_blocked,
+                );
+                record_population_delta(
+                    &mut population_events,
+                    props_before,
+                    &plan.props,
+                    enemies_before,
+                    &plan.enemies,
+                );
+            }
+            let place_free = !prop_tiles.contains(&(cx, cy));
+            if run.blood_crown
+                && rng.random::<f32>() * (8.0 + hard) < hard
+                && dist_sq > outer_spawn_dist * outer_spawn_dist
+                && place_free
+            {
+                let props_before = plan.props.len();
+                let enemies_before = plan.enemies.len();
+                scr_pop_enemies(
+                    run,
+                    area,
+                    plan.styleb,
+                    &mut plan.enemies,
+                    &mut plan.props,
+                    &mut prop_tiles,
+                    rng,
+                    Vec2::new(px, py),
+                    (cx, cy),
+                    walls_cover_tile(walls, cx, cy)
+                        || plan.small_walls.iter().any(|&(wx, wy)| {
+                            (wx as i32).div_euclid(2) == cx && (wy as i32).div_euclid(2) == cy
+                        }),
+                );
+                record_population_delta(
+                    &mut population_events,
+                    props_before,
+                    &plan.props,
+                    enemies_before,
+                    &plan.enemies,
+                );
+            }
+        }
+    }
+    let small_walls_allowed = !boss_sub
+        && !matches!(
+            run.area,
+            AreaId::HQ | AreaId::Vault | AreaId::CrownVault | AreaId::Labs | AreaId::Campfire
+        )
+        && !(((run.floor.max(1) - 1) % 15) + 1 == 15 && run.area == AreaId::Palace);
+    for &(cx, cy) in floors {
+        let (px, py) = cell_center_i(cx, cy);
+        let dist_sq = px * px + py * py;
+        if small_walls_allowed
+            && !prop_tiles.contains(&(cx, cy))
+            && rng.random::<f32>() * 5.0 < 1.0
+            && dist_sq > 100.0 * 100.0
+        {
+            let sx = px + rng.random_range(-8.0..8.0);
+            let _sy = py + rng.random_range(-8.0..8.0);
+            let _wx = (sx / WALL_PX).floor() as i32;
+            let sy = py + rng.random_range(-8.0..8.0);
+            let wx = (sx / WALL_PX).floor() as i32;
+            let wy = (sy / WALL_PX).floor() as i32;
+            plan.small_walls.push((wx as i16, wy as i16));
+            prop_tiles.insert((cx, cy));
+        }
+    }
     for &(cx, cy) in floors {
         if prop_tiles.contains(&(cx, cy)) {
             continue;
@@ -1654,483 +1921,10 @@ fn populate(
         if claims_tile {
             prop_tiles.insert((cx, cy));
         }
-        plan.props.push((kind, Vec2::new(px, py)));
+        let pos = Vec2::new(px, py);
+        plan.props.push((kind, pos));
+        population_events.push(PopulationEvent::Prop { kind, pos });
     }
-
-    let rf_route = ((run.floor.max(1) - 1) % 15) + 1;
-    let skip_enemies = boss_sub && rf_route == 15;
-
-    // GML `scrPopulate` asks for 120 px (150 on the city boss floor) but
-    // `scrPopEnemies` itself refuses anything under 160 px, so the
-    // effective clear ring is 160 everywhere.
-    let spawn_dist = 160.0;
-    let mut enemy_tiles: Vec<(EnemyKind, Vec2)> = Vec::new();
-    for &(cx, cy) in floors {
-        if skip_enemies {
-            break;
-        }
-        let (px, py) = cell_center_i(cx, cy);
-        let dist_sq = px * px + py * py;
-        if dist_sq < spawn_dist * spawn_dist || prop_tiles.contains(&(cx, cy)) {
-            continue;
-        }
-        if walls_cover_tile(walls, cx, cy)
-            || plan
-                .small_walls
-                .iter()
-                .any(|&(wx, wy)| (wx as i32).div_euclid(2) == cx && (wy as i32).div_euclid(2) == cy)
-        {
-            continue;
-        }
-
-        let chance = hard / (10.0 + hard);
-        // GML `scrPopulate` fires `scrPopEnemies` twice per floor: the
-        // open roll above plus the Blood-crown bonus roll below, which
-        // ignores the enemy cap (`random(8 + hard) < hard`).
-        let normal = rng.random::<f32>() < chance || enemy_tiles.len() < enemy_min;
-        let extra = run.blood_crown && rng.random::<f32>() < hard / (8.0 + hard);
-
-        let center = Vec2::new(px, py);
-        let pick_kind = |rng: &mut StdRng, w: &[EnemyKind]| w[rng.random_range(0..w.len())];
-        let loop_extras = loop_elite_candidates(area, run.loop_count);
-
-        for pass in 0..2 {
-            // Pass 0 rolls the open table; pass 1 re-rolls it for the
-            // Blood crown. (`continue` below skips the pass, matching
-            // GML's per-`scrPopEnemies`-call return.)
-            if (pass == 0 && !normal) || (pass == 1 && !extra) {
-                continue;
-            }
-
-            {
-                let mut secret_kinds: Vec<EnemyKind> = match run.area {
-                    AreaId::Oasis => {
-                        if rng.random::<f32>() * 4.0 < 1.0 {
-                            vec![EnemyKind::Crab]
-                        } else if rng.random::<f32>() * 3.0 < 1.0 {
-                            vec![
-                                EnemyKind::BoneFish,
-                                EnemyKind::BoneFish,
-                                EnemyKind::BoneFish,
-                            ]
-                        } else {
-                            Vec::new()
-                        }
-                    }
-                    AreaId::PizzaSewers => vec![EnemyKind::Turtle],
-                    AreaId::Jungle => {
-                        if rng.random::<f32>() * 8.0 < 1.0 {
-                            vec![EnemyKind::JungleFly]
-                        } else if rng.random::<f32>() * 30.0 < 1.0 {
-                            plan.props.push((PropKind::Barrel, center));
-                            vec![
-                                EnemyKind::JungleBandit,
-                                EnemyKind::JungleBandit,
-                                EnemyKind::JungleBandit,
-                            ]
-                        } else {
-                            let k = pick_kind(
-                                &mut rng,
-                                &[
-                                    EnemyKind::JungleBandit,
-                                    EnemyKind::JungleBandit,
-                                    EnemyKind::JungleBandit,
-                                    EnemyKind::JungleBandit,
-                                    EnemyKind::JungleBandit,
-                                    EnemyKind::Maggot,
-                                    EnemyKind::Assassin,
-                                    EnemyKind::Assassin,
-                                ],
-                            );
-                            vec![k]
-                        }
-                    }
-                    AreaId::CursedCaves => {
-                        if rng.random::<f32>() * 5.0 < 4.0 {
-                            let k = pick_kind(
-                                &mut rng,
-                                &[
-                                    EnemyKind::InvSpider,
-                                    EnemyKind::InvSpider,
-                                    EnemyKind::InvSpider,
-                                    EnemyKind::InvSpider,
-                                    EnemyKind::InvLaserCrystal,
-                                    EnemyKind::InvLaserCrystal,
-                                ],
-                            );
-                            vec![k]
-                        } else {
-                            Vec::new()
-                        }
-                    }
-                    AreaId::City => {
-                        if rng.random::<f32>() * 5.0 < 1.0 {
-                            let k = pick_kind(
-                                &mut rng,
-                                &[
-                                    EnemyKind::FireBaller,
-                                    EnemyKind::Jock,
-                                    EnemyKind::FireBaller,
-                                    EnemyKind::Jock,
-                                    EnemyKind::FireBaller,
-                                    EnemyKind::SuperFireBaller,
-                                ],
-                            );
-                            vec![k]
-                        } else if rng.random::<f32>() * 4.0 < 1.0 {
-                            if rng.random::<f32>() * 5.0 < 1.0 {
-                                plan.props.push((PropKind::GoldBarrel, center));
-                            }
-                            let k = pick_kind(
-                                &mut rng,
-                                &[
-                                    EnemyKind::Molefish,
-                                    EnemyKind::Molefish,
-                                    EnemyKind::Molefish,
-                                    EnemyKind::Molefish,
-                                    EnemyKind::Molesarge,
-                                ],
-                            );
-                            vec![k]
-                        } else {
-                            Vec::new()
-                        }
-                    }
-                    AreaId::Vault | AreaId::CrownVault => {
-                        let k = pick_kind(
-                            &mut rng,
-                            &[
-                                EnemyKind::RobotGuard,
-                                EnemyKind::Turret,
-                                EnemyKind::IdpdElite,
-                                EnemyKind::CrownGuardian,
-                                EnemyKind::CrownGuardian,
-                            ],
-                        );
-                        vec![k]
-                    }
-                    AreaId::HQ => {
-                        if rng.random::<f32>() * 7.0 < 1.0 {
-                            let k = pick_kind(
-                                &mut rng,
-                                &[
-                                    EnemyKind::IdpdElite,
-                                    EnemyKind::IdpdShield,
-                                    EnemyKind::IdpdInspector,
-                                ],
-                            );
-                            vec![k]
-                        } else if rng.random::<f32>() * 4.0 < 1.0 {
-                            std::iter::repeat_n(EnemyKind::IdpdGrunt, 5).collect()
-                        } else if rng.random::<f32>() * 3.0 < 1.0 {
-                            let k = pick_kind(
-                                &mut rng,
-                                &[
-                                    EnemyKind::IdpdGrunt,
-                                    EnemyKind::IdpdShield,
-                                    EnemyKind::IdpdInspector,
-                                ],
-                            );
-                            vec![k]
-                        } else {
-                            Vec::new()
-                        }
-                    }
-                    _ => Vec::new(),
-                };
-                if !secret_kinds.is_empty() {
-                    for (i, k) in secret_kinds.drain(..).enumerate() {
-                        let jitter =
-                            Vec2::new(((i % 3) as f32 - 1.0) * 18.0, ((i / 3) as f32 - 0.5) * 18.0);
-                        enemy_tiles.push((k, center + jitter));
-                    }
-                    continue;
-                }
-            }
-
-            match area {
-                1 => {
-                    // GML `scrPopEnemies` desert arm verbatim: loop invaders,
-                    // then the styleb big-maggot nest, then maggot/scorpion,
-                    // then the barrel ambush, then the bandit default.
-                    // (`_loop_rand = random(loops)`; 0 loops never fires.)
-                    let loop_rand = if run.loop_count == 0 {
-                        0.0
-                    } else {
-                        rng.random_range(0.0..run.loop_count as f32)
-                    };
-                    if rng.random_range(0.0..2.0) < loop_rand {
-                        let k = pick_kind(
-                            &mut rng,
-                            &[
-                                EnemyKind::Scorpion,
-                                EnemyKind::Scorpion,
-                                EnemyKind::Bandit,
-                                EnemyKind::Bandit,
-                                EnemyKind::Maggot,
-                                EnemyKind::JungleFly,
-                                EnemyKind::JungleFly,
-                                EnemyKind::MeleeBandit,
-                                EnemyKind::Sniper,
-                            ],
-                        );
-                        enemy_tiles.push((k, center));
-                    } else if plan.styleb {
-                        let k = pick_kind(
-                            &mut rng,
-                            &[
-                                EnemyKind::MaggotSpawn,
-                                EnemyKind::BigMaggot,
-                                EnemyKind::BigMaggot,
-                                EnemyKind::Maggot,
-                            ],
-                        );
-                        enemy_tiles.push((k, center));
-                    } else if rng.random::<f32>() * 7.0 < 1.0 {
-                        let k = pick_kind(&mut rng, &[EnemyKind::MaggotSpawn, EnemyKind::Scorpion]);
-                        enemy_tiles.push((k, center));
-                    } else if rng.random::<f32>() * 30.0 < 1.0 {
-                        plan.props.push((PropKind::Barrel, center));
-                        for _ in 0..3 {
-                            enemy_tiles.push((
-                                EnemyKind::Bandit,
-                                center
-                                    + Vec2::new(
-                                        rng.random_range(-2.0..2.0),
-                                        rng.random_range(-2.0..2.0),
-                                    ),
-                            ));
-                        }
-                    } else {
-                        let mut cands = vec![
-                            EnemyKind::Bandit,
-                            EnemyKind::Bandit,
-                            EnemyKind::Bandit,
-                            EnemyKind::Bandit,
-                            EnemyKind::Bandit,
-                            EnemyKind::Bandit,
-                            EnemyKind::Maggot,
-                            EnemyKind::Scorpion,
-                        ];
-                        cands.extend(loop_extras.iter().copied());
-                        let k = pick_kind(&mut rng, &cands);
-                        enemy_tiles.push((k, center));
-                    }
-                }
-                2 => {
-                    if run.loop_count > 0 && rng.random::<f32>() * 3.0 >= 1.0 {
-                        let mut cands = vec![
-                            EnemyKind::Ratking,
-                            EnemyKind::Ratking,
-                            EnemyKind::BuffGator,
-                            EnemyKind::LaserCrystal,
-                            EnemyKind::Rat,
-                            EnemyKind::Ballguy,
-                            EnemyKind::Ballguy,
-                            EnemyKind::FrogEgg,
-                        ];
-                        cands.extend(loop_extras.iter().copied());
-                        let k = pick_kind(&mut rng, &cands);
-                        enemy_tiles.push((k, center));
-                    } else if rng.random::<f32>() * 9.0 < 1.0 {
-                        let k = pick_kind(
-                            &mut rng,
-                            &[
-                                EnemyKind::Ballguy,
-                                EnemyKind::Ratking,
-                                EnemyKind::MeleeBandit,
-                            ],
-                        );
-                        enemy_tiles.push((k, center));
-                    } else {
-                        let mut cands = vec![
-                            EnemyKind::Rat,
-                            EnemyKind::Rat,
-                            EnemyKind::Rat,
-                            EnemyKind::Maggot,
-                            EnemyKind::Gator,
-                            EnemyKind::Bandit,
-                        ];
-                        cands.extend(loop_extras.iter().copied());
-                        let k = pick_kind(&mut rng, &cands);
-                        enemy_tiles.push((k, center));
-                    }
-                }
-                3 => {
-                    let roll: f32 = rng.random();
-                    let mut cands = if roll * 4.0 < 1.0 {
-                        vec![
-                            EnemyKind::MeleeBandit,
-                            EnemyKind::Sniper,
-                            EnemyKind::MeleeBandit,
-                            EnemyKind::Sniper,
-                            EnemyKind::Ballguy,
-                        ]
-                    } else if roll * 10.0 < 1.0 {
-                        vec![
-                            EnemyKind::Raven,
-                            EnemyKind::Raven,
-                            EnemyKind::Raven,
-                            EnemyKind::Raven,
-                        ]
-                    } else if roll * 20.0 < 1.0 {
-                        vec![EnemyKind::Salamander]
-                    } else {
-                        vec![
-                            EnemyKind::Raven,
-                            EnemyKind::Raven,
-                            EnemyKind::Raven,
-                            EnemyKind::Bandit,
-                        ]
-                    };
-                    cands.extend(loop_extras.iter().copied());
-                    let k = pick_kind(&mut rng, &cands);
-                    enemy_tiles.push((k, center));
-                }
-                4 => {
-                    let mut cands = if run.loop_count > 0 && rng.random_bool(0.5) {
-                        vec![
-                            EnemyKind::LaserCrystal,
-                            EnemyKind::LaserCrystal,
-                            EnemyKind::RhinoFreak,
-                            EnemyKind::LightningCrystal,
-                            EnemyKind::BuffGator,
-                            EnemyKind::ExploFreak,
-                            EnemyKind::Spider,
-                            EnemyKind::Spider,
-                        ]
-                    } else {
-                        vec![
-                            EnemyKind::Spider,
-                            EnemyKind::Spider,
-                            EnemyKind::Spider,
-                            EnemyKind::Spider,
-                            EnemyKind::LaserCrystal,
-                            EnemyKind::LaserCrystal,
-                        ]
-                    };
-                    cands.extend(loop_extras.iter().copied());
-                    let k = pick_kind(&mut rng, &cands);
-                    enemy_tiles.push((k, center));
-                }
-                5 => {
-                    let mut frozen = if run.loop_count > 0 && rng.random_bool(0.5) {
-                        vec![
-                            EnemyKind::RobotGuard,
-                            EnemyKind::RobotGuard,
-                            EnemyKind::SnowTank,
-                            EnemyKind::DogGuardian,
-                            EnemyKind::ExploGuardian,
-                            EnemyKind::Wolf,
-                            EnemyKind::Necromancer,
-                        ]
-                    } else {
-                        vec![
-                            EnemyKind::RobotGuard,
-                            EnemyKind::RobotGuard,
-                            EnemyKind::RobotGuard,
-                            EnemyKind::SnowTank,
-                            EnemyKind::Wolf,
-                            EnemyKind::Wolf,
-                        ]
-                    };
-                    frozen.extend(loop_extras.iter().copied());
-                    let k = pick_kind(&mut rng, &frozen);
-                    enemy_tiles.push((k, center));
-                }
-                6 => {
-                    let mut late = if run.loop_count > 0 && rng.random_bool(0.5) {
-                        vec![
-                            EnemyKind::Ratking,
-                            EnemyKind::RhinoFreak,
-                            EnemyKind::ExploFreak,
-                            EnemyKind::Necromancer,
-                            EnemyKind::LaserCrystal,
-                            EnemyKind::Turret,
-                        ]
-                    } else {
-                        vec![
-                            EnemyKind::Freak,
-                            EnemyKind::Freak,
-                            EnemyKind::Freak,
-                            EnemyKind::Necromancer,
-                            EnemyKind::ExploFreak,
-                            EnemyKind::RhinoFreak,
-                        ]
-                    };
-                    late.extend(std::iter::repeat_n(
-                        EnemyKind::IdpdGrunt,
-                        (run.loop_count.min(3) * 2) as usize,
-                    ));
-                    late.extend(loop_extras.iter().copied());
-                    let k = pick_kind(&mut rng, &late);
-                    enemy_tiles.push((k, center));
-                }
-                7 => {
-                    let mut palace = if run.loop_count > 0 && rng.random_bool(0.5) {
-                        vec![
-                            EnemyKind::ExploGuardian,
-                            EnemyKind::DogGuardian,
-                            EnemyKind::DogGuardian,
-                            EnemyKind::Sniper,
-                            EnemyKind::ExploFreak,
-                            EnemyKind::JungleBandit,
-                            EnemyKind::JungleBandit,
-                        ]
-                    } else {
-                        vec![
-                            EnemyKind::Guardian,
-                            EnemyKind::Guardian,
-                            EnemyKind::Guardian,
-                            EnemyKind::ExploGuardian,
-                            EnemyKind::ExploGuardian,
-                            EnemyKind::DogGuardian,
-                        ]
-                    };
-                    palace.extend(std::iter::repeat_n(
-                        EnemyKind::IdpdGrunt,
-                        (run.loop_count.min(3)) as usize,
-                    ));
-                    palace.extend(loop_extras.iter().copied());
-                    let k = pick_kind(&mut rng, &palace);
-                    enemy_tiles.push((k, center));
-                }
-                _ => {}
-            }
-        }
-    }
-
-    if !skip_enemies {
-        let mut extras = floors
-            .iter()
-            .copied()
-            .filter(|(cx, cy)| {
-                let (px, py) = cell_center_i(*cx, *cy);
-                let d = px * px + py * py;
-                d >= 160.0 * 160.0 && !prop_tiles.contains(&(*cx, *cy))
-            })
-            .collect::<Vec<_>>();
-        extras.sort_by_key(|&(cx, cy)| {
-            let (px, py) = cell_center_i(cx, cy);
-            -((px * px + py * py) as i32)
-        });
-        let mut ei = 0;
-        while enemy_tiles.len() < enemy_min && ei < extras.len() {
-            let (cx, cy) = extras[ei];
-            ei += 1;
-            let center = cell_center_px(cx, cy);
-            if enemy_tiles.iter().any(|(_, p)| p.distance(center) < 8.0) {
-                continue;
-            }
-            let cands = default_area_enemies(area, run.loop_count);
-            if cands.is_empty() {
-                break;
-            }
-            let k = cands[rng.random_range(0..cands.len())];
-            enemy_tiles.push((k, center));
-        }
-    }
-    plan.enemies = enemy_tiles;
 
     if boss_sub {
         let kind = boss_for_floor_and_loop(run.floor, run.loop_count);
@@ -2178,7 +1972,15 @@ fn populate(
             }
             if let Some((_, idx)) = best {
                 let pos = plan.props[idx].1;
+                let removed_kind = plan.props[idx].0;
                 plan.props.remove(idx);
+                population_events.retain(|event| match event {
+                    PopulationEvent::Prop {
+                        kind,
+                        pos: event_pos,
+                    } => *kind != removed_kind || *event_pos != pos,
+                    _ => true,
+                });
                 if !has_weapon {
                     plan.chests.push(ChestSpawn::Weapon(pos));
                 } else {
@@ -2206,7 +2008,19 @@ fn populate(
         {
             plan.chests.push(ChestSpawn::Weapon(cell_center_px(fx, fy)));
         }
+        population_events.retain(|event| !matches!(event, PopulationEvent::Enemy { .. }));
     }
+    if rf == 15 && !is_secret_area(run.area) {
+        population_events.clear();
+        population_events.extend(
+            plan.props
+                .iter()
+                .copied()
+                .map(|(kind, pos)| PopulationEvent::Prop { kind, pos }),
+        );
+    }
+    population_events.extend(plan.chests.iter().copied().map(PopulationEvent::Chest));
+    plan.population_events = population_events;
 }
 
 pub fn boss_for_floor_and_loop(floor: u32, loop_count: u32) -> EnemyKind {
@@ -2267,162 +2081,663 @@ pub fn wall_cell_at(pos: Vec2) -> (i32, i32) {
     )
 }
 
-fn apply_loop_elite_substitutions(
-    table: &mut Vec<(EnemyKind, usize)>,
-    area: AreaId,
-    loop_count: u32,
+fn pop_spawn<T: Copy>(rng: &mut StdRng, center: Vec2, table: &[T]) -> (T, Vec2) {
+    let x = rng.random_range(-2.0..2.0);
+    let y = rng.random_range(-2.0..2.0);
+    let value = table[rng.random_range(0..table.len())];
+    (value, center + Vec2::new(x, y))
+}
+
+fn spawn_pop_enemy(
+    enemies: &mut Vec<(EnemyKind, Vec2)>,
+    rng: &mut StdRng,
+    center: Vec2,
+    table: &[EnemyKind],
 ) {
-    if loop_count == 0 {
+    let (kind, pos) = pop_spawn(rng, center, table);
+    enemies.push((kind, pos));
+}
+
+fn spawn_pop_prop(
+    props: &mut Vec<(PropKind, Vec2)>,
+    prop_tiles: &mut HashSet<(i32, i32)>,
+    cell: (i32, i32),
+    rng: &mut StdRng,
+    center: Vec2,
+    table: &[PropKind],
+) {
+    let (kind, pos) = pop_spawn(rng, center, table);
+    props.push((kind, pos));
+    prop_tiles.insert(cell);
+}
+
+fn record_population_delta(
+    events: &mut Vec<PopulationEvent>,
+    props_before: usize,
+    props: &[(PropKind, Vec2)],
+    enemies_before: usize,
+    enemies: &[(EnemyKind, Vec2)],
+) {
+    for &(kind, pos) in props.iter().skip(props_before) {
+        events.push(PopulationEvent::Prop { kind, pos });
+    }
+    for &(kind, pos) in enemies.iter().skip(enemies_before) {
+        events.push(PopulationEvent::Enemy { kind, pos });
+    }
+}
+
+fn scr_pop_enemies(
+    run: &Run,
+    area: i32,
+    styleb: bool,
+    enemies: &mut Vec<(EnemyKind, Vec2)>,
+    props: &mut Vec<(PropKind, Vec2)>,
+    prop_tiles: &mut HashSet<(i32, i32)>,
+    rng: &mut StdRng,
+    center: Vec2,
+    cell: (i32, i32),
+    wall_blocked: bool,
+) {
+    if center.length_squared() < 160.0 * 160.0 || wall_blocked {
         return;
     }
-
-    let l = loop_count.min(4) as usize;
+    let loop_rand = if run.loop_count == 0 {
+        0.0
+    } else {
+        rng.random_range(0.0..run.loop_count as f32)
+    };
+    if run.area == AreaId::Campfire {
+        return;
+    }
+    let max_subarea = match area {
+        1 | 3 | 5 | 7 | 106 => 3,
+        _ => 1,
+    };
+    let is_last = run.floor_in_area == max_subarea;
 
     match area {
-        AreaId::Desert => {
-            table.push((EnemyKind::Scorpion, 4 + l * 2));
-            table.push((EnemyKind::JungleFly, 3 + l));
-            table.push((EnemyKind::MeleeBandit, 3 + l));
-            table.push((EnemyKind::Sniper, 3 + l));
-        }
-        AreaId::Sewers => {
-            table.push((EnemyKind::Ratking, 4 + l * 2));
-            table.push((EnemyKind::BuffGator, 3 + l));
-            table.push((EnemyKind::IdpdShield, 2 + l));
-        }
-        AreaId::Scrapyards => {
-            table.push((EnemyKind::Sniper, 4 + l * 2));
-            table.push((EnemyKind::MeleeBandit, 3 + l));
-            table.push((EnemyKind::Salamander, 2 + l));
-            if loop_count >= 2 {
-                table.push((EnemyKind::BuffGator, 3 + l));
-                table.push((EnemyKind::RobotGuard, 2 + l));
+        1 => {
+            if run.tutorial {
+                return;
+            }
+            if rng.random::<f32>() * 2.0 < loop_rand {
+                spawn_pop_enemy(
+                    enemies,
+                    rng,
+                    center,
+                    &[
+                        EnemyKind::Scorpion,
+                        EnemyKind::Scorpion,
+                        EnemyKind::Bandit,
+                        EnemyKind::Bandit,
+                        EnemyKind::Maggot,
+                        EnemyKind::JungleFly,
+                        EnemyKind::JungleFly,
+                        EnemyKind::MeleeBandit,
+                        EnemyKind::Sniper,
+                    ],
+                );
+            } else if styleb {
+                spawn_pop_enemy(
+                    enemies,
+                    rng,
+                    center,
+                    &[
+                        EnemyKind::MaggotSpawn,
+                        EnemyKind::BigMaggot,
+                        EnemyKind::BigMaggot,
+                        EnemyKind::Maggot,
+                    ],
+                );
+            } else if rng.random::<f32>() * 7.0 < 1.0 {
+                spawn_pop_enemy(
+                    enemies,
+                    rng,
+                    center,
+                    &[EnemyKind::MaggotSpawn, EnemyKind::Scorpion],
+                );
+            } else if rng.random::<f32>() * 30.0 < 1.0 {
+                spawn_pop_prop(props, prop_tiles, cell, rng, center, &[PropKind::Barrel]);
+                for _ in 0..3 {
+                    spawn_pop_enemy(enemies, rng, center, &[EnemyKind::Bandit]);
+                }
+            } else {
+                spawn_pop_enemy(
+                    enemies,
+                    rng,
+                    center,
+                    &[
+                        EnemyKind::Bandit,
+                        EnemyKind::Bandit,
+                        EnemyKind::Bandit,
+                        EnemyKind::Bandit,
+                        EnemyKind::Bandit,
+                        EnemyKind::Bandit,
+                        EnemyKind::Maggot,
+                        EnemyKind::Scorpion,
+                    ],
+                );
             }
         }
-        AreaId::CrystalCaves => {
-            table.push((EnemyKind::RhinoFreak, 4 + l * 2));
-            table.push((EnemyKind::ExploFreak, 3 + l));
-            table.push((EnemyKind::LightningCrystal, 3 + l));
-            if loop_count >= 2 {
-                table.push((EnemyKind::IdpdElite, 3 + l));
+        2 => {
+            if rng.random::<f32>() * 2.0 < loop_rand {
+                spawn_pop_enemy(
+                    enemies,
+                    rng,
+                    center,
+                    &[
+                        EnemyKind::Ratking,
+                        EnemyKind::Ratking,
+                        EnemyKind::BuffGator,
+                        EnemyKind::LaserCrystal,
+                        EnemyKind::Rat,
+                        EnemyKind::Ballguy,
+                        EnemyKind::Ballguy,
+                        EnemyKind::SuperFireBaller,
+                    ],
+                );
+            } else if styleb {
+                spawn_pop_enemy(
+                    enemies,
+                    rng,
+                    center,
+                    &[
+                        EnemyKind::Rat,
+                        EnemyKind::Rat,
+                        EnemyKind::Gator,
+                        EnemyKind::Gator,
+                        EnemyKind::Ballguy,
+                    ],
+                );
+            } else if rng.random::<f32>() * 9.0 < 1.0 {
+                spawn_pop_enemy(
+                    enemies,
+                    rng,
+                    center,
+                    &[
+                        EnemyKind::Ballguy,
+                        EnemyKind::Ratking,
+                        EnemyKind::Ballguy,
+                        EnemyKind::Ratking,
+                        EnemyKind::Ballguy,
+                        EnemyKind::Ratking,
+                        EnemyKind::MeleeFake,
+                    ],
+                );
+            } else {
+                spawn_pop_enemy(
+                    enemies,
+                    rng,
+                    center,
+                    &[
+                        EnemyKind::Rat,
+                        EnemyKind::Rat,
+                        EnemyKind::Rat,
+                        EnemyKind::Rat,
+                        EnemyKind::Rat,
+                        EnemyKind::Rat,
+                        EnemyKind::Rat,
+                        EnemyKind::Bandit,
+                    ],
+                );
             }
         }
-        AreaId::FrozenCity => {
-            table.push((EnemyKind::SnowTank, 4 + l));
-            table.push((EnemyKind::DogGuardian, 3 + l));
-            table.push((EnemyKind::ExploGuardian, 3 + l));
-            table.push((EnemyKind::Necromancer, 2 + l));
-            if loop_count >= 2 {
-                table.push((EnemyKind::GoldSnowtank, 2 + l));
+        3 => {
+            if rng.random::<f32>() * 5.0 < 4.0 && (!is_last || rng.random::<f32>() * 2.0 < 1.0) {
+                if rng.random::<f32>() * 2.0 < loop_rand {
+                    spawn_pop_enemy(
+                        enemies,
+                        rng,
+                        center,
+                        &[
+                            EnemyKind::Sniper,
+                            EnemyKind::Sniper,
+                            EnemyKind::MeleeFake,
+                            EnemyKind::MeleeFake,
+                            EnemyKind::Salamander,
+                            EnemyKind::RobotGuard,
+                            EnemyKind::Raven,
+                            EnemyKind::BuffGator,
+                            EnemyKind::Raven,
+                        ],
+                    );
+                } else if styleb && rng.random::<f32>() * 3.0 < 1.0 {
+                    spawn_pop_enemy(enemies, rng, center, &[EnemyKind::Salamander]);
+                } else if rng.random::<f32>() * 4.0 < 1.0 {
+                    spawn_pop_enemy(
+                        enemies,
+                        rng,
+                        center,
+                        &[
+                            EnemyKind::MeleeBandit,
+                            EnemyKind::Sniper,
+                            EnemyKind::MeleeFake,
+                            EnemyKind::Sniper,
+                            EnemyKind::MeleeFake,
+                            EnemyKind::Sniper,
+                            EnemyKind::Sniper,
+                            EnemyKind::Ballguy,
+                        ],
+                    );
+                } else if rng.random::<f32>() * 10.0 < 1.0 {
+                    if rng.random::<f32>() * 8.0 < 1.0 {
+                        spawn_pop_prop(props, prop_tiles, cell, rng, center, &[PropKind::Car]);
+                    }
+                    spawn_pop_enemy(enemies, rng, center, &[EnemyKind::Raven, EnemyKind::Raven]);
+                    spawn_pop_enemy(enemies, rng, center, &[EnemyKind::Raven, EnemyKind::Raven]);
+                } else if rng.random::<f32>() * 20.0 < 1.0 {
+                    spawn_pop_enemy(enemies, rng, center, &[EnemyKind::Salamander]);
+                } else if rng.random::<f32>() * 4.0 < 3.0 {
+                    spawn_pop_enemy(
+                        enemies,
+                        rng,
+                        center,
+                        &[EnemyKind::Raven, EnemyKind::Raven, EnemyKind::Bandit],
+                    );
+                }
             }
         }
-        AreaId::Labs => {
-            table.push((EnemyKind::Ratking, 4 + l));
-            table.push((EnemyKind::RhinoFreak, 4 + l * 2));
-            table.push((EnemyKind::ExploFreak, 4 + l));
-            if loop_count >= 2 {
-                table.push((EnemyKind::IdpdElite, 5 + l));
+        4 => {
+            if rng.random::<f32>() * 2.0 < loop_rand {
+                spawn_pop_enemy(
+                    enemies,
+                    rng,
+                    center,
+                    &[
+                        EnemyKind::LaserCrystal,
+                        EnemyKind::LaserCrystal,
+                        EnemyKind::RhinoFreak,
+                        EnemyKind::LightningCrystal,
+                        EnemyKind::BuffGator,
+                        EnemyKind::ExploFreak,
+                        EnemyKind::Spider,
+                        EnemyKind::Spider,
+                    ],
+                );
+            } else {
+                spawn_pop_enemy(
+                    enemies,
+                    rng,
+                    center,
+                    &[
+                        EnemyKind::Spider,
+                        EnemyKind::Spider,
+                        EnemyKind::Spider,
+                        EnemyKind::Spider,
+                        EnemyKind::LaserCrystal,
+                        EnemyKind::LaserCrystal,
+                    ],
+                );
             }
         }
-        AreaId::Palace => {
-            table.push((EnemyKind::Sniper, 3 + l));
-            table.push((EnemyKind::ExploFreak, 3 + l));
-            table.push((EnemyKind::JungleBandit, 3 + l * 2));
-            if loop_count >= 1 {
-                table.push((EnemyKind::PopoFreak, 2 + l));
-                table.push((EnemyKind::HostileHorror, 1 + l));
+        5 => {
+            if rng.random::<f32>() * 2.0 < loop_rand {
+                spawn_pop_enemy(
+                    enemies,
+                    rng,
+                    center,
+                    &[
+                        EnemyKind::SnowTank,
+                        EnemyKind::SnowTank,
+                        EnemyKind::DogGuardian,
+                        EnemyKind::ExploGuardian,
+                        EnemyKind::RobotGuard,
+                        EnemyKind::RobotGuard,
+                        EnemyKind::RobotGuard,
+                        EnemyKind::Wolf,
+                        EnemyKind::Necromancer,
+                    ],
+                );
+            } else if rng.random::<f32>() * 3.0 < 2.0 {
+                spawn_pop_enemy(
+                    enemies,
+                    rng,
+                    center,
+                    &[
+                        EnemyKind::RobotGuard,
+                        EnemyKind::RobotGuard,
+                        EnemyKind::RobotGuard,
+                        EnemyKind::SnowTank,
+                        EnemyKind::Wolf,
+                        EnemyKind::Wolf,
+                    ],
+                );
             }
-            if loop_count >= 2 {
-                table.push((EnemyKind::IdpdElite, 5 + l));
+        }
+        6 => {
+            if rng.random::<f32>() * 2.0 < loop_rand {
+                spawn_pop_enemy(
+                    enemies,
+                    rng,
+                    center,
+                    &[
+                        EnemyKind::Ratking,
+                        EnemyKind::RhinoFreak,
+                        EnemyKind::ExploFreak,
+                        EnemyKind::Necromancer,
+                        EnemyKind::RhinoFreak,
+                        EnemyKind::LaserCrystal,
+                        EnemyKind::Turret,
+                    ],
+                );
+            } else if rng.random::<f32>() * 14.0 < 1.0 {
+                for _ in 0..10 {
+                    spawn_pop_enemy(
+                        enemies,
+                        rng,
+                        center,
+                        &[
+                            EnemyKind::Freak,
+                            EnemyKind::Freak,
+                            EnemyKind::Freak,
+                            EnemyKind::Freak,
+                            EnemyKind::Freak,
+                            EnemyKind::Freak,
+                            EnemyKind::Freak,
+                            EnemyKind::Freak,
+                            EnemyKind::Freak,
+                            EnemyKind::Freak,
+                            EnemyKind::ExploFreak,
+                            EnemyKind::ExploFreak,
+                            EnemyKind::RhinoFreak,
+                            EnemyKind::Freak,
+                            EnemyKind::Freak,
+                            EnemyKind::Freak,
+                        ],
+                    );
+                }
+            } else if rng.random::<f32>() * 8.0 < 1.0 {
+                spawn_pop_enemy(
+                    enemies,
+                    rng,
+                    center,
+                    &[
+                        EnemyKind::Necromancer,
+                        EnemyKind::Necromancer,
+                        EnemyKind::Necromancer,
+                        EnemyKind::ExploFreak,
+                        EnemyKind::RhinoFreak,
+                        EnemyKind::Necromancer,
+                        EnemyKind::Necromancer,
+                        EnemyKind::Turret,
+                        EnemyKind::Turret,
+                        EnemyKind::Turret,
+                        EnemyKind::Necromancer,
+                    ],
+                );
+            }
+        }
+        7 => {
+            if is_last || rng.random::<f32>() * 2.0 > 1.0 {
+                return;
+            }
+            if rng.random::<f32>() * 2.0 < loop_rand {
+                spawn_pop_enemy(
+                    enemies,
+                    rng,
+                    center,
+                    &[
+                        EnemyKind::ExploGuardian,
+                        EnemyKind::DogGuardian,
+                        EnemyKind::Sniper,
+                        EnemyKind::DogGuardian,
+                        EnemyKind::ExploGuardian,
+                        EnemyKind::ExploFreak,
+                        EnemyKind::JungleBandit,
+                        EnemyKind::JungleBandit,
+                    ],
+                );
+            } else if rng.random::<f32>() * 4.0 < 1.0 {
+                spawn_pop_enemy(
+                    enemies,
+                    rng,
+                    center,
+                    &[
+                        EnemyKind::ExploGuardian,
+                        EnemyKind::DogGuardian,
+                        EnemyKind::Guardian,
+                        EnemyKind::Guardian,
+                        EnemyKind::Guardian,
+                        EnemyKind::Guardian,
+                    ],
+                );
+            } else if rng.random::<f32>() * 16.0 < 1.0 {
+                spawn_pop_enemy(enemies, rng, center, &[EnemyKind::IdpdGrunt]);
+            }
+        }
+        101 => {
+            if rng.random::<f32>() * 4.0 < 1.0 {
+                spawn_pop_enemy(enemies, rng, center, &[EnemyKind::Crab]);
+            } else if rng.random::<f32>() * 3.0 < 1.0 {
+                for _ in 0..3 {
+                    spawn_pop_enemy(enemies, rng, center, &[EnemyKind::BoneFish]);
+                }
+            }
+        }
+        102 => {
+            spawn_pop_enemy(enemies, rng, center, &[EnemyKind::Turtle]);
+        }
+        103 => {
+            if rng.random::<f32>() * 5.0 < 1.0 {
+                spawn_pop_enemy(
+                    enemies,
+                    rng,
+                    center,
+                    &[
+                        EnemyKind::FireBaller,
+                        EnemyKind::Jock,
+                        EnemyKind::FireBaller,
+                        EnemyKind::Jock,
+                        EnemyKind::FireBaller,
+                        EnemyKind::SuperFireBaller,
+                    ],
+                );
+            } else if rng.random::<f32>() * 4.0 < 1.0 {
+                if rng.random::<f32>() * 5.0 < 1.0 {
+                    spawn_pop_prop(
+                        props,
+                        prop_tiles,
+                        cell,
+                        rng,
+                        center,
+                        &[PropKind::GoldBarrel],
+                    );
+                }
+                for _ in 0..3 {
+                    spawn_pop_enemy(
+                        enemies,
+                        rng,
+                        center,
+                        &[
+                            EnemyKind::Molefish,
+                            EnemyKind::Molefish,
+                            EnemyKind::Molefish,
+                            EnemyKind::Molefish,
+                            EnemyKind::Molesarge,
+                        ],
+                    );
+                }
+            }
+        }
+        104 => {
+            if rng.random::<f32>() * 5.0 < 4.0 {
+                spawn_pop_enemy(
+                    enemies,
+                    rng,
+                    center,
+                    &[
+                        EnemyKind::InvSpider,
+                        EnemyKind::InvSpider,
+                        EnemyKind::InvSpider,
+                        EnemyKind::InvSpider,
+                        EnemyKind::InvLaserCrystal,
+                        EnemyKind::InvLaserCrystal,
+                    ],
+                );
+            }
+        }
+        105 => {
+            if rng.random::<f32>() * 8.0 < 1.0 {
+                spawn_pop_enemy(enemies, rng, center, &[EnemyKind::JungleFly]);
+            } else if rng.random::<f32>() * 30.0 < 1.0 {
+                spawn_pop_prop(props, prop_tiles, cell, rng, center, &[PropKind::Barrel]);
+                spawn_pop_enemy(enemies, rng, center, &[EnemyKind::JungleBandit]);
+                spawn_pop_enemy(enemies, rng, center, &[EnemyKind::JungleBandit]);
+                spawn_pop_enemy(enemies, rng, center, &[EnemyKind::JungleBandit]);
+            } else {
+                spawn_pop_enemy(
+                    enemies,
+                    rng,
+                    center,
+                    &[
+                        EnemyKind::JungleBandit,
+                        EnemyKind::JungleBandit,
+                        EnemyKind::JungleBandit,
+                        EnemyKind::JungleBandit,
+                        EnemyKind::JungleBandit,
+                        EnemyKind::JungleBandit,
+                        EnemyKind::Maggot,
+                        EnemyKind::Assassin,
+                        EnemyKind::Assassin,
+                    ],
+                );
+            }
+        }
+        106 => {
+            if is_last {
+                return;
+            }
+            if rng.random::<f32>() * 12.0 < 1.0 || enemies.is_empty() {
+                if rng.random::<f32>() * 7.0 < 1.0 {
+                    spawn_pop_enemy(
+                        enemies,
+                        rng,
+                        center,
+                        &[
+                            EnemyKind::IdpdElite,
+                            EnemyKind::EliteShielder,
+                            EnemyKind::EliteInspector,
+                        ],
+                    );
+                } else if rng.random::<f32>() * 4.0 < 1.0 {
+                    for _ in 0..5 {
+                        spawn_pop_enemy(enemies, rng, center, &[EnemyKind::IdpdGrunt]);
+                    }
+                } else if rng.random::<f32>() * 3.0 < 1.0 {
+                    spawn_pop_enemy(
+                        enemies,
+                        rng,
+                        center,
+                        &[
+                            EnemyKind::IdpdGrunt,
+                            EnemyKind::IdpdShield,
+                            EnemyKind::IdpdInspector,
+                        ],
+                    );
+                }
             }
         }
         _ => {}
     }
 }
 
-fn loop_elite_candidates(area_num: i32, loop_count: u32) -> Vec<EnemyKind> {
-    let area = match area_num {
-        1 => AreaId::Desert,
-        2 => AreaId::Sewers,
-        3 => AreaId::Scrapyards,
-        4 => AreaId::CrystalCaves,
-        5 => AreaId::FrozenCity,
-        6 => AreaId::Labs,
-        7 => AreaId::Palace,
-        _ => return Vec::new(),
-    };
+#[derive(Default)]
+pub struct LoopClusterOut {
+    pub portal_clears: Vec<Vec2>,
+}
 
-    let mut table = Vec::new();
-    apply_loop_elite_substitutions(&mut table, area, loop_count);
+fn cluster_kind(kind: EnemyKind) -> EnemyKind {
+    match kind {
+        EnemyKind::GoldScorpion => EnemyKind::Scorpion,
+        EnemyKind::GoldSnowtank => EnemyKind::SnowTank,
+        EnemyKind::LightningCrystal => EnemyKind::LaserCrystal,
+        EnemyKind::BuffGator => EnemyKind::Gator,
+        _ => kind,
+    }
+}
 
-    let mut out = Vec::new();
-    for (kind, weight) in table {
-        for _ in 0..weight.min(8) {
-            out.push(kind);
+fn cluster_source_skips(kind: EnemyKind, loops: u32, rng: &mut StdRng) -> bool {
+    rng.random::<f32>() * 60.0 > loops as f32
+        || matches!(
+            kind,
+            EnemyKind::Mimic | EnemyKind::SuperMimic | EnemyKind::WepMimic | EnemyKind::MaggotSpawn
+        )
+}
+
+pub fn apply_loop_population_clusters(
+    events: &mut Vec<PopulationEvent>,
+    loops: u32,
+    area: AreaId,
+    rng: &mut StdRng,
+) -> LoopClusterOut {
+    let mut out = LoopClusterOut::default();
+    if loops == 0 || area == AreaId::PizzaSewers {
+        return out;
+    }
+
+    let sources = events.clone();
+    let mut next = Vec::with_capacity(events.len());
+    for event in sources {
+        let PopulationEvent::Enemy {
+            kind: source_kind,
+            pos: source_pos,
+        } = event
+        else {
+            next.push(event);
+            continue;
+        };
+        next.push(event);
+        if cluster_source_skips(source_kind, loops, rng) {
+            continue;
+        }
+        let kind = cluster_kind(source_kind);
+        for _ in 0..loops.saturating_add(3) {
+            let x = rng.random_range(-4.0..4.0);
+            let y = rng.random_range(-4.0..4.0);
+            next.push(PopulationEvent::Enemy {
+                kind,
+                pos: source_pos + Vec2::new(x, y),
+            });
+        }
+        if source_pos.length_squared() < 128.0 * 128.0 {
+            out.portal_clears.push(source_pos);
+            next.push(PopulationEvent::PortalClear {
+                pos: source_pos,
+                scale: 0.6,
+            });
         }
     }
+    *events = next;
     out
 }
 
-fn default_area_enemies(area: i32, loop_count: u32) -> Vec<EnemyKind> {
-    let mut c = match area {
-        1 => vec![
-            EnemyKind::Bandit,
-            EnemyKind::Bandit,
-            EnemyKind::Bandit,
-            EnemyKind::Maggot,
-            EnemyKind::Scorpion,
-        ],
-        2 => vec![
-            EnemyKind::Rat,
-            EnemyKind::Rat,
-            EnemyKind::Maggot,
-            EnemyKind::Gator,
-            EnemyKind::MeleeFake,
-        ],
-        3 => vec![
-            EnemyKind::Raven,
-            EnemyKind::Raven,
-            EnemyKind::Raven,
-            EnemyKind::Sniper,
-            EnemyKind::Ballguy,
-        ],
-        4 => vec![
-            EnemyKind::Spider,
-            EnemyKind::Spider,
-            EnemyKind::LaserCrystal,
-            EnemyKind::LaserCrystal,
-            EnemyKind::RadMaggot,
-        ],
-        5 => vec![
-            EnemyKind::RobotGuard,
-            EnemyKind::RobotGuard,
-            EnemyKind::SnowTank,
-            EnemyKind::Wolf,
-            EnemyKind::Wolf,
-        ],
-        6 => vec![
-            EnemyKind::Freak,
-            EnemyKind::Freak,
-            EnemyKind::Necromancer,
-            EnemyKind::ExploFreak,
-            EnemyKind::RhinoFreak,
-        ],
-        7 => vec![
-            EnemyKind::Guardian,
-            EnemyKind::ExploGuardian,
-            EnemyKind::DogGuardian,
-        ],
-        _ => vec![
-            EnemyKind::RobotGuard,
-            EnemyKind::Assassin,
-            EnemyKind::Freak,
-            EnemyKind::Turret,
-            EnemyKind::SuperFrog,
-        ],
-    };
-    c.extend(loop_elite_candidates(area, loop_count));
-    c
+pub fn apply_loop_enemy_clusters(
+    enemies: &mut Vec<(EnemyKind, Vec2)>,
+    loops: u32,
+    area: AreaId,
+    rng: &mut StdRng,
+) -> LoopClusterOut {
+    let mut out = LoopClusterOut::default();
+    if loops == 0 || area == AreaId::PizzaSewers {
+        return out;
+    }
+
+    let sources = enemies.clone();
+    for (source_kind, source_pos) in sources {
+        if cluster_source_skips(source_kind, loops, rng) {
+            continue;
+        }
+        let kind = cluster_kind(source_kind);
+        for _ in 0..loops.saturating_add(3) {
+            let x = rng.random_range(-4.0..4.0);
+            let y = rng.random_range(-4.0..4.0);
+            enemies.push((kind, source_pos + Vec2::new(x, y)));
+        }
+        if source_pos.length_squared() < 128.0 * 128.0 {
+            out.portal_clears.push(source_pos);
+        }
+    }
+    out
 }
 
 fn walls_cover_tile(walls: &std::collections::HashSet<(i32, i32)>, cx: i32, cy: i32) -> bool {

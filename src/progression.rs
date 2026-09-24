@@ -53,6 +53,7 @@ use crate::effects::{
 use crate::enemy_data::enemy_def;
 use crate::environment::{PropDeathEffect, spawn_prop_corpse, spawn_prop_death_effect};
 use crate::msg::Queue;
+use crate::pickups::ProtoChestState;
 use crate::savedata_part::SaveData;
 use crate::spatial::Pos;
 use crate::state::{AppState, Paused};
@@ -1405,6 +1406,7 @@ pub fn tick_portal_shock(
         With<Prop>,
     >,
     mut chests: Query<(Entity, &Pos, &Pickup), (Without<OpenedChest>, Without<Player>)>,
+    proto_q: Query<&ProtoChestState>,
     mut enemy_shots: Query<(Entity, &Pos, &Team), With<Projectile>>,
     entrances: Query<&SecretEntrance>,
     mut secrets: ResMut<crate::secrets::SecretTriggers>,
@@ -1481,7 +1483,7 @@ pub fn tick_portal_shock(
 
             commands.entity(chest_e).insert(OpenedChest(kind));
             match kind {
-                ChestKind::Weapon | ChestKind::Proto => {
+                ChestKind::Weapon => {
                     let weapon = match decide.as_ref() {
                         Some(ctx) => {
                             let mut rng = rand::rng();
@@ -1496,6 +1498,19 @@ pub fn tick_portal_shock(
                         cpos,
                         0,
                         false,
+                    );
+                }
+                ChestKind::Proto => {
+                    let (weapon, cursed) = match proto_q.get(chest_e) {
+                        Ok(&ProtoChestState::Armed { weapon, cursed }) => (weapon, cursed),
+                        _ => (run.protowep, run.protocurse),
+                    };
+                    crate::pickups::spawn_proto_weapon(
+                        &mut commands,
+                        &catalog,
+                        weapon,
+                        cursed,
+                        cpos,
                     );
                 }
                 ChestKind::Ammo => {
@@ -1874,6 +1889,7 @@ pub fn tick_portal_suck(
     mut run: ResMut<Run>,
     level_q: Query<Entity, With<LevelCleanup>>,
     weapon_q: Query<&Pickup>,
+    mut proto_chests: Query<(Entity, &mut ProtoChestState, Option<&OpenedChest>), Without<Player>>,
     _carried: Res<PortalCarriedWeapons>,
     mut player_q: Query<
         (
@@ -1973,8 +1989,31 @@ pub fn tick_portal_suck(
         }
     }
 
+    let mut proto_carriers = Vec::new();
+    for (entity, mut state, opened) in &mut proto_chests {
+        let (weapon, cursed) = if opened.is_some() {
+            (crate::data::WEAPON_RUSTY_REVOLVER, false)
+        } else {
+            match &*state {
+                ProtoChestState::Pending => (run.protowep, run.protocurse),
+                ProtoChestState::Armed { weapon, cursed }
+                | ProtoChestState::Carried { weapon, cursed } => (*weapon, *cursed),
+            }
+        };
+        *state = ProtoChestState::Carried { weapon, cursed };
+        proto_carriers.push(entity);
+        commands
+            .entity(entity)
+            .remove::<LevelCleanup>()
+            .remove::<Pickup>()
+            .remove::<OpenedChest>()
+            .remove::<crate::anim::SpriteAnim>();
+    }
+
     for e in &level_q {
-        commands.entity(e).despawn();
+        if !proto_carriers.contains(&e) {
+            commands.entity(e).despawn();
+        }
     }
     commands.entity(portal_e).despawn();
 
@@ -2100,7 +2139,7 @@ fn begin_between_floor_skill_picks(
 pub fn tick_throne_sit(
     time: Res<SimTime>,
     mut commands: Commands,
-    mut input: ResMut<crate::input::NtInput>,
+    input: ResMut<crate::input::NtInput>,
     mut run: ResMut<Run>,
     mut save: ResMut<SaveData>,
     mut dirty: ResMut<SaveDirty>,
@@ -2193,7 +2232,6 @@ pub fn tick_floor_transition(
     mut player_q: Query<(&mut Pos, &mut Health, &mut Player, &RaceState), With<Player>>,
     mut carried: ResMut<PortalCarriedWeapons>,
     open_mind: Res<OpenMind>,
-    proto_q: Query<&Pickup, (Without<OpenedChest>, Without<Player>)>,
 ) {
     if !ft.active {
         return;
@@ -2286,27 +2324,6 @@ pub fn tick_floor_transition(
             }
             run.portal_open = false;
             ft.active = false;
-            // GML `ProtoChest/Other_5`: opened chests reset the
-            // artifact to rusty revolver; unopened ones carry their
-            // `wep`/`curse` into the next floor. Opened chests flip to
-            // `OpenedChest` at open time, so any surviving
-            // `ChestKind::Proto` pickup here is unopened — but the per
-            // -chest `wep` is not stored on the pickup, so the carry
-            // keeps the current artifact (the common case: the vault
-            // proto chest is the run's `protowep` source).
-            {
-                let mut unopened_proto = false;
-                for pickup in proto_q.iter() {
-                    if matches!(pickup.kind, PickupKind::Chest(ChestKind::Proto)) {
-                        unopened_proto = true;
-                        break;
-                    }
-                }
-                if !unopened_proto {
-                    run.protowep = crate::data::WEAPON_RUSTY_REVOLVER;
-                    run.protocurse = false;
-                }
-            }
             // GML `GenCont/Destroy:186-187` verbatim:
             // `instance_destroy(SpiralCont)` at generation end. The
             // view spiral dies in the lifecycle step; the sim

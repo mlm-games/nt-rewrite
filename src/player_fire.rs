@@ -49,43 +49,48 @@ use repame_fx::Trauma;
 use repame_sim::SimTime;
 
 use crate::audio::AudioCue;
+use crate::combat::Explosion;
 use crate::comps_a::{
-    AbilityHazard, AimDir, BouncesLeft, ChainLightning, DamageSource, DiscFlight, FireCooldown,
-    FlameShellSlowDeath, FlameTrail, GameCleanup, GrenadeFuse, HammerheadBudget, Health, HitId,
-    Hitbox, HitsAllTeams, Homing, Inventory, LevelCleanup, PendingWallBreak, PiercesLeft, Player,
-    Projectile, ProjectileFade, ProjectileFriction, ProjectileHitSet, ProjectileTyp,
-    ProjectileVisual, RaceState,
-    Run, SaveDirty, ShellBonus, ShellWallBounce, SlashProjectile, SpawnGrace, SpawnHazardOnDeath,
-    SplitOnDeath, Sticky, Team, Toast, Velocity, WallCell, WallTile,
+    AbilityHazard, AimDir, BouncesLeft, ChainLightning, CurrentFrame, DamageSource, DiscFlight,
+    FireCooldown, FlameShellSlowDeath, FlameTrail, FloorMask, GameCleanup, GrenadeFuse,
+    HammerheadBudget, Health, HitId, Hitbox, HitsAllTeams, Homing, Inventory, LevelCleanup,
+    NextHurt, PendingWallBreak, PiercesLeft, Player, Projectile, ProjectileFade,
+    ProjectileFriction, ProjectileHitSet, ProjectileTyp, ProjectileVisual, RaceState, Run,
+    SaveDirty, ShellBonus, ShellWallBounce, SlashProjectile, SpawnGrace, SpawnHazardOnDeath,
+    SplitOnDeath, Sticky, Team, Toast, Velocity, WallCell, WallTile, gml_motion_add_clamp,
 };
 use crate::comps_b::{
-    Ally, BloodAmmo, ChestKind, CryAnim, CustomExplosion, Dash, DeploysSentry, Enemy, HazardCloud,
-    PickupKind, PlasmaBurst, PopPopCharges, PortalStrike, PortalSucking, Prop, PropSprites,
-    SecretEntrance, Shield, Slowed, SnareZone, SpawnsWeaponPickup, SwingFx, Telekinesis,
-    WeaponVisual,
+    Ally, BIG_DOG_MISSILE_DAMAGE, BIG_DOG_MISSILE_HP, BIG_DOG_MISSILE_RADIUS, BigDogMissileState,
+    BloodAmmo, ChestKind, CryAnim, CustomExplosion, Dash, DeploysSentry, Enemy, GmlImage,
+    HazardCloud, NativeAngle, NativeDepth, NativeExplosionKind, PickupKind, PlasmaBurst,
+    PopPopCharges, PortalStrike, PortalSucking, Prop, PropSprites, SecretEntrance, Shield, Slowed,
+    SnareZone, SpawnsWeaponPickup, SwingFx, Telekinesis, WeaponVisual,
 };
-use crate::environment::{PropDeathEffect, spawn_prop_corpse, spawn_prop_death_effect};
-use crate::worldgen::WALL_PX;
 use crate::data::{
     AbilityKind, AmmoKind, AreaId, CrownKind, HazardDef, HazardKind, MutationId, RaceId, SplitDef,
     UltraMutationId, WeaponId, WeaponKind, ammo_pickup_amount,
 };
 use crate::effects::{
-    ChromaticAberration, FiredWeapon, HitStop, RumbleRequest, SlowMotion, chromatic_pulse,
-    rumble, slow_motion, spawn_burst,
+    ChromaticAberration, FiredWeapon, HitStop, RumbleRequest, SlowMotion, chromatic_pulse, rumble,
+    slow_motion, spawn_burst,
+};
+use crate::environment::{
+    PropDeathEffect, spawn_native_explosion_visual, spawn_native_smoke_mote, spawn_prop_corpse,
+    spawn_prop_death_effect,
 };
 use crate::input::NtInput;
 use crate::msg::Queue;
 use crate::pickups::{spawn_chest, spawn_flung_weapon_pickup, spawn_pickup, spawn_rad_burst};
 use crate::savedata_part::{SaveData, character_def, check_progress_unlocks};
 use crate::secrets::SecretTriggers;
-use crate::spatial::{Pos, PLAYER_RADIUS};
+use crate::spatial::{PLAYER_RADIUS, Pos, move_bounce_solid, move_contact_solid};
 use crate::time::{GTimer, TimerMode};
 use crate::weapon_runtime::{
     MeleeDef, WeaponDef, base_weapon_name, gml_fire_push_px_s, gml_melee_wkick,
     melee_projectile_spec, weapon_meta, weapon_runtime_def, weapon_sleep_secs,
 };
 use crate::weapons_data::AmmoType;
+use crate::worldgen::WALL_PX;
 
 // ---------------------------------------------------------------------------
 // Small local helpers
@@ -153,7 +158,17 @@ pub struct FireArch {
 /// Archetype lookup by (base) weapon name, mirroring bevy
 /// `projectile_archetype` (GOLDEN/ULTRA/CURSED prefixes strip to base).
 fn projectile_arch(id: WeaponId) -> FireArch {
-    let base = base_weapon_name(weapon_meta(id).wep_name);
+    let full = weapon_meta(id).wep_name;
+    if full == "ULTRA GRENADE LAUNCHER" {
+        return FireArch {
+            custom: Some(CustomExplosion {
+                visual: Some(NativeExplosionKind::Green),
+                ..CustomExplosion::default()
+            }),
+            ..FireArch::default()
+        };
+    }
+    let base = base_weapon_name(full);
     match base {
         "SENTRY GUN" => FireArch {
             sentry: Some(DeploysSentry {
@@ -185,6 +200,7 @@ fn projectile_arch(id: WeaponId) -> FireArch {
                 radius: 32.0,
                 count: 3,
                 spread: 16.0,
+                visual: None,
             }),
             ..FireArch::default()
         },
@@ -197,6 +213,7 @@ fn projectile_arch(id: WeaponId) -> FireArch {
                 radius: 32.0,
                 count: 8,
                 spread: 12.0,
+                visual: None,
             }),
             ..FireArch::default()
         },
@@ -226,10 +243,22 @@ fn projectile_arch(id: WeaponId) -> FireArch {
         },
         "BLOOD LAUNCHER" => FireArch {
             blood: Some(BloodAmmo { hp_cost: 1 }),
+            custom: Some(CustomExplosion {
+                radius: 32.0,
+                count: 1,
+                spread: 0.0,
+                visual: Some(NativeExplosionKind::Meat),
+            }),
             ..FireArch::default()
         },
         "BLOOD CANNON" => FireArch {
             blood: Some(BloodAmmo { hp_cost: 2 }),
+            custom: Some(CustomExplosion {
+                radius: 32.0,
+                count: 1,
+                spread: 0.0,
+                visual: Some(NativeExplosionKind::Meat),
+            }),
             ..FireArch::default()
         },
         "GUN GUN" => FireArch {
@@ -340,9 +369,16 @@ fn projectile_arch(id: WeaponId) -> FireArch {
             hits_all: true,
             ..FireArch::default()
         },
-        "CROSSBOW" | "HEAVY CROSSBOW" | "AUTO CROSSBOW" | "SUPER CROSSBOW"
-        | "HEAVY AUTO CROSSBOW" | "ULTRA CROSSBOW" | "SPLINTER GUN" | "SPLINTER PISTOL"
-        | "SUPER SPLINTER GUN" | "TOXIC BOW" => FireArch {
+        "CROSSBOW"
+        | "HEAVY CROSSBOW"
+        | "AUTO CROSSBOW"
+        | "SUPER CROSSBOW"
+        | "HEAVY AUTO CROSSBOW"
+        | "ULTRA CROSSBOW"
+        | "SPLINTER GUN"
+        | "SPLINTER PISTOL"
+        | "SUPER SPLINTER GUN"
+        | "TOXIC BOW" => FireArch {
             sticky: Some(Sticky::default()),
             ..FireArch::default()
         },
@@ -1459,7 +1495,10 @@ pub fn spawn_player_projectile_with_source(
         }
         if base.contains("DISC") {
             ec.insert(BouncesLeft(255));
-            ec.insert(DiscFlight { dist: 0.0, home: pos });
+            ec.insert(DiscFlight {
+                dist: 0.0,
+                home: pos,
+            });
         }
     }
     if let Some(w) = weapon {
@@ -1534,7 +1573,10 @@ pub fn spawn_player_projectile_with_source(
     if archetype.hits_all {
         ec.insert(HitsAllTeams);
 
-        ec.insert(SpawnGrace(GTimer::from_seconds(2.0 / 30.0, TimerMode::Once)));
+        ec.insert(SpawnGrace(GTimer::from_seconds(
+            2.0 / 30.0,
+            TimerMode::Once,
+        )));
     }
 
     if let Some(w) = weapon {
@@ -1561,10 +1603,7 @@ pub fn spawn_player_projectile_with_source(
             });
         }
 
-        if ammo == AmmoKind::Bullets
-            && !base.contains("DISC")
-            && !base.contains("BOUNCER")
-        {
+        if ammo == AmmoKind::Bullets && !base.contains("DISC") && !base.contains("BOUNCER") {
             return Some(ProjectileVisual {
                 sprite: "images/sprBullet1.png",
                 mask: Some("images/mskBullet1.png"),
@@ -1807,6 +1846,7 @@ pub fn tick_portal_strikes(
     mut commands: Commands,
     mut trauma: ResMut<Trauma>,
     mut cues: ResMut<Queue<AudioCue>>,
+    save: Res<SaveData>,
     mut q: Query<(Entity, &Pos, &mut PortalStrike)>,
     mut enemies: Query<(&Pos, &mut Health), With<Enemy>>,
 ) {
@@ -1823,14 +1863,12 @@ pub fn tick_portal_strikes(
         }
         trauma.add(0.4);
         cue(&mut cues, "sndExplosionL", 0.9, 0.04);
-        let mut rng = rand::rng();
-        spawn_burst(
+        spawn_native_explosion_visual(
             &mut commands,
-            &mut rng,
+            save.settings.particles,
             pos,
-            28,
-            [0.3, 0.9, 1.0, 1.0],
-            (120.0, 360.0),
+            NativeExplosionKind::Popo,
+            false,
         );
         commands.entity(e).despawn();
     }
@@ -1911,22 +1949,19 @@ pub fn robot_eat_drops(
 
     // One HP-or-ammo drop; `hp_amount` is the medkit size when HP wins.
     let drop_hp_or_ammo = |commands: &mut Commands,
-                               pos: Vec2,
-                               player: &Player,
-                               health: &mut Health,
-                               inv: &mut Inventory,
-                               rng: &mut rand::rngs::ThreadRng,
-                               hp_amount: i32| {
+                           pos: Vec2,
+                           player: &Player,
+                           health: &mut Health,
+                           inv: &mut Inventory,
+                           rng: &mut rand::rngs::ThreadRng,
+                           hp_amount: i32| {
         let wants_hp = !life_crown && rng.random_range(0..health.max.max(1)) as i32 > health.hp;
         if wants_hp {
             if auto_collect {
                 let heal = (hp_amount as f32 * medkit_mult).round() as i32;
                 health.hp = (health.hp + heal).min(health.max);
             } else {
-                let off = Vec2::new(
-                    rng.random_range(-12.0..12.0),
-                    rng.random_range(-12.0..12.0),
-                );
+                let off = Vec2::new(rng.random_range(-12.0..12.0), rng.random_range(-12.0..12.0));
                 spawn_pickup(
                     commands,
                     catalog,
@@ -1949,10 +1984,7 @@ pub fn robot_eat_drops(
                 let slot = inv.ammo_mut(kind);
                 *slot = (*slot + ammo_pickup_amount(kind)).min(cap);
             } else {
-                let off = Vec2::new(
-                    rng.random_range(-12.0..12.0),
-                    rng.random_range(-12.0..12.0),
-                );
+                let off = Vec2::new(rng.random_range(-12.0..12.0), rng.random_range(-12.0..12.0));
                 spawn_pickup(
                     commands,
                     catalog,
@@ -2040,7 +2072,10 @@ pub fn player_ability(
         ),
         (With<Player>, Without<Enemy>),
     >,
-    walls: Query<(Entity, &WallCell, &Pos), With<WallTile>>,
+    mut walls_and_allies: ParamSet<(
+        Query<(Entity, &WallCell, &Pos), With<WallTile>>,
+        Query<Entity, With<Ally>>,
+    )>,
     mut enemies: Query<(Entity, &Pos, &mut Health), (With<Enemy>, Without<Player>)>,
 ) {
     let Ok((
@@ -2100,7 +2135,7 @@ pub fn player_ability(
                 }
             }
             if let Some((vpos, _)) = victim
-                && !walls_block_snare(&walls, from, vpos)
+                && !walls_block_snare(walls_and_allies.p0(), from, vpos)
             {
                 let snapped = (vpos - from).normalize_or_zero();
                 aim.0 = snapped;
@@ -2137,54 +2172,54 @@ pub fn player_ability(
         player.ultra_ability_mult
     };
 
-/// GML Plant snare arm shared by the tap ability and
-/// `scrControlAutoSnare`: spawns the `SnareZone` 70px along the aim.
-#[allow(clippy::too_many_arguments)]
-fn player_ability_snare(
-    commands: &mut Commands,
-    pos: glam::Vec2,
-    aim_v: glam::Vec2,
-    player: &Player,
-    trauma: &mut Trauma,
-    chroma: &mut ChromaticAberration,
-    cues: &mut Queue<AudioCue>,
-) {
-    let ability_mult = if player.throne_butt {
-        player.ultra_ability_mult * 1.35
-    } else {
-        player.ultra_ability_mult
-    };
-    commands.spawn((
-        LevelCleanup,
-        SnareZone {
-            timer: GTimer::from_seconds(2.5 * ability_mult.clamp(1.0, 2.0), TimerMode::Once),
-            radius: 110.0 * ability_mult.clamp(1.0, 1.8),
-            slow: (0.35 / ability_mult).clamp(0.12, 0.35),
-        },
-        Pos(pos + aim_v * 70.0),
-    ));
-    cue(cues, "sndAmmoPickup", 0.5, 0.15);
-    let _ = (trauma, chroma);
-}
-
-/// GML wall segment test for the auto-snare ray (`collision_line`
-/// against `Wall`): true when any wall cell center comes within 8px of
-/// the from→to segment.
-fn walls_block_snare(
-    walls: &Query<(Entity, &WallCell, &Pos), With<WallTile>>,
-    from: glam::Vec2,
-    to: glam::Vec2,
-) -> bool {
-    let d = to - from;
-    let len2 = d.length_squared().max(1e-6);
-    for (_, _, wpos) in walls {
-        let t = ((wpos.0 - from).dot(d) / len2).clamp(0.0, 1.0);
-        if (wpos.0 - (from + d * t)).length() < 8.0 {
-            return true;
-        }
+    /// GML Plant snare arm shared by the tap ability and
+    /// `scrControlAutoSnare`: spawns the `SnareZone` 70px along the aim.
+    #[allow(clippy::too_many_arguments)]
+    fn player_ability_snare(
+        commands: &mut Commands,
+        pos: glam::Vec2,
+        aim_v: glam::Vec2,
+        player: &Player,
+        trauma: &mut Trauma,
+        chroma: &mut ChromaticAberration,
+        cues: &mut Queue<AudioCue>,
+    ) {
+        let ability_mult = if player.throne_butt {
+            player.ultra_ability_mult * 1.35
+        } else {
+            player.ultra_ability_mult
+        };
+        commands.spawn((
+            LevelCleanup,
+            SnareZone {
+                timer: GTimer::from_seconds(2.5 * ability_mult.clamp(1.0, 2.0), TimerMode::Once),
+                radius: 110.0 * ability_mult.clamp(1.0, 1.8),
+                slow: (0.35 / ability_mult).clamp(0.12, 0.35),
+            },
+            Pos(pos + aim_v * 70.0),
+        ));
+        cue(cues, "sndAmmoPickup", 0.5, 0.15);
+        let _ = (trauma, chroma);
     }
-    false
-}
+
+    /// GML wall segment test for the auto-snare ray (`collision_line`
+    /// against `Wall`): true when any wall cell center comes within 8px of
+    /// the from→to segment.
+    fn walls_block_snare(
+        walls: Query<(Entity, &WallCell, &Pos), With<WallTile>>,
+        from: glam::Vec2,
+        to: glam::Vec2,
+    ) -> bool {
+        let d = to - from;
+        let len2 = d.length_squared().max(1e-6);
+        for (_, _, wpos) in walls {
+            let t = ((wpos.0 - from).dot(d) / len2).clamp(0.0, 1.0);
+            if (wpos.0 - (from + d * t)).length() < 8.0 {
+                return true;
+            }
+        }
+        false
+    }
 
     match ability {
         AbilityKind::Flip => {
@@ -2205,8 +2240,7 @@ fn walls_block_snare(
             cue(&mut cues, "bolt", 0.7, 0.05);
         }
         AbilityKind::Shield => {
-            let timer =
-                GTimer::from_seconds(1.6 * ability_mult.clamp(1.0, 2.0), TimerMode::Once);
+            let timer = GTimer::from_seconds(1.6 * ability_mult.clamp(1.0, 2.0), TimerMode::Once);
             if let Some(mut s) = shield {
                 s.timer = timer;
             } else {
@@ -2319,7 +2353,14 @@ fn walls_block_snare(
                 let mut rng = rand::rng();
                 for _ in 0..10 {
                     let off = Vec2::new(rng.random_range(-8.0..8.0), rng.random_range(-8.0..8.0));
-                    spawn_pickup(&mut commands, &catalog, PickupKind::Curse, pos + off, 0, false);
+                    spawn_pickup(
+                        &mut commands,
+                        &catalog,
+                        PickupKind::Curse,
+                        pos + off,
+                        0,
+                        false,
+                    );
                 }
             }
             if wep_rads > 0 {
@@ -2366,10 +2407,8 @@ fn walls_block_snare(
             }
             let aim_angle = aim_v.y.atan2(aim_v.x);
             let mut rng = rand::rng();
-            let fling =
-                aim_angle + rng.random_range(-2.0f32.to_radians()..2.0f32.to_radians());
-            let determination =
-                matches!(player.ultra, Some(UltraMutationId::ChickenDetermination));
+            let fling = aim_angle + rng.random_range(-2.0f32.to_radians()..2.0f32.to_radians());
+            let determination = matches!(player.ultra, Some(UltraMutationId::ChickenDetermination));
             spawn_flung_weapon_pickup(
                 &mut commands,
                 &catalog,
@@ -2388,7 +2427,7 @@ fn walls_block_snare(
             cue(&mut cues, "sndChickenThrow", 0.7, 0.05);
         }
         AbilityKind::SpawnAlly => {
-            let has_ally = false; // TODO: query live allies for cost 2 gate.
+            let has_ally = !walls_and_allies.p1().is_empty();
             let cost = if has_ally || matches!(player.ultra, Some(UltraMutationId::RebelRiot)) {
                 2
             } else {
@@ -2489,35 +2528,45 @@ fn walls_block_snare(
                 return;
             }
             *slot -= 3;
-            let base = aim_v.normalize_or_zero();
-            let rockets = if matches!(player.ultra, Some(UltraMutationId::BigDogHeavyArtillery)) {
-                -3..=3
-            } else {
-                -2..=2
-            };
-            for i in rockets {
-                let ang = (i as f32) * 0.12;
-                let dir = Vec2::new(
-                    base.x * ang.cos() - base.y * ang.sin(),
-                    base.x * ang.sin() + base.y * ang.cos(),
-                )
-                .normalize_or_zero();
+            let wall_shapes: Vec<(Vec2, Vec2)> = walls_and_allies
+                .p0()
+                .iter()
+                .map(|(_, _, wall_pos)| (wall_pos.0, Vec2::splat(WALL_PX)))
+                .collect();
+            let speed = (2.0 + f32::from(player.throne_butt)) * 30.0;
+            let mut rng = rand::rng();
+            for _ in 0..3 {
+                let angle = rng.random_range(0.0..std::f32::consts::TAU);
+                let dir = Vec2::from_angle(angle);
+                let mut spawn_pos = pos;
+                move_contact_solid(
+                    &mut spawn_pos,
+                    dir * 14.0,
+                    BIG_DOG_MISSILE_RADIUS,
+                    &wall_shapes,
+                    None,
+                );
+                let mut missile = BigDogMissileState::new(player_e);
+                missile.throne_butt = player.throne_butt;
                 commands.spawn((
+                    GameCleanup,
                     LevelCleanup,
-                    Projectile {
-                        damage: 3,
-                        life: GTimer::from_seconds(0.9, TimerMode::Once),
-                        radius: 6.0,
-                        knockback: 40.0,
-                        explosive: true,
-                        source: Some(DamageSource::player_weapon(
-                            player_e,
-                            WeaponId::GRENADE_LAUNCHER,
-                        )),
-                    },
                     Team::Player,
-                    Velocity(dir * 420.0),
-                    Pos(pos),
+                    Health {
+                        hp: BIG_DOG_MISSILE_HP,
+                        max: BIG_DOG_MISSILE_HP,
+                        invuln: GTimer::disarmed(),
+                    },
+                    Hitbox {
+                        radius: BIG_DOG_MISSILE_RADIUS,
+                    },
+                    NextHurt::default(),
+                    missile,
+                    GmlImage::new("images/sprScrapBossMissileIdle.png", 4, 0.4),
+                    NativeAngle(dir.y.atan2(dir.x)),
+                    NativeDepth(-2.0),
+                    Velocity(dir * speed),
+                    Pos(spawn_pos),
                 ));
             }
             trauma.add(0.25);
@@ -2554,7 +2603,10 @@ fn walls_block_snare(
                     kind: HazardKind::Toxic,
                     radius: 70.0 * ability_mult.clamp(1.0, 2.0),
                     damage: ((1.0 * ability_mult).ceil() as i32).max(1),
-                    timer: GTimer::from_seconds(3.0 * ability_mult.clamp(1.0, 1.8), TimerMode::Once),
+                    timer: GTimer::from_seconds(
+                        3.0 * ability_mult.clamp(1.0, 1.8),
+                        TimerMode::Once,
+                    ),
                     tick: GTimer::from_seconds(0.25, TimerMode::Repeating),
                 },
                 Pos(spot),
@@ -2613,7 +2665,194 @@ fn walls_block_snare(
     }
 }
 
+pub fn tick_big_dog_missiles(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mask: Res<FloorMask>,
+    frame: Res<CurrentFrame>,
+    save: Option<Res<SaveData>>,
+    props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+    creators: Query<(&AimDir, &Player), With<Player>>,
+    mut sets: ParamSet<(
+        Query<
+            (
+                Entity,
+                &mut BigDogMissileState,
+                &mut Health,
+                &mut Velocity,
+                &mut Pos,
+                Option<&mut GmlImage>,
+                Option<&mut NativeAngle>,
+            ),
+            (With<BigDogMissileState>, Without<Prop>),
+        >,
+        Query<
+            (
+                Entity,
+                &Team,
+                &Pos,
+                &Hitbox,
+                &Enemy,
+                &mut Health,
+                Option<&mut NextHurt>,
+                Option<&mut Velocity>,
+            ),
+            (
+                With<Enemy>,
+                Without<Prop>,
+                Without<Projectile>,
+                Without<BigDogMissileState>,
+            ),
+        >,
+    )>,
+) {
+    let dt = time.delta_secs;
+    let solids: Vec<(Vec2, Vec2)> = props
+        .iter()
+        .map(|(_, prop, pos)| (pos.0, prop.size))
+        .collect();
+    let spawn_explosion = |commands: &mut Commands, at: Vec2| {
+        commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            Explosion {
+                timer: GTimer::from_seconds(0.05, TimerMode::Once),
+                radius: 32.0,
+                damage: 0,
+                team: Team::Player,
+                hits_player: false,
+                source: None,
+            },
+            Pos(at),
+        ));
+    };
+    let mut rng = rand::rng();
+    let missile_entities: Vec<Entity> = {
+        let missiles = sets.p0();
+        missiles
+            .iter()
+            .map(|(entity, _, _, _, _, _, _)| entity)
+            .collect()
+    };
+    for entity in missile_entities {
+        let missile_pos = {
+            let mut missiles = sets.p0();
+            let Ok((_, mut state, health, mut vel, mut pos, mut image, mut angle)) =
+                missiles.get_mut(entity)
+            else {
+                continue;
+            };
+            state.fuse.tick(dt);
+            state.hurt_timer.tick(dt);
+            if state.fuse.just_finished() || health.hp <= 0 {
+                spawn_explosion(&mut commands, pos.0);
+                commands.entity(entity).despawn();
+                continue;
+            }
+
+            let hurt_finished = state.hurt_timer.just_finished();
+            if let Some(image) = image.as_deref_mut()
+                && (image.finished || hurt_finished)
+            {
+                *image = GmlImage::new("images/sprScrapBossMissileIdle.png", 4, 0.4);
+            }
+
+            let previous_pos = pos.0;
+            let (aim, throne_butt) = creators
+                .get(state.creator)
+                .map(|(aim, player)| (aim.0, state.throne_butt || player.throne_butt))
+                .unwrap_or((vel.0.normalize_or_zero(), state.throne_butt));
+            gml_motion_add_clamp(&mut vel.0, aim, 0.1, 1000.0, dt);
+            let speed = (2.0 + f32::from(throne_butt)) * 30.0;
+            if vel.0.length_squared() > 1e-6 {
+                vel.0 = vel.0.normalize() * speed;
+            } else {
+                vel.0 = aim.normalize_or_zero() * speed;
+            }
+            if move_bounce_solid(
+                &mut pos.0,
+                &mut vel.0,
+                BIG_DOG_MISSILE_RADIUS,
+                dt,
+                &solids,
+                Some(&mask),
+                true,
+            )
+            .is_some()
+            {
+                spawn_explosion(&mut commands, pos.0);
+                commands.entity(entity).despawn();
+                continue;
+            }
+            if let Some(angle) = angle.as_deref_mut() {
+                angle.0 = vel.0.y.atan2(vel.0.x);
+            }
+            state.trail_timer = state.trail_timer.wrapping_add(1) % 4;
+            if rng.random::<f32>() < 0.25 {
+                spawn_native_smoke_mote(
+                    &mut commands,
+                    save.as_ref().is_some_and(|save| save.settings.particles),
+                    previous_pos,
+                    Vec2::ZERO,
+                    rng.random_range(0.5..1.5),
+                );
+            }
+            pos.0
+        };
+
+        let hit = {
+            let mut targets = sets.p1();
+            let mut hit = false;
+            for (
+                _,
+                target_team,
+                target_pos,
+                target_hitbox,
+                _,
+                mut target_health,
+                mut next_hurt,
+                mut target_velocity,
+            ) in &mut targets
+            {
+                if *target_team != Team::Enemy
+                    || target_health.hp <= 0
+                    || missile_pos.distance(target_pos.0)
+                        > BIG_DOG_MISSILE_RADIUS + target_hitbox.radius
+                {
+                    continue;
+                }
+                if next_hurt.as_ref().is_some_and(|next| next.0 > frame.0) {
+                    continue;
+                }
+                target_health.hp -= BIG_DOG_MISSILE_DAMAGE;
+                if let Some(next) = next_hurt.as_deref_mut() {
+                    next.0 = frame.0 + 5;
+                }
+                if let Some(mut velocity) = target_velocity.take() {
+                    velocity.0 += (target_pos.0 - missile_pos).normalize_or_zero() * 120.0;
+                }
+                hit = true;
+                break;
+            }
+            hit
+        };
+        if !hit {
+            continue;
+        }
+
+        let mut missiles = sets.p0();
+        let Ok((_, mut state, mut health, _, pos, _, _)) = missiles.get_mut(entity) else {
+            continue;
+        };
+        health.hp -= 3;
+        state.hit_enemy();
+        if health.hp <= 0 {
+            spawn_explosion(&mut commands, pos.0);
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests: headless parity for the combat block
 // ---------------------------------------------------------------------------
-

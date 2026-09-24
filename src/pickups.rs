@@ -45,6 +45,65 @@ pub fn weapon_art_path(_id: WeaponId) -> &'static str {
     "images/sprRevolver.png"
 }
 
+#[derive(Component, Clone, Copy)]
+pub enum ProtoChestState {
+    Pending,
+    Armed { weapon: WeaponId, cursed: bool },
+    Carried { weapon: WeaponId, cursed: bool },
+}
+
+impl ProtoChestState {
+    fn pending() -> Self {
+        Self::Pending
+    }
+}
+
+fn arm_proto_chests(
+    commands: &mut Commands,
+    proto_q: &mut Query<(Entity, &mut ProtoChestState)>,
+    run: &Run,
+) {
+    let carried = proto_q
+        .iter()
+        .filter_map(|(_, state)| match &*state {
+            ProtoChestState::Carried { weapon, cursed } => Some((*weapon, *cursed)),
+            _ => None,
+        })
+        .last();
+    let mut carriers = Vec::new();
+    let mut armed = false;
+    for (entity, mut state) in proto_q.iter_mut() {
+        match &*state {
+            ProtoChestState::Pending => {
+                let (weapon, cursed) = carried.unwrap_or((run.protowep, run.protocurse));
+                *state = ProtoChestState::Armed { weapon, cursed };
+                armed = true;
+            }
+            ProtoChestState::Carried { .. } => carriers.push(entity),
+            ProtoChestState::Armed { .. } => {}
+        }
+    }
+    if armed {
+        for entity in carriers {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+pub(crate) fn spawn_proto_weapon(
+    commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
+    weapon: WeaponId,
+    cursed: bool,
+    pos: glam::Vec2,
+) -> Entity {
+    let entity = spawn_pickup(commands, catalog, PickupKind::Weapon(weapon), pos, 0, false);
+    if cursed {
+        commands.entity(entity).insert(PickupCurse);
+    }
+    entity
+}
+
 fn pickup_sprite(kind: PickupKind) -> (&'static str, f32) {
     match kind {
         PickupKind::Rad(_) => ("images/sprRad.png", 12.0),
@@ -119,6 +178,9 @@ pub fn spawn_pickup(
         // GML `Curse` motes drift without a lifetime/physics setup.
         PickupKind::Curse => {}
     }
+    if matches!(kind, PickupKind::Chest(ChestKind::Proto)) {
+        ec.insert(ProtoChestState::pending());
+    }
     ec.id()
 }
 
@@ -149,6 +211,9 @@ pub fn spawn_chest(
         },
         Pos(pos),
     ));
+    if kind == ChestKind::Proto {
+        ec.insert(ProtoChestState::pending());
+    }
     if let Some(def) = catalog.def(path) {
         ec.insert(SpriteAnim::new(path, def));
     }
@@ -611,7 +676,7 @@ pub fn collect_pickups(
     audio: Res<GameAudio>,
     mut cues: ResMut<Queue<AudioCue>>,
     mut rumble_queue: ResMut<Queue<RumbleRequest>>,
-    mut input: ResMut<NtInput>,
+    input: ResMut<NtInput>,
     mut run: ResMut<Run>,
     mut player_q: Query<
         (
@@ -637,6 +702,7 @@ pub fn collect_pickups(
         ),
         Without<Player>,
     >,
+    mut proto_q: Query<(Entity, &mut ProtoChestState)>,
     mut toast: ResMut<Toast>,
     mut tut: Option<ResMut<crate::state::TutorialState>>,
 ) {
@@ -646,6 +712,7 @@ pub fn collect_pickups(
         return;
     };
 
+    arm_proto_chests(&mut commands, &mut proto_q, &run);
     let player_pos = player_pos.0;
     let dt = time.delta_secs;
     // The weapon arm below peeks the shared pulse (see its note);
@@ -949,24 +1016,11 @@ pub fn collect_pickups(
                     audio.play_pickup(&mut cues);
                 }
                 ChestKind::Proto => {
-                    // GML `ProtoChest`: drops the run's `protowep`
-                    // artifact (`UberCont.protowep/protocurse`, default
-                    // rusty revolver); Hatred burns 1 HP + 16 rads.
-                    // GML `ProtoChest/Other_5` writes the opened `wep`
-                    // back on floor exit — the carry lands there.
-                    let weapon = run.protowep;
-                    let cursed = run.protocurse;
-                    let e = spawn_pickup(
-                        &mut commands,
-                        &catalog,
-                        PickupKind::Weapon(weapon),
-                        pickup_pos_value,
-                        0,
-                        false,
-                    );
-                    if cursed {
-                        commands.entity(e).insert(PickupCurse);
-                    }
+                    let (weapon, cursed) = match proto_q.get(pickup_e) {
+                        Ok((_, &ProtoChestState::Armed { weapon, cursed })) => (weapon, cursed),
+                        _ => (run.protowep, run.protocurse),
+                    };
+                    spawn_proto_weapon(&mut commands, &catalog, weapon, cursed, pickup_pos_value);
                     if player.crown == CrownKind::Hatred && health.hp > 1 {
                         health.hp -= 1;
                         let mut rng = rand::rng();

@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use bevy_ecs::prelude::*;
 use game_utils::save::Versioned;
 use game_utils::save_store::SaveStore;
-use game_utils::storage::FsStorage;
+use game_utils::storage::{FsStorage, Storage};
 use serde::{Deserialize, Serialize};
 
 use crate::comps_a::{Health, Inventory, Player, RaceState, Run};
@@ -1508,6 +1508,12 @@ pub fn serialize_save(save: &SaveData) -> Result<String, String> {
 pub fn parse_save(text: &str) -> Result<SaveData, String> {
     let mut save: SaveData = ron::from_str(text).map_err(|e| e.to_string())?;
     save.sanitize_loadouts();
+    if save.version > SAVE_VERSION {
+        return Err(format!(
+            "save version {} is newer than supported version {}",
+            save.version, SAVE_VERSION
+        ));
+    }
     if save.version < SAVE_VERSION {
         save.version = SAVE_VERSION;
     }
@@ -1525,14 +1531,38 @@ pub fn store_save_to_file(save: &SaveData, path: &Path) -> Result<(), String> {
 pub fn load_save_from_file(path: &Path) -> Result<SaveData, String> {
     let store = save_store(path)?;
     let result = store.load(&SaveStore::<FsStorage>::is_intact_ron, &[]);
-    let bytes = result.data.ok_or_else(|| format!("save unavailable: {:?}", result.status))?;
-    let text = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
-    parse_save(text)
+    if let Some(bytes) = result.data {
+        let text = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
+        if let Ok(save) = parse_save(text) {
+            return Ok(save);
+        }
+    }
+
+    let legacy_path = legacy_save_path(path);
+    let legacy_bytes = FsStorage
+        .read(&legacy_path)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("save unavailable: {:?}", result.status))?;
+    let legacy_text =
+        std::str::from_utf8(&legacy_bytes).map_err(|e| e.to_string())?;
+    let mut save: SaveData = serde_json::from_str(legacy_text).map_err(|e| e.to_string())?;
+    save.sanitize_loadouts();
+    save.version = SAVE_VERSION;
+    store_save_to_file(&save, path)?;
+    Ok(save)
 }
 
 /// Load a save, or default when the file is missing/corrupt.
 pub fn load_or_default(path: &Path) -> SaveData {
     load_save_from_file(path).unwrap_or_default()
+}
+
+fn legacy_save_path(path: &Path) -> PathBuf {
+    if path.file_name().and_then(|name| name.to_str()) == Some("nt-save.ron") {
+        path.with_file_name("nt-save.json")
+    } else {
+        path.with_extension("json")
+    }
 }
 
 fn save_store(path: &Path) -> Result<SaveStore<FsStorage>, String> {

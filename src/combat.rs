@@ -22,11 +22,11 @@ use crate::comps_a::{
     Sticky, Team, Toast, Velocity, WallCell, WallTile,
 };
 use crate::comps_b::{
-    Beam, ChestKind, Corpse, CustomExplosion, DeploysSentry, Dying, Enemy, EnemyBrain,
-    GoldBarrelDrop, HazardCloud, LoopTransition, MoteStrip, Pickup, PickupLifetime, PlasmaBurst,
-    Portal, PortalPhase, PortalShock, PortalState, Prop, PropNestMarkers, PropSprites,
-    RadChestContainer, SecretEntrance, SentryTurret, Shield, SpawnsWeaponPickup, StaticFx,
-    ThroneRoomState,
+    Beam, BigDogMissileState, ChestKind, Corpse, CustomExplosion, DeploysSentry, Dying, Enemy,
+    EnemyBrain, ExplosionVisual, GmlImage, GoldBarrelDrop, HazardCloud, LoopTransition,
+    NativeDepth, NativeExplosionKind, Pickup, PickupLifetime, PlasmaBurst, Portal, PortalPhase,
+    PortalShock, PortalState, Prop, PropNestMarkers, PropSprites, RadChestContainer,
+    SecretEntrance, SentryTurret, Shield, SpawnsWeaponPickup, StaticFx, ThroneRoomState,
 };
 use crate::data::{AreaId, CrownKind, EnemyKind, HazardKind, MutationId, RaceId, WeaponId};
 use crate::effects::{
@@ -34,7 +34,10 @@ use crate::effects::{
     flash_white, rumble, slow_motion, spawn_burst,
 };
 use crate::enemy_data::enemy_def;
-use crate::environment::{PropDeathEffect, spawn_prop_corpse, spawn_prop_death_effect};
+use crate::environment::{
+    PropDeathEffect, spawn_exploder_explo, spawn_ground_flame, spawn_native_streak,
+    spawn_prop_corpse, spawn_prop_death_effect,
+};
 use crate::msg::Queue;
 use crate::pickups::{
     give_ammo, maybe_spawn_drop, random_offset, spawn_chest, spawn_pickup, spawn_rad,
@@ -379,23 +382,31 @@ pub fn apply_birth_overrides(
     }
 }
 
-fn spawn_maggot_explosion(
-    commands: &mut Commands,
-    catalog: &repame_anim::AnimCatalog,
-    particles: bool,
-    pos: glam::Vec2,
-) {
-    // GML `MaggotExplosion/Create_0`: six smoke motes and three blood streaks.
-    crate::environment::spawn_motes(commands, catalog, particles, pos, MoteStrip::Smoke, 6);
+fn spawn_maggot_explosion(commands: &mut Commands, particles: bool, pos: glam::Vec2) {
     let mut rng = rand::rng();
-    spawn_burst(
-        commands,
-        &mut rng,
-        pos,
-        3,
-        [0.72, 0.04, 0.04, 1.0],
-        (180.0, 300.0),
-    );
+    let mut dir = rng.random_range(0.0..std::f32::consts::TAU);
+    for _ in 0..6 {
+        crate::environment::spawn_native_smoke_mote(
+            commands,
+            particles,
+            pos,
+            glam::Vec2::from_angle(dir),
+            4.0 + rng.random_range(0.0..1.0),
+        );
+        dir += std::f32::consts::TAU / 6.0;
+    }
+    dir = rng.random_range(0.0..std::f32::consts::TAU);
+    for _ in 0..3 {
+        spawn_native_streak(commands, false, pos, dir, 8.0);
+        dir += 120.0_f32.to_radians();
+    }
+    commands.spawn((
+        GameCleanup,
+        LevelCleanup,
+        Pos(pos),
+        NativeDepth(-5.0),
+        GmlImage::animated("images/sprMeatExplosion.png", 6, 0.4, true),
+    ));
     commands.spawn((
         GameCleanup,
         LevelCleanup,
@@ -735,9 +746,11 @@ pub fn resolve_enemy_deaths(
                 let anim = catalog
                     .def("sprBouncerBullet")
                     .map(|def| SpriteAnim::new("sprBouncerBullet", def));
-                for i in 0..8 {
-                    let ang = (i as f32) * std::f32::consts::TAU / 8.0;
-                    let d = glam::Vec2::new(ang.cos(), ang.sin());
+                let mut rng = rand::rng();
+                let mut angle = rng.random_range(0.0..std::f32::consts::TAU);
+                for _ in 0..8 {
+                    angle += 45.0_f32.to_radians();
+                    let d = glam::Vec2::from_angle(angle);
                     let mut bullet = commands.spawn((
                         GameCleanup,
                         LevelCleanup,
@@ -771,8 +784,20 @@ pub fn resolve_enemy_deaths(
                         Velocity(d * 240.0),
                         Pos(pos),
                     ));
+                    spawn_native_streak(&mut commands, true, pos, angle, 8.0);
                 }
-                trauma.add(0.12);
+                for _ in 0..3 {
+                    let d = glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU));
+                    spawn_exploder_explo(
+                        &mut commands,
+                        save.settings.particles,
+                        pos,
+                        d,
+                        2.0 + rng.random_range(0.0..2.0),
+                    );
+                    trauma.add(0.3);
+                }
+                trauma.add(0.5);
             }
             EnemyKind::ProtoStatue => {
                 // GML `ProtoStatue/Destroy_0`: rad past 24 opens the
@@ -880,23 +905,33 @@ pub fn resolve_enemy_deaths(
                         Velocity(d * 240.0),
                         Pos(pos),
                     ));
+                    spawn_native_streak(&mut commands, true, pos, ang, 8.0);
+                }
+                for _ in 0..5 {
+                    let d = glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU));
+                    spawn_exploder_explo(
+                        &mut commands,
+                        save.settings.particles,
+                        pos,
+                        d,
+                        2.0 + rng.random_range(0.0..2.0),
+                    );
+                    trauma.add(0.3);
                 }
                 for _ in 0..40 {
                     let a = rng.random_range(0.0..std::f32::consts::TAU);
                     let off = glam::Vec2::from_angle(a) * rng.random_range(0.0..=48.0);
-                    commands.spawn((
-                        GameCleanup,
-                        LevelCleanup,
-                        Team::Enemy,
-                        HazardCloud {
-                            kind: HazardKind::Toxic,
-                            radius: 16.0,
-                            damage: 1,
-                            timer: GTimer::from_seconds(6.0, TimerMode::Once),
-                            tick: GTimer::from_seconds(0.5, TimerMode::Repeating),
-                        },
-                        Pos(pos + off),
-                    ));
+                    let speed = rng.random_range(0.2..1.7) * 30.0;
+                    let mut gas = crate::comps_b::ToxicGasState::new();
+                    gas.grow_speed = 0.003 + rng.random_range(0.0..0.002);
+                    gas.rot = (1.0 + rng.random_range(0.0..=3.0))
+                        * if rng.random_bool(0.5) { 1.0 } else { -1.0 };
+                    crate::enemies::spawn_toxic_gas(
+                        &mut commands,
+                        pos + off,
+                        glam::Vec2::from_angle(a) * speed,
+                        gas,
+                    );
                 }
                 commands.spawn((
                     GameCleanup,
@@ -907,7 +942,7 @@ pub fn resolve_enemy_deaths(
                     },
                     Pos(pos),
                 ));
-                trauma.add(0.3);
+                trauma.add(1.0);
             }
             EnemyKind::ExploFreak => {
                 commands.spawn((
@@ -941,12 +976,12 @@ pub fn resolve_enemy_deaths(
             }
             EnemyKind::MaggotSpawn => {
                 // GML `MaggotSpawn/Destroy_0`.
-                spawn_maggot_explosion(&mut commands, &catalog, save.settings.particles, pos);
+                spawn_maggot_explosion(&mut commands, save.settings.particles, pos);
             }
             EnemyKind::JungleFly => {
                 // GML `JungleFly/Destroy_0`.
                 if rand::rng().random_range(0.0..5.0) < 1.0 {
-                    spawn_maggot_explosion(&mut commands, &catalog, save.settings.particles, pos);
+                    spawn_maggot_explosion(&mut commands, save.settings.particles, pos);
                 }
             }
             EnemyKind::Sniper => {
@@ -984,13 +1019,7 @@ pub fn resolve_enemy_deaths(
                         crate::spatial::resolve_mask_circle(mask, &mut flame_pos, 14.0);
                     }
                     crate::spatial::clamp_to_arena(&mut flame_pos, 14.0);
-                    let mut flame_spec = crate::environment::EnvironmentHazardSpec::ground_flame();
-                    flame_spec.duration = 10.0 + rng.random_range(0.0..4.0);
-                    crate::environment::spawn_environment_hazard(
-                        &mut commands,
-                        flame_pos,
-                        flame_spec,
-                    );
+                    spawn_ground_flame(&mut commands, flame_pos, false);
                 }
             }
             EnemyKind::GoldScorpion => {
@@ -1046,7 +1075,7 @@ pub fn resolve_enemy_deaths(
             }
             EnemyKind::BigMaggot => {
                 // GML `BigMaggot/Destroy_0`.
-                spawn_maggot_explosion(&mut commands, &catalog, save.settings.particles, pos);
+                spawn_maggot_explosion(&mut commands, save.settings.particles, pos);
             }
             _ => {}
         }
@@ -1395,7 +1424,11 @@ pub fn move_projectiles(
             Option<&PlasmaBurst>,
             Option<&GrenadeFuse>,
         ),
-        (Without<Prop>, Without<SlashProjectile>),
+        (
+            Without<Prop>,
+            Without<SlashProjectile>,
+            Without<BigDogMissileState>,
+        ),
     >,
     mut aux: ParamSet<(
         Query<&mut DiscFlight>,
@@ -1930,6 +1963,7 @@ fn chain_to_nearby_targets(
             Option<&mut Velocity>,
             Option<&Shield>,
             Option<&mut NextHurt>,
+            Option<&mut BigDogMissileState>,
         ),
         Without<Projectile>,
     >,
@@ -1950,8 +1984,8 @@ fn chain_to_nearby_targets(
 
     for _ in 0..jumps {
         let mut best: Option<(Entity, glam::Vec2, f32)> = None;
-        for (target_e, target_pos, target_team, ..) in targets.iter() {
-            if *target_team != Team::Enemy || visited.contains(&target_e) {
+        for (target_e, target_pos, target_team, _, _, _, _, _, missile) in targets.iter() {
+            if missile.is_some() || *target_team != Team::Enemy || visited.contains(&target_e) {
                 continue;
             }
             let pos = target_pos.0;
@@ -1970,8 +2004,8 @@ fn chain_to_nearby_targets(
 
         damage = ((damage as f32) * falloff).round().max(1.0) as i32;
 
-        for (target_e, _, _, _, mut health, vel_opt, _, _) in targets.iter_mut() {
-            if target_e != next_e {
+        for (target_e, _, _, _, mut health, vel_opt, _, _, missile) in targets.iter_mut() {
+            if target_e != next_e || missile.is_some() {
                 continue;
             }
             health.hp -= damage;
@@ -2036,12 +2070,13 @@ fn retaliate_sharp_teeth(
             Option<&mut Velocity>,
             Option<&Shield>,
             Option<&mut NextHurt>,
+            Option<&mut BigDogMissileState>,
         ),
         Without<Projectile>,
     >,
 ) {
-    for (ee, epos, team, _, mut health, _, _, nexthurt) in targets.iter_mut() {
-        if *team != Team::Enemy {
+    for (ee, epos, team, _, mut health, _, _, nexthurt, missile) in targets.iter_mut() {
+        if missile.is_some() || *team != Team::Enemy {
             continue;
         }
         if epos.0.distance(center) > 900.0 {
@@ -2062,6 +2097,7 @@ pub struct BoomFeel<'w> {
     pub trauma: ResMut<'w, Trauma>,
     pub hitstop: ResMut<'w, HitStop>,
     pub chroma: ResMut<'w, ChromaticAberration>,
+    pub floor: Option<Res<'w, FloorMask>>,
 }
 
 /// Projectile-vs-target hits. Ported whole from nt's `projectile_hits`
@@ -2095,7 +2131,11 @@ pub fn projectile_hits(
             Option<&SpawnsWeaponPickup>,
             Option<&PlasmaBurst>,
         ),
-        (Without<Hitbox>, Without<SlashProjectile>),
+        (
+            Without<Hitbox>,
+            Without<SlashProjectile>,
+            Without<BigDogMissileState>,
+        ),
     >,
     mut aux: ParamSet<(
         Query<&ShellBonus>,
@@ -2118,6 +2158,7 @@ pub fn projectile_hits(
             Option<&mut Velocity>,
             Option<&Shield>,
             Option<&mut NextHurt>,
+            Option<&mut BigDogMissileState>,
         ),
         Without<Projectile>,
     >,
@@ -2160,6 +2201,7 @@ pub fn projectile_hits(
         let mut hit = false;
         let mut damaged = false;
         let mut hit_player = false;
+        let mut missile_hit = false;
         let mut hit_pos = proj_pos.0;
         let mut hit_target = None::<Entity>;
         let mut stuck_bolt = false;
@@ -2168,11 +2210,27 @@ pub fn projectile_hits(
         let mut passthrough = false;
         let mut plasma_died = false;
 
-        for (target_e, target_pos, target_team, hitbox, mut health, vel_opt, shield, nexthurt) in
-            targets.iter_mut()
+        for (
+            target_e,
+            target_pos,
+            target_team,
+            hitbox,
+            mut health,
+            vel_opt,
+            shield,
+            nexthurt,
+            mut missile,
+        ) in targets.iter_mut()
         {
+            if health.hp <= 0 {
+                continue;
+            }
             let hits_all = hits_all_set.contains(&proj_e);
-            if !hits_all && *target_team == *proj_team {
+            let missile_target = missile.is_some();
+            if missile_target && *proj_team != Team::Player {
+                continue;
+            }
+            if !missile_target && !hits_all && *target_team == *proj_team {
                 continue;
             }
 
@@ -2193,6 +2251,13 @@ pub fn projectile_hits(
 
             let target_pos = target_pos.0;
             if proj_pos.0.distance(target_pos) > proj.radius + hitbox.radius {
+                continue;
+            }
+
+            if missile_target
+                && let Some(nh) = nexthurt.as_ref()
+                && nh.0 > frame.0
+            {
                 continue;
             }
 
@@ -2217,8 +2282,10 @@ pub fn projectile_hits(
             hit = true;
             hit_pos = target_pos;
             hit_target = Some(target_e);
+            missile_hit = missile_target;
 
-            if *target_team == Team::Player
+            if !missile_target
+                && *target_team == Team::Player
                 && let Some(shield) = shield
                 && !shield.timer.is_finished()
             {
@@ -2235,7 +2302,7 @@ pub fn projectile_hits(
                 break;
             }
 
-            if *target_team == Team::Player && !health.invuln.is_finished() {
+            if !missile_target && *target_team == Team::Player && !health.invuln.is_finished() {
                 break;
             }
 
@@ -2252,13 +2319,28 @@ pub fn projectile_hits(
             health.hp -= dmg;
             damaged = true;
 
-            if *target_team == Team::Enemy
+            if missile_target {
+                if let Some(state) = missile.as_deref_mut() {
+                    state.hurt_from_projectile();
+                }
+                commands.entity(target_e).insert(GmlImage::animated(
+                    "images/sprScrapBossMissileHurt.png",
+                    3,
+                    0.4,
+                    false,
+                ));
+                if let Some(mut nh) = nexthurt {
+                    nh.0 = frame.0 + 5;
+                } else {
+                    commands.entity(target_e).insert(NextHurt(frame.0 + 5));
+                }
+            } else if *target_team == Team::Enemy
                 && let Some(mut nh) = nexthurt
             {
                 nh.0 = frame.0 + 5;
             }
 
-            if *target_team == Team::Player {
+            if !missile_target && *target_team == Team::Player {
                 health.invuln = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
                 hit_player = true;
                 secrets.mark_damage_taken();
@@ -2268,7 +2350,7 @@ pub fn projectile_hits(
                 audio.play_hit(&mut cues);
             }
 
-            if let Some(mut vel) = vel_opt {
+            if !missile_target && let Some(mut vel) = vel_opt {
                 apply_knockback(&mut vel.0, proj_vel.0.normalize_or_zero(), proj.knockback);
             }
 
@@ -2426,7 +2508,10 @@ pub fn projectile_hits(
             continue;
         }
 
-        if damaged && let Some(ref chain) = chain {
+        if damaged
+            && !missile_hit
+            && let Some(ref chain) = chain
+        {
             chain_to_nearby_targets(
                 &mut commands,
                 &mut targets,
@@ -2553,7 +2638,11 @@ pub fn tick_beams(
     mut beams: Query<(Entity, &Pos, &mut Beam)>,
     mut targets: Query<
         (Entity, &Pos, &Team, &mut Health, Option<&mut Velocity>),
-        (Without<Beam>, Without<Projectile>),
+        (
+            Without<Beam>,
+            Without<Projectile>,
+            Without<BigDogMissileState>,
+        ),
     >,
 ) {
     for (beam_e, beam_pos, mut beam) in beams.iter_mut() {
@@ -3327,7 +3416,11 @@ pub fn tick_hazard_clouds(
     >,
     mut targets: Query<
         (Entity, &Pos, &Team, &mut Health),
-        (Without<HazardCloud>, Without<Projectile>),
+        (
+            Without<HazardCloud>,
+            Without<Projectile>,
+            Without<BigDogMissileState>,
+        ),
     >,
 ) {
     for (cloud_e, cloud_team, cloud_pos, mut cloud) in &mut clouds {
@@ -3409,7 +3502,7 @@ pub fn tick_throne_victory(
             for _ in 0..3 {
                 let at = v.pos
                     + glam::Vec2::new(rng.random_range(-64.0..64.0), rng.random_range(-50.0..50.0));
-                commands.spawn((
+                let mut explosion = commands.spawn((
                     GameCleanup,
                     LevelCleanup,
                     Explosion {
@@ -3422,6 +3515,7 @@ pub fn tick_throne_victory(
                     },
                     Pos(at),
                 ));
+                explosion.insert(ExplosionVisual(NativeExplosionKind::Green));
             }
             trauma.add(0.12);
         }
@@ -3466,7 +3560,13 @@ pub fn apply_explosions(
     mut secrets: ResMut<SecretTriggers>,
     decide: Res<crate::pickups::GunDecideCache>,
     mut q: Query<
-        (Entity, &mut Explosion, &Pos, Option<&ExplosionFeelApplied>),
+        (
+            Entity,
+            &mut Explosion,
+            &Pos,
+            Option<&ExplosionFeelApplied>,
+            Option<&ExplosionVisual>,
+        ),
         (Without<Enemy>, Without<Player>, Without<Prop>),
     >,
     mut enemies: Query<
@@ -3516,7 +3616,7 @@ pub fn apply_explosions(
             )
         })
         .unwrap_or((Vec::new(), false));
-    for (e, mut boom, pos, feel_applied) in &mut q {
+    for (e, mut boom, pos, feel_applied, visual) in &mut q {
         boom.timer.tick(time.delta_secs);
         let fused = boom.timer.just_finished();
 
@@ -3546,21 +3646,28 @@ pub fn apply_explosions(
 
         let pos = pos.0;
         if fused {
+            let kind = visual.map(|v| v.0).unwrap_or(NativeExplosionKind::Standard);
             if feel_applied.is_none() {
-                feel.trauma.add(0.45);
+                feel.trauma.add(match kind {
+                    NativeExplosionKind::Meat => 0.30,
+                    NativeExplosionKind::Small
+                    | NativeExplosionKind::Green
+                    | NativeExplosionKind::Popo => 0.35,
+                    NativeExplosionKind::Standard => 0.45,
+                });
             }
             chromatic_pulse(&mut feel.chroma, 0.3);
             feel.hitstop.trigger(0.14, 0.1);
-            // GML `Explosion/Create_0`: 10 `Smoke` at `2+random(3)`
-            // plus 20 `Dust` fanned at speed 6 around a random start
-            // angle (small variant: 4 + 8). `opt_prtcls` rides
-            // `decide.particles`.
-            crate::environment::spawn_explosion_motes(
+            let on_floor = feel
+                .floor
+                .as_ref()
+                .is_some_and(|mask| mask.is_walkable(pos));
+            crate::environment::spawn_native_explosion_visual(
                 &mut commands,
-                &catalog,
                 decide.particles,
                 pos,
-                false,
+                kind,
+                on_floor,
             );
             if feel_applied.is_none() {
                 audio.play_boom(&mut cues);
@@ -3769,7 +3876,7 @@ pub fn apply_explosions(
             for _ in 0..3 {
                 let ang = rng.random_range(0.0..std::f32::consts::TAU);
                 let at = pos + glam::Vec2::new(ang.cos(), ang.sin()) * 12.0;
-                commands.spawn((
+                let mut explosion = commands.spawn((
                     GameCleanup,
                     LevelCleanup,
                     Explosion {
@@ -3782,6 +3889,7 @@ pub fn apply_explosions(
                     },
                     Pos(at),
                 ));
+                explosion.insert(ExplosionVisual(NativeExplosionKind::Small));
             }
         }
 

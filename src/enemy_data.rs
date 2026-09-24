@@ -1521,7 +1521,7 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             hp: 22,
             speed: 60.0,
             accel: 300.0,
-            radius: 8.0,
+            radius: 6.0,
             size: 16.0,
             color: [0.7, 0.7, 0.75, 1.0],
             sprite: "images/sprScrapBossMissileIdle.png",

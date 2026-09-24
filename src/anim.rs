@@ -11,8 +11,8 @@ use repame_sim::SimTime;
 
 use crate::comps_a::{GmlHurtSprite, Health, Player, Velocity};
 use crate::comps_b::{
-    Enemy, EnemySprites, FireAnim, HurtAnim, HyperOrbitCrystal, PlayerDying, Prop, PropHpTracker,
-    PropSprites,
+    Enemy, EnemySprites, FireAnim, GmlImage, HurtAnim, HyperOrbitCrystal, MaggotSpawnCharge,
+    MaggotSpawnInternalDrain, PlayerDying, Prop, PropHpTracker, PropSprites,
 };
 use crate::time::{GTimer, TimerMode};
 
@@ -82,6 +82,19 @@ pub fn animate_sprites(time: Res<SimTime>, mut q: Query<&mut SpriteAnim>) {
     }
 }
 
+pub fn tick_gml_images(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mut q: Query<(Entity, &mut GmlImage)>,
+) {
+    let steps = time.delta_secs * crate::SIM_HZ as f32;
+    for (entity, mut image) in &mut q {
+        if image.advance(steps) && image.destroy_on_end {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
 #[derive(Component)]
 pub struct PlayerAnim {
     pub idle: &'static str,
@@ -124,12 +137,17 @@ pub fn player_anim_switch(
 pub fn enemy_anim_switch(
     catalog: Res<AnimCatalog>,
     mut q: Query<
-        (&Velocity, &EnemySprites, &mut SpriteAnim),
+        (
+            &Velocity,
+            &EnemySprites,
+            &mut SpriteAnim,
+            Option<&MaggotSpawnCharge>,
+        ),
         (With<Enemy>, Without<HurtAnim>, Without<FireAnim>),
     >,
 ) {
-    for (vel, sprites, mut anim) in &mut q {
-        if anim.oneshot && !anim.finished {
+    for (vel, sprites, mut anim, charge) in &mut q {
+        if charge.is_some() || (anim.oneshot && !anim.finished) {
             continue;
         }
 
@@ -202,13 +220,23 @@ pub fn hurt_on_damage(
     mut last_player_hp: Local<std::collections::HashMap<Entity, i32>>,
     mut damaged: Query<
         (Entity, &Health, &EnemySprites, &mut SpriteAnim),
-        (With<Enemy>, Without<HurtAnim>, Without<Player>),
+        (
+            With<Enemy>,
+            Without<HurtAnim>,
+            Without<Player>,
+            Without<MaggotSpawnInternalDrain>,
+        ),
     >,
     mut player_damaged: Query<
         (Entity, &Health, &PlayerAnim, &mut SpriteAnim),
         (With<Player>, Without<HurtAnim>, Without<Enemy>),
     >,
+    internal: Query<(Entity, &Health), (With<Enemy>, With<MaggotSpawnInternalDrain>)>,
 ) {
+    for (entity, health) in &internal {
+        last_enemy_hp.insert(entity, health.hp);
+        commands.entity(entity).remove::<MaggotSpawnInternalDrain>();
+    }
     for (e, health, sprites, mut anim) in &mut damaged {
         let last = last_enemy_hp.get(&e).copied().unwrap_or(health.max);
         if health.hp >= health.max || health.hp <= 0 || health.hp == last {
@@ -482,6 +510,7 @@ pub fn backfill_spawn_anims(world: &mut World) {
                 idle,
                 walk: derive_walk_path(idle),
                 hurt: derive_hurt_path(idle),
+                charge: crate::anim::derive_charge_path(idle),
             })
         };
         let anim = if *has_anim {

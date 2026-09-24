@@ -37,22 +37,26 @@ use crate::combat::{
     PendingEnemySpawn, apply_birth_overrides, queue_enemy_spawn, queue_enemy_spawn_birth,
 };
 use crate::comps_a::{
-    ARENA_H, ARENA_W, BossIntro, BouncesLeft, DamageSource, Euphoria, FloorMask, GameCleanup,
-    GrenadeFuse, Health, Hitbox, Homing, LevelCleanup, NextHurt, Player, Projectile,
+    ARENA_H, ARENA_W, BossIntro, BouncesLeft, CurrentFrame, DamageSource, Euphoria, FloorMask,
+    GameCleanup, GrenadeFuse, Health, Hitbox, Homing, LevelCleanup, NextHurt, Player, Projectile,
     ProjectileFade, ProjectileFriction, ProjectileTyp, Run, ShellWallBounce, SplitOnDeath, Team,
     Toast, Velocity, apply_gml_friction, gml_motion_add_clamp,
 };
 use crate::comps_b::{
-    BossBrain, Corpse, EliteBlocker, Enemy, EnemyBrain, FxAngle, HazardCloud, HitWarning, HurtAnim,
-    IdpdShieldUnit, IdpdVanBrain, LilHunterDie, MomShot, PendingDelayedBoss, Pickup,
-    PickupLifetime, PopoNadeM, PortalClear, Prop, ProtoGuardian, ShieldFollower, StaticFx,
-    ThroneBall, TrapFire,
+    BossBrain, Corpse, EliteBlocker, Enemy, EnemyBrain, FxAngle, GmlImage, HitWarning, HurtAnim,
+    IdpdShieldUnit, IdpdVanBrain, LilHunterDie, MaggotSpawnCharge, MaggotSpawnInternalDrain,
+    MomShot, NativeAngle, NativeDepth, PendingDelayedBoss, Pickup, PickupLifetime, PopoNadeM,
+    PortalClear, Prop, ProtoGuardian, SCRAP_BOSS_MISSILE_RADIUS, ScrapBossMissileState,
+    ShieldFollower, StaticFx, ThroneBall, ToxicGasState,
 };
-use crate::data::{AreaId, EnemyKind, HazardKind, SplitDef};
+use crate::data::{AreaId, EnemyKind, SplitDef};
 use crate::effects::{HitStop, spawn_burst};
 use crate::enemy_data::{EnemyDef, enemy_def};
 use crate::msg::Queue;
-use crate::spatial::{Pos, clamp_to_arena, resolve_prop_collision};
+use crate::spatial::{
+    Pos, clamp_to_arena, move_bounce_solid, potential_step_solid, resolve_prop_collision,
+    solid_contact,
+};
 use crate::time::{GTimer, TimerMode};
 
 /// Floor-scaled HP multiplier (bevy `world::difficulty_multiplier`
@@ -243,10 +247,12 @@ fn spawn_enemy_impl(
     } else {
         0.0
     };
-    let initial_velocity = if kind == EnemyKind::Ballguy {
-        glam::Vec2::from_angle(initial_heading) * 30.0
-    } else {
-        glam::Vec2::ZERO
+    let initial_velocity = match kind {
+        EnemyKind::Ballguy => glam::Vec2::from_angle(initial_heading) * 30.0,
+        EnemyKind::ScrapBossMissile => {
+            glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU)) * 60.0
+        }
+        _ => glam::Vec2::ZERO,
     };
     let mut health = Health {
         hp,
@@ -259,6 +265,9 @@ fn spawn_enemy_impl(
     }
     ec.insert(health);
     ec.insert(velocity);
+    if kind == EnemyKind::ScrapBossMissile {
+        ec.insert(ScrapBossMissileState::new(loops));
+    }
     let attack_frames = match kind {
         EnemyKind::MaggotSpawn | EnemyKind::FiredMaggot => 0.0,
         EnemyKind::Bandit | EnemyKind::SnowBandit => 30.0 + rng.random_range(0.0..90.0),
@@ -331,6 +340,8 @@ fn spawn_enemy_impl(
         burrow_angle: 0.0,
         sniper_aiming: false,
         maggot_spawn_charging: false,
+        maggot_spawn_charge_ticks: 0.0,
+        maggot_spawn_facing: 1.0,
     });
     if def.boss {
         ec.insert(BossBrain::new(kind, pos));
@@ -354,6 +365,7 @@ fn spawn_enemy_impl(
         idle: def.sprite,
         walk: derive_walk_path(def.sprite),
         hurt: derive_hurt_path(def.sprite),
+        charge: crate::anim::derive_charge_path(def.sprite),
     });
     // Seed the idle strip only (walk/hurt/fire strips resolve
     // renderer-side); without a catalog entry no anim rides along and
@@ -362,6 +374,17 @@ fn spawn_enemy_impl(
         ec.insert(SpriteAnim::new(def.sprite, anim_def));
     }
     drop(ec);
+    if kind == EnemyKind::SuperFrog {
+        for _ in 0..10 {
+            let angle = rng.random_range(0.0..std::f32::consts::TAU);
+            let speed = rng.random_range(0.2..1.7) * 30.0;
+            let mut gas = ToxicGasState::new();
+            gas.grow_speed = 0.003 + rng.random_range(0.0..0.002);
+            gas.rot =
+                (1.0 + rng.random_range(0.0..=3.0)) * if rng.random_bool(0.5) { 1.0 } else { -1.0 };
+            spawn_toxic_gas(commands, pos, glam::Vec2::from_angle(angle) * speed, gas);
+        }
+    }
     if kind == EnemyKind::Scorpion {
         let morph_limit = if context.blood_crown {
             30.0 * 0.7
@@ -594,23 +617,116 @@ fn has_verbatim_tick(kind: EnemyKind) -> bool {
     )
 }
 
+#[derive(Clone, Copy)]
+enum EnemyWallLaw {
+    Parent,
+    PlainBounce,
+    Slide,
+    SlidePush,
+}
+
+fn wall_law(kind: EnemyKind) -> EnemyWallLaw {
+    match kind {
+        EnemyKind::Ballguy
+        | EnemyKind::BigMaggot
+        | EnemyKind::Scorpion
+        | EnemyKind::GoldScorpion
+        | EnemyKind::Sniper => EnemyWallLaw::PlainBounce,
+        EnemyKind::JungleFly => EnemyWallLaw::Slide,
+        EnemyKind::Maggot => EnemyWallLaw::SlidePush,
+        _ => EnemyWallLaw::Parent,
+    }
+}
+
+fn prop_shapes(props: &Query<(Entity, &Prop, &Pos), With<Prop>>) -> Vec<(glam::Vec2, glam::Vec2)> {
+    props
+        .iter()
+        .map(|(_, prop, pos)| (pos.0, prop.size))
+        .collect()
+}
+
+fn wall_probe_axis(
+    pos: glam::Vec2,
+    radius: f32,
+    value: f32,
+    horizontal: bool,
+    friction: f32,
+    solids: &[(glam::Vec2, glam::Vec2)],
+    mask: &FloorMask,
+) -> f32 {
+    if friction <= 0.0 || value.abs() <= 1e-6 {
+        return value;
+    }
+    let sign = if value > 0.0 { 1.0 } else { -1.0 };
+    let mut current = value;
+    for _ in 0..4096 {
+        let candidate = if horizontal {
+            pos + glam::Vec2::new(current / 30.0, 0.0)
+        } else {
+            pos + glam::Vec2::new(0.0, current / 30.0)
+        };
+        if solid_contact(candidate, radius, solids, Some(mask)).is_none() {
+            break;
+        }
+        current -= sign * friction * 30.0;
+        if current.abs() <= 1e-6 {
+            break;
+        }
+    }
+    current
+}
+
 fn integrate_verbatim(
     brain: &mut EnemyBrain,
     vel: &mut Velocity,
     pos: &mut Pos,
-    props: &Query<(Entity, &Prop, &Pos), With<Prop>>,
+    solids: &[(glam::Vec2, glam::Vec2)],
     mask: &FloorMask,
     positions: &[glam::Vec2],
     epos: glam::Vec2,
     radius: f32,
     dt: f32,
     separate_enemies: bool,
+    loops: u32,
+    law: EnemyWallLaw,
 ) {
     if brain.friction > 0.0 {
         apply_gml_friction(&mut vel.0, brain.friction, dt);
     }
-    pos.0 += vel.0 * dt;
-    collide_enemy(props, mask, pos, radius);
+
+    let saved_direction = vel.0.normalize_or_zero();
+    let saved_speed = vel.0.length();
+    let parent = matches!(law, EnemyWallLaw::Parent) && loops <= 3;
+    let contact = move_bounce_solid(
+        &mut pos.0,
+        &mut vel.0,
+        radius,
+        dt,
+        solids,
+        Some(mask),
+        !matches!(law, EnemyWallLaw::Slide | EnemyWallLaw::SlidePush),
+    );
+
+    if parent && contact.is_some() {
+        let post_speed = vel.0.length();
+        if saved_direction.length_squared() > 1e-8 {
+            vel.0 += saved_direction * post_speed;
+        }
+        if vel.0.length_squared() > 1e-8 {
+            vel.0 = vel.0.normalize() * saved_speed;
+        } else {
+            vel.0 = glam::Vec2::ZERO;
+        }
+        if brain.friction > 0.0 {
+            vel.0.x = wall_probe_axis(pos.0, radius, vel.0.x, true, brain.friction, solids, mask);
+            vel.0.y = wall_probe_axis(pos.0, radius, vel.0.y, false, brain.friction, solids, mask);
+        }
+    } else if matches!(law, EnemyWallLaw::SlidePush)
+        && let Some(contact) = contact
+    {
+        vel.0 += contact.normal * 30.0;
+    }
+
     if separate_enemies {
         separate(positions, epos, pos, radius);
     }
@@ -677,6 +793,29 @@ fn blocked_by_wall(mask: &FloorMask, point: glam::Vec2, radius: f32) -> bool {
     (!mask.cells.is_empty() && !mask.is_walkable(point))
         || point.x.abs() + radius > ARENA_W / 2.0
         || point.y.abs() + radius > ARENA_H / 2.0
+}
+
+pub fn spawn_toxic_gas(
+    commands: &mut Commands,
+    pos: glam::Vec2,
+    velocity: glam::Vec2,
+    state: ToxicGasState,
+) -> Entity {
+    let mut rng = rand::rng();
+    let mut image = GmlImage::new("images/sprToxicGas.png", 5, 0.0);
+    image.phase = rng.random_range(0.0..5.0);
+    commands
+        .spawn((
+            GameCleanup,
+            LevelCleanup,
+            Pos(pos),
+            Velocity(velocity),
+            state,
+            image,
+            NativeAngle(rng.random_range(0.0..std::f32::consts::TAU)),
+            NativeDepth(-2.0),
+        ))
+        .id()
 }
 
 fn queue_motion_spawn(
@@ -1794,6 +1933,7 @@ pub fn tick_bandit(
     time: Res<SimTime>,
     mut commands: Commands,
     mask: Res<FloorMask>,
+    run: Res<Run>,
     mut cues: ResMut<Queue<AudioCue>>,
     player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
     mut enemies: Query<
@@ -1805,6 +1945,7 @@ pub fn tick_bandit(
     let dt = time.delta_secs;
     let player_pos = player_q.single().ok().map(|p| p.0);
     let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p)| p.0).collect();
+    let solids = prop_shapes(&props);
     let mut rng = rand::rng();
     for (entity, enemy, mut brain, mut vel, mut pos) in &mut enemies {
         if !matches!(enemy.kind, EnemyKind::Bandit | EnemyKind::SnowBandit) {
@@ -1896,13 +2037,15 @@ pub fn tick_bandit(
             &mut brain,
             &mut vel,
             &mut pos,
-            &props,
+            &solids,
             &mask,
             &positions,
             epos,
             enemy_def(enemy.kind).radius,
             dt,
             true,
+            run.loop_count,
+            wall_law(enemy.kind),
         );
         zero_damage_contact_push(
             &mut brain,
@@ -1918,6 +2061,7 @@ pub fn tick_bandit(
 pub fn tick_maggot(
     time: Res<SimTime>,
     mask: Res<FloorMask>,
+    run: Res<Run>,
     player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
     mut enemies: Query<
         (
@@ -1935,6 +2079,7 @@ pub fn tick_maggot(
     let dt = time.delta_secs;
     let player_pos = player_q.single().ok().map(|p| p.0);
     let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p, _)| p.0).collect();
+    let solids = prop_shapes(&props);
     let mut rng = rand::rng();
     for (_entity, enemy, mut brain, mut vel, mut pos, hurt) in &mut enemies {
         if enemy.kind != EnemyKind::Maggot {
@@ -1978,20 +2123,24 @@ pub fn tick_maggot(
             &mut brain,
             &mut vel,
             &mut pos,
-            &props,
+            &solids,
             &mask,
             &positions,
             epos,
             enemy_def(enemy.kind).radius,
             dt,
             true,
+            run.loop_count,
+            wall_law(enemy.kind),
         );
     }
 }
 
 pub fn tick_maggot_spawn(
     time: Res<SimTime>,
+    mut commands: Commands,
     mask: Res<FloorMask>,
+    run: Res<Run>,
     player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
     mut enemies: Query<
         (
@@ -2002,6 +2151,7 @@ pub fn tick_maggot_spawn(
             &mut Pos,
             &mut Health,
             Option<&HurtAnim>,
+            Option<&mut MaggotSpawnCharge>,
         ),
         (With<Enemy>, Without<Prop>),
     >,
@@ -2009,48 +2159,68 @@ pub fn tick_maggot_spawn(
 ) {
     let dt = time.delta_secs;
     let player_pos = player_q.single().ok().map(|p| p.0);
-    let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p, _, _)| p.0).collect();
+    let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p, _, _, _)| p.0).collect();
+    let solids = prop_shapes(&props);
     let spawns: Vec<(Entity, glam::Vec2)> = enemies
         .iter()
-        .filter_map(|(entity, enemy, _, _, pos, _, _)| {
+        .filter_map(|(entity, enemy, _, _, pos, _, _, _)| {
             (enemy.kind == EnemyKind::MaggotSpawn).then_some((entity, pos.0))
         })
         .collect();
     let mut rng = rand::rng();
-    for (entity, enemy, mut brain, mut vel, mut pos, mut health, hurt) in &mut enemies {
+    for (entity, enemy, mut brain, mut vel, mut pos, mut health, hurt, mut charge) in &mut enemies {
         if enemy.kind != EnemyKind::MaggotSpawn {
             continue;
         }
         let epos = pos.0;
         tick_verbatim_cooldown(&mut brain, dt);
         vel.0 = glam::Vec2::ZERO;
+        let mut started_charge = false;
         if let Some(target) = player_pos {
             if epos.distance(target) < 64.0
                 && !brain.maggot_spawn_charging
+                && charge.is_none()
                 && !hurt.is_some_and(|h| !h.timer.is_finished())
             {
                 health.hp -= 1;
                 brain.maggot_spawn_charging = true;
-                brain.slash_delay = 6.0;
+                brain.maggot_spawn_charge_ticks = 19.0;
+                brain.maggot_spawn_facing = if target.x >= epos.x { 1.0 } else { -1.0 };
+                let mut charge_state = MaggotSpawnCharge::new();
+                charge_state.facing = brain.maggot_spawn_facing;
+                commands.entity(entity).insert(charge_state);
+                commands.entity(entity).insert(MaggotSpawnInternalDrain);
+                started_charge = true;
             }
         }
-        if brain.maggot_spawn_charging {
-            brain.slash_delay = (brain.slash_delay - dt * 30.0).max(0.0);
-            if brain.slash_delay == 0.0 {
-                brain.maggot_spawn_charging = false;
+        if brain.maggot_spawn_charging && !started_charge {
+            brain.maggot_spawn_charge_ticks =
+                (brain.maggot_spawn_charge_ticks - dt * crate::SIM_HZ as f32).max(0.0);
+            if let Some(charge) = charge.as_deref_mut() {
+                charge.image.advance(dt * crate::SIM_HZ as f32);
+                charge.ticks_left = brain.maggot_spawn_charge_ticks;
             }
+            if brain.maggot_spawn_charge_ticks == 0.0 {
+                brain.maggot_spawn_charging = false;
+                commands.entity(entity).remove::<MaggotSpawnCharge>();
+            }
+        }
+        if charge.is_some() && !brain.maggot_spawn_charging {
+            commands.entity(entity).remove::<MaggotSpawnCharge>();
         }
         integrate_verbatim(
             &mut brain,
             &mut vel,
             &mut pos,
-            &props,
+            &solids,
             &mask,
             &positions,
             epos,
             enemy_def(enemy.kind).radius,
             dt,
             false,
+            run.loop_count,
+            wall_law(enemy.kind),
         );
         let radius = enemy_def(enemy.kind).radius;
         for (other_entity, other_pos) in &spawns {
@@ -2089,6 +2259,7 @@ pub fn tick_bigmaggot(
     time: Res<SimTime>,
     mut cues: ResMut<Queue<AudioCue>>,
     mask: Res<FloorMask>,
+    run: Res<Run>,
     player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
     mut enemies: Query<
         (
@@ -2107,6 +2278,7 @@ pub fn tick_bigmaggot(
     let dt = time.delta_secs;
     let player_pos = player_q.single().ok().map(|p| p.0);
     let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p, _, _)| p.0).collect();
+    let solids = prop_shapes(&props);
     let mut rng = rand::rng();
     for (_entity, enemy, mut brain, mut vel, mut pos, health, hurt) in &mut enemies {
         if enemy.kind != EnemyKind::BigMaggot || brain.burrow_state != 0 {
@@ -2178,13 +2350,15 @@ pub fn tick_bigmaggot(
             &mut brain,
             &mut vel,
             &mut pos,
-            &props,
+            &solids,
             &mask,
             &positions,
             epos,
             enemy_def(enemy.kind).radius,
             dt,
             true,
+            run.loop_count,
+            wall_law(enemy.kind),
         );
     }
 }
@@ -2283,6 +2457,7 @@ pub fn tick_jungle_fly(
     let dt = time.delta_secs;
     let player_pos = player_q.single().ok().map(|p| p.0);
     let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p, _)| p.0).collect();
+    let solids = prop_shapes(&props);
     let mut rng = rand::rng();
     for (_entity, enemy, mut brain, mut vel, mut pos, hurt) in &mut enemies {
         if enemy.kind != EnemyKind::JungleFly {
@@ -2366,13 +2541,15 @@ pub fn tick_jungle_fly(
             &mut brain,
             &mut vel,
             &mut pos,
-            &props,
+            &solids,
             &mask,
             &positions,
             epos,
             enemy_def(enemy.kind).radius,
             dt,
             true,
+            run.loop_count,
+            wall_law(enemy.kind),
         );
     }
 }
@@ -2423,6 +2600,7 @@ pub fn tick_scorpion(
     mut commands: Commands,
     mut cues: ResMut<Queue<AudioCue>>,
     mask: Res<FloorMask>,
+    run: Res<Run>,
     player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
     mut enemies: Query<
         (
@@ -2442,6 +2620,7 @@ pub fn tick_scorpion(
     let dt = time.delta_secs;
     let player_pos = player_q.single().ok().map(|p| p.0);
     let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p, _, _)| p.0).collect();
+    let solids = prop_shapes(&props);
     let mut rng = rand::rng();
     for (entity, enemy, mut brain, mut vel, mut pos, mut anim, hurt) in &mut enemies {
         if enemy.kind != EnemyKind::Scorpion {
@@ -2544,13 +2723,15 @@ pub fn tick_scorpion(
             &mut brain,
             &mut vel,
             &mut pos,
-            &props,
+            &solids,
             &mask,
             &positions,
             epos,
             enemy_def(enemy.kind).radius,
             dt,
             true,
+            run.loop_count,
+            wall_law(enemy.kind),
         );
     }
 }
@@ -2561,6 +2742,7 @@ pub fn tick_gold_scorpion(
     mut commands: Commands,
     mut cues: ResMut<Queue<AudioCue>>,
     mask: Res<FloorMask>,
+    run: Res<Run>,
     player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
     mut enemies: Query<
         (
@@ -2580,6 +2762,7 @@ pub fn tick_gold_scorpion(
     let dt = time.delta_secs;
     let player_pos = player_q.single().ok().map(|p| p.0);
     let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p, _, _)| p.0).collect();
+    let solids = prop_shapes(&props);
     let mut rng = rand::rng();
     for (entity, enemy, mut brain, mut vel, mut pos, mut anim, hurt) in &mut enemies {
         if enemy.kind != EnemyKind::GoldScorpion {
@@ -2698,13 +2881,15 @@ pub fn tick_gold_scorpion(
             &mut brain,
             &mut vel,
             &mut pos,
-            &props,
+            &solids,
             &mask,
             &positions,
             epos,
             enemy_def(enemy.kind).radius,
             dt,
             true,
+            run.loop_count,
+            wall_law(enemy.kind),
         );
     }
 }
@@ -2714,6 +2899,7 @@ pub fn tick_sniper(
     mut commands: Commands,
     mut cues: ResMut<Queue<AudioCue>>,
     mask: Res<FloorMask>,
+    run: Res<Run>,
     player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
     mut enemies: Query<
         (Entity, &Enemy, &mut EnemyBrain, &mut Velocity, &mut Pos),
@@ -2724,6 +2910,7 @@ pub fn tick_sniper(
     let dt = time.delta_secs;
     let player_pos = player_q.single().ok().map(|p| p.0);
     let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p)| p.0).collect();
+    let solids = prop_shapes(&props);
     let mut rng = rand::rng();
     for (entity, enemy, mut brain, mut vel, mut pos) in &mut enemies {
         if enemy.kind != EnemyKind::Sniper {
@@ -2841,13 +3028,15 @@ pub fn tick_sniper(
             &mut brain,
             &mut vel,
             &mut pos,
-            &props,
+            &solids,
             &mask,
             &positions,
             epos,
             enemy_def(enemy.kind).radius,
             dt,
             true,
+            run.loop_count,
+            wall_law(enemy.kind),
         );
         zero_damage_contact_push(
             &mut brain,
@@ -2865,6 +3054,7 @@ pub fn tick_jungle_bandit(
     mut commands: Commands,
     mut cues: ResMut<Queue<AudioCue>>,
     mask: Res<FloorMask>,
+    run: Res<Run>,
     player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
     mut enemies: Query<
         (Entity, &Enemy, &mut EnemyBrain, &mut Velocity, &mut Pos),
@@ -2875,6 +3065,7 @@ pub fn tick_jungle_bandit(
     let dt = time.delta_secs;
     let player_pos = player_q.single().ok().map(|p| p.0);
     let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p)| p.0).collect();
+    let solids = prop_shapes(&props);
     let mut rng = rand::rng();
     for (entity, enemy, mut brain, mut vel, mut pos) in &mut enemies {
         if enemy.kind != EnemyKind::JungleBandit {
@@ -2988,13 +3179,15 @@ pub fn tick_jungle_bandit(
             &mut brain,
             &mut vel,
             &mut pos,
-            &props,
+            &solids,
             &mask,
             &positions,
             epos,
             enemy_def(enemy.kind).radius,
             dt,
             true,
+            run.loop_count,
+            wall_law(enemy.kind),
         );
         zero_damage_contact_push(
             &mut brain,
@@ -3012,6 +3205,7 @@ pub fn tick_melee_bandit(
     mut commands: Commands,
     mut cues: ResMut<Queue<AudioCue>>,
     mask: Res<FloorMask>,
+    run: Res<Run>,
     player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
     mut enemies: Query<
         (Entity, &Enemy, &mut EnemyBrain, &mut Velocity, &mut Pos),
@@ -3022,6 +3216,7 @@ pub fn tick_melee_bandit(
     let dt = time.delta_secs;
     let player_pos = player_q.single().ok().map(|p| p.0);
     let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p)| p.0).collect();
+    let solids = prop_shapes(&props);
     let mut rng = rand::rng();
     for (entity, enemy, mut brain, mut vel, mut pos) in &mut enemies {
         if enemy.kind != EnemyKind::MeleeBandit {
@@ -3043,7 +3238,8 @@ pub fn tick_melee_bandit(
             brain.attack =
                 GTimer::from_seconds((10.0 + rng.random_range(0.0..5.0)) / 30.0, TimerMode::Once);
             if let Some(target) = player_pos {
-                let target_dir = (target - epos).y.atan2((target - epos).x);
+                let aim_dir = (target - epos).y.atan2((target - epos).x);
+                let far_dir = (epos - target).y.atan2((epos - target).x);
                 if has_line_of_sight(epos, target, &mask) {
                     if epos.distance(target) < 64.0 {
                         brain.weapon_alarm = 20.0;
@@ -3051,7 +3247,7 @@ pub fn tick_melee_bandit(
                         brain.wepangle = -brain.wepangle;
                         let gunangle = brain.gunangle;
                         add_gml_motion(&mut brain, &mut vel, gunangle, 6.0, dt);
-                        brain.gunangle = target_dir;
+                        brain.gunangle = aim_dir;
                         brain.slash_delay = 10.0;
                         slash_armed_this_tick = true;
                         spawn_hit_warning(&mut commands, epos);
@@ -3063,11 +3259,11 @@ pub fn tick_melee_bandit(
                         set_gml_direction(
                             &mut brain,
                             &mut vel,
-                            target_dir + rng.random_range(-10.0_f32..10.0).to_radians(),
+                            far_dir + rng.random_range(-10.0_f32..10.0).to_radians(),
                         );
                         set_gml_speed(&mut brain, &mut vel, 0.4);
                         brain.walk = 40.0 + rng.random_range(0.0..10.0);
-                        brain.gunangle = target_dir;
+                        brain.gunangle = aim_dir;
                     }
                 } else if rng.random::<f32>() < 0.25 {
                     add_gml_motion(
@@ -3132,6 +3328,16 @@ pub fn tick_melee_bandit(
             if brain.slash_delay == 0.0 {
                 let heading = brain.heading;
                 add_gml_motion(&mut brain, &mut vel, heading, 2.0, dt);
+                if let Some(target) = player_pos {
+                    potential_step_solid(
+                        &mut pos.0,
+                        target,
+                        2.0,
+                        enemy_def(enemy.kind).radius,
+                        &solids,
+                        Some(&mask),
+                    );
+                }
             }
         }
         cap_gml_speed(&mut brain, &mut vel, 3.0);
@@ -3139,13 +3345,15 @@ pub fn tick_melee_bandit(
             &mut brain,
             &mut vel,
             &mut pos,
-            &props,
+            &solids,
             &mask,
             &positions,
             epos,
             enemy_def(enemy.kind).radius,
             dt,
             true,
+            run.loop_count,
+            wall_law(enemy.kind),
         );
         zero_damage_contact_push(
             &mut brain,
@@ -3162,6 +3370,7 @@ pub fn tick_ballguy(
     time: Res<SimTime>,
     mut cues: ResMut<Queue<AudioCue>>,
     mask: Res<FloorMask>,
+    run: Res<Run>,
     player_q: Query<(&Pos, &Health), (With<Player>, Without<Enemy>)>,
     mut enemies: Query<
         (
@@ -3180,6 +3389,7 @@ pub fn tick_ballguy(
     let dt = time.delta_secs;
     let player = player_q.single().ok().map(|(p, h)| (p.0, h.hp > 0));
     let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p, _, _)| p.0).collect();
+    let solids = prop_shapes(&props);
     let mut rng = rand::rng();
     for (_entity, enemy, mut brain, mut vel, mut pos, mut health, hurt) in &mut enemies {
         if enemy.kind != EnemyKind::Ballguy {
@@ -3236,13 +3446,15 @@ pub fn tick_ballguy(
             &mut brain,
             &mut vel,
             &mut pos,
-            &props,
+            &solids,
             &mask,
             &positions,
             epos,
             enemy_def(enemy.kind).radius,
             dt,
             true,
+            run.loop_count,
+            wall_law(enemy.kind),
         );
         if let Some((target, true)) = player
             && pos.0.distance(target) <= 8.0 + enemy_def(enemy.kind).radius
@@ -3833,21 +4045,16 @@ pub fn spawn_lil_hunter_trapfire(commands: &mut Commands, at: glam::Vec2, team: 
         let mut p = at + d * 12.0;
         p.x = p.x.clamp(-ARENA_W * 0.5 + 8.0, ARENA_W * 0.5 - 8.0);
         p.y = p.y.clamp(-ARENA_H * 0.5 + 8.0, ARENA_H * 0.5 - 8.0);
-        commands.spawn((
-            GameCleanup,
-            LevelCleanup,
+        crate::environment::spawn_trap_fire_with_image(
+            commands,
+            p,
+            d,
+            speed,
             team,
-            TrapFire,
-            HazardCloud {
-                kind: HazardKind::Fire,
-                radius: 10.0,
-                damage: 2,
-                timer: GTimer::from_seconds(4.0, TimerMode::Once),
-                tick: GTimer::from_seconds(0.5, TimerMode::Repeating),
-            },
-            Velocity(d * speed),
-            Pos(p),
-        ));
+            None,
+            "images/sprFireLilHunter.png",
+            Some(d.y.atan2(d.x)),
+        );
     }
 }
 
@@ -3942,45 +4149,107 @@ pub fn tick_lil_hunter_die(
 /// homing drift 0.1 px/tick toward the target at forced speed 2 px/tick,
 /// and on loops > 0 a trail bullet (`EnemyBullet1` stats: damage 3 at own
 /// speed + 2 px/tick) every `max(1, 12 - loops)` ticks.
-/// (`brain.ammo` doubles as the spawn-kick flag; wall bounce + hurt flash
-/// from `Collision_Wall` are out: port enemies clamp to the arena.)
 pub fn tick_scrap_missiles(
     time: Res<SimTime>,
     mut commands: Commands,
     run: Res<Run>,
+    mask: Res<FloorMask>,
+    catalog: Res<repame_anim::AnimCatalog>,
     player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
-    mut q: Query<(Entity, &Enemy, &mut EnemyBrain, &mut Velocity, &mut Pos), With<Enemy>>,
+    props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+    mut q: Query<
+        (
+            Entity,
+            &mut ScrapBossMissileState,
+            &mut Health,
+            &mut Velocity,
+            &mut Pos,
+            Option<&mut SpriteAnim>,
+        ),
+        (
+            With<ScrapBossMissileState>,
+            With<Enemy>,
+            Without<Player>,
+            Without<Prop>,
+        ),
+    >,
 ) {
-    let Ok(player_pos) = player_q.single() else {
-        return;
-    };
     let dt = time.delta_secs;
-    let period = (12u32.saturating_sub(run.loop_count).max(1) as f32) / 30.0;
-    let mut rng = rand::rng();
-    for (entity, enemy, mut brain, mut vel, mut pos) in &mut q {
-        if enemy.kind != EnemyKind::ScrapBossMissile {
+    let player_pos = player_q.single().ok().map(|p| p.0);
+    let solids = prop_shapes(&props);
+    for (entity, mut state, mut health, mut vel, mut pos, mut anim) in &mut q {
+        state.fuse.tick(dt);
+        if state.hurt {
+            state.hurt_timer.tick(dt);
+            if state.hurt_timer.just_finished() {
+                state.hurt = false;
+                commands.entity(entity).remove::<HurtAnim>();
+            }
+        }
+        if state.fuse.just_finished() {
+            health.hp = 0;
             continue;
         }
-        if brain.ammo == 0 {
-            // Spawn kick (`motion_add(random_angle, 2)`).
-            let a = rng.random_range(0.0..std::f32::consts::TAU);
-            vel.0 = glam::Vec2::from_angle(a) * 60.0;
-            brain.ammo = 1;
-            brain.strafe_timer = GTimer::from_seconds(period, TimerMode::Once);
+        if health.hp <= 0 {
+            continue;
         }
-        let to_player = player_pos.0 - pos.0;
-        gml_motion_add_clamp(&mut vel.0, to_player.normalize_or_zero(), 0.1, 2.0, dt);
+
+        if !state.hurt
+            && let Some(target) = player_pos
+        {
+            let to_player = target - pos.0;
+            gml_motion_add_clamp(&mut vel.0, to_player.normalize_or_zero(), 0.1, 2.0, dt);
+        }
         if vel.0.length_squared() > 0.001 {
             vel.0 = vel.0.normalize() * 60.0;
-        } else {
-            vel.0 = to_player.normalize_or_zero() * 60.0;
+        } else if let Some(target) = player_pos {
+            vel.0 = (target - pos.0).normalize_or_zero() * 60.0;
         }
+
+        let wall = move_bounce_solid(
+            &mut pos.0,
+            &mut vel.0,
+            SCRAP_BOSS_MISSILE_RADIUS,
+            dt,
+            &solids,
+            Some(&mask),
+            true,
+        );
+        if wall.is_some() {
+            health.hp -= 3;
+            state.hurt = true;
+            state.hurt_timer = GTimer::from_seconds(50.0 / 30.0, TimerMode::Once);
+            state.fuse = GTimer::from_seconds(50.0 / 30.0, TimerMode::Once);
+            if let Some(anim) = anim.as_deref_mut()
+                && let Some(def) = catalog.def("images/sprScrapBossMissileHurt.png")
+            {
+                anim.set_path("images/sprScrapBossMissileHurt.png", def, true);
+            }
+            commands.entity(entity).insert(HurtAnim {
+                idle: "images/sprScrapBossMissileIdle.png",
+                walk: Some("images/sprScrapBossMissileIdle.png"),
+                hurt: "images/sprScrapBossMissileHurt.png",
+                timer: GTimer::from_seconds(50.0 / 30.0, TimerMode::Once),
+                was_moving: false,
+            });
+        }
+
         if run.loop_count > 0 {
-            brain.strafe_timer.tick(dt);
-            if brain.strafe_timer.just_finished() {
-                brain.strafe_timer = GTimer::from_seconds(period, TimerMode::Once);
+            state.trail_timer.tick(dt);
+            if state.trail_timer.just_finished() {
+                state.trail_timer = GTimer::from_seconds(
+                    (12u32.saturating_sub(run.loop_count).max(1)) as f32 / 30.0,
+                    TimerMode::Once,
+                );
                 let heading = vel.0.normalize_or_zero();
-                commands.spawn((
+                let source = state
+                    .creator
+                    .map(|creator| DamageSource::enemy(creator, EnemyKind::BigDog))
+                    .or(Some(DamageSource::enemy(
+                        entity,
+                        EnemyKind::ScrapBossMissile,
+                    )));
+                let trail = commands.spawn((
                     GameCleanup,
                     LevelCleanup,
                     Team::Enemy,
@@ -3990,15 +4259,182 @@ pub fn tick_scrap_missiles(
                         radius: 4.0,
                         knockback: 120.0,
                         explosive: false,
-                        source: Some(DamageSource::enemy(entity, enemy.kind)),
+                        source,
                     },
+                    ProjectileTyp(1),
                     Velocity(heading * 120.0),
-                    Pos(pos.0 + heading * 10.0),
+                    Pos(pos.0),
                 ));
+                let _ = trail;
             }
         }
-        pos.0 += vel.0 * dt;
-        clamp_to_arena(&mut pos.0, 8.0);
+    }
+}
+
+pub fn tick_toxic_gas(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    run: Res<Run>,
+    mask: Res<FloorMask>,
+    props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+    frame: Res<CurrentFrame>,
+    mut sets: ParamSet<(
+        Query<
+            (
+                Entity,
+                &mut ToxicGasState,
+                &mut Pos,
+                &mut Velocity,
+                Option<&mut NativeAngle>,
+            ),
+            (With<ToxicGasState>, Without<Prop>),
+        >,
+        Query<
+            (
+                Entity,
+                &Pos,
+                &Team,
+                &Hitbox,
+                &mut Health,
+                Option<&mut NextHurt>,
+                Option<&Enemy>,
+                Option<&crate::comps_a::RaceState>,
+            ),
+            (
+                With<Hitbox>,
+                Or<(With<Enemy>, With<crate::comps_a::Player>)>,
+                Without<Projectile>,
+                Without<ToxicGasState>,
+                Without<Prop>,
+            ),
+        >,
+    )>,
+) {
+    let dt = time.delta_secs;
+    let solids = prop_shapes(&props);
+    let mut converted = Vec::<Entity>::new();
+    let gas_entities: Vec<Entity> = {
+        let gases = sets.p0();
+        gases.iter().map(|(entity, _, _, _, _)| entity).collect()
+    };
+    for gas_entity in gas_entities {
+        let gas_data = {
+            let mut gases = sets.p0();
+            let Ok((_, mut gas, mut pos, mut vel, angle)) = gases.get_mut(gas_entity) else {
+                continue;
+            };
+            gas.age += dt * 30.0;
+            if gas.age >= 10.0 {
+                gas.typ = 2;
+            }
+            apply_gml_friction(&mut vel.0, gas.friction, dt);
+            move_bounce_solid(
+                &mut pos.0,
+                &mut vel.0,
+                gas.radius,
+                dt,
+                &solids,
+                Some(&mask),
+                true,
+            );
+            if gas.scale + gas.grow_speed < 1.0 {
+                gas.scale += gas.grow_speed;
+            }
+            if gas.grow_speed > -0.005 {
+                gas.grow_speed -= 0.0002;
+            }
+            if gas.scale < 0.4 {
+                gas.grow_speed -= 0.01;
+                if let Some(mut angle) = angle {
+                    angle.0 += gas.rot.to_radians() * dt * 30.0;
+                }
+            }
+            if gas.scale < 0.0 {
+                commands.entity(gas_entity).despawn();
+                None
+            } else {
+                Some((pos.0, gas.radius))
+            }
+        };
+        let Some((gas_pos, gas_radius)) = gas_data else {
+            continue;
+        };
+
+        let target = {
+            let targets = sets.p1();
+            targets.iter().find_map(
+                |(
+                    target_entity,
+                    target_pos,
+                    target_team,
+                    target_hitbox,
+                    target_health,
+                    next_hurt,
+                    enemy,
+                    player_race,
+                )| {
+                    if converted.contains(&target_entity)
+                        || target_health.hp <= 0
+                        || gas_pos.distance(target_pos.0) > gas_radius + target_hitbox.radius
+                    {
+                        return None;
+                    }
+                    let kind = enemy.map(|e| e.kind);
+                    let conversion =
+                        *target_team == Team::Enemy && kind == Some(EnemyKind::Ballguy);
+                    if *target_team == Team::Enemy
+                        && matches!(
+                            kind,
+                            Some(EnemyKind::SuperFrog) | Some(EnemyKind::FrogQueen)
+                        )
+                    {
+                        return None;
+                    }
+                    if *target_team == Team::Player {
+                        if player_race.is_some_and(|race| race.race == crate::data::RaceId::Frog)
+                            || !target_health.invuln.is_finished()
+                        {
+                            return None;
+                        }
+                    } else if next_hurt.as_ref().is_some_and(|next| next.0 > frame.0) {
+                        return None;
+                    }
+                    Some((target_entity, target_pos.0, *target_team, conversion))
+                },
+            )
+        };
+        let Some((target_entity, target_pos, target_team, conversion)) = target else {
+            continue;
+        };
+        if conversion {
+            queue_enemy_spawn(
+                &mut commands,
+                EnemyKind::SuperFrog,
+                target_pos,
+                1.0,
+                run.loop_count,
+            );
+            commands.entity(target_entity).despawn();
+            converted.push(target_entity);
+            continue;
+        }
+
+        let mut targets = sets.p1();
+        let Ok((_, _, _, _, mut target_health, mut next_hurt, _, _)) =
+            targets.get_mut(target_entity)
+        else {
+            continue;
+        };
+        if target_team == Team::Player {
+            target_health.invuln = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
+        }
+        target_health.hp -= 1;
+        if target_team == Team::Enemy
+            && let Some(next) = next_hurt.as_deref_mut()
+        {
+            next.0 = frame.0 + 5;
+        }
+        commands.entity(gas_entity).despawn();
     }
 }
 
@@ -4066,20 +4502,20 @@ pub fn tick_mom_shots(
 ) {
     let mut rng = rand::rng();
     for (team, pos) in &q {
-        let off = glam::Vec2::new(rng.random_range(-2.0..=2.0), rng.random_range(0.0..=0.0));
-        commands.spawn((
-            GameCleanup,
-            LevelCleanup,
-            *team,
-            HazardCloud {
-                kind: crate::data::HazardKind::Toxic,
-                radius: 16.0,
-                damage: 1,
-                timer: GTimer::from_seconds(6.0, TimerMode::Once),
-                tick: GTimer::from_seconds(0.5, TimerMode::Repeating),
-            },
-            Pos(pos.0 + off),
-        ));
+        let off = glam::Vec2::new(rng.random_range(-2.0..=2.0), 0.0);
+        let a = rng.random_range(0.0..std::f32::consts::TAU);
+        let speed = rng.random_range(0.2..1.7) * 30.0;
+        let mut gas = ToxicGasState::new();
+        gas.grow_speed = 0.003 + rng.random_range(0.0..0.002);
+        gas.rot =
+            (1.0 + rng.random_range(0.0..=3.0)) * if rng.random_bool(0.5) { 1.0 } else { -1.0 };
+        spawn_toxic_gas(
+            &mut commands,
+            pos.0 + off,
+            glam::Vec2::from_angle(a) * speed,
+            gas,
+        );
+        let _ = team;
     }
 }
 
@@ -4342,6 +4778,7 @@ pub fn tick_elite_inspectors(
                             radius: 70.0,
                             count: 1,
                             spread: 0.0,
+                            visual: Some(crate::comps_b::NativeExplosionKind::Popo),
                         },
                         Velocity(ndir * 300.0),
                         Pos(epos + ndir * 12.0),

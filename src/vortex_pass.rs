@@ -12,7 +12,7 @@
 //! module and never touches this one.
 
 use repame_sprite::{FullscreenDesc, FullscreenPass, FullscreenTexture, TextureFilter};
-use repose_render_wgpu::{CallbackResources, ScreenDescriptor, WgpuCallback};
+use repose_render_wgpu::{CallbackRenderPass, CallbackResources, ScreenDescriptor, WgpuCallback};
 
 pub const VORTEX_WISPS: usize = 128;
 pub const VORTEX_DEBRIS: usize = 32;
@@ -173,7 +173,7 @@ impl WgpuCallback for VortexPass {
     fn paint(
         &self,
         info: repose_core::PaintCallbackInfo,
-        rpass: &mut wgpu::RenderPass<'static>,
+        rpass: &mut CallbackRenderPass<'_, '_>,
         resources: &CallbackResources,
     ) {
         self.pass.paint(info, rpass, resources);

@@ -2,7 +2,7 @@
 //! [`SpriteInstance`]s through the repame engine crates.
 //!
 //! Render split (renderer resolves art, sim owns truth):
-//! - [`RenderAssets`] packs `assets/images/anims.json` strips into a
+//! - [`RenderAssets`] packs `assets/images/anims.ron` strips into a
 //!   [`repame_anim::AnimCatalog`] once and decodes the strip PNGs (via
 //   the `image` crate — repame ships no image dep; per
 //   `repame-atlas` docs games decode their own pixels).
@@ -26,7 +26,7 @@
 //   paint with, so floaters sit on their sprites).
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -49,11 +49,12 @@ use crate::comps_a::{
     SlashProjectile, TILE, Team, Velocity, WallCell, WallTile,
 };
 use crate::comps_b::{
-    Beam, BossBrain, BossPhase, ChestKind, Corpse, Enemy, EnemyBrain, FxAngle, GroundDecalTint,
-    HazardCloud, Mote, MoteScale, OpenedChest, Pickup, PickupKind, PickupLifetime, Portal,
-    PortalClear, PortalShock, PortalStrike, Prop, PropSprites, StaticFx, SwingFx, Telekinesis,
-    ThroneCarpet, ThroneSit, TitleCampChar, TitleCampfire, TitleLogMenu, TitleTv, WeaponVisual,
-    YvCouch,
+    Beam, BigDogMissileState, BossBrain, BossPhase, ChestKind, Corpse, Enemy, EnemyBrain, FxAngle,
+    GmlImage, GroundDecalTint, HazardCloud, HurtAnim, MaggotSpawnCharge, Mote, MoteScale,
+    NativeAngle, NativeDepth, NativeFlip, NativeScale, OpenedChest, Pickup, PickupKind,
+    PickupLifetime, Portal, PortalClear, PortalShock, PortalStrike, Prop, PropSprites, StaticFx,
+    SwingFx, Telekinesis, ThroneCarpet, ThroneSit, TitleCampChar, TitleCampfire, TitleLogMenu,
+    TitleTv, ToxicGasState, WeaponVisual, YvCouch,
 };
 use crate::data::{
     AreaId, CrownKind, EnemyKind, HazardKind, MutationId, RaceId, UltraMutationId, WeaponId,
@@ -87,8 +88,8 @@ pub struct RenderAssets {
 }
 
 impl RenderAssets {
-    fn build(json: &str, assets_dir: &Path, desc: AtlasDesc) -> anyhow::Result<Self> {
-        let mut catalog = AnimCatalog::from_json(json, desc).map_err(|e| anyhow::anyhow!("{e}"))?;
+    fn build(text: &str, assets_dir: &Path, desc: AtlasDesc) -> anyhow::Result<Self> {
+        let mut catalog = AnimCatalog::from_ron(text, desc).map_err(|e| anyhow::anyhow!("{e}"))?;
         // Decode every strip PNG the catalog references. Missing art is a
         // magenta placeholder (visible bug, never a panic or a hole).
         let mut strips = HashMap::new();
@@ -147,12 +148,12 @@ impl RenderAssets {
         })
     }
 
-    /// Full production load: `assets_dir` holds `images/anims.json` +
+    /// Full production load: `assets_dir` holds `images/anims.ron` +
     /// the strip PNGs (e.g. `./assets`).
     pub fn load(assets_dir: &Path) -> anyhow::Result<Self> {
-        let json = crate::render::read_asset_json(&assets_dir.join("images").join("anims.json"))?;
+        let text = crate::render::read_asset_ron(&assets_dir.join("images").join("anims.ron"))?;
         Self::build(
-            &json,
+            &text,
             assets_dir,
             AtlasDesc {
                 size: ATLAS_SIZE,
@@ -176,23 +177,23 @@ impl RenderAssets {
         size: u32,
         max_pages: u32,
     ) -> anyhow::Result<Self> {
-        let json = crate::render::read_asset_json(&assets_dir.join("images").join("anims.json"))?;
-        let raw: HashMap<String, serde_json::Value> = serde_json::from_str(&json)?;
+        let text = crate::render::read_asset_ron(&assets_dir.join("images").join("anims.ron"))?;
+        let raw: BTreeMap<String, AnimDef> = ron::from_str(&text)?;
         let want: std::collections::HashSet<String> = names
             .iter()
             .map(|n| repame_anim::stem(n).to_string())
             .collect();
-        let filtered: HashMap<String, serde_json::Value> = raw
+        let filtered: BTreeMap<String, AnimDef> = raw
             .into_iter()
             .filter(|(k, _)| want.contains(repame_anim::stem(k)))
             .collect();
         anyhow::ensure!(
             filtered.len() == want.len(),
-            "subset strips missing from anims.json: want {want:?}, kept {}",
+            "subset strips missing from anims.ron: want {want:?}, kept {}",
             filtered.len()
         );
         Self::build(
-            &serde_json::to_string(&filtered)?,
+            &ron::ser::to_string(&filtered)?,
             assets_dir,
             AtlasDesc {
                 size,
@@ -359,8 +360,8 @@ pub(crate) fn decode_png(path: &Path) -> anyhow::Result<(u32, u32, Vec<u8>)> {
     Ok((w, h, rgba.into_raw()))
 }
 
-/// JSON asset text, same portable lookup as [`read_asset_bytes`].
-pub(crate) fn read_asset_json(path: &Path) -> anyhow::Result<String> {
+/// RON asset text, same portable lookup as [`read_asset_bytes`].
+pub(crate) fn read_asset_ron(path: &Path) -> anyhow::Result<String> {
     Ok(String::from_utf8(read_asset_bytes(path)?)?)
 }
 
@@ -368,7 +369,7 @@ pub(crate) fn read_asset_json(path: &Path) -> anyhow::Result<String> {
 /// (APK `assets/`, read through the NDK `AAssetManager` — plain
 /// `std::fs` paths never resolve inside the APK). Paths are matched by
 /// their `images/…` / `fonts/…` tail so both the dev checkout layout
-/// (`<dir>/images/anims.json`) and the APK layout (`assets/…`)
+/// (`<dir>/images/anims.ron`) and the APK layout (`assets/…`)
 /// resolve to the same entry.
 #[cfg(target_os = "android")]
 struct SendPtr(*mut std::ffi::c_void);
@@ -433,8 +434,9 @@ fn read_asset_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
 }
 
 /// Tail of an asset path from the first `images`/`fonts` segment, so
-/// `…/assets/images/anims.json` and `images/anims.json` both address
-/// the APK's `assets/images/anims.json` entry.
+/// `…/assets/images/anims.ron` and `images/anims.ron` both address
+/// the APK's `assets/images/anims.ron` entry.
+#[cfg(target_os = "android")]
 fn asset_tail(path: &Path) -> String {
     let parts: Vec<String> = path
         .components()
@@ -1329,7 +1331,9 @@ pub const Z_MENU: f32 = 20.0;
 /// next to the push order (single place both are visible).
 pub(crate) fn stamp_z(out: &mut [SpriteInstance], z: f32) {
     for s in out.iter_mut() {
-        s.z = z;
+        if s.z == 0.0 {
+            s.z = z;
+        }
     }
 }
 
@@ -1833,6 +1837,24 @@ pub fn sideart_sprites(
 
 fn flash_tint(flash: Option<&HitFlash>) -> [f32; 4] {
     flash.map(|f| f.color).unwrap_or([1.0, 1.0, 1.0, 1.0])
+}
+
+fn native_image_instance(
+    assets: &RenderAssets,
+    image: &GmlImage,
+    pos: Vec2,
+    angle: f32,
+    scale: Vec2,
+    flip: bool,
+    depth: f32,
+    tint: [f32; 4],
+) -> Option<SpriteInstance> {
+    let mut sprite = assets
+        .sprite_stretched(image.path, image.frame(), pos, scale, angle, tint)
+        .or_else(|| Some(white_quad(pos, angle, scale, tint)))?;
+    sprite.flip_x = flip;
+    sprite.z = -depth / 5.0;
+    Some(sprite)
 }
 
 /// Snapshot the sim world into GPU sprites (draw order = push order,
@@ -2506,8 +2528,10 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             Option<&SpriteAnim>,
             Option<&HitFlash>,
             Option<&EnemyBrain>,
+            Option<&HurtAnim>,
+            Option<&MaggotSpawnCharge>,
         )>();
-        for (pos, enemy, _vel, _aim, _anim, _flash, brain) in q.iter(world) {
+        for (pos, enemy, _vel, _aim, _anim, _flash, brain, _hurt, _charge) in q.iter(world) {
             if enemy.kind != EnemyKind::Sniper {
                 continue;
             }
@@ -2549,7 +2573,7 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             }
         }
         // Guns behind.
-        for (pos, enemy, vel, aim, _anim, _flash, brain) in q.iter(world) {
+        for (pos, enemy, vel, aim, _anim, _flash, brain, _hurt, _charge) in q.iter(world) {
             let Some(gun_path) = enemy_gun_art(enemy.kind) else {
                 continue;
             };
@@ -2575,19 +2599,32 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             }
         }
         // Bodies.
-        for (pos, enemy, vel, aim, anim, flash, _brain) in q.iter(world) {
-            let (path, frame) = match anim {
-                Some(a) => (a.path.as_str(), a.frame as i32),
-                None => (crate::enemy_data::enemy_def(enemy.kind).sprite, 0),
+        for (pos, enemy, vel, aim, anim, flash, brain, hurt, charge) in q.iter(world) {
+            let (path, frame) = if hurt.is_none()
+                && let Some(charge) = charge
+            {
+                (charge.image.path, charge.image.frame())
+            } else {
+                match anim {
+                    Some(a) => (a.path.as_str(), a.frame as i32),
+                    None => (crate::enemy_data::enemy_def(enemy.kind).sprite, 0),
+                }
             };
-            let flip = vel.map(|v| v.0.x < 0.0).unwrap_or(false)
-                || aim.map(|a| a.0.x < 0.0).unwrap_or(false);
+            let flip = if enemy.kind == EnemyKind::MaggotSpawn {
+                charge
+                    .map(|c| c.facing < 0.0)
+                    .or_else(|| brain.map(|b| b.maggot_spawn_facing < 0.0))
+                    .unwrap_or(false)
+            } else {
+                vel.map(|v| v.0.x < 0.0).unwrap_or(false)
+                    || aim.map(|a| a.0.x < 0.0).unwrap_or(false)
+            };
             if let Some(s) = assets.sprite_for(path, frame, pos.0, flip, 0.0, flash_tint(flash)) {
                 out.push(s);
             }
         }
         // Guns in front.
-        for (pos, enemy, vel, aim, _anim, _flash, brain) in q.iter(world) {
+        for (pos, enemy, vel, aim, _anim, _flash, brain, _hurt, _charge) in q.iter(world) {
             let Some(gun_path) = enemy_gun_art(enemy.kind) else {
                 continue;
             };
@@ -2610,6 +2647,60 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                 assets.sprite_for_full(gun_path, 0, gun_pos, false, flip, draw_angle, [1.0; 4])
             {
                 out.push(s);
+            }
+        }
+    }
+
+    {
+        let mut q = world.query::<(
+            &Pos,
+            &BigDogMissileState,
+            Option<&Velocity>,
+            Option<&GmlImage>,
+            Option<&NativeAngle>,
+            Option<&NativeDepth>,
+            Option<&HitFlash>,
+        )>();
+        for (pos, state, vel, image, native_angle, depth, flash) in q.iter(world) {
+            let rotation = native_angle
+                .map(|a| a.0)
+                .or_else(|| {
+                    vel.filter(|v| v.0.length_squared() > 1e-6)
+                        .map(|v| v.0.y.atan2(v.0.x))
+                })
+                .unwrap_or(0.0);
+            let (body_path, body_frame) = image.map_or_else(
+                || ("images/sprScrapBossMissileIdle.png", 0),
+                |image| (image.path, image.frame()),
+            );
+            let body_depth = depth.map(|d| d.0).unwrap_or(-2.0);
+            let mut body = assets
+                .sprite_for(
+                    body_path,
+                    body_frame,
+                    pos.0,
+                    false,
+                    rotation,
+                    flash_tint(flash),
+                )
+                .unwrap_or_else(|| {
+                    white_quad(pos.0, rotation, Vec2::splat(16.0), flash_tint(flash))
+                });
+            body.z = -body_depth / 5.0;
+            let trail_frames = strip_frames(assets, "images/sprScrapBossMissileTrail.png").max(1);
+            let trail_frame = (state.trail_timer as i32).rem_euclid(trail_frames as i32);
+            let body_z = body.z;
+            out.push(body);
+            if let Some(mut trail) = assets.sprite_for(
+                "images/sprScrapBossMissileTrail.png",
+                trail_frame,
+                pos.0,
+                false,
+                rotation,
+                [1.0; 4],
+            ) {
+                trail.z = body_z + 0.001;
+                out.push(trail);
             }
         }
     }
@@ -2921,11 +3012,49 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             Option<&SlashProjectile>,
             Option<&GrenadeFuse>,
             Option<&crate::comps_a::ProjectileVisual>,
+            Option<&GmlImage>,
+            Option<&NativeScale>,
+            Option<&NativeAngle>,
+            Option<&NativeFlip>,
+            Option<&NativeDepth>,
         )>();
-        for (pos, proj, vel, team, slash, fuse, visual) in q.iter(world) {
+        for (
+            pos,
+            proj,
+            vel,
+            team,
+            slash,
+            fuse,
+            visual,
+            image,
+            native_scale,
+            native_angle,
+            flip,
+            depth,
+        ) in q.iter(world)
+        {
+            if let Some(image) = image {
+                let rotation = native_angle.map(|a| a.0).unwrap_or_else(|| {
+                    vel.filter(|v| v.0.length_squared() > 1e-6)
+                        .map(|v| v.0.y.atan2(v.0.x))
+                        .unwrap_or(0.0)
+                });
+                if let Some(sprite) = native_image_instance(
+                    assets,
+                    image,
+                    pos.0,
+                    rotation,
+                    native_scale.map(|s| s.0).unwrap_or(Vec2::ONE),
+                    flip.is_some_and(|f| f.0),
+                    depth.map(|d| d.0).unwrap_or(0.0),
+                    [1.0; 4],
+                ) {
+                    out.push(sprite);
+                }
+                continue;
+            }
             let path = projectile_art(proj, team, slash, visual);
             let frame = projectile_frame(assets, path, &proj.life);
-            // Slashes freeze at spawn without this
             let rotation = match slash {
                 Some(s) => s.dir.y.atan2(s.dir.x),
                 None => vel
@@ -2953,6 +3082,63 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             };
             if let Some(s) = assets.sprite_for(path, frame, pos.0, false, rotation, tint) {
                 out.push(s);
+            }
+        }
+    }
+
+    {
+        let mut q = world.query::<(
+            &Pos,
+            &GmlImage,
+            Option<&NativeScale>,
+            Option<&MoteScale>,
+            Option<&NativeAngle>,
+            Option<&FxAngle>,
+            Option<&NativeFlip>,
+            Option<&NativeDepth>,
+            Option<&ToxicGasState>,
+            Option<&Enemy>,
+            Option<&Projectile>,
+            Option<&BigDogMissileState>,
+        )>();
+        for (
+            pos,
+            image,
+            native_scale,
+            mote_scale,
+            native_angle,
+            fx_angle,
+            flip,
+            depth,
+            gas,
+            enemy,
+            projectile,
+            missile,
+        ) in q.iter(world)
+        {
+            if enemy.is_some() || projectile.is_some() || missile.is_some() {
+                continue;
+            }
+            let scale = native_scale
+                .map(|s| s.0)
+                .or_else(|| mote_scale.map(|s| Vec2::splat(s.0.max(0.0))))
+                .or_else(|| gas.map(|s| Vec2::splat(s.scale.max(0.0))))
+                .unwrap_or(Vec2::ONE);
+            let angle = native_angle
+                .map(|a| a.0)
+                .or_else(|| fx_angle.map(|a| a.0))
+                .unwrap_or(0.0);
+            if let Some(sprite) = native_image_instance(
+                assets,
+                image,
+                pos.0,
+                angle,
+                scale,
+                flip.is_some_and(|f| f.0),
+                depth.map(|d| d.0).unwrap_or(0.0),
+                [1.0; 4],
+            ) {
+                out.push(sprite);
             }
         }
     }
@@ -4021,9 +4207,6 @@ const GUI_UIDARK: [u8; 4] = [51, 51, 51, 255];
 const GUI_WHITE: [u8; 4] = [255, 255, 255, 255];
 const GUI_RED2: [u8; 4] = [221, 56, 45, 255];
 const GUI_GREEN: [u8; 4] = [98, 220, 88, 255];
-/// GML yellow `(250, 171, 0)` (`draw_text_nt` `@y` tag,
-/// `scripts/draw_text_nt/draw_text_nt.gml:218`).
-const GUI_GOLD: [u8; 4] = [250, 171, 0, 255];
 
 fn gui_body(text: impl Into<String>, gx: f32, gy: f32, color: [u8; 4]) -> MenuGuiText {
     MenuGuiText {
@@ -8555,7 +8738,6 @@ pub fn touch_sprites(
     let view = view_rect_world(canvas_dp, world_size, cam);
     let gm = hud_gui_map(view);
     let vw = view[2];
-    let gui_to_world = |x: f32, y: f32| hud_gui_to_world(gm, view, x, y);
     let scale_opt = settings.map(|s| s.controls_scale.min(1.0)).unwrap_or(0.5);
     let scale = (1.0 + scale_opt).min(1.5);
     let split_fire = settings.map(|s| s.split_fire).unwrap_or(false);

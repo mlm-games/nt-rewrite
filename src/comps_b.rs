@@ -20,6 +20,7 @@ pub struct CustomExplosion {
     /// (e.g. Nuke 8x @12px, Sticky-stuck 3x @16px). Single-circle when count <= 1.
     pub count: u8,
     pub spread: f32,
+    pub visual: Option<NativeExplosionKind>,
 }
 
 impl Default for CustomExplosion {
@@ -28,6 +29,7 @@ impl Default for CustomExplosion {
             radius: 32.0,
             count: 1,
             spread: 0.0,
+            visual: None,
         }
     }
 }
@@ -428,6 +430,108 @@ pub struct EnemyBrain {
     pub sniper_aiming: bool,
 
     pub maggot_spawn_charging: bool,
+
+    pub maggot_spawn_charge_ticks: f32,
+
+    pub maggot_spawn_facing: f32,
+}
+
+pub const SCRAP_BOSS_MISSILE_HP: i32 = 22;
+pub const SCRAP_BOSS_MISSILE_RADIUS: f32 = 6.0;
+pub const BIG_DOG_MISSILE_HP: i32 = 22;
+pub const BIG_DOG_MISSILE_RADIUS: f32 = 6.0;
+pub const BIG_DOG_MISSILE_DAMAGE: i32 = 5;
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct ScrapBossMissileState {
+    pub creator: Option<Entity>,
+    pub fuse: Timer,
+    pub hurt_timer: Timer,
+    pub trail_timer: Timer,
+    pub hurt: bool,
+}
+
+impl ScrapBossMissileState {
+    pub fn new(loops: u32) -> Self {
+        let trail = if loops > 0 {
+            Timer::from_seconds(
+                (12u32.saturating_sub(loops).max(1)) as f32 / 30.0,
+                TimerMode::Once,
+            )
+        } else {
+            Timer::disarmed()
+        };
+        Self {
+            creator: None,
+            fuse: Timer::disarmed(),
+            hurt_timer: Timer::disarmed(),
+            trail_timer: trail,
+            hurt: false,
+        }
+    }
+}
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct BigDogMissileState {
+    pub creator: Entity,
+    pub throne_butt: bool,
+    pub fuse: Timer,
+    pub hurt_timer: Timer,
+    pub trail_timer: u8,
+}
+
+impl BigDogMissileState {
+    pub fn new(creator: Entity) -> Self {
+        Self {
+            creator,
+            throne_butt: false,
+            fuse: Timer::disarmed(),
+            hurt_timer: Timer::disarmed(),
+            trail_timer: 0,
+        }
+    }
+
+    pub fn hurt_from_projectile(&mut self) {
+        self.hurt_timer = Timer::from_seconds(50.0 / 30.0, TimerMode::Once);
+        self.fuse = Timer::from_seconds(50.0 / 30.0, TimerMode::Once);
+    }
+
+    pub fn hit_enemy(&mut self) {
+        self.fuse = Timer::from_seconds(30.0 / 30.0, TimerMode::Once);
+    }
+}
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct ToxicGasState {
+    pub age: f32,
+    pub typ: u8,
+    pub friction: f32,
+    pub radius: f32,
+    pub scale: f32,
+    pub grow_speed: f32,
+    pub rot: f32,
+    pub speed_bonus: f32,
+}
+
+impl ToxicGasState {
+    pub fn new() -> Self {
+        Self {
+            age: 0.0,
+            typ: 0,
+            friction: 0.01,
+            radius: 16.0,
+            scale: 0.6,
+            grow_speed: 0.003,
+            rot: 1.0,
+            speed_bonus: 0.0,
+        }
+    }
+}
+
+impl Default for ToxicGasState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -728,6 +832,148 @@ pub struct GroundPhysics {
     pub rotspeed: f32,
 }
 
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeWallMotion {
+    Stop,
+    Bounce,
+    BounceEveryThird,
+}
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct GmlImage {
+    pub path: &'static str,
+    pub frames: u32,
+    pub phase: f32,
+    pub image_speed: f32,
+    pub looping: bool,
+    pub finished: bool,
+    pub destroy_on_end: bool,
+}
+
+impl GmlImage {
+    pub fn new(path: &'static str, frames: u32, image_speed: f32) -> Self {
+        Self {
+            path,
+            frames: frames.max(1),
+            phase: 0.0,
+            image_speed,
+            looping: true,
+            finished: false,
+            destroy_on_end: false,
+        }
+    }
+
+    pub fn animated(
+        path: &'static str,
+        frames: u32,
+        image_speed: f32,
+        destroy_on_end: bool,
+    ) -> Self {
+        Self {
+            looping: !destroy_on_end,
+            destroy_on_end,
+            ..Self::new(path, frames, image_speed)
+        }
+    }
+
+    pub fn set_path(&mut self, path: &'static str, frames: u32) {
+        self.path = path;
+        self.frames = frames.max(1);
+        self.phase = 0.0;
+        self.finished = false;
+    }
+
+    pub fn frame(&self) -> i32 {
+        let frame = if self.looping {
+            self.phase.rem_euclid(self.frames.max(1) as f32)
+        } else {
+            self.phase
+        };
+        (frame.floor() as i32).clamp(0, self.frames.max(1) as i32 - 1)
+    }
+
+    pub fn advance(&mut self, steps: f32) -> bool {
+        if self.finished || self.image_speed == 0.0 {
+            return false;
+        }
+        self.phase += self.image_speed * steps;
+        if self.phase < self.frames.max(1) as f32 {
+            return false;
+        }
+        if self.looping {
+            self.phase %= self.frames.max(1) as f32;
+            false
+        } else {
+            self.phase = self.frames.max(1) as f32;
+            self.finished = true;
+            true
+        }
+    }
+}
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct NativeLifetime {
+    pub ticks: f32,
+}
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct NativeMotion {
+    pub velocity: Vec2,
+    pub friction: f32,
+    pub radius: f32,
+    pub wall: NativeWallMotion,
+    pub tick: u32,
+}
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct NativeScale(pub Vec2);
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct NativeAngle(pub f32);
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct NativeFlip(pub bool);
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct NativeDepth(pub f32);
+
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeExplosionKind {
+    Standard,
+    Small,
+    Green,
+    Meat,
+    Popo,
+}
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct ExplosionVisual(pub NativeExplosionKind);
+
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct TopSmall;
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct MaggotSpawnCharge {
+    pub image: GmlImage,
+    pub facing: f32,
+    pub ticks_left: f32,
+    pub duration: f32,
+}
+
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct MaggotSpawnInternalDrain;
+
+impl MaggotSpawnCharge {
+    pub fn new() -> Self {
+        Self {
+            image: GmlImage::new("images/sprMSpawnChrg.png", 4, 0.4),
+            facing: 1.0,
+            ticks_left: 19.0,
+            duration: 19.0,
+        }
+    }
+}
+
 /// GML `Dust`/`Smoke`/`Feather`/`Curse` motes: sprite debris with its
 /// own friction, spin, and scale law. `strip` selects the art
 /// (`sprDust`, `sprSmoke`, `sprRavenFeather`/`sprLeaf`/`sprMoney` set
@@ -743,6 +989,11 @@ pub struct Mote {
     pub grow: f32,
     pub grow_decay: f32,
     pub sway: bool,
+    pub lifetime: Option<f32>,
+    pub fall: Option<f32>,
+    pub bounce_period: u8,
+    pub kill_on_spiral: bool,
+    pub tick: u32,
 }
 
 /// Mote visual scale (`image_xscale`/`image_yscale` verbatim): dust
@@ -788,6 +1039,7 @@ pub struct EnemySprites {
     pub idle: &'static str,
     pub walk: Option<&'static str>,
     pub hurt: &'static str,
+    pub charge: Option<&'static str>,
 }
 
 #[derive(Component)]

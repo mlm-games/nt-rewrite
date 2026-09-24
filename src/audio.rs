@@ -1266,9 +1266,9 @@ pub fn flush_queued_cues(
 pub fn play_reactive_audio_requests(
     time: Option<Res<SimTime>>,
     channels: Option<Res<AudioChannels>>,
-    mut state: Option<ResMut<ReactiveAudioState>>,
-    mut requests: Option<ResMut<Queue<ReactiveAudioRequest>>>,
-    mut out: Option<ResMut<Queue<ResolvedReactiveCue>>>,
+    state: Option<ResMut<ReactiveAudioState>>,
+    requests: Option<ResMut<Queue<ReactiveAudioRequest>>>,
+    out: Option<ResMut<Queue<ResolvedReactiveCue>>>,
 ) {
     let (Some(time), Some(channels), Some(mut state), Some(mut requests), Some(mut out)) =
         (time, channels, state, requests, out)

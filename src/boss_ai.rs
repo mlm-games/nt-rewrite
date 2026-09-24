@@ -36,19 +36,19 @@ use crate::anim::SpriteAnim;
 use crate::audio::AudioCue;
 use crate::combat::{Explosion, queue_enemy_spawn, queue_enemy_spawn_no_kill};
 use crate::comps_a::{
-    BossIntro, DamageSource, GameCleanup, Health, Hitbox, LevelCleanup, NextHurt, PendingWallBreak,
-    Player, Projectile, RaceState, Run, Team, Toast, Velocity, WallCell, WallTile,
-    apply_gml_friction, gml_motion_add_clamp,
+    BossIntro, DamageSource, FloorMask, GameCleanup, Health, Hitbox, LevelCleanup, NextHurt,
+    PendingWallBreak, Player, Projectile, RaceState, Run, Team, Toast, Velocity, WallCell,
+    WallTile, apply_gml_friction, gml_motion_add_clamp,
 };
 use crate::comps_b::{
-    Beam, BossBrain, BossPhase, Enemy, EnemyBrain, HazardCloud, HurtAnim, HyperOrbitCrystal,
-    InvisiWall, MomShot, Portal, PortalClear, Prop, ThroneBall, ThroneStatueProp,
+    Beam, BossBrain, BossPhase, Enemy, EnemyBrain, HurtAnim, HyperOrbitCrystal, InvisiWall,
+    MomShot, Portal, PortalClear, Prop, ThroneBall, ThroneStatueProp,
 };
 use crate::data::{AreaId, EnemyKind};
 use crate::enemies::show_enemy_fire;
 use crate::enemy_data::{EnemyDef, enemy_def};
 use crate::msg::Queue;
-use crate::spatial::{Pos, clamp_to_arena, resolve_prop_collision};
+use crate::spatial::{Pos, clamp_to_arena, move_bounce_solid, resolve_prop_collision};
 use crate::time::{GTimer, TimerMode};
 
 // ---------------------------------------------------------------------------
@@ -437,6 +437,7 @@ pub fn boss_ai(
     portals: Query<Entity, With<Portal>>,
     wall_ids: Query<(Entity, &Pos), (With<WallTile>, Without<Enemy>)>,
     catalog: Res<repame_anim::AnimCatalog>,
+    mask: Res<FloorMask>,
 ) {
     let Ok((player_pos, player_vel, race_state)) = player_q.single() else {
         return;
@@ -531,6 +532,7 @@ pub fn boss_ai(
                 player_pos,
                 dt,
                 &prop_shapes,
+                &mask,
                 run.loop_count,
                 missile_count,
             ),
@@ -916,8 +918,6 @@ fn big_bandit_ai(
 /// Register map: `attack_timer` = `alarm[0]`, `special_timer` = `alarm[1]`,
 /// `brain.ammo` = `ammo`, `boss.aux` = `turn`, `brain.walk` = `walk`,
 /// `brain.gunangle` = `gunangle` (radians), `boss.target` = move heading.
-/// (Wall bounce from `Collision_Wall` is out: port enemies do not collide
-/// walls, they clamp to the arena.)
 #[allow(clippy::too_many_arguments)]
 fn big_dog_ai(
     commands: &mut Commands,
@@ -933,6 +933,7 @@ fn big_dog_ai(
     player_pos: glam::Vec2,
     dt: f32,
     props: &[(glam::Vec2, glam::Vec2)],
+    mask: &FloorMask,
     loop_count: u32,
     missiles: usize,
 ) -> bool {
@@ -1042,8 +1043,15 @@ fn big_dog_ai(
     if brain.ammo > 0 && vel.0.length_squared() > 0.001 {
         vel.0 = vel.0.normalize() * 30.0;
     }
-    pos.0 += vel.0 * dt;
-    resolve_prop_collision(&mut pos.0, def.radius, props.iter().copied());
+    move_bounce_solid(
+        &mut pos.0,
+        &mut vel.0,
+        def.radius,
+        dt,
+        props,
+        Some(mask),
+        true,
+    );
     let _ = trauma;
     fired
 }
@@ -1335,24 +1343,22 @@ fn lil_hunter_ai(
 /// 2 px/tick stepping 4.5 degrees): short-lived fire clouds fanning out
 /// from the impact.
 pub fn lil_hunter_fire_ring(commands: &mut Commands, at: glam::Vec2) {
-    use crate::data::HazardKind;
-    let mut ang = rand::rng().random_range(0.0..std::f32::consts::TAU);
+    let mut rng = rand::rng();
+    let mut ang = rng.random_range(0.0..std::f32::consts::TAU);
     for _ in 0..80 {
         ang += 4.5_f32.to_radians();
         let d = glam::Vec2::from_angle(ang);
-        commands.spawn((
-            GameCleanup,
-            LevelCleanup,
+        let speed = (2.0 + rng.random_range(0.0..0.2)) * 30.0;
+        crate::environment::spawn_trap_fire_with_image(
+            commands,
+            at + d * 36.0,
+            d,
+            speed,
             Team::Enemy,
-            HazardCloud {
-                kind: HazardKind::Fire,
-                radius: 10.0,
-                damage: 2,
-                timer: GTimer::from_seconds(4.0, TimerMode::Once),
-                tick: GTimer::from_seconds(0.5, TimerMode::Repeating),
-            },
-            Pos(at + d * 36.0),
-        ));
+            None,
+            "images/sprFireLilHunter.png",
+            Some(d.y.atan2(d.x)),
+        );
     }
 }
 

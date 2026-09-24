@@ -130,6 +130,7 @@ pub fn build_sim_schedule() -> Schedule {
         (
             (
                 anim::animate_sprites.in_set(NtSimSet::Always),
+                anim::tick_gml_images.in_set(NtSimSet::Always),
                 pickups::tick_toast.in_set(NtSimSet::Always),
                 secrets::observe_oasis_floor_start.in_set(NtSimSet::Always),
                 secrets::detect_oasis_eligibility.in_set(NtSimSet::Always),
@@ -177,7 +178,8 @@ pub fn build_sim_schedule() -> Schedule {
                 (
                     progression::tick_portal_suck.in_set(NtSimSet::Always),
                     progression::tick_throne_sit.in_set(NtSimSet::Always),
-                ),
+                )
+                    .chain(),
                 progression::tick_floor_transition.in_set(NtSimSet::Always),
                 anim::tick_fire_anims.in_set(NtSimSet::Always),
                 enemies::tick_hit_warnings.in_set(NtSimSet::Always),
@@ -198,6 +200,7 @@ pub fn build_sim_schedule() -> Schedule {
             // group above stays under the 20-node tuple cap.
             (
                 effects::tick_fired_weapons.in_set(NtSimSet::Always),
+                environment::tick_native_lifetimes.in_set(NtSimSet::Always),
                 effects::step_fx.in_set(NtSimSet::Always),
                 audio::flush_queued_cues.in_set(NtSimSet::Always),
                 audio::play_reactive_audio_requests.in_set(NtSimSet::Always),
@@ -241,7 +244,8 @@ pub fn build_sim_schedule() -> Schedule {
                     player::player_post_fire_speed_cap
                         .in_set(NtSimSet::Combat)
                         .run_if(gameplay_active),
-                ),
+                )
+                    .chain(),
                 player_fire::move_swing_fx
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
@@ -342,7 +346,8 @@ pub fn build_sim_schedule() -> Schedule {
                     combat::tick_throne_victory
                         .in_set(NtSimSet::Combat)
                         .run_if(gameplay_active),
-                ),
+                )
+                    .chain(),
                 enemies::tick_delayed_boss_spawns
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
@@ -439,6 +444,12 @@ pub fn build_sim_schedule() -> Schedule {
                 combat::move_projectiles
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
+                player_fire::tick_big_dog_missiles
+                    .in_set(NtSimSet::Combat)
+                    .run_if(gameplay_active),
+                enemies::tick_toxic_gas
+                    .in_set(NtSimSet::Combat)
+                    .run_if(gameplay_active),
                 environment::apply_surface_effects
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
@@ -446,6 +457,12 @@ pub fn build_sim_schedule() -> Schedule {
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
                 environment::tick_motes
+                    .in_set(NtSimSet::Combat)
+                    .run_if(gameplay_active),
+                environment::tick_native_motion
+                    .in_set(NtSimSet::Combat)
+                    .run_if(gameplay_active),
+                environment::tick_ground_flames
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
                 combat::tick_hazard_clouds

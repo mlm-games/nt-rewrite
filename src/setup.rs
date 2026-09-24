@@ -61,7 +61,7 @@ use crate::savedata_part::{PassiveKind, SaveData, character_def};
 use crate::spatial::Pos;
 use crate::time::GTimer;
 use crate::weapon_runtime::{sanitize_weapon_id, weapon_ammo};
-use crate::worldgen::{self, ChestSpawn, LevelPlan, PropKind, is_screen_end_wall};
+use crate::worldgen::{self, ChestSpawn, LevelPlan, PopulationEvent, PropKind, is_screen_end_wall};
 
 /// Floor mask from a generated plan (bevy parity: cells verbatim,
 /// dims from the arena constants).
@@ -774,7 +774,7 @@ fn prop_hash_flip(seed: u64, pos: glam::Vec2, salt: u64) -> bool {
 /// art paths but attach no strips (spawn fns skip missing defs, bevy
 /// `catalog.has` parity via `catalog.def(...).is_some()`).
 pub fn empty_anim_catalog() -> repame_anim::AnimCatalog {
-    repame_anim::AnimCatalog::from_json(
+    repame_anim::AnimCatalog::from_ron(
         "{}",
         repame_anim::AtlasDesc {
             size: 128,
@@ -1528,102 +1528,127 @@ pub fn spawn_level(
     }
     spawn_wall_tiles(&mut *commands, wall_set.into_iter().collect(), &floor_set);
 
-    for (kind, pos) in &plan.props {
-        spawn_prop_sim(commands, catalog, run, *kind, *pos);
-    }
-
     spawn_secret_entrances(commands, catalog, run);
 
-    // Bandit-camp spots (GML `scrPopulate`: every free weapon/ammo/rad
-    // chest camps a Bandit; `BigWeaponChest` and `RadMaggotChest` are
-    // excluded, everything else qualifies).
+    let mut events = plan.population_events.clone();
+    if events.is_empty() {
+        events.extend(
+            plan.enemies
+                .iter()
+                .copied()
+                .map(|(kind, pos)| PopulationEvent::Enemy { kind, pos }),
+        );
+        events.extend(
+            plan.props
+                .iter()
+                .copied()
+                .map(|(kind, pos)| PopulationEvent::Prop { kind, pos }),
+        );
+        events.extend(plan.chests.iter().copied().map(PopulationEvent::Chest));
+    }
+
     let mut bandit_spots: Vec<glam::Vec2> = Vec::new();
-    for chest in &plan.chests {
-        match *chest {
-            // GML `scrPopChests` cursed-caves arm: every WeaponChest
-            // becomes a CursedBigChest plus a `PortalClear`.
-            ChestSpawn::Weapon(p) if run.area == AreaId::CursedCaves => {
-                spawn_chest(commands, catalog, ChestKind::CursedBig, p);
-                commands.spawn((
-                    GameCleanup,
-                    LevelCleanup,
-                    PortalClear {
-                        timer: crate::time::GTimer::from_seconds(
-                            5.0 / 30.0,
-                            crate::time::TimerMode::Once,
-                        ),
-                        scale: 1.0,
-                    },
-                    crate::spatial::Pos(p),
-                ));
-                bandit_spots.push(p);
-            }
-            ChestSpawn::Weapon(p) => {
-                spawn_chest(commands, catalog, ChestKind::Weapon, p);
-                bandit_spots.push(p);
-            }
-            ChestSpawn::Ammo(p) => {
-                spawn_chest(commands, catalog, ChestKind::Ammo, p);
-                bandit_spots.push(p);
-            }
-            ChestSpawn::Custom(kind, p) => {
-                spawn_chest(commands, catalog, kind, p);
-                // GML excludes only the mimic-rolled `BigWeaponChest` (a
-                // `WeaponChest` child with a foreign object id) and the
-                // `RadMaggotChest` (`with RadChest` skips it).
-                if !matches!(kind, ChestKind::BigWeapon | ChestKind::RadMaggot) {
-                    bandit_spots.push(p);
-                }
-            }
-            ChestSpawn::Rad(p) => {
-                spawn_rad_container(commands, catalog, run.gen_seed, p);
-                bandit_spots.push(p);
+    for event in &events {
+        let chest = match event {
+            PopulationEvent::Chest(chest) => chest,
+            _ => continue,
+        };
+        let (kind, pos) = match *chest {
+            ChestSpawn::Weapon(p) => (None, p),
+            ChestSpawn::Ammo(p) => (None, p),
+            ChestSpawn::Rad(p) => (None, p),
+            ChestSpawn::Custom(kind, p) => (Some(kind), p),
+        };
+        let qualifies = match kind {
+            Some(kind) => !matches!(kind, ChestKind::BigWeapon | ChestKind::RadMaggot),
+            None => true,
+        };
+        if qualifies {
+            bandit_spots.push(pos);
+        }
+    }
+
+    let g = crate::worldgen::gml_area_from_run(run);
+    if !run.tutorial && (g < 5 || g > 100) && g != 103 && g != 106 {
+        for spot in bandit_spots {
+            if mask.is_walkable(spot) {
+                events.push(PopulationEvent::Enemy {
+                    kind: EnemyKind::Bandit,
+                    pos: spot,
+                });
             }
         }
     }
+
+    let mut cluster_rng = StdRng::seed_from_u64(run.gen_seed);
+    let _ = worldgen::apply_loop_population_clusters(
+        &mut events,
+        run.loop_count,
+        run.area,
+        &mut cluster_rng,
+    );
 
     let difficulty = difficulty_multiplier(run.floor);
     let spawn_context = EnemySpawnContext {
         subarea: run.floor_in_area,
         blood_crown: run.blood_crown,
     };
-    for (kind, pos) in &plan.enemies {
-        spawn_enemy_at(
-            commands,
-            catalog,
-            *kind,
-            *pos,
-            difficulty,
-            false,
-            false,
-            run.loop_count,
-            spawn_context,
-        );
-    }
-
-    // GML `scrPopulate` bandit camps: a Bandit on every free chest spot,
-    // except Crown-Vault-style finale floors (which hold no chests anyway)
-    // and the Mansion/HQ secret slots. GML area ints: city 5, vault 100,
-    // mansion 103, hq 106. The tutorial level camps nothing (GML
-    // `GenCont/Alarm_0` kills the camp pass with the roamers).
-    {
-        let g = crate::worldgen::gml_area_from_run(run);
-        if !run.tutorial && (g < 5 || g > 100) && g != 103 && g != 106 {
-            for spot in bandit_spots {
-                if !mask.is_walkable(spot) {
-                    continue;
+    let mut enemy_count = 0usize;
+    for event in &events {
+        match *event {
+            PopulationEvent::Prop { kind, pos } => {
+                spawn_prop_sim(commands, catalog, run, kind, pos);
+            }
+            PopulationEvent::Chest(chest) => match chest {
+                ChestSpawn::Weapon(p) if run.area == AreaId::CursedCaves => {
+                    spawn_chest(commands, catalog, ChestKind::CursedBig, p);
+                    commands.spawn((
+                        GameCleanup,
+                        LevelCleanup,
+                        PortalClear {
+                            timer: GTimer::from_seconds(5.0 / 30.0, crate::time::TimerMode::Once),
+                            scale: 1.0,
+                        },
+                        Pos(p),
+                    ));
                 }
+                ChestSpawn::Weapon(p) => {
+                    spawn_chest(commands, catalog, ChestKind::Weapon, p);
+                }
+                ChestSpawn::Ammo(p) => {
+                    spawn_chest(commands, catalog, ChestKind::Ammo, p);
+                }
+                ChestSpawn::Custom(kind, p) => {
+                    spawn_chest(commands, catalog, kind, p);
+                }
+                ChestSpawn::Rad(p) => {
+                    spawn_rad_container(commands, catalog, run.gen_seed, p);
+                }
+            },
+            PopulationEvent::Enemy { kind, pos } => {
+                enemy_count += 1;
                 spawn_enemy_at(
                     commands,
                     catalog,
-                    EnemyKind::Bandit,
-                    spot,
+                    kind,
+                    pos,
                     difficulty,
                     false,
                     false,
                     run.loop_count,
                     spawn_context,
                 );
+            }
+            PopulationEvent::PortalClear { pos, scale } => {
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    PortalClear {
+                        timer: GTimer::from_seconds(5.0 / 30.0, crate::time::TimerMode::Once),
+                        scale,
+                    },
+                    Pos(pos),
+                ));
             }
         }
     }
@@ -1637,7 +1662,7 @@ pub fn spawn_level(
                         LevelCleanup,
                         PendingDelayedBoss {
                             kind,
-                            initial_trash: (plan.enemies.len() as u32).max(1),
+                            initial_trash: (enemy_count as u32).max(1),
                             kill_fraction: 0.10 + (i as f32) * 0.02,
                             from_wall: true,
                         },
@@ -1995,6 +2020,7 @@ pub fn setup_title_campfire(world: &mut World) {
         props: Vec::new(),
         chests: Vec::new(),
         enemies: Vec::new(),
+        population_events: Vec::new(),
         boss: None,
         boss_count: 1,
         styleb: false,

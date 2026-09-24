@@ -18,7 +18,7 @@
 //!   [`menu_gui_texts_dp`](crate::render::menu_gui_texts_dp).
 //!
 //! Assets resolution ([`resolve_assets_dir`], in order):
-//! 1. `$NT_ASSETS` (must contain `images/anims.json`),
+//! 1. `$NT_ASSETS` (must contain `images/anims.ron`),
 //! 2. `<exe-dir>/assets`,
 //! 3. `<cwd>/assets`.
 //! Use `cargo run` from the crate dir, or set `NT_ASSETS=/path/to/assets`
@@ -389,9 +389,9 @@ impl App {
     /// a single PNG to internal storage.
     pub fn load_assets_from(&mut self, dir: &Path) -> anyhow::Result<()> {
         let assets = RenderAssets::load(dir)?;
-        let json = crate::render::read_asset_json(&dir.join("images").join("anims.json"))?;
-        let catalog = AnimCatalog::from_json(
-            &json,
+        let text = crate::render::read_asset_ron(&dir.join("images").join("anims.ron"))?;
+        let catalog = AnimCatalog::from_ron(
+            &text,
             AtlasDesc {
                 size: ATLAS_SIZE,
                 max_pages: ATLAS_PAGES,
@@ -3660,10 +3660,10 @@ fn init_schedule_resources(world: &mut World) {
 }
 
 /// Resolve the art dir: `$NT_ASSETS` -> exe-dir `assets` -> cwd `assets`.
-/// Returns `None` when no dir holds `images/anims.json` (placeholder path
+/// Returns `None` when no dir holds `images/anims.ron` (placeholder path
 /// stays active).
 pub fn resolve_assets_dir() -> Option<PathBuf> {
-    let has_catalog = |p: &Path| p.join("images").join("anims.json").is_file();
+    let has_catalog = |p: &Path| p.join("images").join("anims.ron").is_file();
     if let Ok(p) = std::env::var("NT_ASSETS") {
         let p = PathBuf::from(p);
         if has_catalog(&p) {

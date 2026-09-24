@@ -18,11 +18,11 @@ use crate::comps_a::{
     SplitOnDeath, Team, Velocity,
 };
 use crate::comps_b::{
-    CustomExplosion, DeploysSentry, GoldBarrelDrop, HazardCloud, PlasmaBurst, PortalClear, Prop,
-    PropNestMarkers, PropSprites, RadChestContainer, SecretEntrance, SentryTurret,
-    SpawnsWeaponPickup,
+    CustomExplosion, DeploysSentry, ExplosionVisual, GoldBarrelDrop, NativeExplosionKind,
+    PlasmaBurst, PortalClear, Prop, PropNestMarkers, PropSprites, RadChestContainer,
+    SecretEntrance, SentryTurret, SpawnsWeaponPickup,
 };
-use crate::data::{EnemyKind, HazardDef, HazardKind, SplitDef};
+use crate::data::{EnemyKind, HazardDef, SplitDef};
 use crate::environment::PropDeathEffect;
 use crate::msg::Queue;
 use crate::pickups::{random_weapon, spawn_pickup, spawn_rad};
@@ -43,7 +43,29 @@ pub fn spawn_explosion_with_source_radius(
     team: Team,
     hits_player: bool,
 ) {
-    commands.spawn((
+    spawn_explosion_with_source_radius_kind(
+        commands,
+        pos,
+        damage,
+        source,
+        radius,
+        team,
+        hits_player,
+        None,
+    );
+}
+
+pub fn spawn_explosion_with_source_radius_kind(
+    commands: &mut Commands,
+    pos: glam::Vec2,
+    damage: i32,
+    source: Option<DamageSource>,
+    radius: f32,
+    team: Team,
+    hits_player: bool,
+    visual: Option<NativeExplosionKind>,
+) -> Entity {
+    let mut entity = commands.spawn((
         GameCleanup,
         LevelCleanup,
         Explosion {
@@ -61,6 +83,10 @@ pub fn spawn_explosion_with_source_radius(
         },
         Pos(pos),
     ));
+    if let Some(kind) = visual {
+        entity.insert(ExplosionVisual(kind));
+    }
+    entity.id()
 }
 
 /// Hazard cloud from area definitions.
@@ -289,17 +315,20 @@ pub fn on_projectile_removed(
     }
 
     if explosive {
+        let visual = custom_explosion.and_then(|c| c.visual);
         let (radius, count, spread) = custom_explosion
             .map(|c| (c.radius, c.count.max(1), c.spread))
             .unwrap_or((32.0, 1, 0.0));
         if count <= 1 {
-            spawn_explosion_with_source_radius(commands, pos, damage, source, radius, team, true);
+            spawn_explosion_with_source_radius_kind(
+                commands, pos, damage, source, radius, team, true, visual,
+            );
         } else {
             let ang0 = rand::rng().random_range(0.0..std::f32::consts::TAU);
             for k in 0..count {
                 let ang = ang0 + k as f32 * std::f32::consts::TAU / count as f32;
                 let off = glam::Vec2::new(ang.cos(), ang.sin()) * spread;
-                spawn_explosion_with_source_radius(
+                spawn_explosion_with_source_radius_kind(
                     commands,
                     pos + off,
                     damage,
@@ -307,6 +336,7 @@ pub fn on_projectile_removed(
                     radius,
                     team,
                     true,
+                    visual,
                 );
             }
         }
@@ -353,19 +383,17 @@ pub fn on_projectile_removed(
             let a = rng.random_range(0.0..std::f32::consts::TAU);
             let d = rng.random_range(0.0..=48.0);
             let off = glam::Vec2::from_angle(a) * d;
-            commands.spawn((
-                GameCleanup,
-                LevelCleanup,
-                team,
-                HazardCloud {
-                    kind: HazardKind::Toxic,
-                    radius: 16.0,
-                    damage: 1,
-                    timer: GTimer::from_seconds(6.0, TimerMode::Once),
-                    tick: GTimer::from_seconds(0.5, TimerMode::Repeating),
-                },
-                Pos(pos + off),
-            ));
+            let speed = rng.random_range(0.2..1.7) * 30.0;
+            let mut gas = crate::comps_b::ToxicGasState::new();
+            gas.grow_speed = 0.003 + rng.random_range(0.0..0.002);
+            gas.rot =
+                (1.0 + rng.random_range(0.0..=3.0)) * if rng.random_bool(0.5) { 1.0 } else { -1.0 };
+            crate::enemies::spawn_toxic_gas(
+                commands,
+                pos + off,
+                glam::Vec2::from_angle(a) * speed,
+                gas,
+            );
         }
         commands.spawn((
             GameCleanup,
