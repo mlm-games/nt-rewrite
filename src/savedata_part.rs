@@ -16,6 +16,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use bevy_ecs::prelude::*;
+use game_utils::save::Versioned;
+use game_utils::save_store::SaveStore;
+use game_utils::storage::FsStorage;
 use serde::{Deserialize, Serialize};
 
 use crate::comps_a::{Health, Inventory, Player, RaceState, Run};
@@ -373,7 +376,7 @@ pub fn achievement_for_boss(kind: crate::data::EnemyKind) -> Option<u8> {
 // `race_unlocked` (with the `unlocked_characters` name fallback),
 // `race_loadout`, `sanitize_loadouts`, `crown_row`, `crown_unlocked`,
 // `any_crown_unlocked`, `unlock_crown`, `crown_port_to_gml`,
-// `crown_gml_to_port`, plus std::fs JSON IO (`save_file_path`,
+// `crown_gml_to_port`, plus game-utils RON storage IO (`save_file_path`,
 // `serialize_save`, `parse_save`, `store_save_to_file`,
 // `load_save_from_file`, `load_or_default`) and the full
 // `src/game/skin_unlocks.rs` surface (`check_area_skins`,
@@ -655,10 +658,24 @@ impl Default for SaveData {
     }
 }
 
+impl Versioned for SaveData {
+    fn version(&self) -> u32 {
+        self.version
+    }
+
+    fn set_version(&mut self, version: u32) {
+        self.version = version;
+    }
+
+    fn migrate(&mut self, _from: u32, _to: u32) {
+        self.sanitize_loadouts();
+    }
+}
+
 // NOTE: `is_race_unlocked` / `check_progress_unlocks` above are the
 // `src/game/generated/unlocks.rs` gameplay slice that already lived here;
 // the `skin_unlocks.rs` half now lives in the section below.
-// Still deferred: `Versioned` (no game_utils headless).
+// Save migration is delegated to `game-utils`' `Versioned` implementation.
 
 // TODO(port): try_unlock_race calls is_race_unlocked (src/game/generated/unlocks.rs) and
 // SaveData::race_loadout_mut (src/save.rs); neither is part of this slice. Body kept verbatim.
@@ -1456,61 +1473,76 @@ pub fn check_progress_unlocks(
 }
 
 // ---------------------------------------------------------------------------
-// Save file IO. Headless replacement for the bevy build's game_utils
-// `SavePlugin::<SaveData>` (`SaveManager::new("com", "nt-recreated",
-// "save.ron", SAVE_VERSION)`, see
-// the former bevy `src/app.rs`).
-//
-// Fidelity compromise (save path location): without the `directories`
-// crate and without RON in this crate, the sim keeps it simple and
-// portable — project-local JSON instead of the OS data dir + RON:
-// `./nt-save.json` under the process working directory, overridable
-// via the `NT_SAVE_PATH` env var (tests point it at a temp file).
-// `serialize_save` / `parse_save` are pure (no disk) so round-trips
-// stay unit-testable; only `store_save_to_file` /
-// `load_save_from_file` touch `std::fs`.
+// Save file IO. `game-utils` owns the RON codec, platform path, and
+// crash-safe storage; this module only defines the game data and migration.
 // ---------------------------------------------------------------------------
 
-/// Save file name for the project-local path.
+/// Save file name for the project save.
 pub fn save_file_name() -> &'static str {
-    "nt-save.json"
+    "nt-save.ron"
 }
 
-/// Portable save path: `$NT_SAVE_PATH` when set, else
-/// `<current_dir>/nt-save.json`.
+/// Portable save path: `$NT_SAVE_PATH` when set, otherwise the platform data path.
 pub fn save_file_path() -> PathBuf {
-    repame_shell::save_file_path("NT_SAVE_PATH", save_file_name())
+    if let Ok(path) = std::env::var("NT_SAVE_PATH")
+        && !path.is_empty()
+    {
+        return PathBuf::from(path);
+    }
+    game_utils::save::SaveManager::new(
+        "com",
+        "nt-recreated",
+        "nt-rewrite",
+        save_file_name(),
+        SAVE_VERSION,
+    )
+    .path()
 }
 
-/// Serialize a save to JSON (pretty; version stamp included).
+/// Serialize a save to RON.
 pub fn serialize_save(save: &SaveData) -> Result<String, String> {
-    serde_json::to_string_pretty(save).map_err(|e| e.to_string())
+    ron::ser::to_string_pretty(save, Default::default()).map_err(|e| e.to_string())
 }
 
-/// Parse save JSON back, then `sanitize_loadouts` (drops stale
-/// start-crown/weapon picks the same way a fresh load does).
+/// Parse a RON save and sanitize loadouts.
 pub fn parse_save(text: &str) -> Result<SaveData, String> {
-    let mut save: SaveData = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    let mut save: SaveData = ron::from_str(text).map_err(|e| e.to_string())?;
     save.sanitize_loadouts();
+    if save.version < SAVE_VERSION {
+        save.version = SAVE_VERSION;
+    }
     Ok(save)
 }
 
-/// Write a save to disk (creates parent dirs).
+/// Write a save through game-utils' crash-safe RON store.
 pub fn store_save_to_file(save: &SaveData, path: &Path) -> Result<(), String> {
+    let store = save_store(path)?;
     let text = serialize_save(save)?;
-    repame_shell::store_json(&text, path)
+    store.write(text.as_bytes())
 }
 
-/// Read a save from disk (`Err` when missing/corrupt; callers fall
-/// back to `SaveData::default()`).
+/// Read a save through game-utils' crash-safe RON store.
 pub fn load_save_from_file(path: &Path) -> Result<SaveData, String> {
-    let text = repame_shell::load_json(path)?;
-    parse_save(&text)
+    let store = save_store(path)?;
+    let result = store.load(&SaveStore::<FsStorage>::is_intact_ron, &[]);
+    let bytes = result.data.ok_or_else(|| format!("save unavailable: {:?}", result.status))?;
+    let text = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
+    parse_save(text)
 }
 
 /// Load a save, or default when the file is missing/corrupt.
 pub fn load_or_default(path: &Path) -> SaveData {
     load_save_from_file(path).unwrap_or_default()
+}
+
+fn save_store(path: &Path) -> Result<SaveStore<FsStorage>, String> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "save path has no file name".to_string())?;
+    let directory = path.parent().unwrap_or_else(|| Path::new("."));
+    Ok(SaveStore::new(directory, file_name)
+        .with_validator(SaveStore::<FsStorage>::is_intact_ron))
 }
 
 // ---------------------------------------------------------------------------
