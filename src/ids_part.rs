@@ -221,6 +221,7 @@ pub enum UltraMutationId {
     RebelRiot,
     HorrorStalker,
     HorrorAnomaly,
+    HorrorMeltdown,
     RogueSuperBlastArmor,
     RoguePortalStrike,
     BigDogHeavyArtillery,

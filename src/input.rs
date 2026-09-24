@@ -794,7 +794,7 @@ pub fn sample_gamepad_mapped(
     ability_pressed |= pad.left_trigger_pressed;
     spec_held_now |= pad.left_trigger_held;
     spec_pressed_now |= pad.left_trigger_pressed;
-    interact_pressed |= pad.south_pressed || pad.east_pressed;
+    interact_pressed |= pad.south_pressed;
 
     if let Some(state) = keymap {
         use crate::keymap::NtAction;

@@ -328,6 +328,17 @@ pub struct MenuState {
     /// ultra-first precedence, length resets the highlight).
     pub mutation_count: usize,
     pub mutation_is_ultra: bool,
+    pub mutation_appear: f32,
+    pub mutation_appear_y: Vec<f32>,
+    pub mutation_splat: bool,
+    pub mutation_splat_frame: u8,
+    pub mutation_selection_frame: u8,
+    pub mutation_offer_active: bool,
+    pub mutation_anim_just_started: bool,
+    pub mutation_offer_key: u64,
+    pub mutation_skip_title_appear: bool,
+    pub mutation_toast_offset: f32,
+    pub mutation_toast_shift_pending: bool,
     /// Pause quit/restart confirm (bevy `pause_confirm`: 0 quit, 1 restart).
     pub pause_confirm: Option<u8>,
     /// Hardmode armed for the next run (GML PlayButton image 3; needs
@@ -415,6 +426,17 @@ impl Default for MenuState {
             mutation_selected: None,
             mutation_count: 0,
             mutation_is_ultra: false,
+            mutation_appear: 0.0,
+            mutation_appear_y: Vec::new(),
+            mutation_splat: false,
+            mutation_splat_frame: 0,
+            mutation_selection_frame: 0,
+            mutation_offer_active: false,
+            mutation_anim_just_started: false,
+            mutation_offer_key: 0,
+            mutation_skip_title_appear: false,
+            mutation_toast_offset: 0.0,
+            mutation_toast_shift_pending: false,
             pause_confirm: None,
             hardmode_selected: false,
             settings_page: 0,
@@ -539,6 +561,29 @@ pub fn play_row_name(row: u8) -> &'static str {
     }
 }
 
+pub(crate) fn mutation_offer_key(
+    pending: Option<&PendingMutation>,
+    ultra: Option<&PendingUltra>,
+) -> u64 {
+    let mut key: u64 = if ultra.is_some() { 2 } else { 3 };
+    if let Some(ultra) = ultra {
+        for choice in &ultra.choices {
+            key = key
+                .wrapping_mul(31)
+                .wrapping_add(*choice as u64 + 1);
+        }
+    } else if let Some(pending) = pending {
+        for choice in &pending.choices {
+            key = key
+                .wrapping_mul(31)
+                .wrapping_add(*choice as u64 + 1);
+        }
+    } else {
+        return 0;
+    }
+    key
+}
+
 /// Mutation offer mirror (bevy `hud.rs` sync half: ultra offers win,
 /// a length change clears the highlight, a stale highlight clamps to
 /// `None`). Headless keeps count + ultra flag (names render later).
@@ -554,20 +599,151 @@ pub fn tick_mutation_mirror(
     } else {
         (0, false)
     };
-    apply_mutation_mirror(menu, count, is_ultra);
+    apply_mutation_mirror(menu, count, is_ultra, mutation_offer_key(pending, ultra));
 }
 
 /// Pure mirror law shared by [`tick_mutation_mirror`] and the InGame tick
 /// below (single source; the InGame call site can only take owned lens
 /// because of the `World` borrow checker).
-pub(crate) fn apply_mutation_mirror(menu: &mut MenuState, count: usize, is_ultra: bool) {
-    if count != menu.mutation_count {
+pub(crate) fn apply_mutation_mirror(
+    menu: &mut MenuState,
+    count: usize,
+    is_ultra: bool,
+    offer_key: u64,
+) {
+    let changed = count != menu.mutation_count
+        || is_ultra != menu.mutation_is_ultra
+        || offer_key != menu.mutation_offer_key;
+    if changed {
         menu.mutation_selected = None;
+        menu.mutation_selection_frame = 0;
+        menu.mutation_splat = false;
+        menu.mutation_splat_frame = 0;
+        menu.mutation_offer_active = false;
     }
+
+    if count == 0 {
+        menu.mutation_offer_active = false;
+        menu.mutation_appear = 0.0;
+        menu.mutation_appear_y.clear();
+        menu.mutation_anim_just_started = false;
+        menu.mutation_skip_title_appear = false;
+        menu.mutation_toast_shift_pending = false;
+    } else if !menu.mutation_offer_active || menu.mutation_appear_y.len() != count {
+        menu.mutation_offer_active = true;
+        if menu.mutation_toast_shift_pending {
+            let shift = if menu.mutation_toast_offset == 0.0 { 40.0 } else { 48.0 };
+            menu.mutation_toast_offset = menu.mutation_toast_offset - shift;
+            menu.mutation_toast_shift_pending = false;
+        }
+        menu.mutation_appear = if menu.mutation_skip_title_appear {
+            0.0
+        } else {
+            120.0
+        };
+        menu.mutation_skip_title_appear = false;
+        menu.mutation_appear_y = (0..count).map(|i| (i + 1) as f32 * 32.0).collect();
+        menu.mutation_anim_just_started = true;
+    }
+
     menu.mutation_count = count;
     menu.mutation_is_ultra = is_ultra;
+    menu.mutation_offer_key = offer_key;
     if menu.mutation_selected.is_some_and(|sel| sel >= count) {
         menu.mutation_selected = None;
+        menu.mutation_selection_frame = 0;
+    }
+}
+
+pub(crate) fn tick_mutation_anim(world: &mut World) {
+    let active = world.get_resource::<PendingMutation>().is_some()
+        || world.get_resource::<PendingUltra>().is_some();
+    if !active {
+        let toast_finished = world
+            .get_resource::<crate::comps_a::Toast>()
+            .is_none_or(|toast| toast.timer.is_finished());
+        if toast_finished
+            && let Some(mut menu) = world.get_resource_mut::<MenuState>()
+        {
+            menu.mutation_toast_shift_pending = false;
+            menu.mutation_toast_offset = 0.0;
+        }
+        return;
+    }
+    let steps = world
+        .get_resource::<repame_sim::SimTime>()
+        .map(|time| (time.delta_secs * 30.0).max(0.0))
+        .unwrap_or(1.0);
+    let Some(mut menu) = world.get_resource_mut::<MenuState>() else {
+        return;
+    };
+    let animate = !menu.mutation_anim_just_started;
+    menu.mutation_anim_just_started = false;
+    if animate {
+        menu.mutation_appear *= 0.25f32.powf(steps);
+        if menu.mutation_is_ultra {
+            let blend = 0.8f32.powf(steps);
+            for value in &mut menu.mutation_appear_y {
+                if *value > 0.0 {
+                    *value = *value * (1.0 - blend) - blend;
+                }
+            }
+        } else {
+            for value in &mut menu.mutation_appear_y {
+                *value *= 0.2f32.powf(steps);
+            }
+        }
+        if menu.mutation_appear.abs() < 0.001 {
+            menu.mutation_appear = 0.0;
+        }
+        for value in &mut menu.mutation_appear_y {
+            if *value <= 0.0 || value.abs() < 0.001 {
+                *value = 0.0;
+            }
+        }
+    }
+    if menu.mutation_splat {
+        menu.mutation_splat_frame = (menu.mutation_splat_frame as f32 + steps.round())
+            .min(3.0) as u8;
+    }
+    if menu.mutation_selected.is_some() {
+        menu.mutation_selection_frame = (menu.mutation_selection_frame as f32 + steps.round())
+            .min(3.0) as u8;
+    }
+}
+
+pub(crate) fn set_mutation_selection(world: &mut World, idx: usize) {
+    let Some(mut menu) = world.get_resource_mut::<MenuState>() else {
+        return;
+    };
+    if menu.mutation_selected != Some(idx) {
+        menu.mutation_selected = Some(idx);
+        menu.mutation_selection_frame = 0;
+        menu.mutation_splat = true;
+        menu.mutation_splat_frame = 0;
+    }
+}
+
+pub(crate) fn clear_mutation_selection(world: &mut World) {
+    if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+        menu.mutation_selected = None;
+        menu.mutation_selection_frame = 0;
+    }
+}
+
+pub(crate) fn reset_mutation_offer(world: &mut World) {
+    if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+        menu.mutation_selected = None;
+        menu.mutation_selection_frame = 0;
+        menu.mutation_splat = false;
+        menu.mutation_splat_frame = 0;
+        menu.mutation_offer_active = false;
+        menu.mutation_appear = 0.0;
+        menu.mutation_appear_y.clear();
+        menu.mutation_anim_just_started = false;
+        menu.mutation_offer_key = 0;
+        menu.mutation_skip_title_appear = true;
+        menu.mutation_toast_shift_pending = true;
     }
 }
 
@@ -1219,8 +1395,6 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             }
         }
         UiAction::SelectMutation(idx) => {
-            // Bevy: already-highlighted card commits (`MutationChoice`)
-            // and clears; otherwise it highlights with `sndHover`.
             let commit = world
                 .get_resource::<MenuState>()
                 .and_then(|menu| menu.mutation_selected)
@@ -1228,22 +1402,14 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             if commit {
                 world.init_resource::<MutationChoice>();
                 world.resource_mut::<MutationChoice>().0 = Some(idx);
-                if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
-                    menu.mutation_selected = None;
-                }
+                reset_mutation_offer(world);
             } else {
-                if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
-                    menu.mutation_selected = Some(idx);
-                }
+                set_mutation_selection(world, idx);
                 emit_sfx(world, hover_sfx());
             }
             emit_cue(world, &UiAction::SelectMutation(idx));
         }
         UiAction::PickMutation(idx) => {
-            // Bevy `PickMutation`: commits only when the card is already
-            // highlighted, then clears the highlight; otherwise it just
-            // highlights. The commit feeds `MutationChoice`, which
-            // `handle_mutation_choice` takes exactly once.
             let commit = world
                 .get_resource::<MenuState>()
                 .and_then(|menu| menu.mutation_selected)
@@ -1251,11 +1417,9 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             if commit {
                 world.init_resource::<MutationChoice>();
                 world.resource_mut::<MutationChoice>().0 = Some(idx);
-                if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
-                    menu.mutation_selected = None;
-                }
-            } else if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
-                menu.mutation_selected = Some(idx);
+                reset_mutation_offer(world);
+            } else {
+                set_mutation_selection(world, idx);
                 emit_sfx(world, hover_sfx());
             }
             emit_cue(world, &UiAction::PickMutation(idx));
@@ -1976,7 +2140,10 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
     // Offer mirror (bevy `sync_hud` order: mirror before input handling;
     // law shared with `tick_mutation_mirror` via `apply_mutation_mirror`
     // — lens are copied out first for the `World` borrow checker).
-    {
+    let choice_pending = world
+        .get_resource::<MutationChoice>()
+        .is_some_and(|choice| choice.0.is_some());
+    if !choice_pending {
         let (count, is_ultra) = if let Some(ultra) = world.get_resource::<PendingUltra>() {
             (ultra.choices.len(), true)
         } else if let Some(pending) = world.get_resource::<PendingMutation>() {
@@ -1984,9 +2151,14 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
         } else {
             (0, false)
         };
+        let offer_key = mutation_offer_key(
+            world.get_resource::<PendingMutation>(),
+            world.get_resource::<PendingUltra>(),
+        );
         if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
-            apply_mutation_mirror(&mut menu, count, is_ultra);
+            apply_mutation_mirror(&mut menu, count, is_ultra, offer_key);
         }
+        tick_mutation_anim(world);
     }
 
     let game_over = world.get_resource::<Run>().is_some_and(|run| run.game_over);
@@ -2264,11 +2436,26 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
                 apply_menu_action(world, action);
             }
         }
-        if cycle != 0 {
-            if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
-                let count = menu.mutation_count.max(1) as i16;
-                let cur = menu.mutation_selected.unwrap_or(0) as i16;
-                menu.mutation_selected = Some((cur + cycle as i16).rem_euclid(count) as usize);
+        let horizontal = cycle as i16 + nav_h as i16;
+        if horizontal != 0 {
+            let step = horizontal.clamp(-1, 1) as i8;
+            let next = world
+                .get_resource::<MenuState>()
+                .map(|menu| {
+                    let count = menu.mutation_count.max(1) as i16;
+                    menu.mutation_selected.map_or(0, |cur| {
+                        (cur as i16 + step as i16).rem_euclid(count) as usize
+                    })
+                });
+            if let Some(next) = next {
+                let changed = world
+                    .get_resource::<MenuState>()
+                    .and_then(|menu| menu.mutation_selected)
+                    != Some(next);
+                set_mutation_selection(world, next);
+                if changed {
+                    emit_sfx(world, hover_sfx());
+                }
             }
         }
         if confirm {

@@ -3901,12 +3901,17 @@ pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
     // draw `"@d" + loc(txt)` centered-middle AT THE INSTANCE POS.
     // The port has no SkillText entity, so the toast rides the same
     // view-fixed anchor (middle-anchored, like GML's `fa_middle`
-    // draw) — never the view center, which is where the player is.
+    // draw), with the extra `-40` shift while a chained offer still has
+    // the prior SkillText alive — never the view center, which is where
+    // the player is.
     if !hud.toast.is_empty() {
+        let toast_y = world
+            .get_resource::<MenuState>()
+            .map_or(156.0, |menu| 156.0 + menu.mutation_toast_offset);
         items.push(MenuGuiText {
             text: format!("@d{}", hud.toast),
             gx: cx,
-            gy: 156.0,
+            gy: toast_y,
             color: [255, 255, 255, 255],
             px: 7.0,
             centered: true,
@@ -3960,8 +3965,6 @@ const GUI_GREEN: [u8; 4] = [98, 220, 88, 255];
 /// GML yellow `(250, 171, 0)` (`draw_text_nt` `@y` tag,
 /// `scripts/draw_text_nt/draw_text_nt.gml:218`).
 const GUI_GOLD: [u8; 4] = [250, 171, 0, 255];
-/// GML `c_ultra` (#3dc616): LEVEL ULTRA rest tint.
-const GUI_ULTRA: [u8; 4] = [61, 198, 22, 255];
 
 fn gui_body(text: impl Into<String>, gx: f32, gy: f32, color: [u8; 4]) -> MenuGuiText {
     MenuGuiText {
@@ -4046,17 +4049,8 @@ fn gui_pause_button(
 /// `mutation_choice_ids` parallel row), so the Throne Butt special can
 /// key off the picked skill, not the parsed name.
 fn mutation_choice_parts(choice: &str) -> (Option<u8>, String, String) {
-    // `sync_hud_state` writes `mutation_choices` and
-    // `mutation_choice_ids` in the same order; resolve the id by index.
-    // (The id row is passed separately at the call site; this helper
-    // keeps the parse half pure.)
     let trimmed = choice.trim();
-    let (is_ultra, trimmed) = if let Some(rest) = trimmed.strip_prefix("ULTRA:") {
-        (true, rest.trim())
-    } else {
-        (false, trimmed)
-    };
-    let _ = is_ultra;
+    let trimmed = trimmed.strip_prefix("ULTRA:").unwrap_or(trimmed).trim();
     if let Some((name, desc)) = trimmed.split_once(" \u{2014} ") {
         (None, name.trim().to_string(), desc.trim().to_string())
     } else if let Some((name, desc)) = trimmed.split_once(" - ") {
@@ -4064,6 +4058,24 @@ fn mutation_choice_parts(choice: &str) -> (Option<u8>, String, String) {
     } else {
         (None, trimmed.to_string(), String::new())
     }
+}
+
+fn pending_offer_is_ultra(world: &World) -> bool {
+    world.get_resource::<PendingUltra>().is_some()
+}
+
+fn pending_offer_race(world: &mut World) -> RaceId {
+    world
+        .query::<&RaceState>()
+        .iter(world)
+        .map(|race| race.race)
+        .find(|race| *race != RaceId::Random)
+        .or_else(|| {
+            world
+                .get_resource::<SelectedCharacter>()
+                .map(|selected| selected.0)
+        })
+        .unwrap_or(RaceId::Fish)
 }
 /// GML `Credits/Other_11` `credittext` verbatim (unlocalized
 /// defaults): 14 titled sections. Rows carry their GML `@w`/`@s`/`@y`
@@ -5001,71 +5013,88 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
         }
         crate::MenuOverlay::Mutation => {
             let hud = sync_hud_state(world);
-            // GML `LevCont/Draw_0` law verbatim: the offer CENTER column
-            // shows `sprLevelUpText` / `sprLevelUltraText` at
-            // `(cx + appear, 48)` with subimage `appear > H*0.7 ? 0 : 2`
-            // (white bigname while sliding in, `c_ultra` green rest) and
-            // the `@s`-gray subtitle at `(cx + 1, 75 - appear)`. The port
-            // has no `appear` anim resource, so the steady state
-            // (`appear = 0`: art subimage 2, rest tint) is drawn.
-            // Subtitles: ultra offers `INSTALL ULTRA UPDATE` (Robot) /
-            // `PICK YOUR ULTRA MUTATION`; skill offers Robot
-            // `INSTALL n UPDATES # DO NOT TURN OFF ROBOT`, else
-            // `SELECT n MUTATIONS`. `n` counts the pending offer.
-            let pending_n = world
-                .get_resource::<PendingMutation>()
-                .map(|p| p.choices.len());
-            let pending_ultra_n = world
-                .get_resource::<PendingUltra>()
-                .map(|u| u.choices.len());
-            let is_ultra = pending_n.is_none() && pending_ultra_n.is_some();
-            let n = pending_n.or(pending_ultra_n).unwrap_or(0).max(1);
+            let menu = world.get_resource::<MenuState>().cloned();
+            let is_ultra = pending_offer_is_ultra(world);
+            let fallback_count = if is_ultra {
+                world
+                    .get_resource::<PendingUltra>()
+                    .map(|u| u.choices.len())
+                    .unwrap_or(0)
+            } else {
+                world
+                    .get_resource::<PendingMutation>()
+                    .map(|p| p.choices.len())
+                    .unwrap_or(0)
+            };
+            let owed = world
+                .query::<&Player>()
+                .iter(world)
+                .next()
+                .map(|player| {
+                    if is_ultra {
+                        u32::from(player.ultra_pick_owed)
+                    } else {
+                        player.mutation_picks_owed
+                    }
+                })
+                .unwrap_or(fallback_count as u32)
+                .max(1);
             let is_robot = world
-                .get_resource::<SelectedCharacter>()
-                .is_some_and(|s| s.0 == crate::data::RaceId::Robot);
-            let (title, subtitle, extra) = if is_ultra {
+                .query::<&RaceState>()
+                .iter(world)
+                .any(|race| race.race == RaceId::Robot);
+            let (subtitle, extra) = if is_ultra {
                 if is_robot {
                     (
-                        "LEVEL ULTRA",
                         "@sINSTALL @gULTRA@s UPDATE".to_string(),
                         None,
                     )
                 } else {
                     (
-                        "LEVEL ULTRA",
                         "@sPICK YOUR @gULTRA@s MUTATION".to_string(),
                         None,
                     )
                 }
             } else if is_robot {
                 (
-                    "LEVEL UP",
-                    format!("@sINSTALL {n} UPDATES@s"),
+                    format!("@sINSTALL {owed} UPDATES@s"),
                     Some("@sDO NOT TURN OFF ROBOT".to_string()),
                 )
             } else {
-                ("LEVEL UP", format!("@sSELECT {n} MUTATIONS"), None)
+                (format!("@sSELECT {owed} MUTATIONS"), None)
             };
-            let accent = if is_ultra { GUI_ULTRA } else { GUI_GREEN };
-            let mut out = vec![
-                gui_center(title, cx, 48.0, accent),
-                gui_center(subtitle, cx, 75.0, GUI_CREAM),
-            ];
+            let appear = menu
+                .as_ref()
+                .map(|state| state.mutation_appear)
+                .unwrap_or(0.0);
+            let subtitle_x = cx + 1.0;
+            let mut out = vec![gui_center(
+                subtitle,
+                subtitle_x,
+                75.0 - appear,
+                GUI_GRAY,
+            )];
             if let Some(extra) = extra {
-                out.push(gui_center(extra, cx, 87.0, GUI_CREAM));
+                out.push(gui_center(extra, subtitle_x, 87.0 - appear, GUI_GRAY));
             }
-            // GML `SkillIcon/Draw_0` law: the SELECTED card's box is ONE
-            // centered-middle text at `(w/2, H-61-selected)` = (cx, 179):
-            // `"@wName#@sDesc@s"`, with the Throne Butt special (per-race
-            // `Races:<race>:TB` text, or `Name - TB` lines per race when
-            // players hold mixed races). `mutation_choices` already
-            // carries `Name - Desc`; only the first ` - ` splits (descs
-            // contain `#` line breaks which the backend renders).
-            let selected = world
-                .get_resource::<MenuState>()
-                .and_then(|m| m.mutation_selected);
+            let selected = menu.as_ref().and_then(|state| state.mutation_selected);
+            let selection_y = 179.0
+                - menu
+                    .as_ref()
+                    .map(|state| state.mutation_selection_frame as f32)
+                    .unwrap_or(0.0);
+            let selection_settled = !is_ultra
+                || selected
+                    .and_then(|index| {
+                        menu.as_ref()
+                            .and_then(|state| state.mutation_appear_y.get(index).copied())
+                    })
+                    .map(|value| value <= 0.01)
+                    .unwrap_or(true);
             let sel_id = selected.and_then(|i| hud.mutation_choice_ids.get(i).copied());
-            let sel_text = selected.and_then(|i| hud.mutation_choices.get(i));
+            let sel_text = selected
+                .filter(|_| selection_settled)
+                .and_then(|i| hud.mutation_choices.get(i));
             if let Some(sel) = sel_text {
                 let (_, name, desc) = mutation_choice_parts(sel);
                 let race_tb = |race: crate::data::RaceId| -> &'static str {
@@ -5126,7 +5155,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                             out.push(MenuGuiText {
                                 text: line.clone(),
                                 gx: cx,
-                                gy: 179.0 + (i as f32 - (n - 1.0) * 0.5) * 8.0,
+                                gy: selection_y + (i as f32 - (n - 1.0) * 0.5) * 8.0,
                                 color: GUI_WHITE,
                                 px: 7.0,
                                 centered: true,
@@ -5137,12 +5166,10 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         }
                         return out;
                     }
-                    let tb = races.first().map(|r| race_tb(*r)).unwrap_or(race_tb(
-                        world
-                            .get_resource::<SelectedCharacter>()
-                            .map(|s| s.0)
-                            .unwrap_or(crate::data::RaceId::Fish),
-                    ));
+                    let tb = races
+                        .first()
+                        .map(|r| race_tb(*r))
+                        .unwrap_or_else(|| race_tb(pending_offer_race(world)));
                     format!("@w{}@s", tb)
                 } else if desc.is_empty() {
                     format!("@w{}", name.to_ascii_uppercase())
@@ -5164,7 +5191,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     out.push(MenuGuiText {
                         text: line.to_string(),
                         gx: cx,
-                        gy: 179.0 + (i as f32 - (n - 1.0) * 0.5) * 8.0,
+                        gy: selection_y + (i as f32 - (n - 1.0) * 0.5) * 8.0,
                         color: GUI_WHITE,
                         px: 7.0,
                         centered: true,
@@ -6459,101 +6486,6 @@ pub fn hud_sprites(
         }
     }
 
-    // Offer icons (GML `LevCont/Other_10` layout verbatim: the offer
-    // row sits at `_yview = view_yview + view_height - 21` — GUI y=219
-    // — with `step = min(32, floor(view_width/(n+1)))`, `half = step
-    // div 2` (integer!), `scale = max(0.65, step/32)`, centered on the
-    // live view center with a -12 shift at n>=10; SkillIcon cards draw
-    // at `image_xscale/yscale = scale` (UltraIcon/CrownIcon unscaled).
-    // Selected card lifts 1 px (`y - sign(selected)`) and draws white,
-    // others gray. The selected card's textbox is ONE centered-middle
-    // text at `(w/2, H-61-selected)` = (cx, 179) — see the Mutation
-    // overlay arm (`menu_gui_texts_vw`). Normal offers ride
-    // `sprSkillIcon` at the GML skill id (scaled); ultra offers ride
-    // `sprEGSkillIcon` at `(race-1)*3+tier-1` (unscaled — GML only
-    // scales SkillIcon).
-    {
-        // Ultra offers win over normal ones (same precedence as
-        // `sync_hud_state`, `tick_mutation_mirror` and the click
-        // hit-test; bevy `hud.rs`): when both resources coexist the
-        // screen shows ultra cards.
-        let n = world
-            .get_resource::<PendingUltra>()
-            .map(|u| u.choices.len())
-            .or_else(|| {
-                world
-                    .get_resource::<PendingMutation>()
-                    .map(|p| p.choices.len())
-            })
-            .unwrap_or(0);
-        let is_ultra = world.get_resource::<PendingUltra>().is_some();
-        if n > 0 {
-            let selected = world
-                .get_resource::<MenuState>()
-                .and_then(|m| m.mutation_selected);
-            let race = world
-                .get_resource::<SelectedCharacter>()
-                .map(|s| s.0)
-                .unwrap_or(RaceId::Fish);
-            let vw = view[2];
-            let gui_to_world = |x: f32, y: f32| hud_gui_to_world(gm, view, x, y);
-            let step = (vw / (n as f32 + 1.0)).floor().min(32.0);
-            let scale = (step / 32.0).max(0.65);
-            let half = (step as i32 / 2) as f32;
-            let xview_shift = if n >= 10 { -12.0 } else { 0.0 };
-            let start_x = vw * 0.5 + xview_shift - (n as f32 - 1.0) * half;
-            let icon_y = 240.0 - 21.0;
-            for i in 0..n {
-                let (path, frame, mul) = if is_ultra {
-                    let u = world
-                        .get_resource::<PendingUltra>()
-                        .and_then(|u| u.choices.get(i))
-                        .copied();
-                    let tier = u.map(ultra_tier).unwrap_or(2);
-                    let frame = (race as i32 - 1) * 3 + tier - 1;
-                    ("images/sprEGSkillIcon.png", frame, 1.0)
-                } else {
-                    let m = world
-                        .get_resource::<PendingMutation>()
-                        .and_then(|p| p.choices.get(i))
-                        .copied();
-                    let frame = m.map(crate::hud::mutation_skill_index).unwrap_or(0) as i32;
-                    ("images/sprSkillIcon.png", frame, scale)
-                };
-                // Fall back to the HUD strip when the offer strip is
-                // absent from the pack (same frame law; both strips are
-                // 1-based for skills).
-                let (path, frame) = if assets.uv(path, 0).is_some() {
-                    (path, frame)
-                } else {
-                    ("images/sprSkillIconHUD.png", frame)
-                };
-                let is_selected = selected == Some(i);
-                // GML `draw_sprite_ext(sprite, skill, x, y + appeary -
-                // sign(selected), ..., selected ? c_white : c_gray)`:
-                // unselected cards are full gray (not half-alpha), and
-                // the lift is `sign(selected)` = 1 for any nonzero
-                // selection value. Steady state here (`appeary = 0`).
-                let lift = if is_selected { 1.0 } else { 0.0 };
-                let tint = if is_selected {
-                    [1.0; 4]
-                } else {
-                    [0.5, 0.5, 0.5, 1.0]
-                };
-                if let Some(s) = assets.sprite_scaled_rotated(
-                    path,
-                    frame,
-                    hud_gui_to_world(gm, view, start_x + i as f32 * step, icon_y - lift),
-                    mul * gm.s,
-                    0.0,
-                    tint,
-                ) {
-                    out.push(s);
-                }
-            }
-        }
-    }
-
     // Held ultra + skill icons (GML `scrDrawMiscHUD:68-113` verbatim):
     // ultras on `sprEGIconHUD` with the held ultra's own frame at y=13,
     // then skills on `sprSkillIconHUD` at the GML skill id at y=12
@@ -7367,21 +7299,31 @@ pub fn mutation_icon_hit_action(world: &mut World, gx: f32, gy: f32, vw: f32) ->
     if n == 0 {
         return None;
     }
+    let is_ultra = pending_offer_is_ultra(world);
     let step = (vw / (n as f32 + 1.0)).floor().min(32.0);
-    let scale = (step / 32.0).max(0.65);
+    let scale = if is_ultra {
+        1.0
+    } else {
+        (step / 32.0).max(0.65)
+    };
     let half = (step as i32 / 2) as f32;
     let xview_shift = if n >= 10 { -12.0 } else { 0.0 };
     let start_x = vw * 0.5 + xview_shift - (n as f32 - 1.0) * half;
     let icon_y = 240.0 - 21.0;
+    let menu = world.get_resource::<MenuState>().cloned();
+    let selected = menu.as_ref().and_then(|state| state.mutation_selected);
     let hw = 24.0 * scale * 0.5;
-    let top = icon_y - 16.0 * scale;
-    let hh = 32.0 * scale;
     for i in 0..n {
         let cx = start_x + i as f32 * step;
+        let card_y = icon_y
+            + menu
+                .as_ref()
+                .and_then(|state| state.mutation_appear_y.get(i).copied())
+                .unwrap_or(0.0)
+            - if selected == Some(i) { 1.0 } else { 0.0 };
+        let top = card_y - 16.0 * scale;
+        let hh = 32.0 * scale;
         if (gx - cx).abs() <= hw && gy >= top && gy <= top + hh {
-            let selected = world
-                .get_resource::<MenuState>()
-                .and_then(|m| m.mutation_selected);
             return Some(if selected == Some(i) {
                 UiAction::PickMutation(i)
             } else {
@@ -7871,12 +7813,7 @@ pub fn mutation_hud_frame(id: MutationId) -> i32 {
     }
 }
 
-/// GML ultra tier per race (`UltraSkill` A=1/B=2): the offer strip
-/// (`sprEGSkillIcon`) indexes `(race-1)*3+tier-1`, the held strip
-/// (`sprEGIconHUD`, from `ultra_hud`) `race*3+tier-1`. Verified against
-/// the GML `UltraSkill` enum for races 1-12; 13-16 are best-effort
-/// (port-custom ultra names: missiles/blood/gas/arsenal second, and
-/// the port-only Cuz QuickSwap rides tier 2 with no GML frame).
+/// GML ultra tier per race (`UltraSkill` A=1/B=2/C=3).
 pub fn ultra_tier(ultra: UltraMutationId) -> i32 {
     match ultra {
         UltraMutationId::FishConfiscate
@@ -7892,15 +7829,24 @@ pub fn ultra_tier(ultra: UltraMutationId) -> i32 {
         | UltraMutationId::HorrorStalker
         | UltraMutationId::RoguePortalStrike
         | UltraMutationId::BigDogGuardian
-        | UltraMutationId::SkeletonNecromancy
-        | UltraMutationId::FrogToxicLord
+        | UltraMutationId::SkeletonBloodArmor
+        | UltraMutationId::FrogSwampBody
         | UltraMutationId::CuzHoarder => 1,
+        UltraMutationId::HorrorMeltdown => 3,
         _ => 2,
     }
 }
 
-/// GML ultra HUD frame (`race * 3 + tier - 1`, the `ultra_hud` array
-/// law in `scr_ultra_set`) for the held strip `sprEGIconHUD`.
+pub fn ultra_offer_frame(race: RaceId, ultra: UltraMutationId) -> i32 {
+    let race = if race == RaceId::Random {
+        RaceId::Fish
+    } else {
+        race
+    };
+    (race as i32 - 1) * 3 + ultra_tier(ultra) - 1
+}
+
+/// GML ultra HUD frame (`race * 3 + tier - 1`).
 pub fn ultra_hud_frame(race: RaceId, ultra: UltraMutationId) -> i32 {
     (race as i32) * 3 + ultra_tier(ultra) - 1
 }
@@ -9122,80 +9068,129 @@ pub fn menu_sprites(
         // the viewport.
         crate::MenuOverlay::Mutation => {
             let cx = vw * 0.5;
-            let selected = world
-                .get_resource::<MenuState>()
-                .and_then(|m| m.mutation_selected);
-            let ultra = world.get_resource::<PendingUltra>();
-            let skill = world.get_resource::<PendingMutation>();
-            let is_ultra = ultra.is_some() && skill.is_none();
+            let menu = world.get_resource::<MenuState>().cloned();
+            let selected = menu.as_ref().and_then(|state| state.mutation_selected);
+            let is_ultra = pending_offer_is_ultra(world);
             let title_path = if is_ultra {
                 "images/sprLevelUltraText.png"
             } else {
                 "images/sprLevelUpText.png"
             };
+            let appear = menu
+                .as_ref()
+                .map(|state| state.mutation_appear)
+                .unwrap_or(0.0);
+            for (dx, dy) in [(1.0, 1.0), (1.0, 0.0), (0.0, 1.0)] {
+                if let Some(s) = assets.sprite_for(
+                    title_path,
+                    2,
+                    gui_to_world(cx + appear + dx, 48.0 + dy),
+                    false,
+                    0.0,
+                    [0.0, 0.0, 0.0, 1.0],
+                ) {
+                    out.push(s);
+                }
+            }
             if let Some(s) = assets.sprite_for(
                 title_path,
                 2,
-                gui_to_world(cx, 48.0),
+                gui_to_world(cx + appear, 48.0),
                 false,
                 0.0,
                 [1.0; 4],
             ) {
                 out.push(s);
             }
-            if let Some(s) = assets.sprite_for(
-                "images/sprMutationSplat.png",
-                0,
-                gui_to_world(cx, 240.0 - 31.0),
-                false,
-                0.0,
-                [1.0; 4],
-            ) {
+            if menu
+                .as_ref()
+                .is_some_and(|state| state.mutation_splat)
+                && let Some(s) = assets.sprite_for(
+                    "images/sprMutationSplat.png",
+                    menu
+                        .as_ref()
+                        .map(|state| state.mutation_splat_frame as i32)
+                        .unwrap_or(0),
+                    gui_to_world(cx, 240.0 - 31.0),
+                    false,
+                    0.0,
+                    [1.0; 4],
+                )
+            {
                 out.push(s);
             }
-            let selected_race = world
-                .get_resource::<SelectedCharacter>()
-                .map(|s| s.0)
-                .unwrap_or(crate::data::RaceId::Fish);
-            let ids: Vec<i32> = if is_ultra {
-                ultra
-                    .map(|u| {
-                        u.choices.iter().map(|c| ultra_hud_frame(selected_race, *c)).collect()
-                    })
-                    .unwrap_or_default()
+
+            let race = pending_offer_race(world);
+            let n = if is_ultra {
+                world
+                    .get_resource::<PendingUltra>()
+                    .map(|pending| pending.choices.len())
+                    .unwrap_or(0)
             } else {
-                skill
-                    .map(|p| {
-                        p.choices.iter().map(|c| mutation_hud_frame(*c)).collect()
-                    })
-                    .unwrap_or_default()
+                world
+                    .get_resource::<PendingMutation>()
+                    .map(|pending| pending.choices.len())
+                    .unwrap_or(0)
             };
-            let icon_path = "images/sprSkillIcon.png";
-            // GML `LevCont/Other_10` icon row: `y = view_yview +
-            // view_height - 21`, `step = min(32, floor(view_w / (n+1)))`,
-            // centered on the view (`-12` nudge at 10+). Scale holds at
-            // `max(0.65, step/32)`; the port draws native (steady-state
-            // rows never exceed ~6 cards, so step is 32).
-            let n = ids.len();
-            let step = if n == 0 {
-                32.0
+            let step = (32.0f32).min((vw / (n.max(1) as f32 + 1.0)).floor());
+            let scale = if is_ultra {
+                1.0
             } else {
-                (32.0f32).min((vw / (n as f32 + 1.0)).floor())
+                (step / 32.0).max(0.65)
             };
-            for (i, frame) in ids.iter().enumerate() {
-                let half = step / 2.0;
-                let xoff = if n >= 10 { -12.0 } else { 0.0 };
-                let x = cx + xoff - (n as f32 - 1.0) * half + i as f32 * step;
-                let tint = if Some(i) == selected {
+            let half = (step as i32 / 2) as f32;
+            let xoff = if n >= 10 { -12.0 } else { 0.0 };
+            let icon_y = 240.0 - 21.0;
+            for i in 0..n {
+                let (path, frame, mul) = if is_ultra {
+                    let choice = world
+                        .get_resource::<PendingUltra>()
+                        .and_then(|pending| pending.choices.get(i).copied());
+                    (
+                        "images/sprEGSkillIcon.png",
+                        choice.map(|id| ultra_offer_frame(race, id)).unwrap_or(0),
+                        1.0,
+                    )
+                } else {
+                    let choice = world
+                        .get_resource::<PendingMutation>()
+                        .and_then(|pending| pending.choices.get(i).copied());
+                    (
+                        "images/sprSkillIcon.png",
+                        choice.map(mutation_hud_frame).unwrap_or(0),
+                        scale,
+                    )
+                };
+                let (path, frame) = if assets.uv(path, 0).is_some() {
+                    (path, frame)
+                } else if is_ultra {
+                    (
+                        "images/sprEGIconHUD.png",
+                        world
+                            .get_resource::<PendingUltra>()
+                            .and_then(|pending| pending.choices.get(i).copied())
+                            .map(|id| ultra_hud_frame(race, id))
+                            .unwrap_or(frame),
+                    )
+                } else {
+                    ("images/sprSkillIconHUD.png", frame)
+                };
+                let card_y = icon_y
+                    + menu
+                        .as_ref()
+                        .and_then(|state| state.mutation_appear_y.get(i).copied())
+                        .unwrap_or(0.0)
+                    - if selected == Some(i) { 1.0 } else { 0.0 };
+                let tint = if selected == Some(i) {
                     [1.0; 4]
                 } else {
                     [0.5, 0.5, 0.5, 1.0]
                 };
-                if let Some(s) = assets.sprite_for(
-                    icon_path,
-                    *frame,
-                    gui_to_world(x, 240.0 - 21.0),
-                    false,
+                if let Some(s) = assets.sprite_scaled_rotated(
+                    path,
+                    frame,
+                    gui_to_world(cx + xoff - (n as f32 - 1.0) * half + i as f32 * step, card_y),
+                    mul * gm.s,
                     0.0,
                     tint,
                 ) {

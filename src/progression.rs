@@ -133,76 +133,75 @@ pub fn mutation_name(id: MutationId) -> (&'static str, &'static str) {
     }
 }
 
-/// Ultra choice pair per race (bevy `ultra_choices_for` parity).
-pub fn ultra_choices_for(race: RaceId) -> [UltraMutationId; 2] {
+pub fn ultra_choices_for(race: RaceId) -> Vec<UltraMutationId> {
     match race {
-        RaceId::Fish | RaceId::Random => [
-            UltraMutationId::FishGunWarrant,
+        RaceId::Fish | RaceId::Random => vec![
             UltraMutationId::FishConfiscate,
+            UltraMutationId::FishGunWarrant,
         ],
-        RaceId::Crystal => [
+        RaceId::Crystal => vec![
             UltraMutationId::CrystalFortress,
             UltraMutationId::CrystalJuggernaut,
         ],
-        RaceId::Eyes => [
-            UltraMutationId::EyesMonsterStyle,
+        RaceId::Eyes => vec![
             UltraMutationId::EyesProjectileStyle,
+            UltraMutationId::EyesMonsterStyle,
         ],
-        RaceId::Melting => [
+        RaceId::Melting => vec![
             UltraMutationId::MeltingBrainCapacity,
             UltraMutationId::MeltingDetachment,
         ],
-        RaceId::Plant => [UltraMutationId::PlantTrapper, UltraMutationId::PlantKiller],
-        RaceId::Venuz => [
-            UltraMutationId::VenuzBack2Bizniz,
+        RaceId::Plant => vec![UltraMutationId::PlantTrapper, UltraMutationId::PlantKiller],
+        RaceId::Venuz => vec![
             UltraMutationId::VenuzGunGod,
+            UltraMutationId::VenuzBack2Bizniz,
         ],
-        RaceId::Steroids => [
+        RaceId::Steroids => vec![
             UltraMutationId::SteroidsAmbidextrous,
             UltraMutationId::SteroidsGetArmed,
         ],
-        RaceId::Robot => [
+        RaceId::Robot => vec![
             UltraMutationId::RobotRefinedTaste,
             UltraMutationId::RobotRegurgitate,
         ],
-        RaceId::Chicken => [
+        RaceId::Chicken => vec![
             UltraMutationId::ChickenHarderToKill,
             UltraMutationId::ChickenDetermination,
         ],
-        RaceId::Rebel => [
+        RaceId::Rebel => vec![
             UltraMutationId::RebelPersonalGuard,
             UltraMutationId::RebelRiot,
         ],
-        RaceId::Horror => [
+        RaceId::Horror => vec![
             UltraMutationId::HorrorStalker,
             UltraMutationId::HorrorAnomaly,
+            UltraMutationId::HorrorMeltdown,
         ],
-        RaceId::Rogue => [
-            UltraMutationId::RogueSuperBlastArmor,
+        RaceId::Rogue => vec![
             UltraMutationId::RoguePortalStrike,
+            UltraMutationId::RogueSuperBlastArmor,
         ],
-        RaceId::BigDog => [
-            UltraMutationId::BigDogHeavyArtillery,
+        RaceId::BigDog => vec![
             UltraMutationId::BigDogGuardian,
+            UltraMutationId::BigDogHeavyArtillery,
         ],
-        RaceId::Skeleton => [
+        RaceId::Skeleton => vec![
             UltraMutationId::SkeletonBloodArmor,
             UltraMutationId::SkeletonNecromancy,
         ],
-        RaceId::Frog => [
-            UltraMutationId::FrogToxicLord,
+        RaceId::Frog => vec![
             UltraMutationId::FrogSwampBody,
+            UltraMutationId::FrogToxicLord,
         ],
-        RaceId::Cuz => [UltraMutationId::CuzHoarder, UltraMutationId::CuzQuickSwap],
+        RaceId::Cuz => vec![UltraMutationId::CuzHoarder, UltraMutationId::CuzEmotional],
     }
 }
 
 /// GML ultra display name + description verbatim
 /// (`scripts/scrUltras/scrUltras.gml`: `ultr_name[race,tier]` /
 /// `ultr_text[race,tier]`, unlocalized defaults, `@` tags included).
-/// GML indexes by (race gml id, tier 1-2/3); the port's per-race pair
-/// maps onto tiers 1-2 (Horror's 3rd tier only exists via the Horror
-/// race gate in `LevCont`, not as an offer pair).
+/// GML indexes by (race gml id, tier 1-3); each offer follows the
+/// source tier order, including Horror's third choice.
 pub fn ultra_mutation_name(id: UltraMutationId) -> (&'static str, &'static str) {
     match id {
         UltraMutationId::FishGunWarrant => {
@@ -269,6 +268,7 @@ pub fn ultra_mutation_name(id: UltraMutationId) -> (&'static str, &'static str) 
             ("STALKER", "ENEMIES EXPLODE IN RADIATION ON DEATH")
         }
         UltraMutationId::HorrorAnomaly => ("ANOMALY", "@pPORTAL@s APPEAR EARLIER"),
+        UltraMutationId::HorrorMeltdown => ("MELTDOWN", "DOUBLE @gRAD@s CAPACITY"),
         UltraMutationId::RogueSuperBlastArmor => {
             ("SUPER BLAST ARMOR", "SUPER BLAST ARMOR")
         }
@@ -468,6 +468,9 @@ pub fn check_level_up(
             player.mutation_picks_owed = player.mutation_picks_owed.saturating_add(1);
         }
     }
+    if player.level >= 10 {
+        player.rads = player.rads.min(player.next_level_rads.max(1));
+    }
 
     if leveled {
         toast.show(if player.ultra_pick_owed && player.level >= 10 {
@@ -534,12 +537,24 @@ pub fn level_up_feedback(
 /// Roll up to 4 unowned mutations (Destiny crowns roll 1; Patience
 /// grants 4 next roll, then is consumed without repeating).
 pub fn roll_mutations(player: &mut Player) -> Vec<MutationId> {
+    roll_mutations_for(player, RaceId::Fish)
+}
+
+pub fn roll_mutations_for(player: &mut Player, race: RaceId) -> Vec<MutationId> {
     let mut rng = rand::rng();
-    roll_mutations_with(player, &mut rng)
+    roll_mutations_with_for(player, race, &mut rng)
 }
 
 /// Seeded roll (deterministic under a seeded RNG; tests use this).
 pub fn roll_mutations_with(player: &mut Player, rng: &mut impl rand::RngExt) -> Vec<MutationId> {
+    roll_mutations_with_for(player, RaceId::Fish, rng)
+}
+
+pub fn roll_mutations_with_for(
+    player: &mut Player,
+    race: RaceId,
+    rng: &mut impl rand::RngExt,
+) -> Vec<MutationId> {
     let mut pool: Vec<MutationId> = ALL_MUTATIONS
         .iter()
         .copied()
@@ -555,13 +570,14 @@ pub fn roll_mutations_with(player: &mut Player, rng: &mut impl rand::RngExt) -> 
     let mut out = Vec::new();
 
     let destiny = player.crown == CrownKind::Destiny;
-    let want_base = if destiny { 1 } else { 4 };
+    let mut want_base = if destiny { 1 } else { 4 };
+    if race == RaceId::Horror {
+        want_base += 1;
+    }
 
-    let want_base = if player.patience_bonus && !destiny {
-        4
-    } else {
-        want_base
-    };
+    if player.patience_bonus && !destiny {
+        want_base = 4;
+    }
     let want = pool.len().min(want_base);
 
     player.patience_bonus = false;
@@ -665,7 +681,7 @@ pub fn handle_mutation_choice(
             player.ultra_pick_owed = false;
 
             if player.mutation_picks_owed > 0 {
-                let choices = roll_mutations(&mut player);
+                let choices = roll_mutations_for(&mut player, race_state.race);
                 if choices.is_empty() {
                     health.hp = health.max;
                     try_recharge_strong_spirit(&mut player, &health);
@@ -724,14 +740,14 @@ pub fn handle_mutation_choice(
         player.mutation_picks_owed = player.mutation_picks_owed.saturating_sub(1);
 
         if player.ultra_pick_owed && player.ultra.is_none() && player.level >= 10 {
-            let choices = ultra_choices_for(race_state.race).to_vec();
+            let choices = ultra_choices_for(race_state.race);
             commands.insert_resource(PendingUltra { choices });
             flow.paused.0 = true;
             return;
         }
 
         if player.mutation_picks_owed > 0 {
-            let choices = roll_mutations(&mut player);
+            let choices = roll_mutations_for(&mut player, race_state.race);
             if choices.is_empty() {
                 health.hp = health.max;
                 try_recharge_strong_spirit(&mut player, &health);
@@ -1118,6 +1134,9 @@ pub fn apply_ultra_mutation(
             player.pickup_range += 80.0;
             player.lucky_shot = true;
             player.laser_brain = true;
+        }
+        UltraMutationId::HorrorMeltdown => {
+            player.next_level_rads = player.next_level_rads.saturating_mul(2);
         }
 
         UltraMutationId::RogueSuperBlastArmor => {
@@ -2061,17 +2080,17 @@ fn begin_between_floor_skill_picks(
 ) {
     if player.ultra_pick_owed && player.ultra.is_none() && player.level >= 10 {
         paused.0 = true;
-        let choices = ultra_choices_for(race).to_vec();
+        let choices = ultra_choices_for(race);
         commands.insert_resource(PendingUltra { choices });
 
         return;
     }
 
     if player.mutation_picks_owed > 0 {
-        let choices = roll_mutations(player);
+        let choices = roll_mutations_for(player, race);
         if choices.is_empty() {
             while player.mutation_picks_owed > 0 {
-                let c = roll_mutations(player);
+                let c = roll_mutations_for(player, race);
                 if c.is_empty() {
                     player.mutation_picks_owed = player.mutation_picks_owed.saturating_sub(1);
                 } else {

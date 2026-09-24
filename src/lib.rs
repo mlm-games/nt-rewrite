@@ -264,6 +264,7 @@ pub struct App {
     /// `App::touch_up`, so ids missing this frame latch the release
     /// edge in `feed_input`.
     last_touch_ids: Vec<i64>,
+    touch_menu_positions: Vec<(i64, Vec2)>,
     /// Viewport width in screen px for the touch button zones (bevy
     /// reads `window.width()`; refreshed from the frame geometry).
     view_width: f32,
@@ -364,6 +365,7 @@ impl App {
             interact_edge: false,
             pad_live: false,
             last_touch_ids: Vec::new(),
+            touch_menu_positions: Vec::new(),
             view_width: 1280.0,
             view_viewport_dp: [1280.0, 720.0],
             view_density: 1.0,
@@ -1620,6 +1622,19 @@ impl App {
         // edge, so sticks never claimed and buttons never pulsed.
         let touch_contacts_snap = staging.touch_contacts();
         drop(staging);
+        let mut touch_menu_positions = std::mem::take(&mut self.touch_menu_positions);
+        for contact in &touch_contacts_snap {
+            let id = contact.id as i64;
+            if contact.just_pressed {
+                touch_menu_positions.push((id, contact.pos));
+            } else if let Some((_, position)) = touch_menu_positions
+                .iter_mut()
+                .find(|entry| entry.0 == id)
+            {
+                *position = contact.pos;
+            }
+        }
+        let mut released_touch_clicks = Vec::new();
         let state = self
             .sim
             .world
@@ -1812,7 +1827,38 @@ impl App {
             crate::input::sample_keyboard_mapped(&held, &just, &mouse, Some(&keymap), &mut input);
             let pads = self.staging.borrow_mut().take_pads();
             self.pad_live = self.staging.borrow().pad_live;
+            let menu_cycle = if offer_open {
+                input.take_cycle_weapon()
+            } else {
+                0
+            };
+            let menu_slot = if offer_open {
+                input.take_weapon_slot()
+            } else {
+                None
+            };
+            if offer_open {
+                let step = pads.iter().fold(0_i8, |value, pad| {
+                    value.saturating_add(
+                        i8::from(pad.dpad_right_pressed)
+                            .saturating_sub(i8::from(pad.dpad_left_pressed)),
+                    )
+                });
+                if step != 0 {
+                    input.push_menu_nav(0, step);
+                }
+            }
             sample_gamepads_mapped(&pads, Some(&keymap), &mut input);
+            if offer_open {
+                let _ = input.take_cycle_weapon();
+                let _ = input.take_weapon_slot();
+                if menu_cycle != 0 {
+                    input.cycle_weapon(menu_cycle);
+                }
+                if let Some(slot) = menu_slot {
+                    input.select_weapon(slot);
+                }
+            }
             {
                 // Contacts were snapshotted alongside the clicks above
                 // (`touch_contacts_snap`): re-calling `touch_contacts`
@@ -1841,6 +1887,15 @@ impl App {
                     }
                 }
                 self.last_touch_ids = live.into_iter().collect();
+                let mut still_down = Vec::with_capacity(touch_menu_positions.len());
+                for (id, position) in touch_menu_positions.drain(..) {
+                    if self.last_touch_ids.contains(&id) {
+                        still_down.push((id, position));
+                    } else {
+                        released_touch_clicks.push(position);
+                    }
+                }
+                touch_menu_positions = still_down;
                 let need_touch = !contacts.is_empty()
                     || had
                     || !input.touch_lifted.is_empty()
@@ -1885,6 +1940,7 @@ impl App {
                 }
             }
         }
+        self.touch_menu_positions = touch_menu_positions;
         // Right-click and Shift share the `spec` action (GML `spec`
         // on `mb_right` plus the Shift keyboard fallback); on Title
         // that action toggles loadout/hardmode, so a right-click
@@ -2099,6 +2155,29 @@ impl App {
                     )
                 {
                     apply_menu_action(&mut self.sim.world, action);
+                }
+            }
+            let viewport_dp = self.view_viewport_dp;
+            let gml_view = crate::render::gml_view_size(viewport_dp);
+            let sx = if viewport_dp[0] > 1e-6 {
+                gml_view[0] / viewport_dp[0]
+            } else {
+                1.0
+            };
+            let sy = if viewport_dp[1] > 1e-6 {
+                gml_view[1] / viewport_dp[1]
+            } else {
+                1.0
+            };
+            for point in released_touch_clicks {
+                if let Some(action) = crate::render::mutation_icon_hit_action(
+                    &mut self.sim.world,
+                    point.x * sx,
+                    point.y * sy,
+                    gml_view[0],
+                ) {
+                    apply_menu_action(&mut self.sim.world, action);
+                    break;
                 }
             }
 
@@ -2363,33 +2442,59 @@ impl App {
                 if n == 0 {
                     return;
                 }
+                let is_ultra = self
+                    .sim
+                    .world
+                    .get_resource::<crate::comps_a::PendingUltra>()
+                    .is_some();
                 let step = (vw / (n as f32 + 1.0)).floor().min(32.0);
-                let scale = (step / 32.0).max(0.65);
+                let scale = if is_ultra {
+                    1.0
+                } else {
+                    (step / 32.0).max(0.65)
+                };
                 let half = (step as i32 / 2) as f32;
                 let xview_shift = if n >= 10 { -12.0 } else { 0.0 };
                 let start_x = vw * 0.5 + xview_shift - (n as f32 - 1.0) * half;
                 let icon_y = 240.0 - 21.0;
                 let hw = 24.0 * scale * 0.5;
-                let top = icon_y - 16.0 * scale;
-                let hh = 32.0 * scale;
+                let menu = self.sim.world.resource::<MenuState>().clone();
+                let mut pointed = None;
                 for i in 0..n {
                     let cx = start_x + i as f32 * step;
+                    let card_y = icon_y
+                        + menu
+                            .mutation_appear_y
+                            .get(i)
+                            .copied()
+                            .unwrap_or(0.0)
+                        - if menu.mutation_selected == Some(i) {
+                            1.0
+                        } else {
+                            0.0
+                        };
+                    if !is_ultra
+                        && menu
+                            .mutation_appear_y
+                            .get(i)
+                            .is_some_and(|value| *value > 0.01)
+                    {
+                        continue;
+                    }
+                    let top = card_y - 16.0 * scale;
+                    let hh = 32.0 * scale;
                     if (gx - cx).abs() <= hw && gy >= top && gy <= top + hh {
-                        let cur = self
-                            .sim
-                            .world
-                            .get_resource::<MenuState>()
-                            .and_then(|m| m.mutation_selected);
-                        if cur != Some(i) {
-                            if let Some(mut menu) =
-                                self.sim.world.get_resource_mut::<MenuState>()
-                            {
-                                menu.mutation_selected = Some(i);
-                            }
-                            crate::state::menus::emit_hover(&mut self.sim.world);
-                        }
+                        pointed = Some(i);
                         break;
                     }
+                }
+                match pointed {
+                    Some(i) if menu.mutation_selected != Some(i) => {
+                        crate::state::menus::set_mutation_selection(&mut self.sim.world, i);
+                        crate::state::menus::emit_hover(&mut self.sim.world);
+                    }
+                    None => crate::state::menus::clear_mutation_selection(&mut self.sim.world),
+                    _ => {}
                 }
             }
             // GML `PauseButton/Step_0`: same collision hover law as the
@@ -2766,25 +2871,16 @@ impl App {
             // GENERATING + roadmap — no PlayerHUD/MiscHUD — and the
             // Loading room's run is pre-`setup_run` (no live run actors
             // yet), so the HUD stays off while Loading like GML (TopCont
-            // draws the HUD only once the run's actors exist).
+            // draws the HUD only once the run's actors exist). LevCont's
+            // mutation offer keeps the live PlayerHUD enabled.
             let hud_view = view_rect_world(viewport_dp, world_size, &self.cam);
             let loading_cover = state == AppState::Loading
                 || self
                     .sim
                     .world
                     .get_resource::<crate::comps_b::FloorTransition>()
-                    .is_some_and(|f| f.active)
-                || self
-                    .sim
-                    .world
-                    .get_resource::<crate::comps_a::PendingMutation>()
-                    .is_some()
-                || self
-                    .sim
-                    .world
-                    .get_resource::<crate::comps_a::PendingUltra>()
-                    .is_some();
-            let mut h = if loading_cover || generation_screen {
+                    .is_some_and(|f| f.active);
+            let mut h = if loading_cover {
                 Vec::new()
             } else {
                 hud_sprites(&mut self.sim.world, assets, hud_view, hud_dt)
@@ -2797,7 +2893,9 @@ impl App {
             // (off during cinematic/throne-sit/unlock) + live player +
             // touch device (`!opt_keyboard && !opt_gamepad`) + not the
             // layout editor. The port additionally requires live play
-            // (menus/game-over have no sticks).
+            // (menus/game-over have no sticks); mutation offers remain
+            // touch-interactive while the run is paused for selection.
+            let mutation_screen = menu_kind == Some(MenuOverlay::Mutation);
             let touch_paused = self
                 .sim
                 .world
@@ -2809,7 +2907,7 @@ impl App {
                 .get_resource::<OverlayMenu>()
                 .copied()
                 .unwrap_or_default();
-            let touch_live = playing
+            let touch_live = (playing || mutation_screen)
                 && state == AppState::InGame
                 && !game_over
                 && self
@@ -2819,7 +2917,7 @@ impl App {
                     .iter(&self.sim.world)
                     .next()
                     .is_some()
-                && !touch_paused
+                && (!touch_paused || mutation_screen)
                 && touch_overlay == OverlayMenu::None
                 && self
                     .sim
@@ -2882,7 +2980,12 @@ impl App {
                     world_size,
                     &self.cam,
                 );
-                stamp_z(&mut menu, Z_MENU);
+                let menu_z = if menu_kind == Some(MenuOverlay::Mutation) {
+                    Z_HUD - 1.0
+                } else {
+                    Z_MENU
+                };
+                stamp_z(&mut menu, menu_z);
                 s.extend(menu);
             }
             // Hardware cursor (GML `UberCont/Draw_75` verbatim): in
@@ -2968,14 +3071,12 @@ impl App {
         // Canvas text rides above the opaque vortex pass, so the HUD
         // rows need the same gate or HP/level/ammo/FLOOR paints over
         // the spiral mid-transition.
-        let cover_chrome_off = matches!(
-            menu_kind,
-            Some(MenuOverlay::Loading) | Some(MenuOverlay::Mutation)
-        ) || self
-            .sim
-            .world
-            .get_resource::<crate::comps_b::FloorTransition>()
-            .is_some_and(|f| f.active);
+        let cover_chrome_off = menu_kind == Some(MenuOverlay::Loading)
+            || self
+                .sim
+                .world
+                .get_resource::<crate::comps_b::FloorTransition>()
+                .is_some_and(|f| f.active);
         let _ = &mut sprites;
         let mut batch = SpriteBatch::new(
             self.assets
@@ -3102,14 +3203,15 @@ impl App {
         );
         let overlay_color = crate::effects::flash_rgba(&self.sim.world);
 
-        // GML `scrGameIsGenerationScreen` verbatim: no PlayerHUD text
-        // while a generation screen owns the frame (`GenCont` behind
-        // Loading, `LevCont` behind the offer, mid-run `FloorTransition`
-        // covers). The canvas text layer rides ABOVE the opaque vortex
-        // pass, so an ungated `hud_rows` paints HP/level/ammo/FLOOR
-        // straight over the spiral (the cover-text leak). The tutorial
-        // letterbox bar rides `menu_rows` instead (see below).
-        let hud_rows = if state == AppState::InGame && menu_kind.is_none() && !cover_chrome_off {
+        // GML `scrGameIsGenerationScreen` keeps PlayerHUD text off for
+        // Loading and floor-transition covers; `LevCont/Draw_64` explicitly
+        // keeps it on for mutation offers. The canvas text layer rides ABOVE
+        // the opaque vortex pass, so the remaining cover gates prevent
+        // HP/level/ammo/FLOOR from painting over the spiral.
+        let hud_rows = if state == AppState::InGame
+            && !cover_chrome_off
+            && matches!(menu_kind, None | Some(MenuOverlay::Mutation))
+        {
             hud_overlay_lines(&mut self.sim.world, viewport_dp)
         } else {
             Vec::new()

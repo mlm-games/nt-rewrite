@@ -2740,8 +2740,12 @@ mod verbatim_title_to_first_level {
                 } else {
                     (0, false)
                 };
+            let offer_key = crate::state::menus::mutation_offer_key(
+                offer.get_resource::<PendingMutation>(),
+                offer.get_resource::<PendingUltra>(),
+            );
             if let Some(mut m) = offer.get_resource_mut::<crate::state::menus::MenuState>() {
-                crate::state::menus::apply_mutation_mirror(&mut m, count, is_ultra);
+                crate::state::menus::apply_mutation_mirror(&mut m, count, is_ultra, offer_key);
             }
         }
         let offer_menu = offer.resource::<crate::state::menus::MenuState>().clone();
