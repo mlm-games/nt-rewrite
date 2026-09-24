@@ -31,6 +31,7 @@ use repame_fx::Trauma;
 use repame_sim::SimTime;
 
 use crate::audio::{AudioCue, GameAudio, QueuedReactiveCue, ReactiveCue};
+use crate::combat::queue_enemy_spawn;
 use crate::comps_a::{
     Euphoria, FloorMask, FloorStarted, GameCleanup, Health, HeavyHeart, Inventory, LevelCleanup,
     MutationChoice, OpenMind, PendingMutation, PendingUltra, Player, Projectile, RaceState, Run,
@@ -103,7 +104,10 @@ pub fn mutation_name(id: MutationId) -> (&'static str, &'static str) {
     match id {
         MutationId::RhinoSkin => ("RHINO SKIN", "+4 @rMAX HP"),
         MutationId::ExtraFeet => ("EXTRA FEET", "MORE @wSPEED#@sWALK NORMALY ON ALL TERRAIN"),
-        MutationId::PlutoniumHunger => ("PLUTONIUM HUNGER", "ATTRACT @wDROPS@s AND @gRADS@s FROM FURTHER"),
+        MutationId::PlutoniumHunger => (
+            "PLUTONIUM HUNGER",
+            "ATTRACT @wDROPS@s AND @gRADS@s FROM FURTHER",
+        ),
         MutationId::RabbitPaw => ("RABBIT PAW", "MORE @rHP@s AND @yAMMO@s DROPS"),
         MutationId::ThroneButt => ("THRONE BUTT", "UPGRADES YOUR @wSPECIAL ABILITY"),
         MutationId::LuckyShot => ("LUCKY SHOT", "SOME KILLS REGENERATE @yAMMO"),
@@ -114,7 +118,10 @@ pub fn mutation_name(id: MutationId) -> (&'static str, &'static str) {
         MutationId::ScarierFace => ("SCARIER FACE", "LESS @wENEMY @rHP"),
         MutationId::Euphoria => ("EUPHORIA", "SLOWER @wENEMY@s BULLETS"),
         MutationId::LongArms => ("LONG ARMS", "MORE @wMELEE@s RANGE"),
-        MutationId::BoilingVeins => ("BOILING VEINS", "@wNO DAMAGE@s FROM EXPLOSIONS AND FIRE#WHEN UNDER 4 @rHP"),
+        MutationId::BoilingVeins => (
+            "BOILING VEINS",
+            "@wNO DAMAGE@s FROM EXPLOSIONS AND FIRE#WHEN UNDER 4 @rHP",
+        ),
         MutationId::ShotgunShoulders => ("SHOTGUN SHOULDERS", "@wSHELLS@s BOUNCE FURTHER"),
         MutationId::RecycleGland => ("RECYCLE GLANDS", "MOST HIT @wBULLETS@s BECOME @yAMMO"),
         MutationId::LaserBrain => ("LASER BRAIN", "@wENERGY@s WEAPONS DEAL MORE @wDAMAGE@s"),
@@ -124,10 +131,16 @@ pub fn mutation_name(id: MutationId) -> (&'static str, &'static str) {
         MutationId::BoltMarrow => ("BOLT MARROW", "HOMING @wBOLTS"),
         MutationId::Stress => ("STRESS", "HIGHER RATE OF FIRE#AS @rHP@s GETS LOWER"),
         MutationId::TriggerFingers => ("TRIGGER FINGERS", "KILLS LOWER YOUR RELOAD TIME"),
-        MutationId::SharpTeeth => ("SHARP TEETH", "DAMAGE TAKEN IS DEALT TO#ALL ENEMIES ON SCREEN"),
+        MutationId::SharpTeeth => (
+            "SHARP TEETH",
+            "DAMAGE TAKEN IS DEALT TO#ALL ENEMIES ON SCREEN",
+        ),
         MutationId::Patience => ("PATIENCE", "@gMUTATE@s LATER"),
         MutationId::Hammerhead => ("HAMMER HEAD", "BREAK TROUGH LIMITED AMOUNT OF WALLS"),
-        MutationId::StrongSpirit => ("STRONG SPIRIT", "PREVENT DEATH ONCE#RECHARGE AT FULL @rHP@s IN NEXT LEVEL"),
+        MutationId::StrongSpirit => (
+            "STRONG SPIRIT",
+            "PREVENT DEATH ONCE#RECHARGE AT FULL @rHP@s IN NEXT LEVEL",
+        ),
         MutationId::OpenMind => ("OPEN MIND", "EXTRA @wCHESTS@s SPAWN"),
         MutationId::HeavyHeart => ("HEAVY HEART", "MORE WEAPON DROPS"),
     }
@@ -204,21 +217,17 @@ pub fn ultra_choices_for(race: RaceId) -> Vec<UltraMutationId> {
 /// source tier order, including Horror's third choice.
 pub fn ultra_mutation_name(id: UltraMutationId) -> (&'static str, &'static str) {
     match id {
-        UltraMutationId::FishGunWarrant => {
-            (
-                "GUN WARRANT",
-                "INFINITE AMMO THE FIRST 7 SECONDS#AFTER EXITING A @pPORTAL",
-            )
-        }
+        UltraMutationId::FishGunWarrant => (
+            "GUN WARRANT",
+            "INFINITE AMMO THE FIRST 7 SECONDS#AFTER EXITING A @pPORTAL",
+        ),
         UltraMutationId::FishConfiscate => ("CONFISCATE", "ENEMIES SOMETIMES DROP CHESTS"),
         UltraMutationId::CrystalFortress => ("FORTRESS", "+6 MAX HP"),
         UltraMutationId::CrystalJuggernaut => ("JUGGERNAUT", "MOVE WHEN SHIELDING"),
-        UltraMutationId::EyesMonsterStyle => {
-            (
-                "MONSTER STYLE",
-                "PUSH NEARBY ENEMIES AWAY#WHEN NOT USING TELEKINESIS",
-            )
-        }
+        UltraMutationId::EyesMonsterStyle => (
+            "MONSTER STYLE",
+            "PUSH NEARBY ENEMIES AWAY#WHEN NOT USING TELEKINESIS",
+        ),
         UltraMutationId::EyesProjectileStyle => {
             ("PROJECTILE STYLE", "TELEKINESIS HOLDS YOUR PROJECTILES")
         }
@@ -230,68 +239,42 @@ pub fn ultra_mutation_name(id: UltraMutationId) -> (&'static str, &'static str) 
         UltraMutationId::PlantKiller => ("KILLER", "KILLING SNARED ENEMY SPAWN SAPLINGS"),
         UltraMutationId::VenuzBack2Bizniz => ("BACK 2 BIZNIZ", "FREE POP POP UPGRADE"),
         UltraMutationId::VenuzGunGod => ("IMA GUN GOD", "HIGHER RATE OF FIRE"),
-        UltraMutationId::SteroidsAmbidextrous => {
-            ("AMBIDEXTROUS", "DOUBLE WEAPONS FROM CHESTS")
-        }
-        UltraMutationId::SteroidsGetArmed => {
-            ("GET LOADED", "AMMO CHESTS CONTAIN ALL AMMO TYPES")
-        }
-        UltraMutationId::RobotRefinedTaste => {
-            (
-                "REFINED TASTE",
-                "HIGH TIER WEAPONS ONLY#AUTO EAT WEAPONS LEFT BEHIND",
-            )
-        }
-        UltraMutationId::RobotRegurgitate => {
-            (
-                "REGURGITATE",
-                "EATING WEAPONS CAN DROP CHESTS#AUTO EAT WEAPONS LEFT BEHIND",
-            )
-        }
-        UltraMutationId::ChickenHarderToKill => {
-            ("HARDER TO KILL", "KILLS EXTEND BLEED TIME")
-        }
-        UltraMutationId::ChickenDetermination => {
-            (
-                "DETERMINATION",
-                "THROWN WEAPONS CAN TELEPORT BACK#TO YOUR SECONDARY SLOT",
-            )
-        }
-        UltraMutationId::RebelPersonalGuard => {
-            (
-                "PERSONAL GUARD",
-                "START A LEVEL WITH 2 ALLIES#ALL ALLIES HAVE MORE HP",
-            )
-        }
+        UltraMutationId::SteroidsAmbidextrous => ("AMBIDEXTROUS", "DOUBLE WEAPONS FROM CHESTS"),
+        UltraMutationId::SteroidsGetArmed => ("GET LOADED", "AMMO CHESTS CONTAIN ALL AMMO TYPES"),
+        UltraMutationId::RobotRefinedTaste => (
+            "REFINED TASTE",
+            "HIGH TIER WEAPONS ONLY#AUTO EAT WEAPONS LEFT BEHIND",
+        ),
+        UltraMutationId::RobotRegurgitate => (
+            "REGURGITATE",
+            "EATING WEAPONS CAN DROP CHESTS#AUTO EAT WEAPONS LEFT BEHIND",
+        ),
+        UltraMutationId::ChickenHarderToKill => ("HARDER TO KILL", "KILLS EXTEND BLEED TIME"),
+        UltraMutationId::ChickenDetermination => (
+            "DETERMINATION",
+            "THROWN WEAPONS CAN TELEPORT BACK#TO YOUR SECONDARY SLOT",
+        ),
+        UltraMutationId::RebelPersonalGuard => (
+            "PERSONAL GUARD",
+            "START A LEVEL WITH 2 ALLIES#ALL ALLIES HAVE MORE HP",
+        ),
         UltraMutationId::RebelRiot => ("RIOT", "DOUBLE ALLY SPAWNS"),
-        UltraMutationId::HorrorStalker => {
-            ("STALKER", "ENEMIES EXPLODE IN RADIATION ON DEATH")
-        }
+        UltraMutationId::HorrorStalker => ("STALKER", "ENEMIES EXPLODE IN RADIATION ON DEATH"),
         UltraMutationId::HorrorAnomaly => ("ANOMALY", "@pPORTAL@s APPEAR EARLIER"),
         UltraMutationId::HorrorMeltdown => ("MELTDOWN", "DOUBLE @gRAD@s CAPACITY"),
-        UltraMutationId::RogueSuperBlastArmor => {
-            ("SUPER BLAST ARMOR", "SUPER BLAST ARMOR")
-        }
-        UltraMutationId::RoguePortalStrike => {
-            (
-                "SUPER PORTAL STRIKE",
-                "DOUBLE PORTAL STRIKE PICKUPS#AND CAPACITY",
-            )
-        }
-        UltraMutationId::BigDogHeavyArtillery => {
-            ("ULTRA MISSILES", "@wROCKETS SHOOT BULLETS")
-        }
+        UltraMutationId::RogueSuperBlastArmor => ("SUPER BLAST ARMOR", "SUPER BLAST ARMOR"),
+        UltraMutationId::RoguePortalStrike => (
+            "SUPER PORTAL STRIKE",
+            "DOUBLE PORTAL STRIKE PICKUPS#AND CAPACITY",
+        ),
+        UltraMutationId::BigDogHeavyArtillery => ("ULTRA MISSILES", "@wROCKETS SHOOT BULLETS"),
         UltraMutationId::BigDogGuardian => ("ULTRA SPIN", "@wIMPROVED SPIN ATTACK"),
         UltraMutationId::SkeletonBloodArmor => ("REDEMPTION", "BACK IN THE FLESH"),
         UltraMutationId::SkeletonNecromancy => {
             ("DAMNATION", "FAST RECHARGE AFTER#USING BLOOD GAMBLE")
         }
-        UltraMutationId::FrogToxicLord => {
-            ("INTIMACY", "CONTINUOUSLY SPREAD TOXIC GAS")
-        }
-        UltraMutationId::FrogSwampBody => {
-            ("DISTANCE", "@gRADIATION@s CREATES TOXIC GAS")
-        }
+        UltraMutationId::FrogToxicLord => ("INTIMACY", "CONTINUOUSLY SPREAD TOXIC GAS"),
+        UltraMutationId::FrogSwampBody => ("DISTANCE", "@gRADIATION@s CREATES TOXIC GAS"),
         UltraMutationId::CuzHoarder => ("ARSENAL", "TWICE AS MANY GUNS"),
         UltraMutationId::CuzQuickSwap => ("QUICK SWAP", "SWAP ABILITY IS NEARLY INSTANT"),
         UltraMutationId::CuzEmotional => ("EMOTIONAL", "TWICE AS MANY @bTEARS@w"),
@@ -1299,7 +1282,7 @@ pub fn portal_check(
         LevelCleanup,
         PortalClear {
             timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
-                        scale: 1.0,
+            scale: 1.0,
         },
         Pos(pos),
     ));
@@ -1428,7 +1411,9 @@ pub fn tick_portal_shock(
     run: Res<Run>,
     player_q: Query<(&Player, &Inventory, &RaceState)>,
 ) {
-    let hasted = player_q.single().is_ok_and(|(p, _, _)| p.crown == CrownKind::Haste);
+    let hasted = player_q
+        .single()
+        .is_ok_and(|(p, _, _)| p.crown == CrownKind::Haste);
     let decide = player_q.single().ok().map(|(p, inv, race)| {
         crate::pickups::decide_ctx_for(
             &run,
@@ -1562,7 +1547,7 @@ pub fn tick_portal_shock(
                         LevelCleanup,
                         crate::comps_b::PortalClear {
                             timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
-                        scale: 1.0,
+                            scale: 1.0,
                         },
                         Pos(cpos),
                     ));
@@ -1592,7 +1577,7 @@ pub fn tick_portal_shock(
                         LevelCleanup,
                         crate::comps_b::PortalClear {
                             timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
-                        scale: 1.0,
+                            scale: 1.0,
                         },
                         Pos(cpos),
                     ));
@@ -1648,17 +1633,17 @@ pub fn tick_portal_shock(
                             let a = rng.random_range(0.0..std::f32::consts::TAU);
                             let d = glam::Vec2::new(a.cos(), a.sin());
                             let s = rng.random_range(0.0..5.0) * 30.0;
-                            commands.spawn(crate::combat::PendingEnemySpawn {
-                                kind: crate::data::EnemyKind::RadMaggot,
-                                pos: cpos
-                                    + glam::Vec2::new(
-                                        rng.random_range(-4.0..4.0),
-                                        rng.random_range(-4.0..4.0),
-                                    )
-                                    + d * s * 0.05,
-                                difficulty: 1.0,
-                                loops: run.loop_count,
-                            });
+                            let jitter = glam::Vec2::new(
+                                rng.random_range(-4.0..4.0),
+                                rng.random_range(-4.0..4.0),
+                            );
+                            queue_enemy_spawn(
+                                &mut commands,
+                                crate::data::EnemyKind::RadMaggot,
+                                cpos + jitter + d * s * 0.05,
+                                1.0,
+                                run.loop_count,
+                            );
                         }
                     }
                 }
@@ -1943,7 +1928,9 @@ pub fn tick_portal_suck(
         run.tutorial = false;
         save.tutorial_done = true;
         dirty.0 = true;
-        commands.entity(player_e).insert(crate::state::TutorialRestart);
+        commands
+            .entity(player_e)
+            .insert(crate::state::TutorialRestart);
         return;
     }
 

@@ -152,7 +152,7 @@ impl TutorialState {
     pub fn complete_step(&mut self, step: TutorialStep) {
         if self.step == step && !self.complete {
             self.complete = true;
-            self.timer = GTimer::from_seconds(30.0 / 30.0, TimerMode::Once);
+            self.timer = GTimer::from_seconds(1.0, TimerMode::Once);
         }
     }
 }

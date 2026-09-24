@@ -20,11 +20,9 @@
 /// double-ticks a 10 ms `Once` timer into the same observable state
 /// (finished, not just-finished).
 ///
-/// `enemy_ai` carries 15 params (under the bevy_ecs 16-param cap), so no
-/// record-split is needed; the BigMaggot/Inspector tail already lives in
-/// its own system in bevy ([`tick_bigmaggot_inspector`]) and is ported
-/// as such.
-
+/// `enemy_ai` carries 14 params (under the bevy_ecs 16-param cap), so no
+/// record-split is needed; the verbatim per-kind ticks are separate
+/// systems, and the Inspector tail lives in [`tick_bigmaggot_inspector`].
 use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
@@ -35,7 +33,9 @@ use repame_sim::SimTime;
 
 use crate::anim::{SpriteAnim, derive_hurt_path, derive_walk_path};
 use crate::audio::AudioCue;
-use crate::combat::PendingEnemySpawn;
+use crate::combat::{
+    PendingEnemySpawn, apply_birth_overrides, queue_enemy_spawn, queue_enemy_spawn_birth,
+};
 use crate::comps_a::{
     ARENA_H, ARENA_W, BossIntro, BouncesLeft, DamageSource, Euphoria, FloorMask, GameCleanup,
     GrenadeFuse, Health, Hitbox, Homing, LevelCleanup, NextHurt, Player, Projectile,
@@ -43,8 +43,8 @@ use crate::comps_a::{
     Toast, Velocity, apply_gml_friction, gml_motion_add_clamp,
 };
 use crate::comps_b::{
-    BossBrain, Corpse, EliteBlocker, Enemy, EnemyBrain, FxAngle, HazardCloud, HitWarning,
-    HurtAnim, IdpdShieldUnit, IdpdVanBrain, LilHunterDie, MomShot, PendingDelayedBoss, Pickup,
+    BossBrain, Corpse, EliteBlocker, Enemy, EnemyBrain, FxAngle, HazardCloud, HitWarning, HurtAnim,
+    IdpdShieldUnit, IdpdVanBrain, LilHunterDie, MomShot, PendingDelayedBoss, Pickup,
     PickupLifetime, PopoNadeM, PortalClear, Prop, ProtoGuardian, ShieldFollower, StaticFx,
     ThroneBall, TrapFire,
 };
@@ -94,6 +94,12 @@ pub fn spawn_hp(kind: EnemyKind, base_hp: i32, loops: u32) -> i32 {
     hp.round().max(1.0) as i32
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EnemySpawnContext {
+    pub subarea: u32,
+    pub blood_crown: bool,
+}
+
 /// Full enemy spawn: base bundle from [`crate::setup::spawn_enemy`]
 /// (cleanup markers, `Team`, `Pos`, `Velocity`, `Hitbox`, table `Enemy`)
 /// plus difficulty/face/heart scaling, the randomized [`EnemyBrain`]
@@ -111,8 +117,63 @@ pub fn spawn_enemy(
     heavy_heart: bool,
     loops: u32,
 ) -> Entity {
+    spawn_enemy_with_context(
+        commands,
+        catalog,
+        kind,
+        pos,
+        difficulty,
+        scarier_face,
+        heavy_heart,
+        loops,
+        EnemySpawnContext::default(),
+    )
+}
+
+pub fn spawn_enemy_with_context(
+    commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
+    kind: EnemyKind,
+    pos: glam::Vec2,
+    difficulty: f32,
+    scarier_face: bool,
+    heavy_heart: bool,
+    loops: u32,
+    context: EnemySpawnContext,
+) -> Entity {
+    let mut rng = rand::rng();
+    spawn_enemy_impl(
+        commands,
+        catalog,
+        kind,
+        pos,
+        difficulty,
+        scarier_face,
+        heavy_heart,
+        loops,
+        context,
+        true,
+        None,
+        &mut rng,
+    )
+}
+
+fn spawn_enemy_impl(
+    commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
+    kind: EnemyKind,
+    pos: glam::Vec2,
+    difficulty: f32,
+    scarier_face: bool,
+    heavy_heart: bool,
+    loops: u32,
+    context: EnemySpawnContext,
+    give_kill: bool,
+    birth: Option<&PendingEnemySpawn>,
+    rng: &mut impl RngExt,
+) -> Entity {
     let def = enemy_def(kind);
-    let e = crate::setup::spawn_enemy(commands, kind, pos);
+    let e = crate::setup::spawn_enemy(commands, kind, pos, true);
 
     // GML HP law (loop scaling); scarier-face 0.8 floor kept.
     let hp = spawn_hp(kind, def.hp, loops);
@@ -121,7 +182,26 @@ pub fn spawn_enemy(
     } else {
         hp
     };
-    let speed = def.speed * (0.9 + 0.02 * difficulty);
+    let speed = if matches!(
+        kind,
+        EnemyKind::Bandit
+            | EnemyKind::SnowBandit
+            | EnemyKind::Maggot
+            | EnemyKind::MaggotSpawn
+            | EnemyKind::BigMaggot
+            | EnemyKind::JungleFly
+            | EnemyKind::FiredMaggot
+            | EnemyKind::Scorpion
+            | EnemyKind::GoldScorpion
+            | EnemyKind::Sniper
+            | EnemyKind::JungleBandit
+            | EnemyKind::MeleeBandit
+            | EnemyKind::Ballguy
+    ) {
+        if kind == EnemyKind::Ballguy { 1.0 } else { 0.0 }
+    } else {
+        def.speed * (0.9 + 0.02 * difficulty)
+    };
     let weapon_chance = if heavy_heart {
         def.weapon_chance + 9
     } else {
@@ -129,11 +209,6 @@ pub fn spawn_enemy(
     };
 
     let mut ec = commands.entity(e);
-    ec.insert(Health {
-        hp,
-        max: hp,
-        invuln: ready_timer(),
-    });
     ec.insert(Enemy {
         kind,
         score: def.score,
@@ -141,50 +216,121 @@ pub fn spawn_enemy(
         rad_drop: def.rad_drop,
         drop_chance: def.drop_chance,
         weapon_chance,
+        give_kill: give_kill && !matches!(kind, EnemyKind::FastRat | EnemyKind::ScrapBossMissile),
     });
     ec.insert(NextHurt::default());
     ec.insert(Hitbox { radius: def.radius });
+    let initial_gunangle = match kind {
+        EnemyKind::Bandit
+        | EnemyKind::SnowBandit
+        | EnemyKind::JungleFly
+        | EnemyKind::Scorpion
+        | EnemyKind::GoldScorpion
+        | EnemyKind::Sniper
+        | EnemyKind::JungleBandit
+        | EnemyKind::MeleeBandit => rng.random_range(0.0..std::f32::consts::TAU),
+        EnemyKind::Maggot
+        | EnemyKind::MaggotSpawn
+        | EnemyKind::BigMaggot
+        | EnemyKind::FiredMaggot
+        | EnemyKind::Ballguy => 0.0,
+        _ => rng.random_range(0.0..std::f32::consts::TAU),
+    };
+    let initial_heading = if kind == EnemyKind::Ballguy {
+        (pos - glam::Vec2::new(10016.0, 10016.0))
+            .y
+            .atan2((pos - glam::Vec2::new(10016.0, 10016.0)).x)
+    } else {
+        0.0
+    };
+    let initial_velocity = if kind == EnemyKind::Ballguy {
+        glam::Vec2::from_angle(initial_heading) * 30.0
+    } else {
+        glam::Vec2::ZERO
+    };
+    let mut health = Health {
+        hp,
+        max: hp,
+        invuln: ready_timer(),
+    };
+    let mut velocity = Velocity(initial_velocity);
+    if let Some(birth) = birth {
+        apply_birth_overrides(&mut velocity, &mut health, birth);
+    }
+    ec.insert(health);
+    ec.insert(velocity);
+    let attack_frames = match kind {
+        EnemyKind::MaggotSpawn | EnemyKind::FiredMaggot => 0.0,
+        EnemyKind::Bandit | EnemyKind::SnowBandit => 30.0 + rng.random_range(0.0..90.0),
+        EnemyKind::Maggot => 10.0 + rng.random_range(0.0..10.0),
+        EnemyKind::BigMaggot => 45.0 + rng.random_range(0.0..10.0),
+        EnemyKind::JungleFly => 50.0 + rng.random_range(0.0..10.0),
+        EnemyKind::Scorpion | EnemyKind::GoldScorpion => 30.0 + rng.random_range(0.0..90.0),
+        EnemyKind::Sniper => 60.0 + rng.random_range(0.0..90.0),
+        EnemyKind::JungleBandit => 30.0 + rng.random_range(0.0..90.0),
+        EnemyKind::MeleeBandit => 90.0 + rng.random_range(0.0..90.0),
+        EnemyKind::Ballguy => 40.0 + rng.random_range(0.0..40.0),
+        EnemyKind::Turret => 60.0 + rng.random_range(0.0..60.0),
+        EnemyKind::SnowTank => 30.0 + rng.random_range(0.0..10.0),
+        EnemyKind::GoldSnowtank => 120.0 + rng.random_range(0.0..10.0),
+        EnemyKind::LaserCrystal | EnemyKind::LightningCrystal | EnemyKind::InvLaserCrystal => {
+            50.0 + rng.random_range(0.0..90.0)
+        }
+        EnemyKind::Guardian => 40.0 + rng.random_range(0.0..10.0),
+        _ => def.attack_cooldown * 30.0 * rng.random_range(0.5..1.5),
+    };
+    let attack = if matches!(kind, EnemyKind::MaggotSpawn | EnemyKind::FiredMaggot) {
+        GTimer::disarmed()
+    } else {
+        GTimer::from_seconds(attack_frames / 30.0, TimerMode::Once)
+    };
     ec.insert(EnemyBrain {
         speed,
         accel: def.accel,
         preferred_range: def.preferred_range,
         shoot_range: def.shoot_range,
-        attack: GTimer::from_seconds(
-            match kind {
-                EnemyKind::Turret => (60.0 + rand::rng().random_range(0.0..60.0)) / 30.0,
-                EnemyKind::SnowTank => (30.0 + rand::rng().random_range(0.0..10.0)) / 30.0,
-                EnemyKind::GoldSnowtank => (120.0 + rand::rng().random_range(0.0..10.0)) / 30.0,
-                EnemyKind::LaserCrystal
-                | EnemyKind::LightningCrystal
-                | EnemyKind::InvLaserCrystal => {
-                    (50.0 + rand::rng().random_range(0.0..90.0)) / 30.0
-                }
-                EnemyKind::Guardian => (40.0 + rand::rng().random_range(0.0..10.0)) / 30.0,
-                _ => def.attack_cooldown * rand::rng().random_range(0.5..1.5),
-            },
-            TimerMode::Once,
-        ),
+        attack,
         burst_left: 0,
         burst_timer: ready_timer(),
         dash: 0.0,
-        strafe_dir: if rand::rng().random_bool(0.5) {
-            1.0
-        } else {
-            -1.0
-        },
-        strafe_timer: GTimer::from_seconds(rand::rng().random_range(0.8..1.6), TimerMode::Once),
+        strafe_dir: if rng.random_bool(0.5) { 1.0 } else { -1.0 },
+        strafe_timer: GTimer::from_seconds(rng.random_range(0.8..1.6), TimerMode::Once),
         melee: ready_timer(),
+        wkick: 0.0,
         walk: 0.0,
         slash_delay: 0.0,
         ammo: match kind {
             EnemyKind::Scorpion | EnemyKind::GoldScorpion => 10,
+            EnemyKind::JungleFly => 3,
             EnemyKind::IdpdGrunt => 2,
             EnemyKind::IdpdInspector => 4,
             EnemyKind::IdpdElite => 3,
             EnemyKind::Jock => 5,
             _ => 0,
         },
-        gunangle: rand::rng().random_range(0.0..std::f32::consts::TAU),
+        gunangle: initial_gunangle,
+        heading: initial_heading,
+        rage: 0.0,
+        fire: if kind == EnemyKind::JungleFly { 10 } else { 0 },
+        friction: if kind == EnemyKind::FiredMaggot {
+            0.0
+        } else {
+            0.4
+        },
+        close: false,
+        wepangle: if kind == EnemyKind::MeleeBandit {
+            if rng.random_bool(0.5) { -140.0 } else { 140.0 }
+        } else {
+            0.0
+        },
+        wepflip: 1.0,
+        weapon_alarm: 0.0,
+        burrow_state: 0,
+        burrow_alarm0: 0.0,
+        burrow_alarm1: 0.0,
+        burrow_angle: 0.0,
+        sniper_aiming: false,
+        maggot_spawn_charging: false,
     });
     if def.boss {
         ec.insert(BossBrain::new(kind, pos));
@@ -215,6 +361,33 @@ pub fn spawn_enemy(
     if let Some(anim_def) = catalog.def(def.sprite) {
         ec.insert(SpriteAnim::new(def.sprite, anim_def));
     }
+    drop(ec);
+    if kind == EnemyKind::Scorpion {
+        let morph_limit = if context.blood_crown {
+            30.0 * 0.7
+        } else {
+            30.0
+        };
+        let morph_roll = rng.random_range(0.0..morph_limit);
+        if morph_roll < 1.0 + loops as f32 * 5.0 && context.subarea > 1 {
+            let gold = spawn_enemy_impl(
+                commands,
+                catalog,
+                EnemyKind::GoldScorpion,
+                pos,
+                difficulty,
+                scarier_face,
+                heavy_heart,
+                loops,
+                context,
+                true,
+                None,
+                rng,
+            );
+            commands.entity(e).despawn();
+            return gold;
+        }
+    }
     e
 }
 
@@ -228,8 +401,9 @@ pub fn spawn_enemy_at(
     scarier_face: bool,
     heavy_heart: bool,
     loops: u32,
+    context: EnemySpawnContext,
 ) -> Entity {
-    spawn_enemy(
+    spawn_enemy_with_context(
         commands,
         catalog,
         kind,
@@ -238,6 +412,7 @@ pub fn spawn_enemy_at(
         scarier_face,
         heavy_heart,
         loops,
+        context,
     )
 }
 
@@ -246,10 +421,16 @@ pub fn spawn_enemy_at(
 pub fn flush_pending_enemy_spawns(
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
+    run: Res<Run>,
     pending: Query<(Entity, &PendingEnemySpawn)>,
 ) {
+    let context = EnemySpawnContext {
+        subarea: run.floor_in_area,
+        blood_crown: run.blood_crown,
+    };
+    let mut rng = rand::rng();
     for (entity, spawn) in pending.iter() {
-        spawn_enemy_at(
+        spawn_enemy_impl(
             &mut commands,
             &catalog,
             spawn.kind,
@@ -258,6 +439,10 @@ pub fn flush_pending_enemy_spawns(
             false,
             false,
             spawn.loops,
+            context,
+            spawn.give_kill,
+            Some(spawn),
+            &mut rng,
         );
         commands.entity(entity).despawn();
     }
@@ -323,7 +508,228 @@ fn has_line_of_sight(from: glam::Vec2, to: glam::Vec2, mask: &FloorMask) -> bool
     true
 }
 
-/// Non-boss enemy AI: walk impulses, dashes, charges, telegraphs, and
+#[inline]
+fn sync_heading(brain: &mut EnemyBrain, vel: &Velocity) {
+    if vel.0.length_squared() > 0.000001 {
+        brain.heading = vel.0.y.atan2(vel.0.x);
+    }
+    brain.speed = vel.0.length() / 30.0;
+}
+
+#[inline]
+fn set_gml_direction(brain: &mut EnemyBrain, vel: &mut Velocity, angle: f32) {
+    brain.heading = angle;
+    let speed = vel.0.length();
+    if speed > 0.000001 {
+        vel.0 = glam::Vec2::from_angle(angle) * speed;
+    }
+    sync_heading(brain, vel);
+}
+
+#[inline]
+fn set_gml_speed(brain: &mut EnemyBrain, vel: &mut Velocity, speed_f: f32) {
+    let speed = speed_f * 30.0;
+    if speed > 0.000001 {
+        vel.0 = glam::Vec2::from_angle(brain.heading) * speed;
+    } else {
+        vel.0 = glam::Vec2::ZERO;
+    }
+    sync_heading(brain, vel);
+}
+
+#[inline]
+fn add_gml_motion(brain: &mut EnemyBrain, vel: &mut Velocity, angle: f32, impulse_f: f32, dt: f32) {
+    gml_motion_add_clamp(
+        &mut vel.0,
+        glam::Vec2::from_angle(angle),
+        impulse_f,
+        1000.0,
+        dt,
+    );
+    sync_heading(brain, vel);
+}
+
+#[inline]
+fn cap_gml_speed(brain: &mut EnemyBrain, vel: &mut Velocity, cap_f: f32) {
+    let cap = cap_f * 30.0;
+    if vel.0.length() > cap {
+        vel.0 = vel.0.normalize() * cap;
+    }
+    sync_heading(brain, vel);
+}
+
+#[inline]
+fn walk_step(brain: &mut EnemyBrain, vel: &mut Velocity, impulse_f: f32, cap_f: f32, dt: f32) {
+    if brain.walk <= 0.0 {
+        return;
+    }
+    let angle = brain.heading;
+    add_gml_motion(brain, vel, angle, impulse_f, dt);
+    cap_gml_speed(brain, vel, cap_f);
+    brain.walk = (brain.walk - dt * 30.0).max(0.0);
+}
+
+#[inline]
+fn tick_verbatim_cooldown(brain: &mut EnemyBrain, dt: f32) {
+    brain.melee.tick(dt);
+    brain.wkick = (brain.wkick - dt * 30.0).max(0.0);
+}
+
+fn has_verbatim_tick(kind: EnemyKind) -> bool {
+    matches!(
+        kind,
+        EnemyKind::Bandit
+            | EnemyKind::SnowBandit
+            | EnemyKind::Maggot
+            | EnemyKind::MaggotSpawn
+            | EnemyKind::BigMaggot
+            | EnemyKind::JungleFly
+            | EnemyKind::FiredMaggot
+            | EnemyKind::Scorpion
+            | EnemyKind::GoldScorpion
+            | EnemyKind::Sniper
+            | EnemyKind::JungleBandit
+            | EnemyKind::MeleeBandit
+            | EnemyKind::Ballguy
+    )
+}
+
+fn integrate_verbatim(
+    brain: &mut EnemyBrain,
+    vel: &mut Velocity,
+    pos: &mut Pos,
+    props: &Query<(Entity, &Prop, &Pos), With<Prop>>,
+    mask: &FloorMask,
+    positions: &[glam::Vec2],
+    epos: glam::Vec2,
+    radius: f32,
+    dt: f32,
+    separate_enemies: bool,
+) {
+    if brain.friction > 0.0 {
+        apply_gml_friction(&mut vel.0, brain.friction, dt);
+    }
+    pos.0 += vel.0 * dt;
+    collide_enemy(props, mask, pos, radius);
+    if separate_enemies {
+        separate(positions, epos, pos, radius);
+    }
+    sync_heading(brain, vel);
+}
+
+fn zero_damage_contact_push(
+    brain: &mut EnemyBrain,
+    vel: &mut Velocity,
+    player_pos: Option<glam::Vec2>,
+    pos: glam::Vec2,
+    radius: f32,
+    dt: f32,
+) {
+    if let Some(player_pos) = player_pos
+        && pos.distance(player_pos) <= 8.0 + radius
+    {
+        add_gml_motion(
+            brain,
+            vel,
+            (pos - player_pos).y.atan2((pos - player_pos).x),
+            1.0,
+            dt,
+        );
+    }
+}
+
+fn nearest_floor_point(mask: &FloorMask, point: glam::Vec2) -> glam::Vec2 {
+    if mask.is_walkable(point) {
+        return point;
+    }
+    let mut best = point;
+    let mut best_d = f32::MAX;
+    for cell in &mask.cells {
+        let center = mask.cell_center(*cell);
+        let d = center.distance_squared(point);
+        if d < best_d {
+            best_d = d;
+            best = center;
+        }
+    }
+    best
+}
+
+fn blocked_by_geometry(
+    props: &Query<(Entity, &Prop, &Pos), With<Prop>>,
+    mask: &FloorMask,
+    point: glam::Vec2,
+    radius: f32,
+) -> bool {
+    if !mask.cells.is_empty() && !mask.is_walkable(point) {
+        return true;
+    }
+    let mut resolved = point;
+    resolve_prop_collision(
+        &mut resolved,
+        radius,
+        props.iter().map(|(_, p, pp)| (pp.0, p.size)),
+    );
+    resolved.distance_squared(point) > 0.0001
+}
+
+fn blocked_by_wall(mask: &FloorMask, point: glam::Vec2, radius: f32) -> bool {
+    (!mask.cells.is_empty() && !mask.is_walkable(point))
+        || point.x.abs() + radius > ARENA_W / 2.0
+        || point.y.abs() + radius > ARENA_H / 2.0
+}
+
+fn queue_motion_spawn(
+    commands: &mut Commands,
+    kind: EnemyKind,
+    pos: glam::Vec2,
+    velocity: glam::Vec2,
+    difficulty: f32,
+    loops: u32,
+    give_kill: bool,
+) -> Entity {
+    queue_enemy_spawn_birth(
+        commands,
+        kind,
+        pos,
+        difficulty,
+        loops,
+        give_kill,
+        Some(velocity),
+        false,
+    )
+}
+
+fn queue_fired_maggot(commands: &mut Commands, pos: glam::Vec2, angle: f32, loops: u32) -> Entity {
+    queue_motion_spawn(
+        commands,
+        EnemyKind::FiredMaggot,
+        pos,
+        glam::Vec2::from_angle(angle) * 5.0 * 30.0,
+        1.0,
+        loops,
+        true,
+    )
+}
+
+fn queue_conversion_maggot(
+    commands: &mut Commands,
+    pos: glam::Vec2,
+    angle: f32,
+    loops: u32,
+) -> Entity {
+    queue_enemy_spawn_birth(
+        commands,
+        EnemyKind::Maggot,
+        pos,
+        1.0,
+        loops,
+        false,
+        Some(glam::Vec2::from_angle(angle) * 4.0 * 30.0),
+        false,
+    )
+}
+
 /// table-driven fire, per bevy `enemy_ai` top to bottom (bosses `continue`
 /// before their first timer tick — boss brains live elsewhere).
 #[allow(clippy::too_many_arguments)]
@@ -336,7 +742,6 @@ pub fn enemy_ai(
     run: Res<Run>,
     mut cues: ResMut<Queue<AudioCue>>,
     mut ratking_cd: Local<HashMap<Entity, GTimer>>,
-    mut sniper_state: Local<HashMap<Entity, (GTimer, bool)>>,
     mut wolf_roll: Local<HashMap<Entity, GTimer>>,
     mut charge_state: Local<HashMap<Entity, GTimer>>,
     player_q: Query<(&Pos, &Player), (With<Player>, Without<Enemy>)>,
@@ -368,8 +773,10 @@ pub fn enemy_ai(
 
     // Pre-move snapshot for separation (bevy parity: pushes use the
     // snapshot, applied to the live position).
-    let positions: Vec<glam::Vec2> =
-        enemies.iter().map(|(_, _, _, _, pos, _, _, _)| pos.0).collect();
+    let positions: Vec<glam::Vec2> = enemies
+        .iter()
+        .map(|(_, _, _, _, pos, _, _, _)| pos.0)
+        .collect();
 
     for (entity, enemy, mut brain, mut vel, mut pos, boss, mut anim, hurt) in &mut enemies {
         let epos = pos.0;
@@ -378,6 +785,10 @@ pub fn enemy_ai(
         let dir = to_player.normalize_or_zero();
 
         let def = enemy_def(enemy.kind);
+
+        if !has_verbatim_tick(enemy.kind) {
+            brain.wkick = (brain.wkick - dt * 30.0).max(0.0);
+        }
 
         if boss.is_some() {
             continue;
@@ -392,7 +803,20 @@ pub fn enemy_ai(
         // fire law; the generic chase must not double-drive them.
         if matches!(
             enemy.kind,
-            EnemyKind::EliteInspector
+            EnemyKind::Bandit
+                | EnemyKind::SnowBandit
+                | EnemyKind::Maggot
+                | EnemyKind::MaggotSpawn
+                | EnemyKind::BigMaggot
+                | EnemyKind::JungleFly
+                | EnemyKind::FiredMaggot
+                | EnemyKind::Scorpion
+                | EnemyKind::GoldScorpion
+                | EnemyKind::Sniper
+                | EnemyKind::JungleBandit
+                | EnemyKind::MeleeBandit
+                | EnemyKind::Ballguy
+                | EnemyKind::EliteInspector
                 | EnemyKind::EliteShielder
                 | EnemyKind::ScrapBossMissile
                 | EnemyKind::ProtoStatue
@@ -407,16 +831,12 @@ pub fn enemy_ai(
                 | EnemyKind::LaserCrystal
                 | EnemyKind::LightningCrystal
                 | EnemyKind::InvLaserCrystal
-                | EnemyKind::MaggotSpawn
         );
 
         brain.melee.tick(dt);
 
         if brain.walk > 0.0 {
             let (impulse_f, cap_f) = match enemy.kind {
-                EnemyKind::Scorpion | EnemyKind::GoldScorpion => (2.0, 4.0),
-                EnemyKind::Bandit | EnemyKind::SnowBandit | EnemyKind::JungleBandit => (0.8, 3.0),
-                EnemyKind::Maggot => (0.6, 2.0),
                 EnemyKind::Rat | EnemyKind::Ratking => (0.8, 4.0),
                 EnemyKind::Gator
                 | EnemyKind::BuffGator
@@ -434,9 +854,7 @@ pub fn enemy_ai(
                 EnemyKind::SuperFireBaller => (0.6, 1.5),
                 EnemyKind::SnowTank | EnemyKind::GoldSnowtank => (0.6, 1.5),
                 EnemyKind::DogGuardian => (0.4, 2.0),
-                EnemyKind::JungleFly => (0.8, 3.5),
                 EnemyKind::Spider | EnemyKind::InvSpider => (2.0, 4.0),
-                EnemyKind::Sniper => (0.8, 1.5),
                 _ => (0.4, 4.0),
             };
             let walk_dir = if vel.0.length_squared() > 1.0 {
@@ -455,220 +873,6 @@ pub fn enemy_ai(
         // strips from state; no gameplay effect).
 
         apply_gml_friction(&mut vel.0, 0.4, dt);
-
-        if matches!(enemy.kind, EnemyKind::Bandit | EnemyKind::SnowBandit) {
-            brain.attack.tick(dt);
-            if brain.attack.just_finished() {
-                let los = has_line_of_sight(epos, player_pos, &mask);
-                if los {
-                    if dist > 48.0 {
-                        if rng.random::<f32>() < 0.25 {
-                            let spread = rng.random_range(-10.0_f32..10.0).to_radians();
-                            let base_ang = dir.y.atan2(dir.x);
-                            let ang = base_ang + spread;
-                            let sdir = glam::Vec2::new(ang.cos(), ang.sin());
-                            fire_enemy_bullet(
-                                &mut commands,
-                                &mut rng,
-                                entity,
-                                enemy,
-                                def,
-                                epos,
-                                sdir,
-                                euphoria,
-                            );
-                            show_enemy_fire(
-                                &mut commands,
-                                &catalog,
-                                entity,
-                                def.sprite,
-                                anim.as_deref_mut(),
-                                hurt.is_some(),
-                            );
-                            brain.gunangle = base_ang;
-                            brain.attack = GTimer::from_seconds(
-                                (20.0 + rng.random_range(0.0..5.0)) / 30.0,
-                                TimerMode::Once,
-                            );
-                        } else {
-                            let ang =
-                                dir.y.atan2(dir.x) + rng.random_range(-90_f32..90.0).to_radians();
-                            let wdir = glam::Vec2::new(ang.cos(), ang.sin());
-                            vel.0 = wdir * (0.4 * 30.0);
-                            brain.walk = 10.0 + rng.random_range(0.0..10.0);
-                            brain.gunangle = dir.y.atan2(dir.x);
-                            brain.attack = GTimer::from_seconds(
-                                (20.0 + rng.random_range(0.0..5.0)) / 30.0,
-                                TimerMode::Once,
-                            );
-                        }
-                    } else {
-                        let away = -dir;
-                        let ang =
-                            away.y.atan2(away.x) + rng.random_range(-10_f32..10.0).to_radians();
-                        let wdir = glam::Vec2::new(ang.cos(), ang.sin());
-                        vel.0 = wdir * (0.4 * 30.0);
-                        brain.walk = 40.0 + rng.random_range(0.0..10.0);
-                        brain.gunangle = dir.y.atan2(dir.x);
-                        brain.attack = GTimer::from_seconds(
-                            (20.0 + rng.random_range(0.0..5.0)) / 30.0,
-                            TimerMode::Once,
-                        );
-                    }
-                } else if rng.random::<f32>() < 0.25 {
-                    let ang = rng.random_range(0.0..std::f32::consts::TAU);
-                    let wdir = glam::Vec2::new(ang.cos(), ang.sin());
-                    vel.0 = wdir * (0.4 * 30.0);
-                    brain.walk = 20.0 + rng.random_range(0.0..10.0);
-                    brain.attack = GTimer::from_seconds(
-                        (brain.walk + 10.0 + rng.random_range(0.0..30.0)) / 30.0,
-                        TimerMode::Once,
-                    );
-                    brain.gunangle = ang;
-                } else {
-                    // GML `Bandit/Alarm_1` refires unconditionally
-                    // (`alarm[1] = 20 + random(10)` tops the event); without
-                    // this the finished timer never re-arms and the bandit
-                    // freezes at spawn whenever its first cycle has no
-                    // line of sight (75% of no-LOS cycles).
-                    brain.attack = GTimer::from_seconds(
-                        (20.0 + rng.random_range(0.0..10.0)) / 30.0,
-                        TimerMode::Once,
-                    );
-                }
-            }
-            {
-                if vel.0.length() > 90.0 {
-                    vel.0 = vel.0.normalize() * 90.0;
-                }
-                pos.0 += vel.0 * dt;
-                collide_enemy(&props, &mask, &mut pos, def.radius);
-                separate(&positions, epos, &mut pos, def.radius);
-            }
-            continue;
-        }
-
-        if matches!(enemy.kind, EnemyKind::Scorpion | EnemyKind::GoldScorpion) {
-            brain.attack.tick(dt);
-            brain.burst_timer.tick(dt);
-
-            if brain.ammo > 0 && brain.burst_left > 0 {
-                if brain.burst_timer.just_finished() {
-                    let gold = enemy.kind == EnemyKind::GoldScorpion;
-                    if gold {
-                        for (spd_lo, spd_hi, spread_deg) in
-                            [(5.0_f32, 6.0_f32, 5.0_f32), (1.5_f32, 2.0_f32, 40.0_f32)]
-                        {
-                            let spread = rng.random_range(-spread_deg..spread_deg).to_radians();
-                            let ang = brain.gunangle + spread;
-                            let sdir = glam::Vec2::new(ang.cos(), ang.sin());
-                            let speed = rng.random_range(spd_lo..spd_hi) * 30.0;
-                            let bullet = spawn_enemy_projectile(
-                                &mut commands,
-                                entity,
-                                enemy.kind,
-                                epos + sdir * 20.0,
-                                sdir * speed,
-                                def.projectile_damage,
-                                def.projectile_lifetime,
-                                def.projectile_radius,
-                                150.0,
-                                explosive_kind(enemy.kind),
-                            );
-                            // Gold-scorpion bullets are slashable (typ 2).
-                            commands.entity(bullet).insert(ProjectileTyp(2));
-                        }
-                    } else {
-                        let spread = rng.random_range(-20_f32..20.0).to_radians();
-                        let base_ang = brain.gunangle;
-                        let ang = base_ang + spread;
-                        let sdir = glam::Vec2::new(ang.cos(), ang.sin());
-                        let speed = rng.random_range(90.0..120.0);
-                        spawn_enemy_projectile(
-                            &mut commands,
-                            entity,
-                            enemy.kind,
-                            epos + sdir * 20.0,
-                            sdir * speed,
-                            def.projectile_damage,
-                            def.projectile_lifetime,
-                            def.projectile_radius,
-                            150.0,
-                            explosive_kind(enemy.kind),
-                        );
-                    }
-                    brain.ammo = brain.ammo.saturating_sub(1);
-                    brain.burst_left -= 1;
-                    if brain.ammo == 0 || brain.burst_left == 0 {
-                        brain.attack = GTimer::from_seconds(
-                            (40.0 + rng.random_range(0.0..10.0)) / 30.0,
-                            TimerMode::Once,
-                        );
-                        brain.ammo = 10;
-                    } else {
-                        let frames = if enemy.kind == EnemyKind::GoldScorpion {
-                            1.0
-                        } else {
-                            2.0
-                        };
-                        brain.burst_timer = GTimer::from_seconds(frames / 30.0, TimerMode::Once);
-                    }
-                }
-            } else if brain.attack.just_finished() {
-                let target_dir = dir.y.atan2(dir.x);
-                let walk_ang = target_dir
-                    + rng.random_range(-60_f32..60.0).to_radians()
-                    + std::f32::consts::PI;
-                let wdir = glam::Vec2::new(walk_ang.cos(), walk_ang.sin());
-                vel.0 = wdir * (0.4 * 30.0);
-                brain.walk = 10.0 + rng.random_range(0.0..10.0);
-
-                let los = has_line_of_sight(epos, player_pos, &mask);
-                // GML range gate is Scorpion-only (`scrTargetIsVisible`
-                // 210); GoldScorpion fires at any visible range.
-                let in_range =
-                    enemy.kind == EnemyKind::GoldScorpion || dist < 210.0;
-                if los && in_range && rng.random::<f32>() < 0.5 {
-                    brain.attack = GTimer::from_seconds(
-                        (30.0 + rng.random_range(0.0..5.0)) / 30.0,
-                        TimerMode::Once,
-                    );
-                    brain.burst_timer = GTimer::from_seconds(1.0 / 30.0, TimerMode::Once);
-                    if enemy.kind == EnemyKind::GoldScorpion {
-                        brain.burst_left = 20;
-                        brain.ammo = 20;
-                    } else {
-                        brain.burst_left = 10;
-                        brain.ammo = 10;
-                    }
-                    brain.gunangle = target_dir;
-                } else {
-                    brain.attack = GTimer::from_seconds(
-                        (30.0 + rng.random_range(0.0..10.0)) / 30.0,
-                        TimerMode::Once,
-                    );
-                }
-                if dist < 64.0 {
-                    let away = -dir;
-                    let ang = away.y.atan2(away.x) + rng.random_range(-10_f32..10.0).to_radians();
-                    if dist > 32.0 {
-                        let ang2 = ang + std::f32::consts::PI;
-                        vel.0 = glam::Vec2::new(ang2.cos(), ang2.sin()) * (0.4 * 30.0);
-                    } else {
-                        vel.0 = glam::Vec2::new(ang.cos(), ang.sin()) * (0.4 * 30.0);
-                    }
-                    brain.walk = 40.0;
-                }
-            }
-
-            if vel.0.length() > 120.0 {
-                vel.0 = vel.0.normalize() * 120.0;
-            }
-            pos.0 += vel.0 * dt;
-            collide_enemy(&props, &mask, &mut pos, def.radius);
-            separate(&positions, epos, &mut pos, def.radius);
-            continue;
-        }
 
         let was_dashing = brain.dash > 0.0;
 
@@ -741,7 +945,6 @@ pub fn enemy_ai(
                 let base_ang = dir.y.atan2(dir.x);
 
                 let (impulse, _cap, far_walk, close_walk, wander_walk) = match enemy.kind {
-                    EnemyKind::Maggot => (0.6, 2.0, 8.0..14.0, 12.0..18.0, 10.0..20.0),
                     EnemyKind::Gator | EnemyKind::BuffGator => {
                         (0.8, 3.0, 10.0..14.0, 40.0..50.0, 20.0..30.0)
                     }
@@ -755,7 +958,6 @@ pub fn enemy_ai(
                     EnemyKind::Crab => (1.5, 4.5, 8.0..14.0, 50.0..60.0, 20.0..30.0),
                     EnemyKind::Turtle => (1.0, 5.0, 40.0..60.0, 40.0..60.0, 40.0..60.0),
                     EnemyKind::Salamander => (2.0, 2.5, 40.0..50.0, 20.0..30.0, 10.0..20.0),
-                    EnemyKind::Sniper => (0.8, 1.5, 10.0..14.0, 40.0..50.0, 20.0..30.0),
                     EnemyKind::FireBaller | EnemyKind::SuperFireBaller => {
                         (0.6, 2.0, 8.0..12.0, 10.0..14.0, 10.0..16.0)
                     }
@@ -769,10 +971,7 @@ pub fn enemy_ai(
                     | EnemyKind::FastRat
                     | EnemyKind::BigRat => (0.8, 4.0, 10.0..16.0, 40.0..50.0, 10.0..25.0),
                     EnemyKind::Wolf => (0.8, 4.0, 10.0..16.0, 20.0..30.0, 12.0..20.0),
-                    EnemyKind::Assassin | EnemyKind::MeleeBandit => {
-                        (0.8, 4.0, 10.0..14.0, 20.0..28.0, 16.0..24.0)
-                    }
-                    EnemyKind::Ballguy => (0.6, 3.0, 12.0..18.0, 12.0..18.0, 12.0..18.0),
+                    EnemyKind::Assassin => (0.8, 4.0, 10.0..14.0, 20.0..28.0, 16.0..24.0),
                     EnemyKind::LightningCrystal => (0.5, 1.5, 10.0..14.0, 10.0..14.0, 10.0..20.0),
                     _ => (0.4, 4.0, 6.0..14.0, 18.0..28.0, 10.0..18.0),
                 };
@@ -805,7 +1004,6 @@ pub fn enemy_ai(
                     }
 
                     let attack_secs = match enemy.kind {
-                        EnemyKind::Maggot => rng.random_range(30.0..50.0) / 30.0,
                         EnemyKind::Rat
                         | EnemyKind::FastRat
                         | EnemyKind::BigRat
@@ -821,10 +1019,7 @@ pub fn enemy_ai(
                         }
                         EnemyKind::Crab => rng.random_range(10.0..20.0) / 30.0,
                         EnemyKind::Salamander => rng.random_range(10.0..60.0) / 30.0,
-                        EnemyKind::Sniper => rng.random_range(20.0..30.0) / 30.0,
-                        EnemyKind::Assassin | EnemyKind::MeleeBandit | EnemyKind::Wolf => {
-                            rng.random_range(6.0..11.0) / 30.0
-                        }
+                        EnemyKind::Assassin | EnemyKind::Wolf => rng.random_range(6.0..11.0) / 30.0,
                         _ => rng.random_range(0.35..0.75),
                     };
                     brain.attack = GTimer::from_seconds(attack_secs, TimerMode::Once);
@@ -838,7 +1033,8 @@ pub fn enemy_ai(
                         TimerMode::Once,
                     );
                 } else {
-                    brain.attack = GTimer::from_seconds(rng.random_range(0.3..0.6), TimerMode::Once);
+                    brain.attack =
+                        GTimer::from_seconds(rng.random_range(0.3..0.6), TimerMode::Once);
                 }
             }
 
@@ -878,36 +1074,12 @@ pub fn enemy_ai(
                     } else {
                         EnemyKind::Freak
                     };
-                    commands.spawn(PendingEnemySpawn {
-                        kind: revived,
-                        pos: cpos,
-                        difficulty: 1.0,
-                        loops: run.loop_count,
-                    });
+                    queue_enemy_spawn(&mut commands, revived, cpos, 1.0, run.loop_count);
                 } else if (positions.len() as u32) < 40 {
                     let ang = rng.random_range(0.0..std::f32::consts::TAU);
                     let p = epos + glam::Vec2::new(ang.cos(), ang.sin()) * 40.0;
-                    commands.spawn(PendingEnemySpawn {
-                        kind: EnemyKind::Freak,
-                        pos: p,
-                        difficulty: 1.0,
-                        loops: run.loop_count,
-                    });
+                    queue_enemy_spawn(&mut commands, EnemyKind::Freak, p, 1.0, run.loop_count);
                 }
-            }
-        }
-
-        if enemy.kind == EnemyKind::MaggotSpawn {
-            brain.attack.tick(dt);
-            if brain.attack.just_finished() {
-                brain.attack = GTimer::from_seconds(def.attack_cooldown, TimerMode::Once);
-                let ang = rng.random_range(0.0..std::f32::consts::TAU);
-                commands.spawn(PendingEnemySpawn {
-                    kind: EnemyKind::Maggot,
-                    pos: epos + glam::Vec2::new(ang.cos(), ang.sin()) * 24.0,
-                    difficulty: 1.0,
-                    loops: run.loop_count,
-                });
             }
         }
 
@@ -922,12 +1094,13 @@ pub fn enemy_ai(
                     let base = dir.y.atan2(dir.x);
                     let ang = base + spread;
                     let off = glam::Vec2::new(ang.cos(), ang.sin()) * 12.0;
-                    commands.spawn(PendingEnemySpawn {
-                        kind: EnemyKind::FastRat,
-                        pos: epos + off,
-                        difficulty: 1.0,
-                        loops: run.loop_count,
-                    });
+                    queue_enemy_spawn(
+                        &mut commands,
+                        EnemyKind::FastRat,
+                        epos + off,
+                        1.0,
+                        run.loop_count,
+                    );
                     brain.burst_left = brain.burst_left.saturating_sub(1);
                     if brain.burst_left > 0 {
                         brain.burst_timer = GTimer::from_seconds(6.0 / 30.0, TimerMode::Once);
@@ -950,109 +1123,6 @@ pub fn enemy_ai(
                             TimerMode::Once,
                         );
                     }
-                }
-            }
-        }
-
-        if enemy.kind == EnemyKind::Sniper {
-            let (cd, aiming) = sniper_state.entry(entity).or_insert_with(|| {
-                (
-                    GTimer::from_seconds(
-                        (60.0 + rand::rng().random_range(0.0..90.0)) / 30.0,
-                        TimerMode::Once,
-                    ),
-                    false,
-                )
-            });
-            cd.tick(dt);
-            if *aiming && cd.remaining_secs() > 5.0 / 30.0 {
-                brain.gunangle = dir.y.atan2(dir.x);
-            }
-            if cd.just_finished() {
-                let los = has_line_of_sight(epos, player_pos, &mask);
-                if !*aiming {
-                    if los {
-                        if dist > 96.0 {
-                            if rng.random::<f32>() < 0.67 {
-                                enemy_cue(&mut cues, "sndSniperTarget");
-                                *aiming = true;
-                                brain.gunangle = dir.y.atan2(dir.x);
-                                brain.walk = 0.0;
-                                vel.0 = glam::Vec2::ZERO;
-                                *cd = GTimer::from_seconds(1.0 /* 30 ticks */, TimerMode::Once);
-                            } else {
-                                let ang = dir.y.atan2(dir.x)
-                                    + rng.random_range(-80_f32..80.0).to_radians();
-                                let wdir = glam::Vec2::new(ang.cos(), ang.sin());
-                                vel.0 = wdir * (0.4 * 30.0);
-                                brain.walk = 10.0 + rng.random_range(0.0..10.0);
-                                brain.gunangle = dir.y.atan2(dir.x);
-                                *cd = GTimer::from_seconds(
-                                    (20.0 + rng.random_range(0.0..10.0)) / 30.0,
-                                    TimerMode::Once,
-                                );
-                            }
-                        } else {
-                            let away = -dir;
-                            let ang =
-                                away.y.atan2(away.x) + rng.random_range(-10_f32..10.0).to_radians();
-                            let wdir = glam::Vec2::new(ang.cos(), ang.sin());
-                            vel.0 = wdir * (0.4 * 30.0);
-                            brain.walk = 40.0 + rng.random_range(0.0..10.0);
-                            brain.gunangle = dir.y.atan2(dir.x);
-                            *cd = GTimer::from_seconds(
-                                (20.0 + rng.random_range(0.0..10.0)) / 30.0,
-                                TimerMode::Once,
-                            );
-                        }
-                    } else if rng.random::<f32>() < 0.25 {
-                        let ang = rng.random_range(0.0..std::f32::consts::TAU);
-                        let wdir = glam::Vec2::new(ang.cos(), ang.sin());
-                        vel.0 = wdir * (0.4 * 30.0);
-                        brain.walk = 20.0 + rng.random_range(0.0..10.0);
-                        brain.gunangle = ang;
-                        *cd = GTimer::from_seconds(
-                            (brain.walk + 2.0 + rng.random_range(0.0..5.0)) / 30.0,
-                            TimerMode::Once,
-                        );
-                    } else {
-                        *cd = GTimer::from_seconds(
-                            (20.0 + rng.random_range(0.0..10.0)) / 30.0,
-                            TimerMode::Once,
-                        );
-                    }
-                } else {
-                    *aiming = false;
-                    enemy_cue(&mut cues, "sndSniperFire");
-                    let base = brain.gunangle;
-                    for off in [4.0_f32, -4.0, 0.0] {
-                        let ang = base + off.to_radians();
-                        let sdir = glam::Vec2::new(ang.cos(), ang.sin());
-                        spawn_enemy_projectile(
-                            &mut commands,
-                            entity,
-                            enemy.kind,
-                            epos + sdir * 20.0,
-                            sdir * def.projectile_speed,
-                            def.projectile_damage,
-                            def.projectile_lifetime,
-                            def.projectile_radius,
-                            150.0,
-                            explosive_kind(enemy.kind),
-                        );
-                    }
-                    show_enemy_fire(
-                        &mut commands,
-                        &catalog,
-                        entity,
-                        def.sprite,
-                        anim.as_deref_mut(),
-                        hurt.is_some(),
-                    );
-                    *cd = GTimer::from_seconds(
-                        (40.0 + rng.random_range(0.0..5.0)) / 30.0,
-                        TimerMode::Once,
-                    );
                 }
             }
         }
@@ -1090,7 +1160,8 @@ pub fn enemy_ai(
                         brain.strafe_dir = 0.0;
                     } else {
                         brain.burst_left = def.bullets_per_shot;
-                        brain.burst_timer = GTimer::from_seconds(def.burst_interval, TimerMode::Once);
+                        brain.burst_timer =
+                            GTimer::from_seconds(def.burst_interval, TimerMode::Once);
                         fire_enemy_bullet(
                             &mut commands,
                             &mut rng,
@@ -1254,7 +1325,8 @@ pub fn enemy_ai(
                         );
                         brain.burst_left = brain.burst_left.saturating_sub(1);
                         if brain.burst_left == 0 {
-                            brain.attack = GTimer::from_seconds(def.attack_cooldown, TimerMode::Once);
+                            brain.attack =
+                                GTimer::from_seconds(def.attack_cooldown, TimerMode::Once);
                         } else {
                             brain.burst_timer =
                                 GTimer::from_seconds(def.burst_interval, TimerMode::Once);
@@ -1310,50 +1382,6 @@ pub fn enemy_ai(
                     (30.0 + rng.random_range(0.0..20.0)) / 30.0,
                     TimerMode::Once,
                 );
-            }
-        }
-
-        if matches!(enemy.kind, EnemyKind::MeleeBandit) {
-            brain.attack.tick(dt);
-            if brain.attack.just_finished() {
-                let los = has_line_of_sight(epos, player_pos, &mask);
-                if los {
-                    if dist < 64.0 {
-                        let gdir = glam::Vec2::new(brain.gunangle.cos(), brain.gunangle.sin());
-                        vel.0 = gdir * (6.0 * 30.0);
-                        brain.gunangle = dir.y.atan2(dir.x);
-                        enemy_cue(&mut cues, "sndAssassinAttack");
-                        spawn_hit_warning(&mut commands, epos);
-                        brain.slash_delay = 10.0;
-                        brain.attack = GTimer::from_seconds(
-                            (43.0 + rng.random_range(0.0..6.0)) / 30.0,
-                            TimerMode::Once,
-                        );
-                    } else {
-                        let ang = dir.y.atan2(dir.x) + rng.random_range(-10_f32..10.0).to_radians();
-                        let wdir = glam::Vec2::new(ang.cos(), ang.sin());
-                        vel.0 = wdir * (0.4 * 30.0);
-                        brain.walk = 40.0 + rng.random_range(0.0..10.0);
-                        brain.gunangle = dir.y.atan2(dir.x);
-                        brain.attack = GTimer::from_seconds(
-                            (10.0 + rng.random_range(0.0..5.0)) / 30.0,
-                            TimerMode::Once,
-                        );
-                    }
-                } else if rng.random::<f32>() < 0.25 {
-                    let ang = rng.random_range(0.0..std::f32::consts::TAU);
-                    vel.0 = glam::Vec2::new(ang.cos(), ang.sin()) * (0.4 * 30.0);
-                    brain.walk = 20.0 + rng.random_range(0.0..10.0);
-                    brain.attack = GTimer::from_seconds(
-                        (brain.walk + 10.0 + rng.random_range(0.0..30.0)) / 30.0,
-                        TimerMode::Once,
-                    );
-                } else {
-                    brain.attack = GTimer::from_seconds(
-                        (10.0 + rng.random_range(0.0..5.0)) / 30.0,
-                        TimerMode::Once,
-                    );
-                }
             }
         }
 
@@ -1416,8 +1444,7 @@ pub fn enemy_ai(
                     } else {
                         enemy_cue(&mut cues, "sndShotgun");
                         for _ in 0..6 {
-                            let ang =
-                                brain.gunangle + rng.random_range(-25_f32..25.0).to_radians();
+                            let ang = brain.gunangle + rng.random_range(-25_f32..25.0).to_radians();
                             let spd = rng.random_range(300.0..420.0);
                             fire_enemy_shell(&mut commands, entity, enemy.kind, epos, ang, spd);
                         }
@@ -1522,12 +1549,13 @@ pub fn enemy_ai(
                 brain.burst_timer.tick(dt);
                 if brain.burst_timer.just_finished() {
                     if (positions.len() as u32) < 30 {
-                        commands.spawn(PendingEnemySpawn {
-                            kind: EnemyKind::FrogEgg,
-                            pos: epos,
-                            difficulty: 1.0,
-                            loops: run.loop_count,
-                        });
+                        queue_enemy_spawn(
+                            &mut commands,
+                            EnemyKind::FrogEgg,
+                            epos,
+                            1.0,
+                            run.loop_count,
+                        );
                     }
                     brain.burst_left = brain.burst_left.saturating_sub(1);
                     if brain.burst_left > 0 {
@@ -1712,7 +1740,8 @@ pub fn enemy_ai(
                         );
                         brain.burst_left -= 1;
                         if brain.burst_left == 0 {
-                            brain.attack = GTimer::from_seconds(def.attack_cooldown, TimerMode::Once);
+                            brain.attack =
+                                GTimer::from_seconds(def.attack_cooldown, TimerMode::Once);
                         }
                     }
                 } else {
@@ -1761,53 +1790,447 @@ pub fn enemy_ai(
     }
 }
 
-/// BigMaggot burrow/relocate + Inspector mind-control pull (bevy
-/// `tick_bigmaggot_inspector` parity; burst VFX rides `spawn_burst`,
-/// everything else is positions and timers).
-pub fn tick_bigmaggot_inspector(
+pub fn tick_bandit(
     time: Res<SimTime>,
     mut commands: Commands,
     mask: Res<FloorMask>,
-    mut burrow: Local<HashMap<Entity, (f32, bool)>>,
-    mut ctrl: Local<HashMap<Entity, f32>>,
-    player_q: Query<(&Pos, &Player), (With<Player>, Without<Enemy>)>,
-    mut player_vel: Query<&mut Velocity, (With<Player>, Without<Enemy>)>,
-    healths: Query<&Health, (With<Enemy>, Without<Player>)>,
-    mut enemies: Query<(Entity, &Enemy, &mut Velocity, &mut Pos), With<Enemy>>,
+    mut cues: ResMut<Queue<AudioCue>>,
+    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
+    mut enemies: Query<
+        (Entity, &Enemy, &mut EnemyBrain, &mut Velocity, &mut Pos),
+        (With<Enemy>, Without<Prop>),
+    >,
+    props: Query<(Entity, &Prop, &Pos), With<Prop>>,
 ) {
-    let Ok((player_pos, _)) = player_q.single() else {
-        return;
-    };
-    let player_pos = player_pos.0;
     let dt = time.delta_secs;
+    let player_pos = player_q.single().ok().map(|p| p.0);
+    let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p)| p.0).collect();
     let mut rng = rand::rng();
-
-    for (entity, enemy, mut vel, mut pos) in &mut enemies {
+    for (entity, enemy, mut brain, mut vel, mut pos) in &mut enemies {
+        if !matches!(enemy.kind, EnemyKind::Bandit | EnemyKind::SnowBandit) {
+            continue;
+        }
         let epos = pos.0;
-        let to_player = player_pos - epos;
-        let dist = to_player.length();
-        let dir = to_player.normalize_or_zero();
+        tick_verbatim_cooldown(&mut brain, dt);
+        sync_heading(&mut brain, &vel);
+        brain.attack.tick(dt);
+        if brain.attack.just_finished() {
+            brain.attack =
+                GTimer::from_seconds((20.0 + rng.random_range(0.0..10.0)) / 30.0, TimerMode::Once);
+            if let Some(target) = player_pos {
+                let delta = target - epos;
+                let target_dir = delta.y.atan2(delta.x);
+                let target_dist = delta.length();
+                if has_line_of_sight(epos, target, &mask) {
+                    if target_dist > 48.0 {
+                        if rng.random::<f32>() < 0.25 {
+                            brain.wkick = 4.0;
+                            let angle =
+                                brain.gunangle + rng.random_range(-10.0_f32..10.0).to_radians();
+                            let d = glam::Vec2::from_angle(angle);
+                            let bullet = spawn_enemy_projectile(
+                                &mut commands,
+                                entity,
+                                enemy.kind,
+                                epos,
+                                d * 4.0 * 30.0,
+                                3,
+                                3.5,
+                                4.0,
+                                150.0,
+                                false,
+                            );
+                            commands.entity(bullet).insert((
+                                ProjectileTyp(1),
+                                ProjectileFade("images/sprEnemyBulletHit.png"),
+                            ));
+                            enemy_cue(&mut cues, "sndEnemyFire");
+                            brain.gunangle = target_dir;
+                            brain.attack = GTimer::from_seconds(
+                                (20.0 + rng.random_range(0.0..5.0)) / 30.0,
+                                TimerMode::Once,
+                            );
+                        } else {
+                            set_gml_direction(
+                                &mut brain,
+                                &mut vel,
+                                target_dir + rng.random_range(-90.0_f32..90.0).to_radians(),
+                            );
+                            set_gml_speed(&mut brain, &mut vel, 0.4);
+                            brain.walk = 10.0 + rng.random_range(0.0..10.0);
+                            brain.gunangle = target_dir;
+                        }
+                    } else {
+                        set_gml_direction(
+                            &mut brain,
+                            &mut vel,
+                            target_dir + rng.random_range(-10.0_f32..10.0).to_radians(),
+                        );
+                        set_gml_speed(&mut brain, &mut vel, 0.4);
+                        brain.walk = 40.0 + rng.random_range(0.0..10.0);
+                        brain.gunangle = target_dir;
+                    }
+                } else if rng.random::<f32>() < 0.25 {
+                    let angle = rng.random_range(0.0..std::f32::consts::TAU);
+                    add_gml_motion(&mut brain, &mut vel, angle, 0.4, dt);
+                    brain.walk = 20.0 + rng.random_range(0.0..10.0);
+                    brain.attack = GTimer::from_seconds(
+                        (brain.walk + 10.0 + rng.random_range(0.0..30.0)) / 30.0,
+                        TimerMode::Once,
+                    );
+                    brain.gunangle = brain.heading;
+                }
+            } else if rng.random::<f32>() < 0.1 {
+                let angle = rng.random_range(0.0..std::f32::consts::TAU);
+                add_gml_motion(&mut brain, &mut vel, angle, 0.4, dt);
+                brain.walk = 20.0 + rng.random_range(0.0..10.0);
+                brain.attack = GTimer::from_seconds(
+                    (brain.walk + 10.0 + rng.random_range(0.0..30.0)) / 30.0,
+                    TimerMode::Once,
+                );
+                brain.gunangle = brain.heading;
+            }
+        }
+        walk_step(&mut brain, &mut vel, 0.8, 3.0, dt);
+        integrate_verbatim(
+            &mut brain,
+            &mut vel,
+            &mut pos,
+            &props,
+            &mask,
+            &positions,
+            epos,
+            enemy_def(enemy.kind).radius,
+            dt,
+            true,
+        );
+        zero_damage_contact_push(
+            &mut brain,
+            &mut vel,
+            player_pos,
+            pos.0,
+            enemy_def(enemy.kind).radius,
+            dt,
+        );
+    }
+}
 
-        if enemy.kind == EnemyKind::BigMaggot {
-            let los = has_line_of_sight(epos, player_pos, &mask);
-            let entry = burrow.entry(entity).or_insert((0.0, false));
-            if los {
-                entry.0 = 0.0;
-                if !entry.1 {
-                    entry.1 = true;
-                    vel.0 = dir * 90.0;
+pub fn tick_maggot(
+    time: Res<SimTime>,
+    mask: Res<FloorMask>,
+    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
+    mut enemies: Query<
+        (
+            Entity,
+            &Enemy,
+            &mut EnemyBrain,
+            &mut Velocity,
+            &mut Pos,
+            Option<&HurtAnim>,
+        ),
+        (With<Enemy>, Without<Prop>),
+    >,
+    props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+) {
+    let dt = time.delta_secs;
+    let player_pos = player_q.single().ok().map(|p| p.0);
+    let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p, _)| p.0).collect();
+    let mut rng = rand::rng();
+    for (_entity, enemy, mut brain, mut vel, mut pos, hurt) in &mut enemies {
+        if enemy.kind != EnemyKind::Maggot {
+            continue;
+        }
+        let epos = pos.0;
+        tick_verbatim_cooldown(&mut brain, dt);
+        sync_heading(&mut brain, &vel);
+        brain.attack.tick(dt);
+        if brain.attack.just_finished() {
+            brain.attack =
+                GTimer::from_seconds((30.0 + rng.random_range(0.0..20.0)) / 30.0, TimerMode::Once);
+            if let Some(target) = player_pos
+                && has_line_of_sight(epos, target, &mask)
+            {
+                set_gml_direction(
+                    &mut brain,
+                    &mut vel,
+                    (target - epos).y.atan2((target - epos).x)
+                        + rng.random_range(-10.0_f32..10.0).to_radians(),
+                );
+            } else {
+                add_gml_motion(
+                    &mut brain,
+                    &mut vel,
+                    rng.random_range(0.0..std::f32::consts::TAU),
+                    0.5,
+                    dt,
+                );
+            }
+            if blocked_by_wall(&mask, pos.0, enemy_def(enemy.kind).radius) {
+                pos.0 = nearest_floor_point(&mask, pos.0);
+            }
+        }
+        if !hurt.is_some_and(|h| !h.timer.is_finished()) {
+            let heading = brain.heading;
+            add_gml_motion(&mut brain, &mut vel, heading, 0.6, dt);
+        }
+        cap_gml_speed(&mut brain, &mut vel, 2.0);
+        integrate_verbatim(
+            &mut brain,
+            &mut vel,
+            &mut pos,
+            &props,
+            &mask,
+            &positions,
+            epos,
+            enemy_def(enemy.kind).radius,
+            dt,
+            true,
+        );
+    }
+}
+
+pub fn tick_maggot_spawn(
+    time: Res<SimTime>,
+    mask: Res<FloorMask>,
+    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
+    mut enemies: Query<
+        (
+            Entity,
+            &Enemy,
+            &mut EnemyBrain,
+            &mut Velocity,
+            &mut Pos,
+            &mut Health,
+            Option<&HurtAnim>,
+        ),
+        (With<Enemy>, Without<Prop>),
+    >,
+    props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+) {
+    let dt = time.delta_secs;
+    let player_pos = player_q.single().ok().map(|p| p.0);
+    let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p, _, _)| p.0).collect();
+    let spawns: Vec<(Entity, glam::Vec2)> = enemies
+        .iter()
+        .filter_map(|(entity, enemy, _, _, pos, _, _)| {
+            (enemy.kind == EnemyKind::MaggotSpawn).then_some((entity, pos.0))
+        })
+        .collect();
+    let mut rng = rand::rng();
+    for (entity, enemy, mut brain, mut vel, mut pos, mut health, hurt) in &mut enemies {
+        if enemy.kind != EnemyKind::MaggotSpawn {
+            continue;
+        }
+        let epos = pos.0;
+        tick_verbatim_cooldown(&mut brain, dt);
+        vel.0 = glam::Vec2::ZERO;
+        if let Some(target) = player_pos {
+            if epos.distance(target) < 64.0
+                && !brain.maggot_spawn_charging
+                && !hurt.is_some_and(|h| !h.timer.is_finished())
+            {
+                health.hp -= 1;
+                brain.maggot_spawn_charging = true;
+                brain.slash_delay = 6.0;
+            }
+        }
+        if brain.maggot_spawn_charging {
+            brain.slash_delay = (brain.slash_delay - dt * 30.0).max(0.0);
+            if brain.slash_delay == 0.0 {
+                brain.maggot_spawn_charging = false;
+            }
+        }
+        integrate_verbatim(
+            &mut brain,
+            &mut vel,
+            &mut pos,
+            &props,
+            &mask,
+            &positions,
+            epos,
+            enemy_def(enemy.kind).radius,
+            dt,
+            false,
+        );
+        let radius = enemy_def(enemy.kind).radius;
+        for (other_entity, other_pos) in &spawns {
+            if *other_entity == entity || entity.index() >= other_entity.index() {
+                continue;
+            }
+            if pos.0.distance(*other_pos) > radius * 2.0 {
+                continue;
+            }
+            let jitter = glam::Vec2::new(rng.random_range(-1.0..1.0), rng.random_range(-1.0..1.0));
+            let to_other = *other_pos + jitter - pos.0;
+            let angle = to_other.y.atan2(to_other.x);
+            let mx = angle.cos() * 8.0;
+            let my = angle.sin() * 8.0;
+            let x = pos.0 + glam::Vec2::new(mx, 0.0);
+            if !blocked_by_geometry(&props, &mask, x, 0.0) && !blocked_by_wall(&mask, x, 0.0) {
+                pos.0.x += mx;
+            }
+            let y = pos.0 + glam::Vec2::new(0.0, my);
+            if !blocked_by_geometry(&props, &mask, y, 0.0) && !blocked_by_wall(&mask, y, 0.0) {
+                pos.0.y += my;
+            }
+        }
+        zero_damage_contact_push(
+            &mut brain,
+            &mut vel,
+            player_pos,
+            pos.0,
+            enemy_def(enemy.kind).radius,
+            dt,
+        );
+    }
+}
+
+pub fn tick_bigmaggot(
+    time: Res<SimTime>,
+    mut cues: ResMut<Queue<AudioCue>>,
+    mask: Res<FloorMask>,
+    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
+    mut enemies: Query<
+        (
+            Entity,
+            &Enemy,
+            &mut EnemyBrain,
+            &mut Velocity,
+            &mut Pos,
+            &Health,
+            Option<&HurtAnim>,
+        ),
+        (With<Enemy>, Without<Prop>),
+    >,
+    props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+) {
+    let dt = time.delta_secs;
+    let player_pos = player_q.single().ok().map(|p| p.0);
+    let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p, _, _)| p.0).collect();
+    let mut rng = rand::rng();
+    for (_entity, enemy, mut brain, mut vel, mut pos, health, hurt) in &mut enemies {
+        if enemy.kind != EnemyKind::BigMaggot || brain.burrow_state != 0 {
+            continue;
+        }
+        let epos = pos.0;
+        tick_verbatim_cooldown(&mut brain, dt);
+        sync_heading(&mut brain, &vel);
+        brain.attack.tick(dt);
+        if brain.attack.just_finished() {
+            brain.attack =
+                GTimer::from_seconds((20.0 + rng.random_range(0.0..20.0)) / 30.0, TimerMode::Once);
+            let mut burrow = false;
+            if let Some(target) = player_pos {
+                let target_dir = (target - epos).y.atan2((target - epos).x);
+                if has_line_of_sight(epos, target, &mask) {
+                    if brain.rage == 0.0 {
+                        brain.rage = 1.0;
+                        set_gml_direction(
+                            &mut brain,
+                            &mut vel,
+                            target_dir + rng.random_range(-30.0_f32..30.0).to_radians(),
+                        );
+                    }
+                } else if health.hp < health.max && rng.random::<f32>() < 0.5 {
+                    burrow = true;
+                } else {
+                    brain.rage = 0.0;
+                    add_gml_motion(
+                        &mut brain,
+                        &mut vel,
+                        rng.random_range(0.0..std::f32::consts::TAU),
+                        1.0,
+                        dt,
+                    );
                 }
             } else {
-                entry.0 += dt;
-                let damaged = healths.get(entity).map(|h| h.hp < h.max).unwrap_or(false);
-                if damaged && entry.0 > 1.0 && rng.random::<f32>() < dt * 0.5 {
-                    let ang = rng.random_range(0.0..std::f32::consts::TAU);
-                    let dest = player_pos + glam::Vec2::new(ang.cos(), ang.sin()) * 64.0;
-                    if mask.is_walkable(dest) {
+                brain.rage = 0.0;
+                add_gml_motion(
+                    &mut brain,
+                    &mut vel,
+                    rng.random_range(0.0..std::f32::consts::TAU),
+                    1.0,
+                    dt,
+                );
+            }
+            if burrow {
+                enemy_cue(&mut cues, "sndBigMaggotBurrow");
+                brain.rage = 0.0;
+                brain.burrow_state = 1;
+                brain.burrow_alarm0 = 30.0;
+                brain.burrow_alarm1 = 0.0;
+                brain.burrow_angle = rng.random_range(0.0..std::f32::consts::TAU);
+                vel.0 = glam::Vec2::ZERO;
+                sync_heading(&mut brain, &vel);
+                continue;
+            }
+        }
+        if !hurt.is_some_and(|h| !h.timer.is_finished()) {
+            let heading = brain.heading;
+            add_gml_motion(&mut brain, &mut vel, heading, 0.5, dt);
+        }
+        if vel.0.length() < 0.5 * 30.0 {
+            set_gml_speed(&mut brain, &mut vel, 0.5);
+        }
+        let cap = 1.0 + brain.rage * 2.0;
+        cap_gml_speed(&mut brain, &mut vel, cap);
+        integrate_verbatim(
+            &mut brain,
+            &mut vel,
+            &mut pos,
+            &props,
+            &mask,
+            &positions,
+            epos,
+            enemy_def(enemy.kind).radius,
+            dt,
+            true,
+        );
+    }
+}
+
+pub fn tick_bigmaggot_burrow(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mut cues: ResMut<Queue<AudioCue>>,
+    mask: Res<FloorMask>,
+    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
+    mut enemies: Query<
+        (Entity, &Enemy, &mut EnemyBrain, &mut Velocity, &mut Pos),
+        (With<Enemy>, Without<Prop>),
+    >,
+    props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+) {
+    let dt = time.delta_secs;
+    let player_pos = player_q.single().ok().map(|p| p.0);
+    let mut rng = rand::rng();
+    for (_entity, enemy, mut brain, mut vel, mut pos) in &mut enemies {
+        if enemy.kind != EnemyKind::BigMaggot || brain.burrow_state == 0 {
+            continue;
+        }
+        tick_verbatim_cooldown(&mut brain, dt);
+        if brain.burrow_state == 2 {
+            brain.attack.tick(dt);
+            if brain.attack.just_finished() {
+                enemy_cue(&mut cues, "sndBigMaggotUnburrow");
+            }
+        }
+        if brain.burrow_state == 1 && brain.burrow_alarm0 > 0.0 {
+            brain.burrow_alarm0 -= dt * 30.0;
+            if brain.burrow_alarm0 <= 0.0 {
+                brain.burrow_angle = rng.random_range(0.0..std::f32::consts::TAU);
+                if let Some(target) = player_pos {
+                    let dest = target + glam::Vec2::from_angle(brain.burrow_angle) * 64.0;
+                    if !blocked_by_geometry(&props, &mask, dest, 0.0)
+                        && !blocked_by_wall(&mask, dest, 0.0)
+                    {
                         pos.0 = dest;
                         vel.0 = glam::Vec2::ZERO;
-                        entry.0 = 0.0;
-                        entry.1 = false;
+                        sync_heading(&mut brain, &vel);
+                        enemy_cue(&mut cues, "sndBigMaggotUnburrowSand");
+                        brain.burrow_state = 2;
+                        brain.burrow_alarm1 = 5.0 / 0.4;
+                        brain.attack = GTimer::from_seconds((5.0 / 0.4) / 30.0, TimerMode::Once);
                         spawn_burst(
                             &mut commands,
                             &mut rng,
@@ -1816,10 +2239,1044 @@ pub fn tick_bigmaggot_inspector(
                             [0.6, 0.45, 0.3, 1.0],
                             (40.0, 140.0),
                         );
+                    } else {
+                        brain.burrow_alarm0 = 1.0;
                     }
                 }
             }
+        } else if brain.burrow_state == 2 {
+            brain.burrow_alarm1 -= dt * 30.0;
+            if brain.burrow_alarm1 <= 0.0 {
+                brain.burrow_state = 0;
+                brain.attack = GTimer::from_seconds(
+                    (10.0 + rng.random_range(0.0..10.0)) / 30.0,
+                    TimerMode::Once,
+                );
+                brain.walk = 0.0;
+                brain.burrow_alarm0 = 0.0;
+                brain.burrow_alarm1 = 0.0;
+            }
         }
+    }
+}
+#[allow(clippy::too_many_arguments)]
+pub fn tick_jungle_fly(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mut cues: ResMut<Queue<AudioCue>>,
+    mask: Res<FloorMask>,
+    run: Res<Run>,
+    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
+    mut enemies: Query<
+        (
+            Entity,
+            &Enemy,
+            &mut EnemyBrain,
+            &mut Velocity,
+            &mut Pos,
+            Option<&HurtAnim>,
+        ),
+        (With<Enemy>, Without<Prop>),
+    >,
+    props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+) {
+    let dt = time.delta_secs;
+    let player_pos = player_q.single().ok().map(|p| p.0);
+    let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p, _)| p.0).collect();
+    let mut rng = rand::rng();
+    for (_entity, enemy, mut brain, mut vel, mut pos, hurt) in &mut enemies {
+        if enemy.kind != EnemyKind::JungleFly {
+            continue;
+        }
+        let epos = pos.0;
+        tick_verbatim_cooldown(&mut brain, dt);
+        sync_heading(&mut brain, &vel);
+        brain.attack.tick(dt);
+        brain.burst_timer.tick(dt);
+        if brain.attack.just_finished() {
+            brain.attack =
+                GTimer::from_seconds((15.0 + rng.random_range(0.0..5.0)) / 30.0, TimerMode::Once);
+            if let Some(target) = player_pos {
+                let target_dir = (target - epos).y.atan2((target - epos).x);
+                if has_line_of_sight(epos, target, &mask) && rng.random::<f32>() > 0.2 {
+                    if rng.random::<f32>() < 1.0 / 6.0
+                        && brain.ammo > 0
+                        && epos.distance(target) > 96.0
+                    {
+                        brain.ammo -= 1;
+                        brain.fire = 6;
+                        brain.burst_timer = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
+                        brain.attack = GTimer::from_seconds(1.0, TimerMode::Once);
+                        brain.rage = 0.0;
+                        brain.gunangle = target_dir + rng.random_range(-3.0_f32..3.0).to_radians();
+                    } else {
+                        if brain.rage == 0.0 {
+                            brain.rage = 1.0;
+                        }
+                        set_gml_direction(
+                            &mut brain,
+                            &mut vel,
+                            target_dir + rng.random_range(-30.0_f32..30.0).to_radians(),
+                        );
+                    }
+                } else {
+                    brain.rage = 0.0;
+                    add_gml_motion(
+                        &mut brain,
+                        &mut vel,
+                        rng.random_range(0.0..std::f32::consts::TAU),
+                        1.0,
+                        dt,
+                    );
+                }
+            } else {
+                brain.rage = 0.0;
+                add_gml_motion(
+                    &mut brain,
+                    &mut vel,
+                    rng.random_range(0.0..std::f32::consts::TAU),
+                    1.0,
+                    dt,
+                );
+            }
+        }
+        if brain.burst_timer.just_finished() && brain.fire > 0 {
+            let angle = brain.gunangle + rng.random_range(-1.0_f32..1.0).to_radians();
+            queue_fired_maggot(&mut commands, epos, angle, run.loop_count);
+            cues.push(AudioCue {
+                name: "sndFlyFire",
+                volume: 0.3,
+                variance: 0.05,
+            });
+            brain.burst_timer = GTimer::from_seconds(2.0 / 30.0, TimerMode::Once);
+            brain.fire -= 1;
+        }
+        if !hurt.is_some_and(|h| !h.timer.is_finished()) {
+            let heading = brain.heading;
+            add_gml_motion(&mut brain, &mut vel, heading, 1.0, dt);
+        }
+        let cap = 2.0 + brain.rage * 2.0;
+        if vel.0.length() > cap * 30.0 {
+            cap_gml_speed(&mut brain, &mut vel, cap);
+        }
+        if vel.0.length() < 30.0 {
+            set_gml_speed(&mut brain, &mut vel, 1.0);
+        }
+        integrate_verbatim(
+            &mut brain,
+            &mut vel,
+            &mut pos,
+            &props,
+            &mask,
+            &positions,
+            epos,
+            enemy_def(enemy.kind).radius,
+            dt,
+            true,
+        );
+    }
+}
+
+pub fn tick_fired_maggot(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    run: Res<Run>,
+    mask: Res<FloorMask>,
+    player_q: Query<(&Pos, &Health), (With<Player>, Without<Enemy>)>,
+    mut enemies: Query<
+        (Entity, &Enemy, &mut EnemyBrain, &mut Velocity, &mut Pos),
+        (With<Enemy>, Without<Prop>),
+    >,
+) {
+    let dt = time.delta_secs;
+    let player = player_q.single().ok().map(|(p, h)| (p.0, h.hp > 0));
+    for (entity, enemy, mut brain, mut vel, mut pos) in &mut enemies {
+        if enemy.kind != EnemyKind::FiredMaggot {
+            continue;
+        }
+        tick_verbatim_cooldown(&mut brain, dt);
+        sync_heading(&mut brain, &vel);
+        set_gml_speed(&mut brain, &mut vel, 7.0);
+        let epos = pos.0;
+        let next = epos + vel.0 * dt;
+        if let Some((player_pos, true)) = player
+            && next.distance(player_pos) <= 8.0 + enemy_def(enemy.kind).radius
+        {
+            let angle = (player_pos - epos).y.atan2((player_pos - epos).x);
+            queue_conversion_maggot(&mut commands, next, angle, run.loop_count);
+            commands.entity(entity).despawn();
+            continue;
+        }
+        if blocked_by_wall(&mask, next, enemy_def(enemy.kind).radius) {
+            let angle = brain.heading + std::f32::consts::PI;
+            queue_conversion_maggot(&mut commands, next, angle, run.loop_count);
+            commands.entity(entity).despawn();
+            continue;
+        }
+        pos.0 += vel.0 * dt;
+        sync_heading(&mut brain, &vel);
+    }
+}
+#[allow(clippy::too_many_arguments)]
+pub fn tick_scorpion(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mut cues: ResMut<Queue<AudioCue>>,
+    mask: Res<FloorMask>,
+    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
+    mut enemies: Query<
+        (
+            Entity,
+            &Enemy,
+            &mut EnemyBrain,
+            &mut Velocity,
+            &mut Pos,
+            Option<&mut SpriteAnim>,
+            Option<&HurtAnim>,
+        ),
+        (With<Enemy>, Without<Prop>),
+    >,
+    props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+    catalog: Res<repame_anim::AnimCatalog>,
+) {
+    let dt = time.delta_secs;
+    let player_pos = player_q.single().ok().map(|p| p.0);
+    let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p, _, _)| p.0).collect();
+    let mut rng = rand::rng();
+    for (entity, enemy, mut brain, mut vel, mut pos, mut anim, hurt) in &mut enemies {
+        if enemy.kind != EnemyKind::Scorpion {
+            continue;
+        }
+        let epos = pos.0;
+        tick_verbatim_cooldown(&mut brain, dt);
+        sync_heading(&mut brain, &vel);
+        brain.attack.tick(dt);
+        brain.burst_timer.tick(dt);
+        if brain.attack.just_finished() {
+            brain.attack =
+                GTimer::from_seconds((30.0 + rng.random_range(0.0..10.0)) / 30.0, TimerMode::Once);
+            if let Some(target) = player_pos {
+                let target_dir = (target - epos).y.atan2((target - epos).x);
+                set_gml_direction(
+                    &mut brain,
+                    &mut vel,
+                    target_dir
+                        + rng.random_range(-60.0_f32..60.0).to_radians()
+                        + std::f32::consts::PI,
+                );
+                brain.walk = rng.random_range(10.0..20.0);
+                set_gml_speed(&mut brain, &mut vel, 0.4);
+                if has_line_of_sight(epos, target, &mask)
+                    && epos.distance(target) <= 210.0
+                    && rng.random::<f32>() < 0.5
+                {
+                    brain.attack = GTimer::from_seconds(
+                        (30.0 + rng.random_range(0.0..5.0)) / 30.0,
+                        TimerMode::Once,
+                    );
+                    brain.burst_timer = GTimer::from_seconds(1.0 / 30.0, TimerMode::Once);
+                    brain.gunangle = target_dir;
+                    brain.ammo = 10;
+                    enemy_cue(&mut cues, "sndScorpionFireStart");
+                }
+                if epos.distance(target) < 64.0 {
+                    let mut angle = target_dir + rng.random_range(-10.0_f32..10.0).to_radians();
+                    if epos.distance(target) > 32.0 {
+                        angle += std::f32::consts::PI;
+                    }
+                    set_gml_direction(&mut brain, &mut vel, angle);
+                    brain.walk = 40.0;
+                }
+            } else {
+                add_gml_motion(
+                    &mut brain,
+                    &mut vel,
+                    rng.random_range(0.0..std::f32::consts::TAU),
+                    0.4,
+                    dt,
+                );
+                brain.walk = rng.random_range(10.0..20.0);
+                brain.attack = GTimer::from_seconds(
+                    (brain.walk + rng.random_range(10..=30) as f32) / 30.0,
+                    TimerMode::Once,
+                );
+            }
+        }
+        if brain.burst_timer.just_finished() {
+            if brain.ammo > 0 {
+                brain.ammo -= 1;
+                brain.burst_timer = GTimer::from_seconds(2.0 / 30.0, TimerMode::Once);
+                let angle = brain.gunangle + rng.random_range(-20.0_f32..20.0).to_radians();
+                let bullet = spawn_enemy_projectile(
+                    &mut commands,
+                    entity,
+                    enemy.kind,
+                    epos,
+                    glam::Vec2::from_angle(angle) * rng.random_range(3.0_f32..4.0) * 30.0,
+                    2,
+                    3.0,
+                    4.0,
+                    150.0,
+                    false,
+                );
+                commands.entity(bullet).insert((
+                    ProjectileTyp(2),
+                    ProjectileFade("images/sprScorpionBulletHit.png"),
+                ));
+                enemy_cue(&mut cues, "sndScorpionFire");
+                show_enemy_fire(
+                    &mut commands,
+                    &catalog,
+                    entity,
+                    enemy_def(enemy.kind).sprite,
+                    anim.as_deref_mut(),
+                    hurt.is_some(),
+                );
+            } else {
+                brain.attack = GTimer::from_seconds(
+                    (40.0 + rng.random_range(0.0..10.0)) / 30.0,
+                    TimerMode::Once,
+                );
+            }
+        }
+        walk_step(&mut brain, &mut vel, 2.0, 4.0, dt);
+        integrate_verbatim(
+            &mut brain,
+            &mut vel,
+            &mut pos,
+            &props,
+            &mask,
+            &positions,
+            epos,
+            enemy_def(enemy.kind).radius,
+            dt,
+            true,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn tick_gold_scorpion(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mut cues: ResMut<Queue<AudioCue>>,
+    mask: Res<FloorMask>,
+    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
+    mut enemies: Query<
+        (
+            Entity,
+            &Enemy,
+            &mut EnemyBrain,
+            &mut Velocity,
+            &mut Pos,
+            Option<&mut SpriteAnim>,
+            Option<&HurtAnim>,
+        ),
+        (With<Enemy>, Without<Prop>),
+    >,
+    props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+    catalog: Res<repame_anim::AnimCatalog>,
+) {
+    let dt = time.delta_secs;
+    let player_pos = player_q.single().ok().map(|p| p.0);
+    let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p, _, _)| p.0).collect();
+    let mut rng = rand::rng();
+    for (entity, enemy, mut brain, mut vel, mut pos, mut anim, hurt) in &mut enemies {
+        if enemy.kind != EnemyKind::GoldScorpion {
+            continue;
+        }
+        let epos = pos.0;
+        tick_verbatim_cooldown(&mut brain, dt);
+        sync_heading(&mut brain, &vel);
+        brain.attack.tick(dt);
+        brain.burst_timer.tick(dt);
+        if brain.attack.just_finished() {
+            brain.attack =
+                GTimer::from_seconds((30.0 + rng.random_range(0.0..10.0)) / 30.0, TimerMode::Once);
+            if let Some(target) = player_pos {
+                let target_dir = (target - epos).y.atan2((target - epos).x);
+                if has_line_of_sight(epos, target, &mask) && rng.random::<f32>() < 0.5 {
+                    brain.ammo = 20;
+                    brain.walk = 0.0;
+                    brain.burst_timer = GTimer::from_seconds(1.0 / 30.0, TimerMode::Once);
+                    enemy_cue(&mut cues, "sndGoldScorpionFire");
+                    brain.gunangle = target_dir;
+                    brain.attack = GTimer::from_seconds(
+                        (20.0 + rng.random_range(0.0..5.0)) / 30.0,
+                        TimerMode::Once,
+                    );
+                }
+                set_gml_direction(
+                    &mut brain,
+                    &mut vel,
+                    target_dir + rng.random_range(-60.0_f32..60.0).to_radians(),
+                );
+                set_gml_speed(&mut brain, &mut vel, 0.4);
+                if brain.ammo == 0 {
+                    brain.walk = 10.0 + rng.random_range(0.0..10.0);
+                }
+                if epos.distance(target) < 64.0 {
+                    brain.walk = 40.0;
+                    set_gml_direction(
+                        &mut brain,
+                        &mut vel,
+                        target_dir + rng.random_range(-10.0_f32..10.0).to_radians(),
+                    );
+                }
+                if brain.ammo == 0 {
+                    add_gml_motion(&mut brain, &mut vel, target_dir, 0.3, dt);
+                }
+            } else if rng.random::<f32>() < 0.1 {
+                add_gml_motion(
+                    &mut brain,
+                    &mut vel,
+                    rng.random_range(0.0..std::f32::consts::TAU),
+                    0.4,
+                    dt,
+                );
+                brain.walk = 10.0 + rng.random_range(0.0..10.0);
+                brain.attack = GTimer::from_seconds(
+                    (brain.walk + 10.0 + rng.random_range(0.0..30.0)) / 30.0,
+                    TimerMode::Once,
+                );
+                brain.gunangle = brain.heading;
+            }
+        }
+        if brain.burst_timer.just_finished() {
+            if brain.ammo > 0 {
+                brain.ammo -= 1;
+                brain.burst_timer = GTimer::from_seconds(1.0 / 30.0, TimerMode::Once);
+                let angle1 = brain.gunangle + rng.random_range(-5.0_f32..5.0).to_radians();
+                let angle2 = brain.gunangle + rng.random_range(-40.0_f32..40.0).to_radians();
+                let b1 = spawn_enemy_projectile(
+                    &mut commands,
+                    entity,
+                    enemy.kind,
+                    epos,
+                    glam::Vec2::from_angle(angle1) * (5.0 + rng.random_range(0.0..1.0)) * 30.0,
+                    2,
+                    3.0,
+                    4.0,
+                    150.0,
+                    false,
+                );
+                let b2 = spawn_enemy_projectile(
+                    &mut commands,
+                    entity,
+                    enemy.kind,
+                    epos,
+                    glam::Vec2::from_angle(angle2) * (1.5 + rng.random_range(0.0..0.5)) * 30.0,
+                    2,
+                    3.0,
+                    4.0,
+                    150.0,
+                    false,
+                );
+                commands.entity(b1).insert(ProjectileTyp(2));
+                commands.entity(b2).insert(ProjectileTyp(2));
+                enemy_cue(&mut cues, "sndScorpionFire");
+                show_enemy_fire(
+                    &mut commands,
+                    &catalog,
+                    entity,
+                    enemy_def(enemy.kind).sprite,
+                    anim.as_deref_mut(),
+                    hurt.is_some(),
+                );
+            } else {
+                brain.attack = GTimer::from_seconds(
+                    (40.0 + rng.random_range(0.0..10.0)) / 30.0,
+                    TimerMode::Once,
+                );
+            }
+        }
+        walk_step(&mut brain, &mut vel, 2.0, 3.0, dt);
+        if vel.0.length() < 30.0 && brain.ammo < 1 {
+            set_gml_speed(&mut brain, &mut vel, 1.0);
+        }
+        integrate_verbatim(
+            &mut brain,
+            &mut vel,
+            &mut pos,
+            &props,
+            &mask,
+            &positions,
+            epos,
+            enemy_def(enemy.kind).radius,
+            dt,
+            true,
+        );
+    }
+}
+
+pub fn tick_sniper(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mut cues: ResMut<Queue<AudioCue>>,
+    mask: Res<FloorMask>,
+    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
+    mut enemies: Query<
+        (Entity, &Enemy, &mut EnemyBrain, &mut Velocity, &mut Pos),
+        (With<Enemy>, Without<Prop>),
+    >,
+    props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+) {
+    let dt = time.delta_secs;
+    let player_pos = player_q.single().ok().map(|p| p.0);
+    let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p)| p.0).collect();
+    let mut rng = rand::rng();
+    for (entity, enemy, mut brain, mut vel, mut pos) in &mut enemies {
+        if enemy.kind != EnemyKind::Sniper {
+            continue;
+        }
+        let epos = pos.0;
+        tick_verbatim_cooldown(&mut brain, dt);
+        sync_heading(&mut brain, &vel);
+        brain.attack.tick(dt);
+        brain.burst_timer.tick(dt);
+        if brain.attack.just_finished() {
+            brain.attack =
+                GTimer::from_seconds((20.0 + rng.random_range(0.0..10.0)) / 30.0, TimerMode::Once);
+            if !brain.sniper_aiming {
+                if let Some(target) = player_pos {
+                    let target_dir = (target - epos).y.atan2((target - epos).x);
+                    if has_line_of_sight(epos, target, &mask) {
+                        if epos.distance(target) > 96.0 {
+                            if rng.random::<f32>() < 2.0 / 3.0 {
+                                enemy_cue(&mut cues, "sndSniperTarget");
+                                brain.walk = 0.0;
+                                brain.attack = GTimer::from_seconds(40.0 / 30.0, TimerMode::Once);
+                                brain.burst_timer = GTimer::from_seconds(1.0, TimerMode::Once);
+                                brain.sniper_aiming = true;
+                            } else {
+                                set_gml_direction(
+                                    &mut brain,
+                                    &mut vel,
+                                    target_dir + rng.random_range(-80.0_f32..80.0).to_radians(),
+                                );
+                                set_gml_speed(&mut brain, &mut vel, 0.4);
+                                brain.walk = 10.0 + rng.random_range(0.0..10.0);
+                                brain.gunangle = target_dir;
+                            }
+                        } else {
+                            set_gml_direction(
+                                &mut brain,
+                                &mut vel,
+                                target_dir + rng.random_range(-10.0_f32..10.0).to_radians(),
+                            );
+                            set_gml_speed(&mut brain, &mut vel, 0.4);
+                            brain.walk = 40.0 + rng.random_range(0.0..10.0);
+                            brain.gunangle = target_dir;
+                        }
+                    } else if rng.random::<f32>() < 0.25 {
+                        add_gml_motion(
+                            &mut brain,
+                            &mut vel,
+                            rng.random_range(0.0..std::f32::consts::TAU),
+                            0.4,
+                            dt,
+                        );
+                        brain.walk = 20.0 + rng.random_range(0.0..10.0);
+                        brain.attack = GTimer::from_seconds(
+                            (brain.walk + 2.0 + rng.random_range(0.0..5.0)) / 30.0,
+                            TimerMode::Once,
+                        );
+                        brain.gunangle = brain.heading;
+                    }
+                } else if rng.random::<f32>() < 0.1 {
+                    add_gml_motion(
+                        &mut brain,
+                        &mut vel,
+                        rng.random_range(0.0..std::f32::consts::TAU),
+                        0.4,
+                        dt,
+                    );
+                    brain.walk = 20.0 + rng.random_range(0.0..10.0);
+                    brain.attack = GTimer::from_seconds(
+                        (brain.walk + 10.0 + rng.random_range(0.0..30.0)) / 30.0,
+                        TimerMode::Once,
+                    );
+                    brain.gunangle = brain.heading;
+                }
+            }
+        }
+        if brain.sniper_aiming && brain.burst_timer.just_finished() {
+            brain.wkick = 7.0;
+            enemy_cue(&mut cues, "sndSniperFire");
+            for offset in [4.0_f32, -4.0, 0.0] {
+                let angle = brain.gunangle + offset.to_radians();
+                let bullet = spawn_enemy_projectile(
+                    &mut commands,
+                    entity,
+                    enemy.kind,
+                    epos,
+                    glam::Vec2::from_angle(angle) * 16.0 * 30.0,
+                    3,
+                    2.0,
+                    3.5,
+                    150.0,
+                    false,
+                );
+                commands.entity(bullet).insert((
+                    ProjectileTyp(1),
+                    ProjectileFade("images/sprEnemyBulletHit.png"),
+                ));
+            }
+            if let Some(target) = player_pos {
+                brain.gunangle = (target - epos).y.atan2((target - epos).x);
+            }
+            brain.attack =
+                GTimer::from_seconds((40.0 + rng.random_range(0.0..5.0)) / 30.0, TimerMode::Once);
+            brain.sniper_aiming = false;
+        }
+        walk_step(&mut brain, &mut vel, 0.8, 1.5, dt);
+        if brain.sniper_aiming
+            && brain.burst_timer.remaining_secs() > 5.0 / 30.0
+            && let Some(target) = player_pos
+        {
+            brain.gunangle = (target - epos).y.atan2((target - epos).x);
+        }
+        cap_gml_speed(&mut brain, &mut vel, 1.5);
+        integrate_verbatim(
+            &mut brain,
+            &mut vel,
+            &mut pos,
+            &props,
+            &mask,
+            &positions,
+            epos,
+            enemy_def(enemy.kind).radius,
+            dt,
+            true,
+        );
+        zero_damage_contact_push(
+            &mut brain,
+            &mut vel,
+            player_pos,
+            pos.0,
+            enemy_def(enemy.kind).radius,
+            dt,
+        );
+    }
+}
+
+pub fn tick_jungle_bandit(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mut cues: ResMut<Queue<AudioCue>>,
+    mask: Res<FloorMask>,
+    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
+    mut enemies: Query<
+        (Entity, &Enemy, &mut EnemyBrain, &mut Velocity, &mut Pos),
+        (With<Enemy>, Without<Prop>),
+    >,
+    props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+) {
+    let dt = time.delta_secs;
+    let player_pos = player_q.single().ok().map(|p| p.0);
+    let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p)| p.0).collect();
+    let mut rng = rand::rng();
+    for (entity, enemy, mut brain, mut vel, mut pos) in &mut enemies {
+        if enemy.kind != EnemyKind::JungleBandit {
+            continue;
+        }
+        let epos = pos.0;
+        tick_verbatim_cooldown(&mut brain, dt);
+        sync_heading(&mut brain, &vel);
+        brain.attack.tick(dt);
+        brain.burst_timer.tick(dt);
+        if brain.attack.just_finished() {
+            brain.attack =
+                GTimer::from_seconds((10.0 + rng.random_range(0.0..5.0)) / 30.0, TimerMode::Once);
+            if let Some(target) = player_pos {
+                let target_dir = (target - epos).y.atan2((target - epos).x);
+                if has_line_of_sight(epos, target, &mask) {
+                    if epos.distance(target) > 48.0 {
+                        if rng.random::<f32>() < 0.5 && epos.distance(target) <= 96.0 {
+                            enemy_cue(&mut cues, "sndEnemyFire");
+                            brain.gunangle = target_dir;
+                            brain.ammo = 6;
+                            brain.burst_timer = GTimer::from_seconds(1.0 / 30.0, TimerMode::Once);
+                            brain.attack = GTimer::from_seconds(
+                                (20.0 + rng.random_range(0.0..5.0)) / 30.0,
+                                TimerMode::Once,
+                            );
+                        } else {
+                            set_gml_direction(
+                                &mut brain,
+                                &mut vel,
+                                target_dir + rng.random_range(-90.0_f32..90.0).to_radians(),
+                            );
+                            set_gml_speed(&mut brain, &mut vel, 0.4);
+                            brain.walk = 10.0 + rng.random_range(0.0..10.0);
+                            brain.gunangle = target_dir;
+                        }
+                    } else {
+                        set_gml_direction(
+                            &mut brain,
+                            &mut vel,
+                            target_dir + rng.random_range(-10.0_f32..10.0).to_radians(),
+                        );
+                        set_gml_speed(&mut brain, &mut vel, 0.4);
+                        brain.walk = 40.0 + rng.random_range(0.0..10.0);
+                        brain.gunangle = target_dir;
+                    }
+                } else if rng.random::<f32>() < 0.25 {
+                    add_gml_motion(
+                        &mut brain,
+                        &mut vel,
+                        rng.random_range(0.0..std::f32::consts::TAU),
+                        0.4,
+                        dt,
+                    );
+                    brain.walk = 20.0 + rng.random_range(0.0..10.0);
+                    brain.attack = GTimer::from_seconds(
+                        (brain.walk + 10.0 + rng.random_range(0.0..30.0)) / 30.0,
+                        TimerMode::Once,
+                    );
+                    brain.gunangle = brain.heading;
+                }
+            } else if rng.random::<f32>() < 0.1 {
+                add_gml_motion(
+                    &mut brain,
+                    &mut vel,
+                    rng.random_range(0.0..std::f32::consts::TAU),
+                    0.4,
+                    dt,
+                );
+                brain.walk = 20.0 + rng.random_range(0.0..10.0);
+                brain.attack = GTimer::from_seconds(
+                    (brain.walk + 10.0 + rng.random_range(0.0..30.0)) / 30.0,
+                    TimerMode::Once,
+                );
+                brain.gunangle = brain.heading;
+            }
+        }
+        if brain.burst_timer.just_finished() && brain.ammo > 0 {
+            brain.wkick = 4.0;
+            let angle = brain.gunangle + rng.random_range(-8.0_f32..8.0).to_radians();
+            let bullet = spawn_enemy_projectile(
+                &mut commands,
+                entity,
+                enemy.kind,
+                epos,
+                glam::Vec2::from_angle(angle) * (13.0 - rng.random_range(0.0_f32..2.0)) * 30.0,
+                1,
+                3.0,
+                3.5,
+                150.0,
+                false,
+            );
+            commands.entity(bullet).insert((
+                ProjectileFriction(0.6),
+                BouncesLeft(255),
+                ShellWallBounce {
+                    add: 0.0,
+                    cap: 18.0 * 30.0,
+                    decay: 0.9,
+                    rearm: None,
+                },
+                ProjectileTyp(1),
+                ProjectileFade("images/sprEBullet3Disappear.png"),
+            ));
+            enemy_cue(&mut cues, "sndPopgun");
+            brain.ammo -= 1;
+            brain.burst_timer = GTimer::from_seconds(4.0 / 30.0, TimerMode::Once);
+        }
+        walk_step(&mut brain, &mut vel, 0.8, 3.5, dt);
+        integrate_verbatim(
+            &mut brain,
+            &mut vel,
+            &mut pos,
+            &props,
+            &mask,
+            &positions,
+            epos,
+            enemy_def(enemy.kind).radius,
+            dt,
+            true,
+        );
+        zero_damage_contact_push(
+            &mut brain,
+            &mut vel,
+            player_pos,
+            pos.0,
+            enemy_def(enemy.kind).radius,
+            dt,
+        );
+    }
+}
+
+pub fn tick_melee_bandit(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mut cues: ResMut<Queue<AudioCue>>,
+    mask: Res<FloorMask>,
+    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
+    mut enemies: Query<
+        (Entity, &Enemy, &mut EnemyBrain, &mut Velocity, &mut Pos),
+        (With<Enemy>, Without<Prop>),
+    >,
+    props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+) {
+    let dt = time.delta_secs;
+    let player_pos = player_q.single().ok().map(|p| p.0);
+    let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p)| p.0).collect();
+    let mut rng = rand::rng();
+    for (entity, enemy, mut brain, mut vel, mut pos) in &mut enemies {
+        if enemy.kind != EnemyKind::MeleeBandit {
+            continue;
+        }
+        let epos = pos.0;
+        tick_verbatim_cooldown(&mut brain, dt);
+        sync_heading(&mut brain, &vel);
+        let mut slash_armed_this_tick = false;
+        if brain.weapon_alarm > 0.0 {
+            brain.weapon_alarm -= dt * 30.0;
+            if brain.weapon_alarm <= 0.0 {
+                brain.weapon_alarm = 0.0;
+                brain.wepangle = -brain.wepangle;
+            }
+        }
+        brain.attack.tick(dt);
+        if brain.attack.just_finished() {
+            brain.attack =
+                GTimer::from_seconds((10.0 + rng.random_range(0.0..5.0)) / 30.0, TimerMode::Once);
+            if let Some(target) = player_pos {
+                let target_dir = (target - epos).y.atan2((target - epos).x);
+                if has_line_of_sight(epos, target, &mask) {
+                    if epos.distance(target) < 64.0 {
+                        brain.weapon_alarm = 20.0;
+                        enemy_cue(&mut cues, "sndAssassinAttack");
+                        brain.wepangle = -brain.wepangle;
+                        let gunangle = brain.gunangle;
+                        add_gml_motion(&mut brain, &mut vel, gunangle, 6.0, dt);
+                        brain.gunangle = target_dir;
+                        brain.slash_delay = 10.0;
+                        slash_armed_this_tick = true;
+                        spawn_hit_warning(&mut commands, epos);
+                        brain.attack = GTimer::from_seconds(
+                            (50.0 + rng.random_range(0.0..6.0)) / 30.0,
+                            TimerMode::Once,
+                        );
+                    } else {
+                        set_gml_direction(
+                            &mut brain,
+                            &mut vel,
+                            target_dir + rng.random_range(-10.0_f32..10.0).to_radians(),
+                        );
+                        set_gml_speed(&mut brain, &mut vel, 0.4);
+                        brain.walk = 40.0 + rng.random_range(0.0..10.0);
+                        brain.gunangle = target_dir;
+                    }
+                } else if rng.random::<f32>() < 0.25 {
+                    add_gml_motion(
+                        &mut brain,
+                        &mut vel,
+                        rng.random_range(0.0..std::f32::consts::TAU),
+                        0.4,
+                        dt,
+                    );
+                    brain.walk = 20.0 + rng.random_range(0.0..10.0);
+                    brain.attack = GTimer::from_seconds(
+                        (brain.walk + 10.0 + rng.random_range(0.0..30.0)) / 30.0,
+                        TimerMode::Once,
+                    );
+                    brain.gunangle = brain.heading;
+                }
+            } else if rng.random::<f32>() < 0.1 {
+                add_gml_motion(
+                    &mut brain,
+                    &mut vel,
+                    rng.random_range(0.0..std::f32::consts::TAU),
+                    0.4,
+                    dt,
+                );
+                brain.walk = 20.0 + rng.random_range(0.0..10.0);
+                brain.attack = GTimer::from_seconds(
+                    (brain.walk + 10.0 + rng.random_range(0.0..30.0)) / 30.0,
+                    TimerMode::Once,
+                );
+                brain.gunangle = brain.heading;
+            }
+        }
+        if brain.slash_delay > 0.0 && !slash_armed_this_tick {
+            brain.slash_delay -= dt * 30.0;
+            if brain.slash_delay <= 0.0 {
+                brain.slash_delay = 0.0;
+                let d = glam::Vec2::from_angle(
+                    brain.gunangle + rng.random_range(-5.0_f32..5.0).to_radians(),
+                );
+                let slash = spawn_enemy_projectile(
+                    &mut commands,
+                    entity,
+                    enemy.kind,
+                    epos,
+                    d * 2.0 * 30.0,
+                    5,
+                    0.4,
+                    4.0,
+                    150.0,
+                    false,
+                );
+                commands.entity(slash).insert(ProjectileTyp(0));
+                brain.wepangle *= -1.0;
+                brain.attack = GTimer::from_seconds(
+                    brain.attack.remaining_secs() + 7.0 / 30.0,
+                    TimerMode::Once,
+                );
+            }
+        }
+        if brain.walk > 0.0 {
+            brain.walk = (brain.walk - dt * 30.0).max(0.0);
+            if brain.slash_delay == 0.0 {
+                let heading = brain.heading;
+                add_gml_motion(&mut brain, &mut vel, heading, 2.0, dt);
+            }
+        }
+        cap_gml_speed(&mut brain, &mut vel, 3.0);
+        integrate_verbatim(
+            &mut brain,
+            &mut vel,
+            &mut pos,
+            &props,
+            &mask,
+            &positions,
+            epos,
+            enemy_def(enemy.kind).radius,
+            dt,
+            true,
+        );
+        zero_damage_contact_push(
+            &mut brain,
+            &mut vel,
+            player_pos,
+            pos.0,
+            enemy_def(enemy.kind).radius,
+            dt,
+        );
+    }
+}
+
+pub fn tick_ballguy(
+    time: Res<SimTime>,
+    mut cues: ResMut<Queue<AudioCue>>,
+    mask: Res<FloorMask>,
+    player_q: Query<(&Pos, &Health), (With<Player>, Without<Enemy>)>,
+    mut enemies: Query<
+        (
+            Entity,
+            &Enemy,
+            &mut EnemyBrain,
+            &mut Velocity,
+            &mut Pos,
+            &mut Health,
+            Option<&HurtAnim>,
+        ),
+        (With<Enemy>, Without<Prop>),
+    >,
+    props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+) {
+    let dt = time.delta_secs;
+    let player = player_q.single().ok().map(|(p, h)| (p.0, h.hp > 0));
+    let positions: Vec<glam::Vec2> = enemies.iter().map(|(_, _, _, _, p, _, _)| p.0).collect();
+    let mut rng = rand::rng();
+    for (_entity, enemy, mut brain, mut vel, mut pos, mut health, hurt) in &mut enemies {
+        if enemy.kind != EnemyKind::Ballguy {
+            continue;
+        }
+        let epos = pos.0;
+        tick_verbatim_cooldown(&mut brain, dt);
+        sync_heading(&mut brain, &vel);
+        if let Some((target, alive)) = player
+            && alive
+            && !brain.close
+            && epos.distance(target) < 64.0
+        {
+            enemy_cue(&mut cues, "sndFrogClose");
+            brain.close = true;
+        }
+        brain.attack.tick(dt);
+        if brain.attack.just_finished() {
+            brain.attack =
+                GTimer::from_seconds((30.0 + rng.random_range(0.0..20.0)) / 30.0, TimerMode::Once);
+            if let Some(target) = player.map(|(p, _)| p) {
+                if has_line_of_sight(epos, target, &mask) {
+                    set_gml_direction(
+                        &mut brain,
+                        &mut vel,
+                        (target - epos).y.atan2((target - epos).x)
+                            + rng.random_range(-10.0_f32..10.0).to_radians(),
+                    );
+                } else {
+                    add_gml_motion(
+                        &mut brain,
+                        &mut vel,
+                        rng.random_range(0.0..std::f32::consts::TAU),
+                        0.5,
+                        dt,
+                    );
+                }
+            } else {
+                add_gml_motion(
+                    &mut brain,
+                    &mut vel,
+                    rng.random_range(0.0..std::f32::consts::TAU),
+                    0.5,
+                    dt,
+                );
+            }
+        }
+        if !hurt.is_some_and(|h| !h.timer.is_finished()) {
+            let heading = brain.heading;
+            add_gml_motion(&mut brain, &mut vel, heading, 0.6, dt);
+        }
+        set_gml_speed(&mut brain, &mut vel, 3.0);
+        integrate_verbatim(
+            &mut brain,
+            &mut vel,
+            &mut pos,
+            &props,
+            &mask,
+            &positions,
+            epos,
+            enemy_def(enemy.kind).radius,
+            dt,
+            true,
+        );
+        if let Some((target, true)) = player
+            && pos.0.distance(target) <= 8.0 + enemy_def(enemy.kind).radius
+        {
+            health.hp = 0;
+            add_gml_motion(
+                &mut brain,
+                &mut vel,
+                (pos.0 - target).y.atan2((pos.0 - target).x),
+                1.0,
+                dt,
+            );
+        }
+    }
+}
+
+pub fn tick_bigmaggot_inspector(
+    time: Res<SimTime>,
+    mask: Res<FloorMask>,
+    mut ctrl: Local<HashMap<Entity, f32>>,
+    player_q: Query<(&Pos, &Player), (With<Player>, Without<Enemy>)>,
+    mut player_vel: Query<&mut Velocity, (With<Player>, Without<Enemy>)>,
+    enemies: Query<(Entity, &Enemy, &Pos), With<Enemy>>,
+) {
+    let Ok((player_pos, _)) = player_q.single() else {
+        return;
+    };
+    let player_pos = player_pos.0;
+    let dt = time.delta_secs;
+
+    for (entity, enemy, pos) in &enemies {
+        let epos = pos.0;
+        let to_player = player_pos - epos;
+        let dist = to_player.length();
 
         if enemy.kind == EnemyKind::IdpdInspector && dist < 240.0 && dist > 1.0 {
             let los = has_line_of_sight(epos, player_pos, &mask);
@@ -1868,11 +3325,13 @@ pub fn show_enemy_fire(
         return;
     };
     anim.set_path(fire_path, def, true);
-    commands.entity(entity).try_insert(crate::comps_b::FireAnim {
-        idle,
-        walk: None,
-        timer: GTimer::from_seconds(0.25, TimerMode::Once),
-    });
+    commands
+        .entity(entity)
+        .try_insert(crate::comps_b::FireAnim {
+            idle,
+            walk: None,
+            timer: GTimer::from_seconds(0.25, TimerMode::Once),
+        });
 }
 
 /// GML `spr_fire` table (per-kind `Create_0.gml`): idle strip -> fire
@@ -2068,10 +3527,7 @@ pub fn finish_enemy_bullet(ec: &mut EntityCommands, kind: EnemyKind) {
     };
     ec.insert(ProjectileTyp(typ));
     if !explosive_kind(kind) {
-        let fade_path = if matches!(
-            kind,
-            EnemyKind::Scorpion | EnemyKind::GoldScorpion
-        ) {
+        let fade_path = if matches!(kind, EnemyKind::Scorpion | EnemyKind::GoldScorpion) {
             "images/sprScorpionBulletHit.png"
         } else if matches!(
             kind,
@@ -2178,10 +3634,7 @@ pub fn tick_delayed_boss_spawns(
         return;
     };
 
-    let living_trash = enemies
-        .iter()
-        .filter(|e| !enemy_def(e.kind).boss)
-        .count() as u32;
+    let living_trash = enemies.iter().filter(|e| !enemy_def(e.kind).boss).count() as u32;
     let killed = pending_boss.initial_trash.saturating_sub(living_trash);
     if killed < pending_boss.kills_needed() {
         return;
@@ -2255,6 +3708,10 @@ pub fn tick_delayed_boss_spawns(
         false,
         false,
         run.loop_count,
+        EnemySpawnContext {
+            subarea: run.floor_in_area,
+            blood_crown: run.blood_crown,
+        },
     );
 
     commands.spawn((
@@ -2267,8 +3724,6 @@ pub fn tick_delayed_boss_spawns(
     hitstop.trigger(0.2, 0.15);
 }
 
-/// Frog egg hatch: the egg despawns into a pending Ballguy plus an
-/// 8-way acid ring (bevy parity).
 pub fn tick_frog_eggs(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -2286,12 +3741,13 @@ pub fn tick_frog_eggs(
         let hatch = pos.0;
         commands.entity(e).despawn();
 
-        commands.spawn(PendingEnemySpawn {
-            kind: EnemyKind::Ballguy,
-            pos: hatch,
-            difficulty: 1.0,
-            loops: run.loop_count,
-        });
+        queue_enemy_spawn(
+            &mut commands,
+            EnemyKind::Ballguy,
+            hatch,
+            1.0,
+            run.loop_count,
+        );
 
         for i in 0..8 {
             let ang = (i as f32) * std::f32::consts::TAU / 8.0;
@@ -2329,9 +3785,7 @@ pub fn spawn_lil_hunter_die(
     let dir = target_pos
         .map(|t| (t - pos).normalize_or_zero())
         .filter(|d| d.length_squared() > 0.001)
-        .unwrap_or_else(|| {
-            glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU))
-        });
+        .unwrap_or_else(|| glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU)));
     let e = commands
         .spawn((
             GameCleanup,
@@ -2354,7 +3808,7 @@ pub fn spawn_lil_hunter_die(
         LevelCleanup,
         PortalClear {
             timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
-                        scale: 1.0,
+            scale: 1.0,
         },
         Pos(pos),
     ));
@@ -2612,10 +4066,7 @@ pub fn tick_mom_shots(
 ) {
     let mut rng = rand::rng();
     for (team, pos) in &q {
-        let off = glam::Vec2::new(
-            rng.random_range(-2.0..=2.0),
-            rng.random_range(0.0..=0.0),
-        );
+        let off = glam::Vec2::new(rng.random_range(-2.0..=2.0), rng.random_range(0.0..=0.0));
         commands.spawn((
             GameCleanup,
             LevelCleanup,
@@ -2688,8 +4139,21 @@ pub fn tick_elite_inspectors(
     mask: Res<FloorMask>,
     player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
     mut player_vel: Query<&mut Velocity, (With<Player>, Without<Enemy>)>,
-    mut enemies: Query<(Entity, &Enemy, &mut EnemyBrain, &mut Velocity, &mut Pos, &Health), With<Enemy>>,
-    mut shots: Query<(&mut Pos, &Team, Option<&ProjectileTyp>, Option<&PopoNadeM>), (With<Projectile>, Without<Enemy>, Without<Player>)>,
+    mut enemies: Query<
+        (
+            Entity,
+            &Enemy,
+            &mut EnemyBrain,
+            &mut Velocity,
+            &mut Pos,
+            &Health,
+        ),
+        With<Enemy>,
+    >,
+    mut shots: Query<
+        (&mut Pos, &Team, Option<&ProjectileTyp>, Option<&PopoNadeM>),
+        (With<Projectile>, Without<Enemy>, Without<Player>),
+    >,
     mut last_seen: Local<HashMap<Entity, glam::Vec2>>,
     mut headings: Local<HashMap<Entity, glam::Vec2>>,
     mut inited: Local<std::collections::HashSet<Entity>>,
@@ -2723,10 +4187,8 @@ pub fn tick_elite_inspectors(
             brain.strafe_dir = 0.0;
             brain.slash_delay = 0.0;
             brain.gunangle = rng.random_range(0.0..std::f32::consts::TAU);
-            brain.attack = GTimer::from_seconds(
-                rng.random_range(30.0..=45.0) / 30.0,
-                TimerMode::Once,
-            );
+            brain.attack =
+                GTimer::from_seconds(rng.random_range(30.0..=45.0) / 30.0, TimerMode::Once);
             last_seen.insert(entity, epos);
         }
 
@@ -2838,9 +4300,7 @@ pub fn tick_elite_inspectors(
                     brain.attack = GTimer::from_seconds(d, TimerMode::Once);
                 }
             } else if rng.random::<f32>() < 2.0 / 3.0 {
-                let head = glam::Vec2::from_angle(
-                    rng.random_range(0.0..std::f32::consts::TAU),
-                );
+                let head = glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU));
                 headings.insert(entity, head);
                 brain.gunangle = head.y.atan2(head.x);
                 brain.walk = rng.random_range(20.0..=30.0);
@@ -2909,7 +4369,17 @@ pub fn tick_elite_shielders(
     mut commands: Commands,
     mask: Res<FloorMask>,
     player_q: Query<(&Pos, &Velocity), (With<Player>, Without<Enemy>)>,
-    mut enemies: Query<(Entity, &Enemy, &mut EnemyBrain, &mut Velocity, &mut Pos, &Health), With<Enemy>>,
+    mut enemies: Query<
+        (
+            Entity,
+            &Enemy,
+            &mut EnemyBrain,
+            &mut Velocity,
+            &mut Pos,
+            &Health,
+        ),
+        With<Enemy>,
+    >,
     mut headings: Local<HashMap<Entity, glam::Vec2>>,
     mut inited: Local<std::collections::HashSet<Entity>>,
 ) {
@@ -2935,10 +4405,8 @@ pub fn tick_elite_shielders(
             brain.burst_left = 20;
             brain.slash_delay = 0.0;
             brain.gunangle = rng.random_range(0.0..std::f32::consts::TAU);
-            brain.attack = GTimer::from_seconds(
-                rng.random_range(30.0..=45.0) / 30.0,
-                TimerMode::Once,
-            );
+            brain.attack =
+                GTimer::from_seconds(rng.random_range(30.0..=45.0) / 30.0, TimerMode::Once);
             headings.insert(entity, glam::Vec2::X);
         }
 
@@ -2971,8 +4439,7 @@ pub fn tick_elite_shielders(
             brain.slash_delay -= dt * 30.0;
             if brain.slash_delay <= 0.0 {
                 if brain.ammo > 0 {
-                    let jitter =
-                        rng.random_range(-10.0..=10.0_f32).to_radians();
+                    let jitter = rng.random_range(-10.0..=10.0_f32).to_radians();
                     let sdir = glam::Vec2::from_angle(brain.gunangle + jitter);
                     commands.spawn((
                         GameCleanup,
@@ -3063,9 +4530,7 @@ pub fn tick_elite_shielders(
                     }
                 }
             } else if rng.random::<f32>() < 1.0 / 3.0 {
-                let head = glam::Vec2::from_angle(
-                    rng.random_range(0.0..std::f32::consts::TAU),
-                );
+                let head = glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU));
                 headings.insert(entity, head);
                 brain.gunangle = head.y.atan2(head.x);
                 brain.walk = rng.random_range(20.0..=30.0);
@@ -3115,7 +4580,13 @@ pub fn tick_elite_blockers(
     mut blockers: Query<(Entity, &Pos, &mut EliteBlocker), Without<Enemy>>,
     mut owners: Query<&mut Pos, With<Enemy>>,
     mut shots: Query<
-        (Entity, &Pos, &mut Team, &mut Velocity, Option<&ProjectileTyp>),
+        (
+            Entity,
+            &Pos,
+            &mut Team,
+            &mut Velocity,
+            Option<&ProjectileTyp>,
+        ),
         (With<Projectile>, Without<Enemy>),
     >,
 ) {
@@ -3191,27 +4662,15 @@ pub fn tick_proto_statues(
             health.hp = (health.hp / 2).max(1);
             waves += 2;
         }
-        if !statue.phased
-            && (health.hp as f32) < (health.max as f32) * 0.7
-            && health.hp > 0
-        {
+        if !statue.phased && (health.hp as f32) < (health.max as f32) * 0.7 && health.hp > 0 {
             statue.phased = true;
             waves += 2;
         }
         for _ in 0..waves {
             run.popolevel += 1;
-            for kind in crate::idpd::roll_idpd_table(
-                run.loop_count,
-                run.area,
-                run.popolevel,
-                false,
-            ) {
-                commands.spawn(crate::combat::PendingEnemySpawn {
-                    kind,
-                    pos: pos.0,
-                    difficulty: 1.0,
-                    loops: run.loop_count,
-                });
+            for kind in crate::idpd::roll_idpd_table(run.loop_count, run.area, run.popolevel, false)
+            {
+                queue_enemy_spawn(&mut commands, kind, pos.0, 1.0, run.loop_count);
             }
         }
         let _ = player_pos;
@@ -3342,7 +4801,6 @@ pub fn tick_corpses(
         p.0 += g.vel * dt;
     }
 }
-
 
 #[cfg(test)]
 mod spawn_hp_tests {

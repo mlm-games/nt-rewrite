@@ -13,10 +13,10 @@ use repame_sim::SimTime;
 
 use crate::anim::SpriteAnim;
 use crate::audio::{AudioCue, GameAudio, QueuedReactiveCue, ReactiveCue};
-use crate::combat::Explosion;
+use crate::combat::{Explosion, queue_enemy_spawn};
 use crate::comps_a::{
-    FloorMask, GameCleanup, Health, Inventory, LevelCleanup, Player, RaceState, Run, Team, Toast,
-    MAX_WEAPON_SLOTS,
+    FloorMask, GameCleanup, Health, Inventory, LevelCleanup, MAX_WEAPON_SLOTS, Player, RaceState,
+    Run, Team, Toast,
 };
 use crate::comps_b::{
     ChestKind, FlungWeapon, GroundPhysics, OpenedChest, Pickup, PickupCurse, PickupKind,
@@ -238,7 +238,9 @@ pub fn tick_flung_weapons(
         if let Some(mut g) = ground {
             g.vel = vel;
         } else {
-            commands.entity(e).insert(GroundPhysics { vel, rotspeed: 0.0 });
+            commands
+                .entity(e)
+                .insert(GroundPhysics { vel, rotspeed: 0.0 });
         }
         cues.push(AudioCue {
             name: "sndChickenReturn",
@@ -672,7 +674,8 @@ pub fn collect_pickups(
         }
     }
 
-    for (pickup_e, mut pickup_pos, pickup, ground, lifetime, wep_ammo, pickup_curse) in &mut pickups {
+    for (pickup_e, mut pickup_pos, pickup, ground, lifetime, wep_ammo, pickup_curse) in &mut pickups
+    {
         let pickup_pos_value = pickup_pos.0;
         let dist = player_pos.distance(pickup_pos_value);
 
@@ -773,8 +776,7 @@ pub fn collect_pickups(
                         } else {
                             1.0
                         };
-                    let cursed =
-                        player.crown != CrownKind::None && curse_roll;
+                    let cursed = player.crown != CrownKind::None && curse_roll;
                     let mut rng = rand::rng();
                     let count =
                         if matches!(player.ultra, Some(UltraMutationId::SteroidsAmbidextrous)) {
@@ -793,8 +795,7 @@ pub fn collect_pickups(
                             &inv,
                             u32::from(race_opt.is_some_and(|r| r.race == RaceId::Robot)),
                         );
-                        let weapon =
-                            crate::decide_wep::decide_wep(&mut rng, &ctx, extra, cursed);
+                        let weapon = crate::decide_wep::decide_wep(&mut rng, &ctx, extra, cursed);
                         let e = spawn_pickup(
                             &mut commands,
                             &catalog,
@@ -847,8 +848,7 @@ pub fn collect_pickups(
                             &mut commands,
                             &catalog,
                             PickupKind::Rad(1),
-                            pickup_pos_value
-                                + glam::Vec2::new(ang.cos() * d, ang.sin() * d),
+                            pickup_pos_value + glam::Vec2::new(ang.cos() * d, ang.sin() * d),
                             0,
                             false,
                         );
@@ -863,9 +863,7 @@ pub fn collect_pickups(
                         player.headloses -= 1;
                         health.max += 1;
                     }
-                    let big = player
-                        .mutations
-                        .contains(&MutationId::SecondStomach);
+                    let big = player.mutations.contains(&MutationId::SecondStomach);
                     let num = if big { 8 } else { 4 };
                     health.hp = (health.hp + num).min(health.max);
                     repame_fx::spawn_number(
@@ -899,8 +897,7 @@ pub fn collect_pickups(
                             &inv,
                             u32::from(race_opt.is_some_and(|r| r.race == RaceId::Robot)),
                         );
-                        let weapon =
-                            crate::decide_wep::decide_wep(&mut rng, &ctx, 1, false);
+                        let weapon = crate::decide_wep::decide_wep(&mut rng, &ctx, 1, false);
                         let e = spawn_pickup(
                             &mut commands,
                             &catalog,
@@ -921,7 +918,7 @@ pub fn collect_pickups(
                         LevelCleanup,
                         PortalClear {
                             timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
-                        scale: 1.0,
+                            scale: 1.0,
                         },
                         Pos(pickup_pos_value),
                     ));
@@ -930,9 +927,7 @@ pub fn collect_pickups(
                 ChestKind::Rogue => {
                     // GML `RogueChest`: 25 rads for non-Rogue, a
                     // `RogueAmmo` refill for Rogue.
-                    let is_rogue = race_opt.is_some_and(|r| {
-                        r.race == crate::data::RaceId::Rogue
-                    });
+                    let is_rogue = race_opt.is_some_and(|r| r.race == crate::data::RaceId::Rogue);
                     if is_rogue {
                         player.rogue_ammo = player.rogue_ammo_max;
                         toast.show("Rogue ammo");
@@ -945,8 +940,7 @@ pub fn collect_pickups(
                                 &mut commands,
                                 &catalog,
                                 PickupKind::Rad(1),
-                                pickup_pos_value
-                                    + glam::Vec2::new(ang.cos() * d, ang.sin() * d),
+                                pickup_pos_value + glam::Vec2::new(ang.cos() * d, ang.sin() * d),
                                 0,
                                 false,
                             );
@@ -983,8 +977,7 @@ pub fn collect_pickups(
                                 &mut commands,
                                 &catalog,
                                 PickupKind::Rad(1),
-                                pickup_pos_value
-                                    + glam::Vec2::new(ang.cos() * d, ang.sin() * d),
+                                pickup_pos_value + glam::Vec2::new(ang.cos() * d, ang.sin() * d),
                                 0,
                                 false,
                             );
@@ -1014,8 +1007,7 @@ pub fn collect_pickups(
                             &inv,
                             u32::from(race_opt.is_some_and(|r| r.race == RaceId::Robot)),
                         );
-                        let weapon =
-                            crate::decide_wep::decide_wep(&mut rng, &ctx, 1, false);
+                        let weapon = crate::decide_wep::decide_wep(&mut rng, &ctx, 1, false);
                         spawn_pickup(
                             &mut commands,
                             &catalog,
@@ -1035,7 +1027,7 @@ pub fn collect_pickups(
                         LevelCleanup,
                         PortalClear {
                             timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
-                        scale: 1.0,
+                            scale: 1.0,
                         },
                         Pos(pickup_pos_value),
                     ));
@@ -1052,8 +1044,7 @@ pub fn collect_pickups(
                             &mut commands,
                             &catalog,
                             PickupKind::Rad(1),
-                            pickup_pos_value
-                                + glam::Vec2::new(ang.cos() * d, ang.sin() * d),
+                            pickup_pos_value + glam::Vec2::new(ang.cos() * d, ang.sin() * d),
                             0,
                             false,
                         );
@@ -1099,17 +1090,17 @@ pub fn collect_pickups(
                             let a = rng.random_range(0.0..std::f32::consts::TAU);
                             let d = glam::Vec2::new(a.cos(), a.sin());
                             let s = rng.random_range(0.0..5.0) * 30.0;
-                            commands.spawn(crate::combat::PendingEnemySpawn {
-                                kind: crate::data::EnemyKind::RadMaggot,
-                                pos: pickup_pos_value
-                                    + glam::Vec2::new(
-                                        rng.random_range(-4.0..4.0),
-                                        rng.random_range(-4.0..4.0),
-                                    )
-                                    + d * s * 0.05,
-                                difficulty: 1.0,
-                                loops: run.loop_count,
-                            });
+                            let jitter = glam::Vec2::new(
+                                rng.random_range(-4.0..4.0),
+                                rng.random_range(-4.0..4.0),
+                            );
+                            queue_enemy_spawn(
+                                &mut commands,
+                                crate::data::EnemyKind::RadMaggot,
+                                pickup_pos_value + jitter + d * s * 0.05,
+                                1.0,
+                                run.loop_count,
+                            );
                         }
                     }
                     trauma.add(0.3);
@@ -1127,8 +1118,7 @@ pub fn collect_pickups(
                             &mut commands,
                             &catalog,
                             PickupKind::Ammo(ammo, amount),
-                            pickup_pos_value
-                                + glam::Vec2::new(ang.cos() * d, ang.sin() * d),
+                            pickup_pos_value + glam::Vec2::new(ang.cos() * d, ang.sin() * d),
                             0,
                             false,
                         );
@@ -1202,8 +1192,7 @@ pub fn collect_pickups(
                 }
                 // GML `AmmoPickup`: with 2+ cursed guns held, half the
                 // pickups convert to `CursedPickup` at 1.5x ammo.
-                let held_cursed =
-                    inv.cursed.iter().filter(|c| **c).count();
+                let held_cursed = inv.cursed.iter().filter(|c| **c).count();
                 if held_cursed >= 2 && rand::rng().random::<f32>() < 0.5 {
                     amount += amount / 2;
                 }
@@ -1259,10 +1248,7 @@ pub fn collect_pickups(
                 audio.play_pickup(&mut cues);
             }
             PickupKind::Weapon(weapon) => {
-                commands.spawn((
-                    GameCleanup,
-                    QueuedReactiveCue(ReactiveCue::WeaponPickup),
-                ));
+                commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::WeaponPickup)));
 
                 // GML `Player/Collision_WepPickup`: a cursed held gun
                 // cannot be swapped for an uncursed one unless a free
@@ -1603,5 +1589,3 @@ pub fn tick_rad_container_contact(
         );
     }
 }
-
-

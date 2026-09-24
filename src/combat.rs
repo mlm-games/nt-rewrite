@@ -23,11 +23,12 @@ use crate::comps_a::{
 };
 use crate::comps_b::{
     Beam, ChestKind, Corpse, CustomExplosion, DeploysSentry, Dying, Enemy, EnemyBrain,
-    GoldBarrelDrop, HazardCloud, LoopTransition, Pickup, PickupLifetime, PlasmaBurst, Portal,
-    PortalPhase, PortalShock, PortalState, Prop, PropNestMarkers, PropSprites, RadChestContainer,
-    SecretEntrance, SentryTurret, Shield, SpawnsWeaponPickup, ThroneRoomState,
+    GoldBarrelDrop, HazardCloud, LoopTransition, MoteStrip, Pickup, PickupLifetime, PlasmaBurst,
+    Portal, PortalPhase, PortalShock, PortalState, Prop, PropNestMarkers, PropSprites,
+    RadChestContainer, SecretEntrance, SentryTurret, Shield, SpawnsWeaponPickup, StaticFx,
+    ThroneRoomState,
 };
-use crate::data::{CrownKind, EnemyKind, HazardKind, MutationId, RaceId, WeaponId};
+use crate::data::{AreaId, CrownKind, EnemyKind, HazardKind, MutationId, RaceId, WeaponId};
 use crate::effects::{
     ChromaticAberration, FlashWhite, HitStop, RumbleRequest, SlowMotion, chromatic_pulse,
     flash_white, rumble, slow_motion, spawn_burst,
@@ -36,13 +37,14 @@ use crate::enemy_data::enemy_def;
 use crate::environment::{PropDeathEffect, spawn_prop_corpse, spawn_prop_death_effect};
 use crate::msg::Queue;
 use crate::pickups::{
-    give_ammo, maybe_spawn_drop, random_offset, spawn_chest,
-    spawn_pickup, spawn_rad, spawn_rad_burst,
+    give_ammo, maybe_spawn_drop, random_offset, spawn_chest, spawn_pickup, spawn_rad,
+    spawn_rad_burst,
 };
-use crate::projectile_math::{    arena_wall_normal, bounce_velocity, circle_aabb_normal, record_hit, should_despawn_after_hit,
+use crate::projectile_math::{
+    arena_wall_normal, bounce_velocity, circle_aabb_normal, record_hit, should_despawn_after_hit,
 };
-use crate::secrets::SecretTriggers;
 use crate::savedata_part::{SaveData, check_kill_unlocks};
+use crate::secrets::SecretTriggers;
 use crate::spatial::{PLAYER_RADIUS, Pos};
 use crate::spawns::{
     damage_destructible_prop, on_projectile_removed, spawn_explosion_with_source_radius,
@@ -264,6 +266,9 @@ pub struct Explosion {
     pub source: Option<DamageSource>,
 }
 
+#[derive(Component, Clone, Copy, Debug)]
+pub struct ExplosionFeelApplied;
+
 /// GML lingering blast: the explosion re-scans every 1/30 s for 0.75 s,
 /// hitting each victim once (bevy `LingeringBlast` parity — walk-ins
 /// caught like GML).
@@ -272,6 +277,12 @@ pub struct LingeringBlast {
     pub duration: GTimer,
     pub tick: GTimer,
     pub hit: Vec<Entity>,
+}
+
+/// GML `MaggotExplosion` two-tick marker.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct MaggotExplosionFx {
+    timer: GTimer,
 }
 
 /// One processed enemy death, handed from `resolve_enemy_deaths` to
@@ -286,6 +297,8 @@ pub struct DeathEvent {
     pub rad_drop: usize,
     pub drop_chance: usize,
     pub weapon_chance: usize,
+    pub extra_drop_chance: usize,
+    pub extra_weapon_chance: usize,
 }
 
 /// Death records of the current tick, drained by `resolve_death_drops`.
@@ -293,13 +306,104 @@ pub struct DeathEvent {
 pub struct DeathEvents(pub Vec<DeathEvent>);
 
 /// Deferred enemy spawn request, drained by the spawner system.
-/// (Port of nt's `PendingEnemySpawn`.) `loops` drives the GML HP law.
+/// (Port of nt's `PendingEnemySpawn`.) `loops` drives the GML HP law;
+/// `give_kill` carries GML `givekill` (parent default `true`, cleared by
+/// `FastRat`, `BigDogMissile`, and the maggot conversions below).
 #[derive(Component, Clone, Copy, Debug)]
 pub struct PendingEnemySpawn {
     pub kind: EnemyKind,
     pub pos: glam::Vec2,
     pub difficulty: f32,
     pub loops: u32,
+    pub give_kill: bool,
+    /// GML `motion_add` at creation (`FiredMaggot`, `MaggotExplosion`).
+    pub velocity: Option<glam::Vec2>,
+    /// GML forces `hp = 0` at creation while a Portal exists.
+    pub zero_hp: bool,
+}
+
+pub fn queue_enemy_spawn(
+    commands: &mut Commands,
+    kind: EnemyKind,
+    pos: glam::Vec2,
+    difficulty: f32,
+    loops: u32,
+) -> Entity {
+    queue_enemy_spawn_birth(commands, kind, pos, difficulty, loops, true, None, false)
+}
+
+pub fn queue_enemy_spawn_no_kill(
+    commands: &mut Commands,
+    kind: EnemyKind,
+    pos: glam::Vec2,
+    difficulty: f32,
+    loops: u32,
+) -> Entity {
+    queue_enemy_spawn_birth(commands, kind, pos, difficulty, loops, false, None, false)
+}
+
+pub fn queue_enemy_spawn_birth(
+    commands: &mut Commands,
+    kind: EnemyKind,
+    pos: glam::Vec2,
+    difficulty: f32,
+    loops: u32,
+    give_kill: bool,
+    velocity: Option<glam::Vec2>,
+    zero_hp: bool,
+) -> Entity {
+    commands
+        .spawn(PendingEnemySpawn {
+            kind,
+            pos,
+            difficulty,
+            loops,
+            give_kill,
+            velocity,
+            zero_hp,
+        })
+        .id()
+}
+
+/// Apply the queued creation-time overrides to a freshly flushed enemy.
+pub fn apply_birth_overrides(
+    velocity: &mut crate::comps_a::Velocity,
+    health: &mut crate::comps_a::Health,
+    spawn: &PendingEnemySpawn,
+) {
+    if let Some(v) = spawn.velocity {
+        velocity.0 = v;
+    }
+    if spawn.zero_hp {
+        health.hp = 0;
+    }
+}
+
+fn spawn_maggot_explosion(
+    commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
+    particles: bool,
+    pos: glam::Vec2,
+) {
+    // GML `MaggotExplosion/Create_0`: six smoke motes and three blood streaks.
+    crate::environment::spawn_motes(commands, catalog, particles, pos, MoteStrip::Smoke, 6);
+    let mut rng = rand::rng();
+    spawn_burst(
+        commands,
+        &mut rng,
+        pos,
+        3,
+        [0.72, 0.04, 0.04, 1.0],
+        (180.0, 300.0),
+    );
+    commands.spawn((
+        GameCleanup,
+        LevelCleanup,
+        MaggotExplosionFx {
+            timer: GTimer::from_seconds(2.0 / 30.0, TimerMode::Once),
+        },
+        Pos(pos),
+    ));
 }
 
 /// Enemy death resolution, slice A: despawn + corpse slide, kill
@@ -323,8 +427,14 @@ pub fn resolve_enemy_deaths(
     mut save: ResMut<SaveData>,
     mut dirty: ResMut<SaveDirty>,
     mut toast: ResMut<Toast>,
-    player_q: Query<(Entity, &Pos, &Player, &RaceState, &Inventory), (With<Player>, Without<Enemy>)>,
-    mut enemy_shots: Query<(Entity, &Team), With<Projectile>>,
+    player_q: Query<
+        (Entity, &Pos, &Player, &RaceState, &Inventory),
+        (With<Player>, Without<Enemy>),
+    >,
+    mut shots_and_floor: ParamSet<(
+        Query<(Entity, &Team), With<Projectile>>,
+        Option<Res<FloorMask>>,
+    )>,
     mut q: Query<
         (
             Entity,
@@ -369,6 +479,7 @@ pub fn resolve_enemy_deaths(
             rad_drop: 1,
             drop_chance: 0,
             weapon_chance: 0,
+            give_kill: true,
         });
         let def = enemy_def(enemy.kind);
         let pos = pos.0;
@@ -405,8 +516,7 @@ pub fn resolve_enemy_deaths(
             }
         }
 
-        let give_kill = !matches!(enemy.kind, EnemyKind::FastRat);
-        if give_kill {
+        if enemy.give_kill {
             run.total_kills += 1;
             score.0 += enemy.score;
         }
@@ -568,7 +678,7 @@ pub fn resolve_enemy_deaths(
             }
             EnemyKind::ThroneII => {
                 // GML `Nothing2/Destroy_0`: clear enemy projectiles.
-                for (proj_e, team) in &mut enemy_shots {
+                for (proj_e, team) in &mut shots_and_floor.p0() {
                     if *team != Team::Player {
                         commands.entity(proj_e).despawn();
                     }
@@ -586,12 +696,7 @@ pub fn resolve_enemy_deaths(
                     },
                 ));
                 // GML `SitDown`: the throne awaits its sitter.
-                commands.spawn((
-                    GameCleanup,
-                    LevelCleanup,
-                    crate::comps_b::SitZone,
-                    Pos(pos),
-                ));
+                commands.spawn((GameCleanup, LevelCleanup, crate::comps_b::SitZone, Pos(pos)));
                 // GML `scrUnlocksThroneDefeat` + `scrUnlocksWinOrLoop`
                 // crown share (golden-store half has no port equivalent).
                 for (r, s) in crate::savedata_part::throne_defeat_skins(
@@ -703,9 +808,8 @@ pub fn resolve_enemy_deaths(
                     let mut left = rad;
                     while left > 15 {
                         left -= 10;
-                        let dir = glam::Vec2::from_angle(
-                            rng.random_range(0.0..std::f32::consts::TAU),
-                        );
+                        let dir =
+                            glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU));
                         let re = crate::pickups::spawn_pickup(
                             &mut commands,
                             &catalog,
@@ -720,9 +824,8 @@ pub fn resolve_enemy_deaths(
                         });
                     }
                     for _ in 0..left {
-                        let dir = glam::Vec2::from_angle(
-                            rng.random_range(0.0..std::f32::consts::TAU),
-                        );
+                        let dir =
+                            glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU));
                         let re = crate::pickups::spawn_pickup(
                             &mut commands,
                             &catalog,
@@ -836,27 +939,114 @@ pub fn resolve_enemy_deaths(
                 );
                 trauma.add(0.12);
             }
-            EnemyKind::BigMaggot => {
-                let mut rng = rand::rng();
-                for _ in 0..6 {
-                    let ang = rng.random_range(0.0..std::f32::consts::TAU);
-                    let off = glam::Vec2::new(ang.cos(), ang.sin()) * 12.0;
-                    commands.spawn(PendingEnemySpawn {
-                        kind: EnemyKind::Maggot,
-                        pos: pos + off,
-                        difficulty: 1.0,
-                        loops: run.loop_count,
-                    });
+            EnemyKind::MaggotSpawn => {
+                // GML `MaggotSpawn/Destroy_0`.
+                spawn_maggot_explosion(&mut commands, &catalog, save.settings.particles, pos);
+            }
+            EnemyKind::JungleFly => {
+                // GML `JungleFly/Destroy_0`.
+                if rand::rng().random_range(0.0..5.0) < 1.0 {
+                    spawn_maggot_explosion(&mut commands, &catalog, save.settings.particles, pos);
                 }
+            }
+            EnemyKind::Sniper => {
+                // GML `Sniper/Destroy_0`; `Explosion` supplies screenshake(7).
+                let mut rng = rand::rng();
+                let boom_pos =
+                    pos + glam::Vec2::new(rng.random_range(-2.0..2.0), rng.random_range(-2.0..2.0));
+                let mut explosion = commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    Explosion {
+                        timer: GTimer::from_seconds(0.05, TimerMode::Once),
+                        radius: 32.0,
+                        damage: 5,
+                        team: *team,
+                        hits_player: true,
+                        source: Some(DamageSource {
+                            owner: e,
+                            team: *team,
+                            hit_id: HitId::Explosion(WeaponId::NONE),
+                            enemy_kind: Some(enemy.kind),
+                        }),
+                    },
+                    Pos(boom_pos),
+                ));
+                explosion.insert(ExplosionFeelApplied);
+                trauma.add(0.45);
+                audio.play_explode(&mut cues);
+                let flame_count = 2 + rng.random_range(0..=3);
+                for _ in 0..flame_count {
+                    let ang = rng.random_range(0.0..std::f32::consts::TAU);
+                    let distance = 4.0 + rng.random_range(0.0..16.0);
+                    let mut flame_pos = pos + glam::Vec2::from_angle(ang) * distance;
+                    if let Some(mask) = shots_and_floor.p1().as_ref() {
+                        crate::spatial::resolve_mask_circle(mask, &mut flame_pos, 14.0);
+                    }
+                    crate::spatial::clamp_to_arena(&mut flame_pos, 14.0);
+                    let mut flame_spec = crate::environment::EnvironmentHazardSpec::ground_flame();
+                    flame_spec.duration = 10.0 + rng.random_range(0.0..4.0);
+                    crate::environment::spawn_environment_hazard(
+                        &mut commands,
+                        flame_pos,
+                        flame_spec,
+                    );
+                }
+            }
+            EnemyKind::GoldScorpion => {
+                // GML `GoldScorpion/Destroy_0`.
                 let mut rng = rand::rng();
                 spawn_burst(
                     &mut commands,
                     &mut rng,
                     pos,
-                    16,
-                    [0.95, 0.5, 0.2, 1.0],
-                    (60.0, 220.0),
+                    5,
+                    [0.45, 1.0, 0.18, 1.0],
+                    (220.0, 260.0),
                 );
+                for _ in 0..60 {
+                    let ang = rng.random_range(0.0..std::f32::consts::TAU);
+                    let speed = (3.0 + rng.random_range(0.0..2.0)) * 30.0;
+                    let dir = glam::Vec2::from_angle(ang);
+                    commands.spawn((
+                        GameCleanup,
+                        LevelCleanup,
+                        *team,
+                        Projectile {
+                            damage: 2,
+                            life: GTimer::from_seconds(3.0, TimerMode::Once),
+                            radius: 4.0,
+                            knockback: 120.0,
+                            explosive: false,
+                            source: Some(DamageSource::enemy(e, enemy.kind)),
+                        },
+                        ProjectileTyp(2),
+                        ProjectileFade("images/sprScorpionBulletHit.png"),
+                        Velocity(dir * speed),
+                        Pos(pos),
+                    ));
+                }
+            }
+            EnemyKind::Bandit if matches!(run.area, AreaId::Oasis) => {
+                // GML `Bandit/Destroy_0`: scrBubblePopFX is Oasis-only.
+                let path = "images/sprPlayerBubblePop.png";
+                let mut bubble = commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    Pos(pos),
+                    PickupLifetime {
+                        timer: GTimer::from_seconds(0.5, TimerMode::Once),
+                    },
+                ));
+                if let Some(def) = catalog.def(path) {
+                    bubble.insert(SpriteAnim::oneshot(path, def));
+                } else {
+                    bubble.insert(StaticFx { path });
+                }
+            }
+            EnemyKind::BigMaggot => {
+                // GML `BigMaggot/Destroy_0`.
+                spawn_maggot_explosion(&mut commands, &catalog, save.settings.particles, pos);
             }
             _ => {}
         }
@@ -866,15 +1056,18 @@ pub fn resolve_enemy_deaths(
             kind: enemy.kind,
             rad_drop: enemy.rad_drop,
             // GML `LilHunter/Destroy_0`: `scrDrop(200, 0)`.
-            drop_chance: if matches!(
-                enemy.kind,
-                EnemyKind::LilHunter | EnemyKind::LilHunterLoop
-            ) {
+            drop_chance: if matches!(enemy.kind, EnemyKind::LilHunter | EnemyKind::LilHunterLoop) {
                 200
             } else {
                 enemy.drop_chance
             },
             weapon_chance: enemy.weapon_chance,
+            extra_drop_chance: 0,
+            extra_weapon_chance: if enemy.kind == EnemyKind::MaggotSpawn {
+                35
+            } else {
+                0
+            },
         });
     }
 }
@@ -912,8 +1105,7 @@ pub fn resolve_death_drops(
     // E0596 on the reborrow in the lucky-shot branch instead) — allowed,
     // not worked around.
     #[allow(unused_mut)]
-    let Ok((_, player_pos, player, mut phealth, mut pinv, mut race_state)) =
-        player_q.single_mut()
+    let Ok((_, player_pos, player, mut phealth, mut pinv, mut race_state)) = player_q.single_mut()
     else {
         deaths.0.clear();
         return;
@@ -1002,6 +1194,7 @@ pub fn resolve_death_drops(
             rad_drop: event.rad_drop,
             drop_chance: event.drop_chance,
             weapon_chance: event.weapon_chance,
+            give_kill: true,
         };
         let mut rng = rand::rng();
         if player.bloodlust && rng.random_range(0..15) == 0 {
@@ -1121,6 +1314,20 @@ pub fn resolve_death_drops(
                 run.loop_count,
                 Some(&decide),
             );
+            if event.extra_drop_chance != 0 || event.extra_weapon_chance != 0 {
+                maybe_spawn_drop(
+                    &mut commands,
+                    &catalog,
+                    pos,
+                    event.extra_drop_chance,
+                    event.extra_weapon_chance,
+                    &player,
+                    &pinv,
+                    &phealth,
+                    run.loop_count,
+                    Some(&decide),
+                );
+            }
             // GML `DogGuardian/Destroy_0`: double `scrDrop(60, 0)` —
             // the second table roll just above covers it.
             if matches!(enemy.kind, EnemyKind::DogGuardian) {
@@ -1308,8 +1515,8 @@ pub fn move_projectiles(
                 custom_explosion.copied(),
                 deploys_sentry.copied(),
                 spawn_pickup_spec.copied(),
-                        gun_decide.as_ref(),
-                        plasma_burst.copied(),
+                gun_decide.as_ref(),
+                plasma_burst.copied(),
                 fade,
                 already_faded,
             );
@@ -1336,8 +1543,8 @@ pub fn move_projectiles(
                 custom_explosion.copied(),
                 deploys_sentry.copied(),
                 spawn_pickup_spec.copied(),
-                        gun_decide.as_ref(),
-                        plasma_burst.copied(),
+                gun_decide.as_ref(),
+                plasma_burst.copied(),
                 fade,
                 already_faded,
             );
@@ -1651,10 +1858,8 @@ pub fn move_projectiles(
                 // `image_angle = random_angle` per puff).
                 if let Some(def) = catalog.def("images/sprDust.png") {
                     let mut anim = SpriteAnim::oneshot("images/sprDust.png", def);
-                    anim.timer = GTimer::from_seconds(
-                        1.0 / (def.fps * 0.7).max(1.0),
-                        TimerMode::Repeating,
-                    );
+                    anim.timer =
+                        GTimer::from_seconds(1.0 / (def.fps * 0.7).max(1.0), TimerMode::Repeating);
                     commands.spawn((
                         GameCleanup,
                         LevelCleanup,
@@ -1700,8 +1905,8 @@ pub fn move_projectiles(
                 custom_explosion.copied(),
                 deploys_sentry.copied(),
                 spawn_pickup_spec.copied(),
-                        gun_decide.as_ref(),
-                        plasma_burst.copied(),
+                gun_decide.as_ref(),
+                plasma_burst.copied(),
                 fade,
                 already_faded,
             );
@@ -2004,7 +2209,7 @@ pub fn projectile_hits(
             {
                 sticky.armed = true;
                 sticky.stuck_to = Some(target_e);
-                    sticky.offset = proj_pos.0 - target_pos;
+                sticky.offset = proj_pos.0 - target_pos;
                 proj_vel.0 = glam::Vec2::ZERO;
                 break;
             }
@@ -2116,10 +2321,8 @@ pub fn projectile_hits(
                 // renderer-only caveat as the dust fallback above).
                 if let Some(def) = catalog.def(hit_sprite) {
                     let mut anim = SpriteAnim::oneshot(hit_sprite, def);
-                    anim.timer = GTimer::from_seconds(
-                        1.0 / (def.fps * 1.5).max(1.0),
-                        TimerMode::Repeating,
-                    );
+                    anim.timer =
+                        GTimer::from_seconds(1.0 / (def.fps * 1.5).max(1.0), TimerMode::Repeating);
                     commands.spawn((
                         GameCleanup,
                         LevelCleanup,
@@ -2155,7 +2358,7 @@ pub fn projectile_hits(
                 if hp_before >= ((dmg as f32 * 0.5).ceil() as i32) {
                     sticky.armed = true;
                     sticky.stuck_to = Some(target_e);
-                sticky.offset = proj_pos.0 - target_pos;
+                    sticky.offset = proj_pos.0 - target_pos;
                     proj_vel.0 = glam::Vec2::ZERO;
                     stuck_bolt = true;
                 }
@@ -2349,13 +2552,7 @@ pub fn tick_beams(
     mut last_damage: ResMut<LastDamageTaken>,
     mut beams: Query<(Entity, &Pos, &mut Beam)>,
     mut targets: Query<
-        (
-            Entity,
-            &Pos,
-            &Team,
-            &mut Health,
-            Option<&mut Velocity>,
-        ),
+        (Entity, &Pos, &Team, &mut Health, Option<&mut Velocity>),
         (Without<Beam>, Without<Projectile>),
     >,
 ) {
@@ -2572,9 +2769,7 @@ pub fn tick_bullet2_fade(
                 current.set_path(fade_path, def, false);
                 commands.entity(e).insert(current);
             } else {
-                commands
-                    .entity(e)
-                    .insert(SpriteAnim::new(fade_path, def));
+                commands.entity(e).insert(SpriteAnim::new(fade_path, def));
             }
             proj.life = GTimer::from_seconds(fade_len.max(0.1), TimerMode::Once);
         }
@@ -2585,11 +2780,7 @@ pub fn tick_bullet2_fade(
 pub fn tick_grenade_fuse(
     time: Res<SimTime>,
     mut commands: Commands,
-    mut q: Query<(
-        &mut GrenadeFuse,
-        &mut ProjectileFriction,
-        &Pos,
-    )>,
+    mut q: Query<(&mut GrenadeFuse, &mut ProjectileFriction, &Pos)>,
 ) {
     for (mut fuse, mut friction, pos) in &mut q {
         if fuse.friction_switched {
@@ -2633,8 +2824,46 @@ pub fn tick_shell_bonus(time: Res<SimTime>, mut q: Query<&mut ShellBonus>) {
 pub fn tick_hit_effects(
     time: Res<SimTime>,
     mut commands: Commands,
+    run: Option<Res<Run>>,
+    floor: Option<Res<FloorMask>>,
+    portals: Query<Entity, With<Portal>>,
+    mut maggot_explosions: Query<(Entity, &Pos, &mut MaggotExplosionFx)>,
     mut q: Query<(Entity, &mut PickupLifetime), Without<Pickup>>,
 ) {
+    let portal_exists = portals.iter().next().is_some();
+    let loops = run.as_deref().map(|run| run.loop_count).unwrap_or(0);
+    for (entity, pos, mut explosion) in &mut maggot_explosions {
+        explosion.timer.tick(time.delta_secs);
+        if !explosion.timer.just_finished() {
+            continue;
+        }
+
+        // GML `MaggotExplosion/Alarm_0`.
+        let mut rng = rand::rng();
+        let mut angle = rng.random_range(0.0..std::f32::consts::TAU);
+        let radius = enemy_def(EnemyKind::Maggot).radius;
+        for _ in 0..6 {
+            let direction = glam::Vec2::from_angle(angle);
+            let mut spawn_pos = pos.0 + direction * rng.random_range(0.0..4.0);
+            if let Some(mask) = floor.as_deref() {
+                crate::spatial::resolve_mask_circle(mask, &mut spawn_pos, radius);
+            }
+            crate::spatial::clamp_to_arena(&mut spawn_pos, radius);
+            queue_enemy_spawn_birth(
+                &mut commands,
+                EnemyKind::Maggot,
+                spawn_pos,
+                1.0,
+                loops,
+                false,
+                Some(direction * (4.0 * 30.0)),
+                portal_exists,
+            );
+            angle += std::f32::consts::TAU / 6.0;
+        }
+        commands.entity(entity).despawn();
+    }
+
     for (e, mut lt) in &mut q {
         lt.timer.tick(time.delta_secs);
         if lt.timer.just_finished() {
@@ -2901,11 +3130,7 @@ pub fn tick_slash_projectiles(
                 nh.0 = frame.0 + 5;
             }
             if let Some(mut ev) = evel {
-                apply_knockback(
-                    &mut ev.0,
-                    (epos - pos).normalize_or_zero(),
-                    proj.knockback,
-                );
+                apply_knockback(&mut ev.0, (epos - pos).normalize_or_zero(), proj.knockback);
             }
             HitFlash::apply(&mut commands, ee, [1.0, 1.0, 1.0, 1.0], 0.12);
             repame_fx::spawn_number(
@@ -3096,7 +3321,10 @@ pub fn tick_hazard_clouds(
     mut commands: Commands,
     mut secrets: ResMut<SecretTriggers>,
     mut last_damage: ResMut<LastDamageTaken>,
-    mut clouds: Query<(Entity, &Team, &Pos, &mut HazardCloud), Without<crate::comps_a::AbilityHazard>>,
+    mut clouds: Query<
+        (Entity, &Team, &Pos, &mut HazardCloud),
+        Without<crate::comps_a::AbilityHazard>,
+    >,
     mut targets: Query<
         (Entity, &Pos, &Team, &mut Health),
         (Without<HazardCloud>, Without<Projectile>),
@@ -3180,10 +3408,7 @@ pub fn tick_throne_victory(
             v.bursts = step;
             for _ in 0..3 {
                 let at = v.pos
-                    + glam::Vec2::new(
-                        rng.random_range(-64.0..64.0),
-                        rng.random_range(-50.0..50.0),
-                    );
+                    + glam::Vec2::new(rng.random_range(-64.0..64.0), rng.random_range(-50.0..50.0));
                 commands.spawn((
                     GameCleanup,
                     LevelCleanup,
@@ -3198,8 +3423,8 @@ pub fn tick_throne_victory(
                     Pos(at),
                 ));
             }
-                trauma.add(0.12);
-            }
+            trauma.add(0.12);
+        }
 
         if v.timer.just_finished() {
             for _ in 0..10 {
@@ -3241,7 +3466,7 @@ pub fn apply_explosions(
     mut secrets: ResMut<SecretTriggers>,
     decide: Res<crate::pickups::GunDecideCache>,
     mut q: Query<
-        (Entity, &mut Explosion, &Pos),
+        (Entity, &mut Explosion, &Pos, Option<&ExplosionFeelApplied>),
         (Without<Enemy>, Without<Player>, Without<Prop>),
     >,
     mut enemies: Query<
@@ -3291,7 +3516,7 @@ pub fn apply_explosions(
             )
         })
         .unwrap_or((Vec::new(), false));
-    for (e, mut boom, pos) in &mut q {
+    for (e, mut boom, pos, feel_applied) in &mut q {
         boom.timer.tick(time.delta_secs);
         let fused = boom.timer.just_finished();
 
@@ -3321,7 +3546,9 @@ pub fn apply_explosions(
 
         let pos = pos.0;
         if fused {
-            feel.trauma.add(0.45);
+            if feel_applied.is_none() {
+                feel.trauma.add(0.45);
+            }
             chromatic_pulse(&mut feel.chroma, 0.3);
             feel.hitstop.trigger(0.14, 0.1);
             // GML `Explosion/Create_0`: 10 `Smoke` at `2+random(3)`
@@ -3335,7 +3562,9 @@ pub fn apply_explosions(
                 pos,
                 false,
             );
-            audio.play_boom(&mut cues);
+            if feel_applied.is_none() {
+                audio.play_boom(&mut cues);
+            }
         }
 
         if boom.team == Team::Player {
@@ -3432,16 +3661,17 @@ pub fn apply_explosions(
                 if is_snowman {
                     let mut rng = rand::rng();
                     for _ in 0..3 {
-                        commands.spawn(PendingEnemySpawn {
-                            kind: EnemyKind::Bandit,
-                            pos: center
-                                + glam::Vec2::new(
-                                    rng.random_range(-4.0..4.0),
-                                    rng.random_range(-4.0..4.0),
-                                ),
-                            difficulty: 1.0,
-                            loops: run.loop_count,
-                        });
+                        let jitter = glam::Vec2::new(
+                            rng.random_range(-4.0..4.0),
+                            rng.random_range(-4.0..4.0),
+                        );
+                        queue_enemy_spawn(
+                            &mut commands,
+                            EnemyKind::Bandit,
+                            center + jitter,
+                            1.0,
+                            run.loop_count,
+                        );
                     }
                     for _ in 0..6 {
                         spawn_rad(&mut commands, &catalog, center, 1);
@@ -3500,8 +3730,7 @@ pub fn apply_explosions(
         }
 
         if boom.hits_player
-            && let Ok((player_e, ppos, mut health, player, vel_opt, _, _)) =
-                player_q.single_mut()
+            && let Ok((player_e, ppos, mut health, player, vel_opt, _, _)) = player_q.single_mut()
             && ppos.0.distance(pos) < boom.radius + PLAYER_RADIUS
             && health.invuln.is_finished()
             && !hit_opt.as_ref().is_some_and(|hit| hit.contains(&player_e))
@@ -3561,5 +3790,3 @@ pub fn apply_explosions(
         }
     }
 }
-
-

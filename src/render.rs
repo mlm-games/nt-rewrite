@@ -918,6 +918,8 @@ fn enemy_gun_art(kind: EnemyKind) -> Option<&'static str> {
         EnemyKind::IdpdGrunt => Some("images/sprPopoGun.png"),
         EnemyKind::IdpdElite => Some("images/sprElitePopoGun.png"),
         EnemyKind::JungleBandit => Some("images/sprJungleBanditGun.png"),
+        EnemyKind::Sniper => Some("images/sprSniperGun.png"),
+        EnemyKind::MeleeBandit => Some("images/sprPipe.png"),
         EnemyKind::LilHunter | EnemyKind::LilHunterLoop => Some("images/sprLilHunterGun.png"),
         EnemyKind::Molefish => Some("images/sprMolefishGun.png"),
         EnemyKind::Molesarge => Some("images/sprMolesargeGun.png"),
@@ -1066,13 +1068,21 @@ fn wall_out_raw(seed: u64, wx: i32, wy: i32) -> usize {
 /// `l = 0` means no wall to the west and the window keeps the full 4px
 /// west skirt of the 24-wide cell; a wall next door cuts it to 4.
 fn wall_out_crop(wall_set: &HashSet<(i32, i32)>, wx: i32, wy: i32) -> (f32, f32, f32, f32) {
-    let l = if wall_set.contains(&(wx - 1, wy)) { 4.0 } else { 0.0 };
+    let l = if wall_set.contains(&(wx - 1, wy)) {
+        4.0
+    } else {
+        0.0
+    };
     let w = if wall_set.contains(&(wx + 1, wy)) {
         20.0 - l
     } else {
         24.0 - l
     };
-    let r = if wall_set.contains(&(wx, wy - 1)) { 4.0 } else { 0.0 };
+    let r = if wall_set.contains(&(wx, wy - 1)) {
+        4.0
+    } else {
+        0.0
+    };
     let h = if wall_set.contains(&(wx, wy + 1)) {
         20.0 - r
     } else {
@@ -1133,10 +1143,7 @@ fn wall_out_part(
     );
     let iw = ix1 - ix0;
     let ih = iy1 - iy0;
-    let top_left = Vec2::new(
-        wx as f32 * 16.0 - 4.0 + ix0,
-        wy as f32 * 16.0 - 12.0 + iy0,
-    );
+    let top_left = Vec2::new(wx as f32 * 16.0 - 4.0 + ix0, wy as f32 * 16.0 - 12.0 + iy0);
     Some(SpriteInstance {
         center: top_left + Vec2::new(iw, ih) * 0.5,
         rotation: 0.0,
@@ -1198,8 +1205,8 @@ fn trans_cells(
                 if !seen.insert((wx, wy)) {
                     continue;
                 }
-                let frame = (wall_hash(seed, wx, wy, 0x41) as usize
-                    % trans_frames.max(1) as usize) as i32;
+                let frame =
+                    (wall_hash(seed, wx, wy, 0x41) as usize % trans_frames.max(1) as usize) as i32;
                 out.push(((wx, wy), frame));
             }
         }
@@ -1885,7 +1892,9 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                     // coords hash into the same distribution
                     // deterministically (1/500 rare, 7/9 plain,
                     // 1/9 mid, then +4 half the time).
-                    let h = (cx.wrapping_mul(0x8da6b343u32 as i32).wrapping_add(cy.wrapping_mul(0xd8163841u32 as i32))
+                    let h = (cx
+                        .wrapping_mul(0x8da6b343u32 as i32)
+                        .wrapping_add(cy.wrapping_mul(0xd8163841u32 as i32))
                         >> 7) as u32;
                     let raw = if h % 500 == 0 {
                         3
@@ -1992,8 +2001,7 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
         } else {
             Vec::new()
         };
-        let trans_set: HashSet<(i32, i32)> =
-            trans_cells.iter().map(|(c, _)| *c).collect();
+        let trans_set: HashSet<(i32, i32)> = trans_cells.iter().map(|(c, _)| *c).collect();
         for ((wx, wy), frame) in &trans_cells {
             if let Some(s) = place_top_left(
                 assets,
@@ -2176,8 +2184,8 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                 // the near Frog idles on `sprMutant15Idle` — `Step_0`
                 // forces `Walk` directly every step while near, which
                 // needs no arm here.
-                let frog_far = c.race_gml == 15
-                    && fire_pos.is_some_and(|f| _pos.0.distance(f) > 600.0);
+                let frog_far =
+                    c.race_gml == 15 && fire_pos.is_some_and(|f| _pos.0.distance(f) > 600.0);
                 let strips = crate::comps_b::camper_strips(c.race_gml, frog_far);
                 let want_selected = c.race_gml == selected;
                 let (end, trans) = if want_selected {
@@ -2185,7 +2193,11 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                 } else {
                     (strips.slct, strips.from)
                 };
-                let want_swap = if want_selected { Some(true) } else { Some(false) };
+                let want_swap = if want_selected {
+                    Some(true)
+                } else {
+                    Some(false)
+                };
                 let end_exists = assets.catalog.def(end).is_some();
                 let trans_exists = assets.catalog.def(trans).is_some();
                 let (end, has_trans) = if end_exists {
@@ -2244,8 +2256,8 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                 // (`Sit` == `from` == `to` == `menu` out far, and the
                 // near-arm `GoSit -> Sit on animation_end` lands on
                 // the Sit end through the same path).
-                let frog_settle = path == "images/sprMutant15Sit.png"
-                    || path == "images/sprMutant15GoSit.png";
+                let frog_settle =
+                    path == "images/sprMutant15Sit.png" || path == "images/sprMutant15GoSit.png";
                 let transition = !frog_settle
                     && (path.ends_with("Select.png")
                         || path.ends_with("Deselect.png")
@@ -2259,7 +2271,11 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                 if let Some(mut c) = world.get_mut::<TitleCampChar>(e) {
                     // Jumped straight to the end (no transition
                     // strip): settled immediately.
-                    c.swap = if transition { Some(want_selected) } else { None };
+                    c.swap = if transition {
+                        Some(want_selected)
+                    } else {
+                        None
+                    };
                 }
             } else if let Some(mut c) = world.get_mut::<TitleCampChar>(e) {
                 c.swap = None;
@@ -2278,14 +2294,9 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                 continue;
             }
             if camp.is_some() {
-                if let Some(s) = assets.sprite_for(
-                    &anim.path,
-                    anim.frame as i32,
-                    pos.0,
-                    false,
-                    0.0,
-                    [1.0; 4],
-                ) {
+                if let Some(s) =
+                    assets.sprite_for(&anim.path, anim.frame as i32, pos.0, false, 0.0, [1.0; 4])
+                {
                     out.push(s);
                 }
                 continue;
@@ -2449,8 +2460,7 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
     // (nt-rewrite never attaches `EnemySprites`; bevy's walk/hurt strips
     // resolve here from the anim path instead.) Gun carriers draw their
     // gun behind the body when aiming down-ish (gunangle ≤ 180°) and in
-    // front above it (GML per-kind `Draw_0` law; gun at the body center —
-    // the wkick offset is rest-zero).
+    // front above it (GML per-kind `Draw_0` law).
     {
         // Throne flames (`Nothing/Draw_0` verbatim): four flame quads,
         // Big while the beam charges.
@@ -2483,6 +2493,11 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                 }
             }
         }
+        let walls: Vec<Vec2> = world
+            .query::<(&Pos, &WallCell)>()
+            .iter(world)
+            .map(|(p, _)| p.0)
+            .collect();
         let mut q = world.query::<(
             &Pos,
             &Enemy,
@@ -2492,21 +2507,69 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             Option<&HitFlash>,
             Option<&EnemyBrain>,
         )>();
+        for (pos, enemy, _vel, _aim, _anim, _flash, brain) in q.iter(world) {
+            if enemy.kind != EnemyKind::Sniper {
+                continue;
+            }
+            let Some(brain) = brain else {
+                continue;
+            };
+            if !brain.sniper_aiming {
+                continue;
+            }
+            let angle = brain.gunangle;
+            let step = Vec2::new(angle.cos(), angle.sin()) * 2.0;
+            let mut tip = pos.0;
+            for _ in 0..1000 {
+                let next = tip + step;
+                let hit = walls.iter().any(|w| w.distance(next) < 8.0);
+                tip = next;
+                if hit {
+                    break;
+                }
+            }
+            let distance = pos.0.distance(tip);
+            if let Some(native) = assets.native_size("images/sprLaserSight.png") {
+                let size = Vec2::new(native.x * (distance / 2.0 + 2.0), native.y);
+                let mid = pos.0 + Vec2::new(angle.cos(), angle.sin()) * (size.x * 0.5);
+                let mut s = match assets.sprite_sized(
+                    "images/sprLaserSight.png",
+                    0,
+                    mid,
+                    size,
+                    false,
+                    [1.0; 4],
+                ) {
+                    Some(s) => s,
+                    None => continue,
+                };
+                s.rotation = angle;
+                s.anchor = Vec2::new(0.5, 0.5);
+                out.push(s);
+            }
+        }
         // Guns behind.
         for (pos, enemy, vel, aim, _anim, _flash, brain) in q.iter(world) {
             let Some(gun_path) = enemy_gun_art(enemy.kind) else {
                 continue;
             };
-            let Some(gunangle) = brain.map(|b| b.gunangle) else {
+            let Some(brain) = brain else {
                 continue;
             };
+            let gunangle = brain.gunangle;
+            let draw_angle = if enemy.kind == EnemyKind::MeleeBandit {
+                gunangle + brain.wepangle
+            } else {
+                gunangle
+            };
+            let gun_pos = pos.0 + Vec2::new(draw_angle.cos(), draw_angle.sin()) * (-brain.wkick);
             if gunangle.to_degrees().rem_euclid(360.0) > 180.0 {
                 continue;
             }
             let flip = vel.map(|v| v.0.x < 0.0).unwrap_or(false)
                 || aim.map(|a| a.0.x < 0.0).unwrap_or(false);
             if let Some(s) =
-                assets.sprite_for_full(gun_path, 0, pos.0, false, flip, gunangle, [1.0; 4])
+                assets.sprite_for_full(gun_path, 0, gun_pos, false, flip, draw_angle, [1.0; 4])
             {
                 out.push(s);
             }
@@ -2528,16 +2591,23 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             let Some(gun_path) = enemy_gun_art(enemy.kind) else {
                 continue;
             };
-            let Some(gunangle) = brain.map(|b| b.gunangle) else {
+            let Some(brain) = brain else {
                 continue;
             };
+            let gunangle = brain.gunangle;
+            let draw_angle = if enemy.kind == EnemyKind::MeleeBandit {
+                gunangle + brain.wepangle
+            } else {
+                gunangle
+            };
+            let gun_pos = pos.0 + Vec2::new(draw_angle.cos(), draw_angle.sin()) * (-brain.wkick);
             if gunangle.to_degrees().rem_euclid(360.0) <= 180.0 {
                 continue;
             }
             let flip = vel.map(|v| v.0.x < 0.0).unwrap_or(false)
                 || aim.map(|a| a.0.x < 0.0).unwrap_or(false);
             if let Some(s) =
-                assets.sprite_for_full(gun_path, 0, pos.0, false, flip, gunangle, [1.0; 4])
+                assets.sprite_for_full(gun_path, 0, gun_pos, false, flip, draw_angle, [1.0; 4])
             {
                 out.push(s);
             }
@@ -3027,13 +3097,7 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
         // live `MoteScale` (grow/decay law) and `FxAngle` spin. Drawn
         // from the catalog strip at the mote scale, no lifetime fade
         // (GML kills on `image_xscale < 0`, not alpha).
-        let mut q = world.query::<(
-            &Pos,
-            &SpriteAnim,
-            &Mote,
-            &MoteScale,
-            Option<&FxAngle>,
-        )>();
+        let mut q = world.query::<(&Pos, &SpriteAnim, &Mote, &MoteScale, Option<&FxAngle>)>();
         for (pos, anim, _mote, scale, angle) in q.iter(world) {
             let rotation = angle.map(|a| a.0).unwrap_or(0.0);
             if let Some(s) = assets.sprite_scaled_rotated(
@@ -3323,12 +3387,7 @@ pub fn hud_gui_place(
     let size = Vec2::new(def.w as f32 * mul * map.s, def.h as f32 * mul * map.s);
     // GML draw point minus the origin: `draw_sprite(spr, sub, x, y)` puts
     // the art top-left at `(x - xorigin, y - yorigin)`.
-    let top_left = hud_gui_to_world(
-        map,
-        view,
-        gx - def.xorigin * mul,
-        gy - def.yorigin * mul,
-    );
+    let top_left = hud_gui_to_world(map, view, gx - def.xorigin * mul, gy - def.yorigin * mul);
     Some(SpriteInstance {
         center: top_left + Vec2::new(anchor[0] * size.x, anchor[1] * size.y),
         rotation: 0.0,
@@ -3917,7 +3976,7 @@ pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
             centered: true,
             middle_y: true,
             right: false,
-                    bold: false,
+            bold: false,
         });
     }
     if hud.boss_max > 0 {
@@ -3930,7 +3989,7 @@ pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
             centered: true,
             middle_y: false,
             right: false,
-                    bold: false,
+            bold: false,
         });
     }
     if hud.idpd_warning {
@@ -3943,7 +4002,7 @@ pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
             centered: true,
             middle_y: false,
             right: false,
-                    bold: false,
+            bold: false,
         });
     }
     gui_texts_dp(canvas_dp, items)
@@ -3976,7 +4035,7 @@ fn gui_body(text: impl Into<String>, gx: f32, gy: f32, color: [u8; 4]) -> MenuGu
         centered: false,
         middle_y: false,
         right: false,
-                    bold: false,
+        bold: false,
     }
 }
 
@@ -3990,7 +4049,7 @@ fn gui_center(text: impl Into<String>, gx: f32, gy: f32, color: [u8; 4]) -> Menu
         centered: true,
         middle_y: false,
         right: false,
-                    bold: false,
+        bold: false,
     }
 }
 
@@ -4290,9 +4349,14 @@ pub fn tutorial_texts(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
         crate::state::TutorialStep::PickingUp => {
             format!("PICK UP A NEW WEAPON WITH @w{}@s", key_name("pick"))
         }
-        crate::state::TutorialStep::Shooting => "AIM WITH THE MOUSE, @wLEFT BUTTON@s FIRES".to_string(),
+        crate::state::TutorialStep::Shooting => {
+            "AIM WITH THE MOUSE, @wLEFT BUTTON@s FIRES".to_string()
+        }
         crate::state::TutorialStep::Swapping => {
-            format!("SWAP WEAPONS WITH @w{}@s#TRY IT A FEW TIMES!", key_name("swap"))
+            format!(
+                "SWAP WEAPONS WITH @w{}@s#TRY IT A FEW TIMES!",
+                key_name("swap")
+            )
         }
         crate::state::TutorialStep::Power => {
             "@wRIGHT MOUSE BUTTON@s USES YOUR ABILITY#GIVE IT A GO!".to_string()
@@ -4442,7 +4506,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         centered: true,
                         middle_y: true,
                         right: false,
-                    bold: false,
+                        bold: false,
                     },
                     MenuGuiText {
                         text: "WHILE THIS SAVING ICON IS DISPLAYED.".to_string(),
@@ -4453,7 +4517,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         centered: true,
                         middle_y: true,
                         right: false,
-                    bold: false,
+                        bold: false,
                     },
                 ],
                 1 => vec![MenuGuiText {
@@ -4562,7 +4626,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         centered: false,
                         middle_y: true,
                         right: false,
-                    bold: false,
+                        bold: false,
                     });
                     out.push(MenuGuiText {
                         text: run.total_kills.to_string(),
@@ -4573,7 +4637,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         centered: false,
                         middle_y: true,
                         right: false,
-                    bold: false,
+                        bold: false,
                     });
                 }
             }
@@ -4939,7 +5003,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         centered: true,
                         middle_y: true,
                         right: false,
-                    bold: false,
+                        bold: false,
                     });
                 }
             }
@@ -4982,7 +5046,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                                 centered: true,
                                 middle_y: true,
                                 right: false,
-                    bold: false,
+                                bold: false,
                             });
                         }
                     }
@@ -5004,7 +5068,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                             centered: true,
                             middle_y: true,
                             right: false,
-                    bold: false,
+                            bold: false,
                         });
                     }
                 }
@@ -5045,15 +5109,9 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 .any(|race| race.race == RaceId::Robot);
             let (subtitle, extra) = if is_ultra {
                 if is_robot {
-                    (
-                        "@sINSTALL @gULTRA@s UPDATE".to_string(),
-                        None,
-                    )
+                    ("@sINSTALL @gULTRA@s UPDATE".to_string(), None)
                 } else {
-                    (
-                        "@sPICK YOUR @gULTRA@s MUTATION".to_string(),
-                        None,
-                    )
+                    ("@sPICK YOUR @gULTRA@s MUTATION".to_string(), None)
                 }
             } else if is_robot {
                 (
@@ -5068,12 +5126,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 .map(|state| state.mutation_appear)
                 .unwrap_or(0.0);
             let subtitle_x = cx + 1.0;
-            let mut out = vec![gui_center(
-                subtitle,
-                subtitle_x,
-                75.0 - appear,
-                GUI_GRAY,
-            )];
+            let mut out = vec![gui_center(subtitle, subtitle_x, 75.0 - appear, GUI_GRAY)];
             if let Some(extra) = extra {
                 out.push(gui_center(extra, subtitle_x, 87.0 - appear, GUI_GRAY));
             }
@@ -5161,7 +5214,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                                 centered: true,
                                 middle_y: true,
                                 right: false,
-                    bold: false,
+                                bold: false,
                             });
                         }
                         return out;
@@ -5180,10 +5233,8 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 // centered-middle block: `middle_y` centers on the whole
                 // block, so split per line around the block middle
                 // (`gy + (i - (n-1)/2) * 8`).
-                let box_lines: Vec<&str> = box_text
-                    .split('#')
-                    .flat_map(|s| s.split('\n'))
-                    .collect();
+                let box_lines: Vec<&str> =
+                    box_text.split('#').flat_map(|s| s.split('\n')).collect();
                 let n = box_lines.len().max(1) as f32;
                 for (i, line) in box_lines.iter().enumerate() {
                     // `gui_multiline` cannot carry per-block middle
@@ -5197,7 +5248,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         centered: true,
                         middle_y: true,
                         right: false,
-                    bold: false,
+                        bold: false,
                     });
                 }
             }
@@ -5286,7 +5337,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         centered: true,
                         middle_y: true,
                         right: false,
-                    bold: false,
+                        bold: false,
                     });
                     out.push(MenuGuiText {
                         text: run_timer_string(run.tottimer),
@@ -5297,7 +5348,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         centered: true,
                         middle_y: true,
                         right: false,
-                    bold: false,
+                        bold: false,
                     });
                 } else {
                     out.push(MenuGuiText {
@@ -5309,7 +5360,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         centered: true,
                         middle_y: true,
                         right: false,
-                    bold: false,
+                        bold: false,
                     });
                 }
             } else {
@@ -5386,7 +5437,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         centered: true,
                         middle_y: true,
                         right: false,
-                    bold: false,
+                        bold: false,
                     },
                     gui_pause_button("MENU", 45.0, 176.0, true, GUI_MID),
                     gui_pause_button("RETRY", 60.0, 208.0, true, GUI_MID),
@@ -6479,8 +6530,7 @@ pub fn hud_sprites(
             } else {
                 (((frames as f32 - 1.0) * progress).floor() as i32).max(1)
             };
-            if let Some(s) = hud_gui_place(assets, path, sub, 110.0, 4.0, 1.0, [1.0; 4], gm, view)
-            {
+            if let Some(s) = hud_gui_place(assets, path, sub, 110.0, 4.0, 1.0, [1.0; 4], gm, view) {
                 out.push(s);
             }
         }
@@ -6642,9 +6692,9 @@ pub fn hud_sprites(
         // have no port state yet).
         if draw_outline {
             for (ox, oy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
-                if let Some(s) = hud_weapon_part(
-                    assets, &path, dx + ox, 16.0 + oy, ww, outline, gm, view,
-                ) {
+                if let Some(s) =
+                    hud_weapon_part(assets, &path, dx + ox, 16.0 + oy, ww, outline, gm, view)
+                {
                     out.push(s);
                 }
             }
@@ -7080,14 +7130,7 @@ pub fn shadow_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIns
         if assets.uv("images/shd24.png", 0).is_none() {
             break;
         }
-        if let Some(s) = assets.sprite_for(
-            "images/shd24.png",
-            0,
-            pos.0,
-            false,
-            0.0,
-            [1.0; 4],
-        ) {
+        if let Some(s) = assets.sprite_for("images/shd24.png", 0, pos.0, false, 0.0, [1.0; 4]) {
             out.push(s);
         }
     }
@@ -7251,9 +7294,7 @@ pub fn title_click_action(
     // (sprite origin); `sprGoButtonSymbolic` origin is (0,-2) so the
     let roster =
         crate::state::menus::visible_roster(world.get_resource::<crate::savedata_part::SaveData>());
-    if menu.title_go_visible
-        && 8.0 + roster.len() as f32 * go_step(roster.len()) < vw - 30.0
-    {
+    if menu.title_go_visible && 8.0 + roster.len() as f32 * go_step(roster.len()) < vw - 30.0 {
         let go = go_button_pos([vw, 240.0], roster.len(), 19.0);
         let top = go[1] + 2.0;
         if gx >= go[0] && gx <= go[0] + TITLE_GO_W && gy >= top && gy <= top + TITLE_GO_H {
@@ -8454,12 +8495,7 @@ pub fn place_touch_sprite_rot(
     let (uv, def) = assets.uv(path, frame)?;
     let anchor = def.anchor();
     let size = Vec2::new(def.w as f32 * mul * map.s, def.h as f32 * mul * map.s);
-    let top_left = hud_gui_to_world(
-        map,
-        view,
-        gx - def.xorigin * mul,
-        gy - def.yorigin * mul,
-    );
+    let top_left = hud_gui_to_world(map, view, gx - def.xorigin * mul, gy - def.yorigin * mul);
     Some(SpriteInstance {
         center: top_left + Vec2::new(anchor[0] * size.x, anchor[1] * size.y),
         rotation,
@@ -8512,9 +8548,7 @@ pub fn touch_sprites(
     // false on Android). Binds the whole chrome (sticks at home +
     // act/swap/ability/splitfire art), not just live claims — GML
     // draws the homes at all times in a run.
-    let gamepad = save
-        .as_ref()
-        .is_some_and(|s| s.settings.gamepad_enabled);
+    let gamepad = save.as_ref().is_some_and(|s| s.settings.gamepad_enabled);
     if gamepad {
         return out;
     }
@@ -8553,18 +8587,35 @@ pub fn touch_sprites(
         let a = alpha(stick.touch >= 0);
         if a > 0.0 {
             let dir = if stick.dis > 0.0 {
-                Vec2::new(
-                    stick.dir.to_radians().cos(),
-                    stick.dir.to_radians().sin(),
-                )
+                Vec2::new(stick.dir.to_radians().cos(), stick.dir.to_radians().sin())
             } else {
                 Vec2::ZERO
             };
             let knob = stick.anchor + dir * (stick.dis.min(32.0) * 0.5);
-            if let Some(s) = hud_gui_place(assets, "images/sprMobileControlJoystick.png", 0, stick.anchor.x, stick.anchor.y, scale, [1.0, 1.0, 1.0, a], gm, view) {
+            if let Some(s) = hud_gui_place(
+                assets,
+                "images/sprMobileControlJoystick.png",
+                0,
+                stick.anchor.x,
+                stick.anchor.y,
+                scale,
+                [1.0, 1.0, 1.0, a],
+                gm,
+                view,
+            ) {
                 out.push(s);
             }
-            if let Some(s) = hud_gui_place(assets, "images/sprMobileControlJoystick.png", 1, knob.x, knob.y, scale, [1.0, 1.0, 1.0, a], gm, view) {
+            if let Some(s) = hud_gui_place(
+                assets,
+                "images/sprMobileControlJoystick.png",
+                1,
+                knob.x,
+                knob.y,
+                scale,
+                [1.0, 1.0, 1.0, a],
+                gm,
+                view,
+            ) {
                 out.push(s);
             }
         }
@@ -8580,10 +8631,7 @@ pub fn touch_sprites(
             let a = alpha(stick.touch >= 0);
             if a > 0.0 {
                 let dir = if stick.dis > 0.0 {
-                    Vec2::new(
-                        stick.dir.to_radians().cos(),
-                        stick.dir.to_radians().sin(),
-                    )
+                    Vec2::new(stick.dir.to_radians().cos(), stick.dir.to_radians().sin())
                 } else {
                     Vec2::ZERO
                 };
@@ -8592,12 +8640,21 @@ pub fn touch_sprites(
                 } else {
                     stick.anchor + dir * (stick.dis.min(64.0) * 0.5)
                 };
-                let under_deadzone =
-                    stick.dis / 32.0 < crate::input::ATTACK_BUTTON_DEADZONE;
+                let under_deadzone = stick.dis / 32.0 < crate::input::ATTACK_BUTTON_DEADZONE;
                 let show_dead = (split_fire && stick.touch < 0)
                     || (under_deadzone && stick.touch >= 0 && !autoaim);
                 if show_dead {
-                    if let Some(s) = hud_gui_place(assets, "images/sprMobileControlJoystick.png", 2, stick.anchor.x, stick.anchor.y, scale, [0.5, 0.5, 0.5, a], gm, view) {
+                    if let Some(s) = hud_gui_place(
+                        assets,
+                        "images/sprMobileControlJoystick.png",
+                        2,
+                        stick.anchor.x,
+                        stick.anchor.y,
+                        scale,
+                        [0.5, 0.5, 0.5, a],
+                        gm,
+                        view,
+                    ) {
                         out.push(s);
                     }
                 }
@@ -8612,7 +8669,8 @@ pub fn touch_sprites(
                     assets,
                     "images/sprCrosshairBig.png",
                     frame,
-                    knob.x, knob.y,
+                    knob.x,
+                    knob.y,
                     scale * 0.5,
                     knob_rot,
                     [0.05, 0.99, 0.6, a],
@@ -8644,10 +8702,30 @@ pub fn touch_sprites(
         let attack_btn = Vec2::new(gui_w - 48.0, gui_h * 0.5);
         let active = Vec2::new(gui_w - 64.0, gui_h * 0.5 - 48.0);
         let held_alpha = 0.7;
-        if let Some(s) = hud_gui_place(assets, "images/sprMobileControlAbility.png", 0, active.x, active.y, scale * 0.75, [0.5, 0.5, 0.5, held_alpha], gm, view) {
+        if let Some(s) = hud_gui_place(
+            assets,
+            "images/sprMobileControlAbility.png",
+            0,
+            active.x,
+            active.y,
+            scale * 0.75,
+            [0.5, 0.5, 0.5, held_alpha],
+            gm,
+            view,
+        ) {
             out.push(s);
         }
-        if let Some(s) = hud_gui_place(assets, "images/sprMobileControlCorners.png", 0, act.x, act.y, scale, [1.0, 1.0, 1.0, 1.0], gm, view) {
+        if let Some(s) = hud_gui_place(
+            assets,
+            "images/sprMobileControlCorners.png",
+            0,
+            act.x,
+            act.y,
+            scale,
+            [1.0, 1.0, 1.0, 1.0],
+            gm,
+            view,
+        ) {
             out.push(s);
         }
         // Swap button (`ButtonSwap` region in `scrDrawMobileControls`):
@@ -8655,7 +8733,17 @@ pub fn touch_sprites(
         // (vanilla GML draws wep white / bwep gray, tilted 45°).
         {
             let black = [0.0, 0.0, 0.0, 37.0 / 255.0];
-            if let Some(s) = hud_gui_place(assets, "images/sprMobileControlJoystick.png", 0, swap_home.x, swap_home.y, scale, black, gm, view) {
+            if let Some(s) = hud_gui_place(
+                assets,
+                "images/sprMobileControlJoystick.png",
+                0,
+                swap_home.x,
+                swap_home.y,
+                scale,
+                black,
+                gm,
+                view,
+            ) {
                 out.push(s);
             }
             let (wep, bwep) = world
@@ -8672,28 +8760,30 @@ pub fn touch_sprites(
                     )
                 })
                 .unwrap_or((crate::data::WeaponId::NONE, crate::data::WeaponId::NONE));
-            let draw_gun = |id: crate::data::WeaponId, tint: [f32; 4], out: &mut Vec<SpriteInstance>| {
-                let meta = crate::weapon_runtime::weapon_meta(id);
-                let stem = if meta.wep_sprt.is_empty() || meta.wep_sprt == "mskNone" {
-                    "sprRevolver"
-                } else {
-                    meta.wep_sprt
+            let draw_gun =
+                |id: crate::data::WeaponId, tint: [f32; 4], out: &mut Vec<SpriteInstance>| {
+                    let meta = crate::weapon_runtime::weapon_meta(id);
+                    let stem = if meta.wep_sprt.is_empty() || meta.wep_sprt == "mskNone" {
+                        "sprRevolver"
+                    } else {
+                        meta.wep_sprt
+                    };
+                    let path = format!("images/{stem}.png");
+                    if let Some(s) = place_touch_sprite_rot(
+                        assets,
+                        &path,
+                        0,
+                        swap_home.x,
+                        swap_home.y + 10.0,
+                        scale + 0.5,
+                        45.0_f32.to_radians(),
+                        tint,
+                        gm,
+                        view,
+                    ) {
+                        out.push(s);
+                    }
                 };
-                let path = format!("images/{stem}.png");
-                if let Some(s) = place_touch_sprite_rot(
-                    assets,
-                    &path,
-                    0,
-                    swap_home.x, swap_home.y + 10.0,
-                    scale + 0.5,
-                    45.0_f32.to_radians(),
-                    tint,
-                    gm,
-                    view,
-                ) {
-                    out.push(s);
-                }
-            };
             draw_gun(bwep, [0.7, 0.7, 0.7, 1.0], &mut out);
             draw_gun(wep, [1.0, 1.0, 1.0, 1.0], &mut out);
         }
@@ -8701,10 +8791,30 @@ pub fn touch_sprites(
             let frames = strip_frames(assets, "images/sprCrosshairBig.png").max(1) as i32;
             let frame = crosshair.clamp(0, frames - 1);
             let half = scale * 0.5;
-            if let Some(s) = hud_gui_place(assets, "images/sprMobileControlCorners.png", 0, attack_btn.x, attack_btn.y, scale * 0.5, [1.0, 1.0, 1.0, 1.0], gm, view) {
+            if let Some(s) = hud_gui_place(
+                assets,
+                "images/sprMobileControlCorners.png",
+                0,
+                attack_btn.x,
+                attack_btn.y,
+                scale * 0.5,
+                [1.0, 1.0, 1.0, 1.0],
+                gm,
+                view,
+            ) {
                 out.push(s);
             }
-            if let Some(s) = hud_gui_place(assets, "images/sprCrosshairBig.png", frame, attack_btn.x, attack_btn.y, scale * 0.5, [0.49, 0.99, 0.05, 1.0], gm, view) {
+            if let Some(s) = hud_gui_place(
+                assets,
+                "images/sprCrosshairBig.png",
+                frame,
+                attack_btn.x,
+                attack_btn.y,
+                scale * 0.5,
+                [0.49, 0.99, 0.05, 1.0],
+                gm,
+                view,
+            ) {
                 out.push(s);
             }
             let _ = half;
@@ -9102,13 +9212,10 @@ pub fn menu_sprites(
             ) {
                 out.push(s);
             }
-            if menu
-                .as_ref()
-                .is_some_and(|state| state.mutation_splat)
+            if menu.as_ref().is_some_and(|state| state.mutation_splat)
                 && let Some(s) = assets.sprite_for(
                     "images/sprMutationSplat.png",
-                    menu
-                        .as_ref()
+                    menu.as_ref()
                         .map(|state| state.mutation_splat_frame as i32)
                         .unwrap_or(0),
                     gui_to_world(cx, 240.0 - 31.0),
@@ -9189,7 +9296,10 @@ pub fn menu_sprites(
                 if let Some(s) = assets.sprite_scaled_rotated(
                     path,
                     frame,
-                    gui_to_world(cx + xoff - (n as f32 - 1.0) * half + i as f32 * step, card_y),
+                    gui_to_world(
+                        cx + xoff - (n as f32 - 1.0) * half + i as f32 * step,
+                        card_y,
+                    ),
                     mul * gm.s,
                     0.0,
                     tint,
@@ -9886,10 +9996,13 @@ mod ui_parity_regression {
                 centered: false,
                 middle_y: true,
                 right: true,
-                    bold: false,
+                bold: false,
             }],
         );
-        assert!((dp[0].1[0] + dp[0].4 - (1.0 + 109.0 * 3.0)).abs() < 1.0, "{dp:?}");
+        assert!(
+            (dp[0].1[0] + dp[0].4 - (1.0 + 109.0 * 3.0)).abs() < 1.0,
+            "{dp:?}"
+        );
     }
 
     /// Narrow-window contain-fit: on a 600x800 portrait canvas the
@@ -9913,11 +10026,15 @@ mod ui_parity_regression {
             }],
         );
         let k = 600.0 / 320.0;
-        let (left, top, _px, _c, bw, _r) = (dp[0].1[0], dp[0].1[1], dp[0].2, dp[0].3, dp[0].4, dp[0].5);
+        let (left, top, _px, _c, bw, _r) =
+            (dp[0].1[0], dp[0].1[1], dp[0].2, dp[0].3, dp[0].4, dp[0].5);
         assert!((left + bw * 0.5 - 300.0).abs() < 1.0, "{dp:?}");
         assert!((bw - 320.0 * k).abs() < 1.0, "{dp:?}");
         let oy = (800.0 - 240.0 * k) * 0.5;
-        assert!((top - (oy + 24.0 * k - (10.0 * k).round() * 0.5)).abs() < 1.0, "{dp:?}");
+        assert!(
+            (top - (oy + 24.0 * k - (10.0 * k).round() * 0.5)).abs() < 1.0,
+            "{dp:?}"
+        );
     }
 }
 
@@ -10038,12 +10155,26 @@ mod title_cam_tests {
         assert_eq!(focus, Vec2::new(64.0, 64.0));
         // Entry snap centers exactly (m = 1 like Create_0).
         let mut cam = GmlCamera::default();
-        title_camera_step(&mut cam, 426.0, 240.0, Vec2::new(64.0, 32.0), 1.0 / 30.0, true);
+        title_camera_step(
+            &mut cam,
+            426.0,
+            240.0,
+            Vec2::new(64.0, 32.0),
+            1.0 / 30.0,
+            true,
+        );
         assert_eq!((cam.x, cam.y), (64.0 - 213.0, 32.0 - 120.0));
         // Step_1 lerp converges toward the centered point.
         let mut cam = GmlCamera::default();
         for _ in 0..60 {
-            title_camera_step(&mut cam, 426.0, 240.0, Vec2::new(64.0, 32.0), 1.0 / 30.0, false);
+            title_camera_step(
+                &mut cam,
+                426.0,
+                240.0,
+                Vec2::new(64.0, 32.0),
+                1.0 / 30.0,
+                false,
+            );
         }
         assert!((cam.x - (64.0 - 213.0)).abs() < 1.0, "x={}", cam.x);
         assert!((cam.y - (32.0 - 120.0)).abs() < 1.0, "y={}", cam.y);
@@ -10064,14 +10195,14 @@ mod remap_page_tests {
         world.insert_resource(crate::savedata_part::SaveData::default());
         world.init_resource::<crate::state::menus::MenuState>();
         world.init_resource::<crate::keymap::InputMapState>();
-        world.resource_mut::<crate::state::menus::MenuState>().settings_page = 13;
+        world
+            .resource_mut::<crate::state::menus::MenuState>()
+            .settings_page = 13;
         let texts = settings_gui_texts(&mut world, 320.0);
         let rows = settings_hot_rows(13, 320.0);
         assert_eq!(rows.len(), 10, "8 rebind rows + reset + back");
         for (i, row) in rows.iter().enumerate() {
-            let hit = texts
-                .iter()
-                .any(|t| (t.gy - row.gy).abs() < 0.5);
+            let hit = texts.iter().any(|t| (t.gy - row.gy).abs() < 0.5);
             assert!(hit, "hot row {i} at gy={} has no text row", row.gy);
         }
         // Rebind rows keep a 16px pitch clear of the ±7px click band;
@@ -10102,7 +10233,9 @@ mod remap_page_tests {
         let mut world = World::new();
         world.insert_resource(crate::savedata_part::SaveData::default());
         world.init_resource::<crate::state::menus::MenuState>();
-        world.resource_mut::<crate::state::menus::MenuState>().settings_page = 16;
+        world
+            .resource_mut::<crate::state::menus::MenuState>()
+            .settings_page = 16;
         let texts = settings_gui_texts(&mut world, 320.0);
         assert!(
             texts.iter().all(|t| t.text != "KEYBOARD MODE - WIP"),

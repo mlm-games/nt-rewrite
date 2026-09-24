@@ -35,15 +35,15 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
+use nt_rewrite::App;
 use nt_rewrite::comps_a::{Health, Inventory, Player, Projectile, Run};
 use nt_rewrite::comps_b::{Enemy, Pickup};
 use nt_rewrite::data::AmmoKind;
 use nt_rewrite::spatial::Pos;
 use nt_rewrite::state::{AppState, Paused};
-use nt_rewrite::App;
+use repose_core::Scheduler;
 use repose_core::input::{Key, KeyEvent, KeyEventType, Modifiers, PhysicalKey};
 use repose_core::shortcuts::{Action, KeyChord};
-use repose_core::Scheduler;
 
 const DT: Duration = Duration::from_millis(33);
 const TICKS: usize = 220;
@@ -166,6 +166,7 @@ fn run_tape() -> Vec<TickSnap> {
             &mut w.commands(),
             nt_rewrite::EnemyKind::Bandit,
             player_pos + glam::Vec2::new(60.0, 0.0),
+            true,
         );
     }
     nt_rewrite::nt_shortcuts::install_map_once();
@@ -303,7 +304,11 @@ fn golden_demo_level_walkthrough() {
     assert_eq!(start.bullets, 96, "Fish revolver start ammo");
 
     let walk_end = &snaps[29];
-    assert_eq!((walk_end.px, walk_end.py), (16, 8), "W walks north into wall");
+    assert_eq!(
+        (walk_end.px, walk_end.py),
+        (16, 8),
+        "W walks north into wall"
+    );
 
     let strafe_end = &snaps[119];
     assert!(
@@ -321,7 +326,11 @@ fn golden_demo_level_walkthrough() {
 
     let kill = snaps.iter().find(|s| s.kills > 0).expect("bandit must die");
     assert_eq!(kill.kills, 1, "exactly one kill");
-    assert!(kill.shots >= 1, "kill must come from firing, got {:?}", kill);
+    assert!(
+        kill.shots >= 1,
+        "kill must come from firing, got {:?}",
+        kill
+    );
     assert!(
         kill.ammo_spent >= kill.shots as i32,
         "every shot costs at least a bullet, got {:?}",
@@ -340,7 +349,11 @@ fn golden_demo_level_walkthrough() {
     );
     let frozen = &snaps[180];
     for s in &snaps[181..190] {
-        assert_eq!((s.px, s.py), (frozen.px, frozen.py), "world moved while paused");
+        assert_eq!(
+            (s.px, s.py),
+            (frozen.px, frozen.py),
+            "world moved while paused"
+        );
     }
 
     for s in &snaps {

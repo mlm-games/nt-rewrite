@@ -26,10 +26,12 @@ use repame_sim::SimTime;
 
 use crate::audio::{AudioCue, GameAudio, QueuedReactiveCue, ReactiveCue};
 use crate::comps_a::{ARENA_H, ARENA_W, GameCleanup, Player, Run, Toast};
-use crate::comps_b::{Enemy, IdpdRaidState, IdpdShieldUnit, IdpdVanBrain, LoopTransition, RaidWave};
+use crate::comps_b::{
+    Enemy, IdpdRaidState, IdpdShieldUnit, IdpdVanBrain, LoopTransition, RaidWave,
+};
 use crate::data::{AreaId, EnemyKind};
 use crate::effects::spawn_burst;
-use crate::enemies::spawn_enemy_at;
+use crate::enemies::{EnemySpawnContext, spawn_enemy_at};
 use crate::msg::Queue;
 use crate::spatial::Pos;
 use crate::time::{GTimer, TimerMode};
@@ -277,6 +279,10 @@ pub fn tick_idpd_raids(
         run.loop_count,
         run.area,
         wave,
+        EnemySpawnContext {
+            subarea: run.floor_in_area,
+            blood_crown: run.blood_crown,
+        },
     );
     run.popolevel += portals as u32;
 
@@ -300,6 +306,13 @@ pub fn tick_idpd_raids(
     );
 }
 
+fn enemy_spawn_context(run: &Run) -> EnemySpawnContext {
+    EnemySpawnContext {
+        subarea: run.floor_in_area,
+        blood_crown: run.blood_crown,
+    }
+}
+
 /// Wave composition at `1.0 + loop * 0.18` difficulty (bevy parity,
 /// including the Heavy midpoint offsets and the VanDrop bumps).
 /// Returns the portal count for `Run.popolevel` (GML counts one portal
@@ -312,29 +325,44 @@ pub fn spawn_raid_wave(
     loop_count: u32,
     area: AreaId,
     wave: RaidWave,
+    context: EnemySpawnContext,
 ) -> usize {
     let points = edge_spawn_points_away_from(player_pos);
     let difficulty = 1.0 + loop_count as f32 * 0.18;
 
     match wave {
         RaidWave::Light => {
-            spawn_grunt(commands, catalog, points[0], difficulty, loop_count);
-            spawn_grunt(commands, catalog, points[1], difficulty, loop_count);
-            spawn_shield(commands, catalog, points[2], difficulty, loop_count, area);
+            spawn_grunt(
+                commands, catalog, points[0], difficulty, loop_count, context,
+            );
+            spawn_grunt(
+                commands, catalog, points[1], difficulty, loop_count, context,
+            );
+            spawn_shield(
+                commands, catalog, points[2], difficulty, loop_count, area, context,
+            );
             3
         }
 
         RaidWave::Medium => {
-            spawn_grunt(commands, catalog, points[0], difficulty, loop_count);
-            spawn_grunt(commands, catalog, points[1], difficulty, loop_count);
-            spawn_shield(commands, catalog, points[2], difficulty, loop_count, area);
-            spawn_elite(commands, catalog, points[3], difficulty, loop_count);
+            spawn_grunt(
+                commands, catalog, points[0], difficulty, loop_count, context,
+            );
+            spawn_grunt(
+                commands, catalog, points[1], difficulty, loop_count, context,
+            );
+            spawn_shield(
+                commands, catalog, points[2], difficulty, loop_count, area, context,
+            );
+            spawn_elite(
+                commands, catalog, points[3], difficulty, loop_count, context,
+            );
             4
         }
 
         RaidWave::Heavy => {
             for &p in &points {
-                spawn_grunt(commands, catalog, p, difficulty, loop_count);
+                spawn_grunt(commands, catalog, p, difficulty, loop_count, context);
             }
             spawn_elite(
                 commands,
@@ -342,6 +370,7 @@ pub fn spawn_raid_wave(
                 (points[0] + points[1]) * 0.5,
                 difficulty + 0.15,
                 loop_count,
+                context,
             );
             spawn_shield(
                 commands,
@@ -350,14 +379,26 @@ pub fn spawn_raid_wave(
                 difficulty + 0.15,
                 loop_count,
                 area,
+                context,
             );
             6
         }
 
         RaidWave::VanDrop => {
-            spawn_van(commands, catalog, points[0], difficulty + 0.25, loop_count);
-            spawn_shield(commands, catalog, points[1], difficulty, loop_count, area);
-            spawn_elite(commands, catalog, points[2], difficulty, loop_count);
+            spawn_van(
+                commands,
+                catalog,
+                points[0],
+                difficulty + 0.25,
+                loop_count,
+                context,
+            );
+            spawn_shield(
+                commands, catalog, points[1], difficulty, loop_count, area, context,
+            );
+            spawn_elite(
+                commands, catalog, points[2], difficulty, loop_count, context,
+            );
             3
         }
     }
@@ -370,8 +411,11 @@ fn spawn_at(
     pos: glam::Vec2,
     difficulty: f32,
     loops: u32,
+    context: EnemySpawnContext,
 ) {
-    spawn_enemy_at(commands, catalog, kind, pos, difficulty, false, false, loops);
+    spawn_enemy_at(
+        commands, catalog, kind, pos, difficulty, false, false, loops, context,
+    );
 }
 
 fn spawn_grunt(
@@ -380,8 +424,17 @@ fn spawn_grunt(
     pos: glam::Vec2,
     difficulty: f32,
     loops: u32,
+    context: EnemySpawnContext,
 ) {
-    spawn_at(commands, catalog, EnemyKind::IdpdGrunt, pos, difficulty, loops);
+    spawn_at(
+        commands,
+        catalog,
+        EnemyKind::IdpdGrunt,
+        pos,
+        difficulty,
+        loops,
+        context,
+    );
 }
 
 fn spawn_shield(
@@ -391,6 +444,7 @@ fn spawn_shield(
     difficulty: f32,
     loops: u32,
     area: AreaId,
+    context: EnemySpawnContext,
 ) {
     // GML `IDPDSpawn` dir-2 elite swap.
     let kind = if idpd_elite_roll(loops, area) {
@@ -398,7 +452,7 @@ fn spawn_shield(
     } else {
         EnemyKind::IdpdShield
     };
-    spawn_at(commands, catalog, kind, pos, difficulty, loops);
+    spawn_at(commands, catalog, kind, pos, difficulty, loops, context);
 }
 
 fn spawn_elite(
@@ -407,8 +461,17 @@ fn spawn_elite(
     pos: glam::Vec2,
     difficulty: f32,
     loops: u32,
+    context: EnemySpawnContext,
 ) {
-    spawn_at(commands, catalog, EnemyKind::IdpdElite, pos, difficulty, loops);
+    spawn_at(
+        commands,
+        catalog,
+        EnemyKind::IdpdElite,
+        pos,
+        difficulty,
+        loops,
+        context,
+    );
 }
 
 fn spawn_van(
@@ -417,8 +480,17 @@ fn spawn_van(
     pos: glam::Vec2,
     difficulty: f32,
     loops: u32,
+    context: EnemySpawnContext,
 ) {
-    spawn_at(commands, catalog, EnemyKind::IdpdVan, pos, difficulty, loops);
+    spawn_at(
+        commands,
+        catalog,
+        EnemyKind::IdpdVan,
+        pos,
+        difficulty,
+        loops,
+        context,
+    );
 }
 
 /// Van deploy tick: each finished 2.2 s timer spends a charge to drop
@@ -433,6 +505,7 @@ pub fn tick_idpd_vans(
     mut vans: Query<(Entity, &Pos, &mut IdpdVanBrain), With<Enemy>>,
 ) {
     let dt = time.delta_secs;
+    let context = enemy_spawn_context(&run);
     for (entity, pos, mut van) in vans.iter_mut() {
         if van.charges_left == 0 {
             continue;
@@ -452,6 +525,7 @@ pub fn tick_idpd_vans(
             center + glam::Vec2::new(-18.0, -22.0),
             1.15,
             run.loop_count,
+            context,
         );
         spawn_grunt(
             &mut commands,
@@ -459,6 +533,7 @@ pub fn tick_idpd_vans(
             center + glam::Vec2::new(18.0, -22.0),
             1.15,
             run.loop_count,
+            context,
         );
 
         if van.charges_left % 2 == 0 {
@@ -469,6 +544,7 @@ pub fn tick_idpd_vans(
                 1.2,
                 run.loop_count,
                 run.area,
+                context,
             );
         }
 
@@ -510,8 +586,16 @@ pub fn hq_pressure(
 
     let player_pos = player.0;
     let points = edge_spawn_points_away_from(player_pos);
+    let context = enemy_spawn_context(&run);
 
-    spawn_grunt(&mut commands, &catalog, points[0], 1.3, run.loop_count);
+    spawn_grunt(
+        &mut commands,
+        &catalog,
+        points[0],
+        1.3,
+        run.loop_count,
+        context,
+    );
     spawn_shield(
         &mut commands,
         &catalog,
@@ -519,14 +603,28 @@ pub fn hq_pressure(
         1.35,
         run.loop_count,
         run.area,
+        context,
     );
-    spawn_elite(&mut commands, &catalog, points[2], 1.4, run.loop_count);
+    spawn_elite(
+        &mut commands,
+        &catalog,
+        points[2],
+        1.4,
+        run.loop_count,
+        context,
+    );
 
     if raid.wave_index % 2 == 0 {
-        spawn_van(&mut commands, &catalog, points[3], 1.45, run.loop_count);
+        spawn_van(
+            &mut commands,
+            &catalog,
+            points[3],
+            1.45,
+            run.loop_count,
+            context,
+        );
     }
 
     raid.wave_index += 1;
     raid.cooldown = GTimer::from_seconds(9.5, TimerMode::Once);
 }
-

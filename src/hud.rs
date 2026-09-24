@@ -282,11 +282,12 @@ pub fn sync_hud_state(world: &World) -> HudState {
     // view, exactly like GML's `clamp(x, view_xview + 30, ...)`).
     // GML `:85` requires `instance_exists(Player)`, so markers only
     // surface while a player is alive.
-    let player_alive = world.iter_entities().any(|e| e.contains::<crate::comps_a::Player>());
+    let player_alive = world
+        .iter_entities()
+        .any(|e| e.contains::<crate::comps_a::Player>());
     if player_alive {
         for entity_ref in world.iter_entities() {
-            let (Some(pos), Some(revive)) =
-                (entity_ref.get::<Pos>(), entity_ref.get::<Revive>())
+            let (Some(pos), Some(revive)) = (entity_ref.get::<Pos>(), entity_ref.get::<Revive>())
             else {
                 continue;
             };

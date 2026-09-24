@@ -263,24 +263,69 @@ pub fn build_sim_schedule() -> Schedule {
                 enemies::enemy_ai
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
+                (
+                    enemies::tick_bandit
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    enemies::tick_maggot
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    enemies::tick_maggot_spawn
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    enemies::tick_bigmaggot_burrow
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    enemies::tick_bigmaggot
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    enemies::tick_jungle_fly
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    enemies::tick_fired_maggot
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    enemies::tick_scorpion
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    enemies::tick_gold_scorpion
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    enemies::tick_sniper
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    enemies::tick_jungle_bandit
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    enemies::tick_melee_bandit
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    enemies::tick_ballguy
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                )
+                    .chain(),
                 enemies::tick_bigmaggot_inspector
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
-                enemies::tick_frog_eggs
-                    .in_set(NtSimSet::Combat)
-                    .run_if(gameplay_active),
-                enemies::tick_scrap_missiles
-                    .in_set(NtSimSet::Combat)
-                    .run_if(gameplay_active),
-                enemies::tick_throne_balls
-                    .in_set(NtSimSet::Combat)
-                    .run_if(gameplay_active),
-                enemies::tick_mom_shots
-                    .in_set(NtSimSet::Combat)
-                    .run_if(gameplay_active),
-                enemies::tick_super_frogs
-                    .in_set(NtSimSet::Combat)
-                    .run_if(gameplay_active),
+                (
+                    enemies::tick_frog_eggs
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    enemies::tick_scrap_missiles
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    enemies::tick_throne_balls
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    enemies::tick_mom_shots
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    enemies::tick_super_frogs
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                )
+                    .chain(),
                 (
                     enemies::tick_elite_inspectors
                         .in_set(NtSimSet::Combat)
@@ -519,4 +564,3 @@ mod schedule_tests {
         sched.run(&mut app.sim.world);
     }
 }
-

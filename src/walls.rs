@@ -23,7 +23,7 @@
 use bevy_ecs::prelude::*;
 use repame_fx::Trauma;
 
-use crate::combat::PendingEnemySpawn;
+use crate::combat::queue_enemy_spawn;
 use crate::comps_a::{
     ARENA_H, ARENA_W, FloorMask, FloorStarted, GameCleanup, HammerheadBudget, Health, LevelCleanup,
     PendingWallBreak, Player, Run, Toast, WallCell, WallTile, WallVisuals,
@@ -220,16 +220,14 @@ pub fn handle_throne_room_props(
     mut toast: ResMut<Toast>,
     run: Res<Run>,
     mut bosses: Query<(&Enemy, &mut Health), With<BossBrain>>,
-    props: Query<
-        (
-            Entity,
-            &Prop,
-            Option<&BigGenerator>,
-            Option<&ThroneStatueProp>,
-            &Pos,
-            Option<&CountedGenerator>,
-        ),
-    >,
+    props: Query<(
+        Entity,
+        &Prop,
+        Option<&BigGenerator>,
+        Option<&ThroneStatueProp>,
+        &Pos,
+        Option<&CountedGenerator>,
+    )>,
 ) {
     for (e, prop, big_gen, statue, pos, counted) in &props {
         if prop.hp > 0 {
@@ -266,17 +264,18 @@ pub fn handle_throne_room_props(
         if let Some(statue) = statue {
             if counted.is_none() {
                 commands.entity(e).insert(CountedGenerator);
-            let center = pos.0;
-            for i in 0..statue.guardian_count {
-                let ang = i as f32 * std::f32::consts::TAU / statue.guardian_count as f32;
-                let p = center + glam::Vec2::new(ang.cos(), ang.sin()) * 36.0;
-                commands.spawn(PendingEnemySpawn {
-                    kind: EnemyKind::PalaceGuardian,
-                    pos: p,
-                    difficulty: 1.0,
-                    loops: run.loop_count,
-                });
-            }
+                let center = pos.0;
+                for i in 0..statue.guardian_count {
+                    let ang = i as f32 * std::f32::consts::TAU / statue.guardian_count as f32;
+                    let p = center + glam::Vec2::new(ang.cos(), ang.sin()) * 36.0;
+                    queue_enemy_spawn(
+                        &mut commands,
+                        EnemyKind::PalaceGuardian,
+                        p,
+                        1.0,
+                        run.loop_count,
+                    );
+                }
             }
         }
     }
@@ -302,4 +301,3 @@ pub fn update_carpet_occupancy(
         }
     }
 }
-

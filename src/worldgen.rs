@@ -957,21 +957,14 @@ fn generate_hq_last(run: &Run) -> LevelPlan {
 // world.rs:1904-1927, verbatim (Open Mind mutation: two bonus chests,
 // skipped for chest-less areas). Seeded: GML draws from the Generation
 // stream, so callers pass the run seed.
-pub fn apply_open_mind_bonus(
-    plan: &mut LevelPlan,
-    area: AreaId,
-    floor_in_area: u32,
-    seed: u64,
-) {
-    let no_chests = matches!(
-        area,
-        AreaId::Campfire | AreaId::Vault | AreaId::CrownVault
-    ) || (area == AreaId::HQ && floor_in_area >= 3);
+pub fn apply_open_mind_bonus(plan: &mut LevelPlan, area: AreaId, floor_in_area: u32, seed: u64) {
+    let no_chests = matches!(area, AreaId::Campfire | AreaId::Vault | AreaId::CrownVault)
+        || (area == AreaId::HQ && floor_in_area >= 3);
     if no_chests || plan.floor_cells.is_empty() {
         return;
     }
-    use rand::{RngExt, SeedableRng};
     use rand::rngs::StdRng;
+    use rand::{RngExt, SeedableRng};
     let mut rng = StdRng::seed_from_u64(seed ^ 0x0BAD_C0DE);
     for _ in 0..2 {
         let idx = rng.random_range(0..plan.floor_cells.len());
@@ -1025,12 +1018,9 @@ pub struct ChestPermuteOut {
 /// rad permutations (Rogue / noradch horror-or-big / half-health /
 /// desert styleb maggot), crown Life/Love conversions, mimic rolls, and
 /// the hardmode desert 1-1 `BigWeaponChest` arm.
-pub fn apply_chest_permutations(
-    plan: &mut LevelPlan,
-    ctx: ChestPermuteCtx,
-) -> ChestPermuteOut {
-    use rand::{RngExt, SeedableRng};
+pub fn apply_chest_permutations(plan: &mut LevelPlan, ctx: ChestPermuteCtx) -> ChestPermuteOut {
     use rand::rngs::StdRng;
+    use rand::{RngExt, SeedableRng};
     let mut rng = StdRng::seed_from_u64(ctx.seed);
     let mut out = ChestPermuteOut { horror: false };
 
@@ -1067,13 +1057,12 @@ pub fn apply_chest_permutations(
             .copied()
         {
             plan.chests.push(ChestSpawn::Custom(ChestKind::Proto, p));
-            plan.enemies.push((EnemyKind::ProtoStatue, p + Vec2::new(0.0, 64.0)));
+            plan.enemies
+                .push((EnemyKind::ProtoStatue, p + Vec2::new(0.0, 64.0)));
             for i in 0..4 {
                 let a = i as f32 * std::f32::consts::TAU / 4.0;
-                plan.enemies.push((
-                    EnemyKind::Bandit,
-                    p + Vec2::new(a.cos(), a.sin()) * 48.0,
-                ));
+                plan.enemies
+                    .push((EnemyKind::Bandit, p + Vec2::new(a.cos(), a.sin()) * 48.0));
             }
         }
         return out;
@@ -1165,8 +1154,7 @@ pub fn apply_chest_permutations(
     }
 
     // Base survivors.
-    let mut final_chests: Vec<ChestSpawn> =
-        weapons.into_iter().map(ChestSpawn::Weapon).collect();
+    let mut final_chests: Vec<ChestSpawn> = weapons.into_iter().map(ChestSpawn::Weapon).collect();
     final_chests.extend(ammos.into_iter().map(ChestSpawn::Ammo));
     final_chests.extend(rad_out);
     for (k, p) in customs {
@@ -1196,18 +1184,14 @@ pub fn apply_chest_permutations(
 
     // Mimic rolls (GML order; BigWeapon needs nochest and no existing
     // BigWeapon; the crib gate is all-true since random(3) < 3).
-    let sewers_gate = (ctx.area != AreaId::Desert
-        && ctx.area != AreaId::Campfire)
-        || ctx.loops > 0;
-    let mut no_big_yet = !final_chests.iter().any(|c| {
-        matches!(c, ChestSpawn::Custom(ChestKind::BigWeapon, _))
-    });
+    let sewers_gate = (ctx.area != AreaId::Desert && ctx.area != AreaId::Campfire) || ctx.loops > 0;
+    let mut no_big_yet = !final_chests
+        .iter()
+        .any(|c| matches!(c, ChestSpawn::Custom(ChestKind::BigWeapon, _)));
     let mut swapped: Vec<ChestSpawn> = Vec::with_capacity(final_chests.len());
     for c in final_chests {
         match c {
-            ChestSpawn::Ammo(p)
-                if sewers_gate && rng.random_range(0.0..11.0) < 1.0 =>
-            {
+            ChestSpawn::Ammo(p) if sewers_gate && rng.random_range(0.0..11.0) < 1.0 => {
                 plan.enemies.push((EnemyKind::Mimic, p));
             }
             ChestSpawn::Weapon(p)
@@ -1238,10 +1222,8 @@ pub fn apply_chest_permutations(
         && ctx.area == AreaId::Desert
         && ctx.subarea == 1
     {
-        plan.chests.push(ChestSpawn::Custom(
-            ChestKind::BigWeapon,
-            ctx.player_pos,
-        ));
+        plan.chests
+            .push(ChestSpawn::Custom(ChestKind::BigWeapon, ctx.player_pos));
     }
     out
 }
@@ -1722,397 +1704,397 @@ fn populate(
 
             {
                 let mut secret_kinds: Vec<EnemyKind> = match run.area {
-                AreaId::Oasis => {
-                    if rng.random::<f32>() * 4.0 < 1.0 {
-                        vec![EnemyKind::Crab]
-                    } else if rng.random::<f32>() * 3.0 < 1.0 {
-                        vec![
-                            EnemyKind::BoneFish,
-                            EnemyKind::BoneFish,
-                            EnemyKind::BoneFish,
-                        ]
-                    } else {
-                        Vec::new()
+                    AreaId::Oasis => {
+                        if rng.random::<f32>() * 4.0 < 1.0 {
+                            vec![EnemyKind::Crab]
+                        } else if rng.random::<f32>() * 3.0 < 1.0 {
+                            vec![
+                                EnemyKind::BoneFish,
+                                EnemyKind::BoneFish,
+                                EnemyKind::BoneFish,
+                            ]
+                        } else {
+                            Vec::new()
+                        }
                     }
+                    AreaId::PizzaSewers => vec![EnemyKind::Turtle],
+                    AreaId::Jungle => {
+                        if rng.random::<f32>() * 8.0 < 1.0 {
+                            vec![EnemyKind::JungleFly]
+                        } else if rng.random::<f32>() * 30.0 < 1.0 {
+                            plan.props.push((PropKind::Barrel, center));
+                            vec![
+                                EnemyKind::JungleBandit,
+                                EnemyKind::JungleBandit,
+                                EnemyKind::JungleBandit,
+                            ]
+                        } else {
+                            let k = pick_kind(
+                                &mut rng,
+                                &[
+                                    EnemyKind::JungleBandit,
+                                    EnemyKind::JungleBandit,
+                                    EnemyKind::JungleBandit,
+                                    EnemyKind::JungleBandit,
+                                    EnemyKind::JungleBandit,
+                                    EnemyKind::Maggot,
+                                    EnemyKind::Assassin,
+                                    EnemyKind::Assassin,
+                                ],
+                            );
+                            vec![k]
+                        }
+                    }
+                    AreaId::CursedCaves => {
+                        if rng.random::<f32>() * 5.0 < 4.0 {
+                            let k = pick_kind(
+                                &mut rng,
+                                &[
+                                    EnemyKind::InvSpider,
+                                    EnemyKind::InvSpider,
+                                    EnemyKind::InvSpider,
+                                    EnemyKind::InvSpider,
+                                    EnemyKind::InvLaserCrystal,
+                                    EnemyKind::InvLaserCrystal,
+                                ],
+                            );
+                            vec![k]
+                        } else {
+                            Vec::new()
+                        }
+                    }
+                    AreaId::City => {
+                        if rng.random::<f32>() * 5.0 < 1.0 {
+                            let k = pick_kind(
+                                &mut rng,
+                                &[
+                                    EnemyKind::FireBaller,
+                                    EnemyKind::Jock,
+                                    EnemyKind::FireBaller,
+                                    EnemyKind::Jock,
+                                    EnemyKind::FireBaller,
+                                    EnemyKind::SuperFireBaller,
+                                ],
+                            );
+                            vec![k]
+                        } else if rng.random::<f32>() * 4.0 < 1.0 {
+                            if rng.random::<f32>() * 5.0 < 1.0 {
+                                plan.props.push((PropKind::GoldBarrel, center));
+                            }
+                            let k = pick_kind(
+                                &mut rng,
+                                &[
+                                    EnemyKind::Molefish,
+                                    EnemyKind::Molefish,
+                                    EnemyKind::Molefish,
+                                    EnemyKind::Molefish,
+                                    EnemyKind::Molesarge,
+                                ],
+                            );
+                            vec![k]
+                        } else {
+                            Vec::new()
+                        }
+                    }
+                    AreaId::Vault | AreaId::CrownVault => {
+                        let k = pick_kind(
+                            &mut rng,
+                            &[
+                                EnemyKind::RobotGuard,
+                                EnemyKind::Turret,
+                                EnemyKind::IdpdElite,
+                                EnemyKind::CrownGuardian,
+                                EnemyKind::CrownGuardian,
+                            ],
+                        );
+                        vec![k]
+                    }
+                    AreaId::HQ => {
+                        if rng.random::<f32>() * 7.0 < 1.0 {
+                            let k = pick_kind(
+                                &mut rng,
+                                &[
+                                    EnemyKind::IdpdElite,
+                                    EnemyKind::IdpdShield,
+                                    EnemyKind::IdpdInspector,
+                                ],
+                            );
+                            vec![k]
+                        } else if rng.random::<f32>() * 4.0 < 1.0 {
+                            std::iter::repeat_n(EnemyKind::IdpdGrunt, 5).collect()
+                        } else if rng.random::<f32>() * 3.0 < 1.0 {
+                            let k = pick_kind(
+                                &mut rng,
+                                &[
+                                    EnemyKind::IdpdGrunt,
+                                    EnemyKind::IdpdShield,
+                                    EnemyKind::IdpdInspector,
+                                ],
+                            );
+                            vec![k]
+                        } else {
+                            Vec::new()
+                        }
+                    }
+                    _ => Vec::new(),
+                };
+                if !secret_kinds.is_empty() {
+                    for (i, k) in secret_kinds.drain(..).enumerate() {
+                        let jitter =
+                            Vec2::new(((i % 3) as f32 - 1.0) * 18.0, ((i / 3) as f32 - 0.5) * 18.0);
+                        enemy_tiles.push((k, center + jitter));
+                    }
+                    continue;
                 }
-                AreaId::PizzaSewers => vec![EnemyKind::Turtle],
-                AreaId::Jungle => {
-                    if rng.random::<f32>() * 8.0 < 1.0 {
-                        vec![EnemyKind::JungleFly]
+            }
+
+            match area {
+                1 => {
+                    // GML `scrPopEnemies` desert arm verbatim: loop invaders,
+                    // then the styleb big-maggot nest, then maggot/scorpion,
+                    // then the barrel ambush, then the bandit default.
+                    // (`_loop_rand = random(loops)`; 0 loops never fires.)
+                    let loop_rand = if run.loop_count == 0 {
+                        0.0
+                    } else {
+                        rng.random_range(0.0..run.loop_count as f32)
+                    };
+                    if rng.random_range(0.0..2.0) < loop_rand {
+                        let k = pick_kind(
+                            &mut rng,
+                            &[
+                                EnemyKind::Scorpion,
+                                EnemyKind::Scorpion,
+                                EnemyKind::Bandit,
+                                EnemyKind::Bandit,
+                                EnemyKind::Maggot,
+                                EnemyKind::JungleFly,
+                                EnemyKind::JungleFly,
+                                EnemyKind::MeleeBandit,
+                                EnemyKind::Sniper,
+                            ],
+                        );
+                        enemy_tiles.push((k, center));
+                    } else if plan.styleb {
+                        let k = pick_kind(
+                            &mut rng,
+                            &[
+                                EnemyKind::MaggotSpawn,
+                                EnemyKind::BigMaggot,
+                                EnemyKind::BigMaggot,
+                                EnemyKind::Maggot,
+                            ],
+                        );
+                        enemy_tiles.push((k, center));
+                    } else if rng.random::<f32>() * 7.0 < 1.0 {
+                        let k = pick_kind(&mut rng, &[EnemyKind::MaggotSpawn, EnemyKind::Scorpion]);
+                        enemy_tiles.push((k, center));
                     } else if rng.random::<f32>() * 30.0 < 1.0 {
                         plan.props.push((PropKind::Barrel, center));
+                        for _ in 0..3 {
+                            enemy_tiles.push((
+                                EnemyKind::Bandit,
+                                center
+                                    + Vec2::new(
+                                        rng.random_range(-2.0..2.0),
+                                        rng.random_range(-2.0..2.0),
+                                    ),
+                            ));
+                        }
+                    } else {
+                        let mut cands = vec![
+                            EnemyKind::Bandit,
+                            EnemyKind::Bandit,
+                            EnemyKind::Bandit,
+                            EnemyKind::Bandit,
+                            EnemyKind::Bandit,
+                            EnemyKind::Bandit,
+                            EnemyKind::Maggot,
+                            EnemyKind::Scorpion,
+                        ];
+                        cands.extend(loop_extras.iter().copied());
+                        let k = pick_kind(&mut rng, &cands);
+                        enemy_tiles.push((k, center));
+                    }
+                }
+                2 => {
+                    if run.loop_count > 0 && rng.random::<f32>() * 3.0 >= 1.0 {
+                        let mut cands = vec![
+                            EnemyKind::Ratking,
+                            EnemyKind::Ratking,
+                            EnemyKind::BuffGator,
+                            EnemyKind::LaserCrystal,
+                            EnemyKind::Rat,
+                            EnemyKind::Ballguy,
+                            EnemyKind::Ballguy,
+                            EnemyKind::FrogEgg,
+                        ];
+                        cands.extend(loop_extras.iter().copied());
+                        let k = pick_kind(&mut rng, &cands);
+                        enemy_tiles.push((k, center));
+                    } else if rng.random::<f32>() * 9.0 < 1.0 {
+                        let k = pick_kind(
+                            &mut rng,
+                            &[
+                                EnemyKind::Ballguy,
+                                EnemyKind::Ratking,
+                                EnemyKind::MeleeBandit,
+                            ],
+                        );
+                        enemy_tiles.push((k, center));
+                    } else {
+                        let mut cands = vec![
+                            EnemyKind::Rat,
+                            EnemyKind::Rat,
+                            EnemyKind::Rat,
+                            EnemyKind::Maggot,
+                            EnemyKind::Gator,
+                            EnemyKind::Bandit,
+                        ];
+                        cands.extend(loop_extras.iter().copied());
+                        let k = pick_kind(&mut rng, &cands);
+                        enemy_tiles.push((k, center));
+                    }
+                }
+                3 => {
+                    let roll: f32 = rng.random();
+                    let mut cands = if roll * 4.0 < 1.0 {
                         vec![
-                            EnemyKind::JungleBandit,
+                            EnemyKind::MeleeBandit,
+                            EnemyKind::Sniper,
+                            EnemyKind::MeleeBandit,
+                            EnemyKind::Sniper,
+                            EnemyKind::Ballguy,
+                        ]
+                    } else if roll * 10.0 < 1.0 {
+                        vec![
+                            EnemyKind::Raven,
+                            EnemyKind::Raven,
+                            EnemyKind::Raven,
+                            EnemyKind::Raven,
+                        ]
+                    } else if roll * 20.0 < 1.0 {
+                        vec![EnemyKind::Salamander]
+                    } else {
+                        vec![
+                            EnemyKind::Raven,
+                            EnemyKind::Raven,
+                            EnemyKind::Raven,
+                            EnemyKind::Bandit,
+                        ]
+                    };
+                    cands.extend(loop_extras.iter().copied());
+                    let k = pick_kind(&mut rng, &cands);
+                    enemy_tiles.push((k, center));
+                }
+                4 => {
+                    let mut cands = if run.loop_count > 0 && rng.random_bool(0.5) {
+                        vec![
+                            EnemyKind::LaserCrystal,
+                            EnemyKind::LaserCrystal,
+                            EnemyKind::RhinoFreak,
+                            EnemyKind::LightningCrystal,
+                            EnemyKind::BuffGator,
+                            EnemyKind::ExploFreak,
+                            EnemyKind::Spider,
+                            EnemyKind::Spider,
+                        ]
+                    } else {
+                        vec![
+                            EnemyKind::Spider,
+                            EnemyKind::Spider,
+                            EnemyKind::Spider,
+                            EnemyKind::Spider,
+                            EnemyKind::LaserCrystal,
+                            EnemyKind::LaserCrystal,
+                        ]
+                    };
+                    cands.extend(loop_extras.iter().copied());
+                    let k = pick_kind(&mut rng, &cands);
+                    enemy_tiles.push((k, center));
+                }
+                5 => {
+                    let mut frozen = if run.loop_count > 0 && rng.random_bool(0.5) {
+                        vec![
+                            EnemyKind::RobotGuard,
+                            EnemyKind::RobotGuard,
+                            EnemyKind::SnowTank,
+                            EnemyKind::DogGuardian,
+                            EnemyKind::ExploGuardian,
+                            EnemyKind::Wolf,
+                            EnemyKind::Necromancer,
+                        ]
+                    } else {
+                        vec![
+                            EnemyKind::RobotGuard,
+                            EnemyKind::RobotGuard,
+                            EnemyKind::RobotGuard,
+                            EnemyKind::SnowTank,
+                            EnemyKind::Wolf,
+                            EnemyKind::Wolf,
+                        ]
+                    };
+                    frozen.extend(loop_extras.iter().copied());
+                    let k = pick_kind(&mut rng, &frozen);
+                    enemy_tiles.push((k, center));
+                }
+                6 => {
+                    let mut late = if run.loop_count > 0 && rng.random_bool(0.5) {
+                        vec![
+                            EnemyKind::Ratking,
+                            EnemyKind::RhinoFreak,
+                            EnemyKind::ExploFreak,
+                            EnemyKind::Necromancer,
+                            EnemyKind::LaserCrystal,
+                            EnemyKind::Turret,
+                        ]
+                    } else {
+                        vec![
+                            EnemyKind::Freak,
+                            EnemyKind::Freak,
+                            EnemyKind::Freak,
+                            EnemyKind::Necromancer,
+                            EnemyKind::ExploFreak,
+                            EnemyKind::RhinoFreak,
+                        ]
+                    };
+                    late.extend(std::iter::repeat_n(
+                        EnemyKind::IdpdGrunt,
+                        (run.loop_count.min(3) * 2) as usize,
+                    ));
+                    late.extend(loop_extras.iter().copied());
+                    let k = pick_kind(&mut rng, &late);
+                    enemy_tiles.push((k, center));
+                }
+                7 => {
+                    let mut palace = if run.loop_count > 0 && rng.random_bool(0.5) {
+                        vec![
+                            EnemyKind::ExploGuardian,
+                            EnemyKind::DogGuardian,
+                            EnemyKind::DogGuardian,
+                            EnemyKind::Sniper,
+                            EnemyKind::ExploFreak,
                             EnemyKind::JungleBandit,
                             EnemyKind::JungleBandit,
                         ]
                     } else {
-                        let k = pick_kind(
-                            &mut rng,
-                            &[
-                                EnemyKind::JungleBandit,
-                                EnemyKind::JungleBandit,
-                                EnemyKind::JungleBandit,
-                                EnemyKind::JungleBandit,
-                                EnemyKind::JungleBandit,
-                                EnemyKind::Maggot,
-                                EnemyKind::Assassin,
-                                EnemyKind::Assassin,
-                            ],
-                        );
-                        vec![k]
-                    }
-                }
-                AreaId::CursedCaves => {
-                    if rng.random::<f32>() * 5.0 < 4.0 {
-                        let k = pick_kind(
-                            &mut rng,
-                            &[
-                                EnemyKind::InvSpider,
-                                EnemyKind::InvSpider,
-                                EnemyKind::InvSpider,
-                                EnemyKind::InvSpider,
-                                EnemyKind::InvLaserCrystal,
-                                EnemyKind::InvLaserCrystal,
-                            ],
-                        );
-                        vec![k]
-                    } else {
-                        Vec::new()
-                    }
-                }
-                AreaId::City => {
-                    if rng.random::<f32>() * 5.0 < 1.0 {
-                        let k = pick_kind(
-                            &mut rng,
-                            &[
-                                EnemyKind::FireBaller,
-                                EnemyKind::Jock,
-                                EnemyKind::FireBaller,
-                                EnemyKind::Jock,
-                                EnemyKind::FireBaller,
-                                EnemyKind::SuperFireBaller,
-                            ],
-                        );
-                        vec![k]
-                    } else if rng.random::<f32>() * 4.0 < 1.0 {
-                        if rng.random::<f32>() * 5.0 < 1.0 {
-                            plan.props.push((PropKind::GoldBarrel, center));
-                        }
-                        let k = pick_kind(
-                            &mut rng,
-                            &[
-                                EnemyKind::Molefish,
-                                EnemyKind::Molefish,
-                                EnemyKind::Molefish,
-                                EnemyKind::Molefish,
-                                EnemyKind::Molesarge,
-                            ],
-                        );
-                        vec![k]
-                    } else {
-                        Vec::new()
-                    }
-                }
-                AreaId::Vault | AreaId::CrownVault => {
-                    let k = pick_kind(
-                        &mut rng,
-                        &[
-                            EnemyKind::RobotGuard,
-                            EnemyKind::Turret,
-                            EnemyKind::IdpdElite,
-                            EnemyKind::CrownGuardian,
-                            EnemyKind::CrownGuardian,
-                        ],
-                    );
-                    vec![k]
-                }
-                AreaId::HQ => {
-                    if rng.random::<f32>() * 7.0 < 1.0 {
-                        let k = pick_kind(
-                            &mut rng,
-                            &[
-                                EnemyKind::IdpdElite,
-                                EnemyKind::IdpdShield,
-                                EnemyKind::IdpdInspector,
-                            ],
-                        );
-                        vec![k]
-                    } else if rng.random::<f32>() * 4.0 < 1.0 {
-                        std::iter::repeat_n(EnemyKind::IdpdGrunt, 5).collect()
-                    } else if rng.random::<f32>() * 3.0 < 1.0 {
-                        let k = pick_kind(
-                            &mut rng,
-                            &[
-                                EnemyKind::IdpdGrunt,
-                                EnemyKind::IdpdShield,
-                                EnemyKind::IdpdInspector,
-                            ],
-                        );
-                        vec![k]
-                    } else {
-                        Vec::new()
-                    }
-                }
-                _ => Vec::new(),
-            };
-            if !secret_kinds.is_empty() {
-                for (i, k) in secret_kinds.drain(..).enumerate() {
-                    let jitter =
-                        Vec2::new(((i % 3) as f32 - 1.0) * 18.0, ((i / 3) as f32 - 0.5) * 18.0);
-                    enemy_tiles.push((k, center + jitter));
-                }
-                continue;
-            }
-        }
-
-        match area {
-            1 => {
-                // GML `scrPopEnemies` desert arm verbatim: loop invaders,
-                // then the styleb big-maggot nest, then maggot/scorpion,
-                // then the barrel ambush, then the bandit default.
-                // (`_loop_rand = random(loops)`; 0 loops never fires.)
-                let loop_rand = if run.loop_count == 0 {
-                    0.0
-                } else {
-                    rng.random_range(0.0..run.loop_count as f32)
-                };
-                if rng.random_range(0.0..2.0) < loop_rand {
-                    let k = pick_kind(
-                        &mut rng,
-                        &[
-                            EnemyKind::Scorpion,
-                            EnemyKind::Scorpion,
-                            EnemyKind::Bandit,
-                            EnemyKind::Bandit,
-                            EnemyKind::Maggot,
-                            EnemyKind::JungleFly,
-                            EnemyKind::JungleFly,
-                            EnemyKind::MeleeBandit,
-                            EnemyKind::Sniper,
-                        ],
-                    );
-                    enemy_tiles.push((k, center));
-                } else if plan.styleb {
-                    let k = pick_kind(
-                        &mut rng,
-                        &[
-                            EnemyKind::MaggotSpawn,
-                            EnemyKind::BigMaggot,
-                            EnemyKind::BigMaggot,
-                            EnemyKind::Maggot,
-                        ],
-                    );
-                    enemy_tiles.push((k, center));
-                } else if rng.random::<f32>() * 7.0 < 1.0 {
-                    let k = pick_kind(&mut rng, &[EnemyKind::MaggotSpawn, EnemyKind::Scorpion]);
-                    enemy_tiles.push((k, center));
-                } else if rng.random::<f32>() * 30.0 < 1.0 {
-                    plan.props.push((PropKind::Barrel, center));
-                    for _ in 0..3 {
-                        enemy_tiles.push((
-                            EnemyKind::Bandit,
-                            center
-                                + Vec2::new(
-                                    rng.random_range(-2.0..2.0),
-                                    rng.random_range(-2.0..2.0),
-                                ),
-                        ));
-                    }
-                } else {
-                    let mut cands = vec![
-                        EnemyKind::Bandit,
-                        EnemyKind::Bandit,
-                        EnemyKind::Bandit,
-                        EnemyKind::Bandit,
-                        EnemyKind::Bandit,
-                        EnemyKind::Bandit,
-                        EnemyKind::Maggot,
-                        EnemyKind::Scorpion,
-                    ];
-                    cands.extend(loop_extras.iter().copied());
-                    let k = pick_kind(&mut rng, &cands);
+                        vec![
+                            EnemyKind::Guardian,
+                            EnemyKind::Guardian,
+                            EnemyKind::Guardian,
+                            EnemyKind::ExploGuardian,
+                            EnemyKind::ExploGuardian,
+                            EnemyKind::DogGuardian,
+                        ]
+                    };
+                    palace.extend(std::iter::repeat_n(
+                        EnemyKind::IdpdGrunt,
+                        (run.loop_count.min(3)) as usize,
+                    ));
+                    palace.extend(loop_extras.iter().copied());
+                    let k = pick_kind(&mut rng, &palace);
                     enemy_tiles.push((k, center));
                 }
-            }
-            2 => {
-                if run.loop_count > 0 && rng.random::<f32>() * 3.0 >= 1.0 {
-                    let mut cands = vec![
-                        EnemyKind::Ratking,
-                        EnemyKind::Ratking,
-                        EnemyKind::BuffGator,
-                        EnemyKind::LaserCrystal,
-                        EnemyKind::Rat,
-                        EnemyKind::Ballguy,
-                        EnemyKind::Ballguy,
-                        EnemyKind::FrogEgg,
-                    ];
-                    cands.extend(loop_extras.iter().copied());
-                    let k = pick_kind(&mut rng, &cands);
-                    enemy_tiles.push((k, center));
-                } else if rng.random::<f32>() * 9.0 < 1.0 {
-                    let k = pick_kind(
-                        &mut rng,
-                        &[
-                            EnemyKind::Ballguy,
-                            EnemyKind::Ratking,
-                            EnemyKind::MeleeBandit,
-                        ],
-                    );
-                    enemy_tiles.push((k, center));
-                } else {
-                    let mut cands = vec![
-                        EnemyKind::Rat,
-                        EnemyKind::Rat,
-                        EnemyKind::Rat,
-                        EnemyKind::Maggot,
-                        EnemyKind::Gator,
-                        EnemyKind::Bandit,
-                    ];
-                    cands.extend(loop_extras.iter().copied());
-                    let k = pick_kind(&mut rng, &cands);
-                    enemy_tiles.push((k, center));
-                }
-            }
-            3 => {
-                let roll: f32 = rng.random();
-                let mut cands = if roll * 4.0 < 1.0 {
-                    vec![
-                        EnemyKind::MeleeBandit,
-                        EnemyKind::Sniper,
-                        EnemyKind::MeleeBandit,
-                        EnemyKind::Sniper,
-                        EnemyKind::Ballguy,
-                    ]
-                } else if roll * 10.0 < 1.0 {
-                    vec![
-                        EnemyKind::Raven,
-                        EnemyKind::Raven,
-                        EnemyKind::Raven,
-                        EnemyKind::Raven,
-                    ]
-                } else if roll * 20.0 < 1.0 {
-                    vec![EnemyKind::Salamander]
-                } else {
-                    vec![
-                        EnemyKind::Raven,
-                        EnemyKind::Raven,
-                        EnemyKind::Raven,
-                        EnemyKind::Bandit,
-                    ]
-                };
-                cands.extend(loop_extras.iter().copied());
-                let k = pick_kind(&mut rng, &cands);
-                enemy_tiles.push((k, center));
-            }
-            4 => {
-                let mut cands = if run.loop_count > 0 && rng.random_bool(0.5) {
-                    vec![
-                        EnemyKind::LaserCrystal,
-                        EnemyKind::LaserCrystal,
-                        EnemyKind::RhinoFreak,
-                        EnemyKind::LightningCrystal,
-                        EnemyKind::BuffGator,
-                        EnemyKind::ExploFreak,
-                        EnemyKind::Spider,
-                        EnemyKind::Spider,
-                    ]
-                } else {
-                    vec![
-                        EnemyKind::Spider,
-                        EnemyKind::Spider,
-                        EnemyKind::Spider,
-                        EnemyKind::Spider,
-                        EnemyKind::LaserCrystal,
-                        EnemyKind::LaserCrystal,
-                    ]
-                };
-                cands.extend(loop_extras.iter().copied());
-                let k = pick_kind(&mut rng, &cands);
-                enemy_tiles.push((k, center));
-            }
-            5 => {
-                let mut frozen = if run.loop_count > 0 && rng.random_bool(0.5) {
-                    vec![
-                        EnemyKind::RobotGuard,
-                        EnemyKind::RobotGuard,
-                        EnemyKind::SnowTank,
-                        EnemyKind::DogGuardian,
-                        EnemyKind::ExploGuardian,
-                        EnemyKind::Wolf,
-                        EnemyKind::Necromancer,
-                    ]
-                } else {
-                    vec![
-                        EnemyKind::RobotGuard,
-                        EnemyKind::RobotGuard,
-                        EnemyKind::RobotGuard,
-                        EnemyKind::SnowTank,
-                        EnemyKind::Wolf,
-                        EnemyKind::Wolf,
-                    ]
-                };
-                frozen.extend(loop_extras.iter().copied());
-                let k = pick_kind(&mut rng, &frozen);
-                enemy_tiles.push((k, center));
-            }
-            6 => {
-                let mut late = if run.loop_count > 0 && rng.random_bool(0.5) {
-                    vec![
-                        EnemyKind::Ratking,
-                        EnemyKind::RhinoFreak,
-                        EnemyKind::ExploFreak,
-                        EnemyKind::Necromancer,
-                        EnemyKind::LaserCrystal,
-                        EnemyKind::Turret,
-                    ]
-                } else {
-                    vec![
-                        EnemyKind::Freak,
-                        EnemyKind::Freak,
-                        EnemyKind::Freak,
-                        EnemyKind::Necromancer,
-                        EnemyKind::ExploFreak,
-                        EnemyKind::RhinoFreak,
-                    ]
-                };
-                late.extend(std::iter::repeat_n(
-                    EnemyKind::IdpdGrunt,
-                    (run.loop_count.min(3) * 2) as usize,
-                ));
-                late.extend(loop_extras.iter().copied());
-                let k = pick_kind(&mut rng, &late);
-                enemy_tiles.push((k, center));
-            }
-            7 => {
-                let mut palace = if run.loop_count > 0 && rng.random_bool(0.5) {
-                    vec![
-                        EnemyKind::ExploGuardian,
-                        EnemyKind::DogGuardian,
-                        EnemyKind::DogGuardian,
-                        EnemyKind::Sniper,
-                        EnemyKind::ExploFreak,
-                        EnemyKind::JungleBandit,
-                        EnemyKind::JungleBandit,
-                    ]
-                } else {
-                    vec![
-                        EnemyKind::Guardian,
-                        EnemyKind::Guardian,
-                        EnemyKind::Guardian,
-                        EnemyKind::ExploGuardian,
-                        EnemyKind::ExploGuardian,
-                        EnemyKind::DogGuardian,
-                    ]
-                };
-                palace.extend(std::iter::repeat_n(
-                    EnemyKind::IdpdGrunt,
-                    (run.loop_count.min(3)) as usize,
-                ));
-                palace.extend(loop_extras.iter().copied());
-                let k = pick_kind(&mut rng, &palace);
-                enemy_tiles.push((k, center));
-            }
                 _ => {}
             }
         }
@@ -2302,9 +2284,6 @@ fn apply_loop_elite_substitutions(
             table.push((EnemyKind::JungleFly, 3 + l));
             table.push((EnemyKind::MeleeBandit, 3 + l));
             table.push((EnemyKind::Sniper, 3 + l));
-            if loop_count >= 2 {
-                table.push((EnemyKind::GoldScorpion, 2 + l));
-            }
         }
         AreaId::Sewers => {
             table.push((EnemyKind::Ratking, 4 + l * 2));
@@ -2513,4 +2492,3 @@ pub fn big_bandit_count(loop_count: u32) -> u32 {
         loop_count.saturating_mul(2).max(2)
     }
 }
-

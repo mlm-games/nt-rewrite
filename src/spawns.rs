@@ -31,7 +31,7 @@ use crate::secrets::SecretTriggers;
 use crate::spatial::Pos;
 use crate::time::{GTimer, TimerMode};
 
-use super::combat::{Explosion, LingeringBlast, PendingEnemySpawn};
+use super::combat::{Explosion, LingeringBlast, queue_enemy_spawn};
 
 /// Timed explosion entity (sticky blasts, barrels, booms).
 pub fn spawn_explosion_with_source_radius(
@@ -372,7 +372,7 @@ pub fn on_projectile_removed(
             LevelCleanup,
             PortalClear {
                 timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
-                        scale: 1.0,
+                scale: 1.0,
             },
             Pos(pos),
         ));
@@ -454,13 +454,13 @@ pub fn damage_destructible_prop(
     if nest_flags.snowman {
         let mut rng = rand::rng();
         for _ in 0..3 {
-            commands.spawn(PendingEnemySpawn {
-                kind: EnemyKind::Bandit,
-                pos: center
-                    + glam::Vec2::new(rng.random_range(-4.0..4.0), rng.random_range(-4.0..4.0)),
-                difficulty: 1.0,
+            queue_enemy_spawn(
+                &mut *commands,
+                EnemyKind::Bandit,
+                center + glam::Vec2::new(rng.random_range(-4.0..4.0), rng.random_range(-4.0..4.0)),
+                1.0,
                 loops,
-            });
+            );
         }
         for _ in 0..6 {
             spawn_rad(commands, catalog, center, 1);
@@ -469,24 +469,19 @@ pub fn damage_destructible_prop(
     if nest_flags.cocoon {
         let mut rng = rand::rng();
         if rng.random_range(0.0..3.0) < 1.0 {
-            commands.spawn(PendingEnemySpawn {
-                kind: EnemyKind::Gator,
-                pos: center,
-                difficulty: 1.0,
-                loops,
-            });
+            queue_enemy_spawn(&mut *commands, EnemyKind::Gator, center, 1.0, loops);
         }
     }
     if nest_flags.mutant_tube {
         let mut rng = rand::rng();
         for _ in 0..8 {
-            commands.spawn(PendingEnemySpawn {
-                kind: EnemyKind::Freak,
-                pos: center
-                    + glam::Vec2::new(rng.random_range(-4.0..4.0), rng.random_range(-4.0..4.0)),
-                difficulty: 1.0,
+            queue_enemy_spawn(
+                &mut *commands,
+                EnemyKind::Freak,
+                center + glam::Vec2::new(rng.random_range(-4.0..4.0), rng.random_range(-4.0..4.0)),
+                1.0,
                 loops,
-            });
+            );
         }
     }
     if nest_flags.soda_machine {
@@ -553,4 +548,3 @@ pub fn damage_destructible_prop(
         }
     }
 }
-

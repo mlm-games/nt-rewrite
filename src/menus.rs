@@ -568,15 +568,11 @@ pub(crate) fn mutation_offer_key(
     let mut key: u64 = if ultra.is_some() { 2 } else { 3 };
     if let Some(ultra) = ultra {
         for choice in &ultra.choices {
-            key = key
-                .wrapping_mul(31)
-                .wrapping_add(*choice as u64 + 1);
+            key = key.wrapping_mul(31).wrapping_add(*choice as u64 + 1);
         }
     } else if let Some(pending) = pending {
         for choice in &pending.choices {
-            key = key
-                .wrapping_mul(31)
-                .wrapping_add(*choice as u64 + 1);
+            key = key.wrapping_mul(31).wrapping_add(*choice as u64 + 1);
         }
     } else {
         return 0;
@@ -632,7 +628,11 @@ pub(crate) fn apply_mutation_mirror(
     } else if !menu.mutation_offer_active || menu.mutation_appear_y.len() != count {
         menu.mutation_offer_active = true;
         if menu.mutation_toast_shift_pending {
-            let shift = if menu.mutation_toast_offset == 0.0 { 40.0 } else { 48.0 };
+            let shift = if menu.mutation_toast_offset == 0.0 {
+                40.0
+            } else {
+                48.0
+            };
             menu.mutation_toast_offset = menu.mutation_toast_offset - shift;
             menu.mutation_toast_shift_pending = false;
         }
@@ -662,9 +662,7 @@ pub(crate) fn tick_mutation_anim(world: &mut World) {
         let toast_finished = world
             .get_resource::<crate::comps_a::Toast>()
             .is_none_or(|toast| toast.timer.is_finished());
-        if toast_finished
-            && let Some(mut menu) = world.get_resource_mut::<MenuState>()
-        {
+        if toast_finished && let Some(mut menu) = world.get_resource_mut::<MenuState>() {
             menu.mutation_toast_shift_pending = false;
             menu.mutation_toast_offset = 0.0;
         }
@@ -703,12 +701,12 @@ pub(crate) fn tick_mutation_anim(world: &mut World) {
         }
     }
     if menu.mutation_splat {
-        menu.mutation_splat_frame = (menu.mutation_splat_frame as f32 + steps.round())
-            .min(3.0) as u8;
+        menu.mutation_splat_frame =
+            (menu.mutation_splat_frame as f32 + steps.round()).min(3.0) as u8;
     }
     if menu.mutation_selected.is_some() {
-        menu.mutation_selection_frame = (menu.mutation_selection_frame as f32 + steps.round())
-            .min(3.0) as u8;
+        menu.mutation_selection_frame =
+            (menu.mutation_selection_frame as f32 + steps.round()).min(3.0) as u8;
     }
 }
 
@@ -2173,7 +2171,9 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
         let pending: Vec<Entity> = restart.iter(world).collect();
         if !pending.is_empty() {
             for e in pending {
-                world.entity_mut(e).remove::<crate::state::TutorialRestart>();
+                world
+                    .entity_mut(e)
+                    .remove::<crate::state::TutorialRestart>();
             }
             goto_state(world, AppState::Loading);
             return;
@@ -2439,14 +2439,12 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
         let horizontal = cycle as i16 + nav_h as i16;
         if horizontal != 0 {
             let step = horizontal.clamp(-1, 1) as i8;
-            let next = world
-                .get_resource::<MenuState>()
-                .map(|menu| {
-                    let count = menu.mutation_count.max(1) as i16;
-                    menu.mutation_selected.map_or(0, |cur| {
-                        (cur as i16 + step as i16).rem_euclid(count) as usize
-                    })
-                });
+            let next = world.get_resource::<MenuState>().map(|menu| {
+                let count = menu.mutation_count.max(1) as i16;
+                menu.mutation_selected.map_or(0, |cur| {
+                    (cur as i16 + step as i16).rem_euclid(count) as usize
+                })
+            });
             if let Some(next) = next {
                 let changed = world
                     .get_resource::<MenuState>()

@@ -69,9 +69,7 @@ use repame_sprite::{
 };
 use repose_canvas::Embedded;
 use repose_core::PaddingValues;
-use repose_core::input::{
-    Key, KeyEvent, KeyEventType, PhysicalKey, PointerButton,
-};
+use repose_core::input::{Key, KeyEvent, KeyEventType, PhysicalKey, PointerButton};
 use repose_core::prelude::{AlignItems, Modifier};
 use repose_core::{
     Color, Dp, FocusRequester, RenderContext, Scheduler, Sp, View, remember, request_frame,
@@ -84,9 +82,8 @@ use crate::comps_a::CurrentFrame as CombatFrame;
 use crate::comps_a::{NT_CAM_SCALE, Player, Projectile, WallCell, WallTile};
 use crate::comps_b::{Enemy, Pickup, Prop};
 use crate::data::AreaId;
-use crate::input::{
-    GamepadState, KeyCode, MouseState, NtInput, sample_gamepads_mapped,
-};
+use crate::input::{GamepadState, KeyCode, MouseState, NtInput, sample_gamepads_mapped};
+use crate::keymap::{InputMapState, KeyBindings};
 use crate::render::{
     ATLAS_PAGES, ATLAS_SIZE, CamPoi, CamStepInput, GmlCamera, RenderAssets, Z_BLOOM, Z_CROSSHAIR,
     Z_FAINTED, Z_FOG, Z_FX, Z_HUD, Z_MENU, Z_PORTAL_INDICATOR, Z_SHADOW, Z_SIDEART,
@@ -95,15 +92,13 @@ use crate::render::{
     gml_camera_step, gml_view_scale, gml_view_size, hud_gui_texts_dp, hud_sprites, menu_gui_texts,
     menu_gui_texts_dp, menu_gui_texts_vw, menu_sprites, portal_indicator_sprites, shadow_sprites,
     sideart_sprites, spiral_figures, splash_sprites, stamp_z, title_cam_focus, title_camera_step,
-    touch_sprites, view_rect_world, world_camera,
-    world_instances,
+    touch_sprites, view_rect_world, world_camera, world_instances,
 };
 use crate::schedule::build_sim_schedule;
 use crate::setup::setup_run_with_seed;
 use crate::spatial::Pos;
 use crate::state::menus::{MenuEdge, MenuState, apply_menu_action};
 use crate::state::{AppState, OverlayMenu};
-use crate::keymap::{InputMapState, KeyBindings};
 use crate::vortex::{SpiralCtl, gml_area_for_area};
 
 pub mod anim;
@@ -114,9 +109,9 @@ pub mod comps_a;
 pub mod comps_b;
 pub mod crown;
 pub mod data;
-pub mod decide_wep;
 mod dead_path_part;
 pub mod deaths;
+pub mod decide_wep;
 pub mod effects;
 pub mod enemies;
 pub mod enemy_data;
@@ -697,8 +692,11 @@ impl App {
         let mut killed_this_tick = false;
         if state == AppState::Loading && self.adv_state != AppState::Loading {
             let view_w = self.spiral.view_w;
-            self.spiral =
-                SpiralCtl::warmed_up_for_gml_area_seeded_in_view(gml_area_for_area(area), seed, view_w);
+            self.spiral = SpiralCtl::warmed_up_for_gml_area_seeded_in_view(
+                gml_area_for_area(area),
+                seed,
+                view_w,
+            );
             self.adv_seed = seed;
             self.adv_area = gml_area_for_area(area);
         }
@@ -776,8 +774,11 @@ impl App {
             // no rewarm this tick
         } else if cover && !self.adv_cover {
             let view_w = self.spiral.view_w;
-            self.spiral =
-                SpiralCtl::warmed_up_for_gml_area_seeded_in_view(gml_area_for_area(area), seed, view_w);
+            self.spiral = SpiralCtl::warmed_up_for_gml_area_seeded_in_view(
+                gml_area_for_area(area),
+                seed,
+                view_w,
+            );
         } else if !cover && self.adv_cover {
             self.spiral.kill();
         }
@@ -836,101 +837,101 @@ impl App {
         };
         #[cfg(not(target_os = "android"))]
         let step_in = {
-        // (`cursor_to_world` borrows `self.cam` only, so resolve the
-        // live cursor before the `world` borrow below.)
-        let live_hover = self.live_cursor_world();
-        let world = &mut self.sim.world;
-        let player = player_pos(world).unwrap_or(rest);
-        // Current weapon drives the aim-lean divisor (melee 8, bolts
-        // 3, else 4).
-        let wep = world
-            .query::<(&Pos, &crate::comps_a::Player, &crate::comps_a::Inventory)>()
-            .iter(world)
-            .next()
-            .map(|(_, _, inv)| inv.weapons[0])
-            .unwrap_or(crate::data::WeaponId::NONE);
-        // GML `KeyCont.dis_fire`: cursor distance in world px. The
-        // lean caps at 48 px (bevy `player_aim` `MAX_LOOK` parity: the
-        // playable builds clamp the lookahead there; unbounded
-        // `dis/viewdist` drifts whole screens when the cursor sits at
-        // a window edge and never feels like the original). Uses the
-        // live cursor unprojection (see `cursor_to_world`), so the lean
-        // follows the on-screen cursor as the camera moves.
-        // (`cursor_to_world` borrows `self.cam` only, so it was
-        // resolved into `live_hover` before the `world` borrow above.)
-        let (aim_dir, aim_dis) = match live_hover {
-            Some(h) => {
-                let d = h - player;
-                let len = d.length();
-                if len > 1e-6 {
-                    (d / len, len)
-                } else {
-                    (Vec2::X, 0.0)
+            // (`cursor_to_world` borrows `self.cam` only, so resolve the
+            // live cursor before the `world` borrow below.)
+            let live_hover = self.live_cursor_world();
+            let world = &mut self.sim.world;
+            let player = player_pos(world).unwrap_or(rest);
+            // Current weapon drives the aim-lean divisor (melee 8, bolts
+            // 3, else 4).
+            let wep = world
+                .query::<(&Pos, &crate::comps_a::Player, &crate::comps_a::Inventory)>()
+                .iter(world)
+                .next()
+                .map(|(_, _, inv)| inv.weapons[0])
+                .unwrap_or(crate::data::WeaponId::NONE);
+            // GML `KeyCont.dis_fire`: cursor distance in world px. The
+            // lean caps at 48 px (bevy `player_aim` `MAX_LOOK` parity: the
+            // playable builds clamp the lookahead there; unbounded
+            // `dis/viewdist` drifts whole screens when the cursor sits at
+            // a window edge and never feels like the original). Uses the
+            // live cursor unprojection (see `cursor_to_world`), so the lean
+            // follows the on-screen cursor as the camera moves.
+            // (`cursor_to_world` borrows `self.cam` only, so it was
+            // resolved into `live_hover` before the `world` borrow above.)
+            let (aim_dir, aim_dis) = match live_hover {
+                Some(h) => {
+                    let d = h - player;
+                    let len = d.length();
+                    if len > 1e-6 {
+                        (d / len, len)
+                    } else {
+                        (Vec2::X, 0.0)
+                    }
                 }
+                None => (Vec2::X, 0.0),
+            };
+            let aim_dis = aim_dis.min(crate::render::CAM_MAX_LOOK);
+            // GML POI chain: Portal, then victory/sit markers (the
+            // `BecomeNothing`/`NothingDeath` kinds have no port counterpart
+            // yet) — nearest instance wins, cap only for portals.
+            let poi = nearest_poi(world, player);
+            let shake_scale = world
+                .get_resource::<crate::savedata_part::SaveData>()
+                .map(|s| s.settings.screenshake.clamp(0.0, 2.0))
+                .unwrap_or(1.0);
+            // Trauma feeds GML `BackCont.shake` in px (max 20 at full
+            // trauma). Trauma owns the decay (1.5/s in `step_fx`), so the
+            // GML-law decay inside the step is parked (`timescale = 0`).
+            let shake_px = world
+                .get_resource::<repame_fx::Trauma>()
+                .map(|t| t.amount * t.max_translation_px)
+                .unwrap_or(0.0);
+            self.gml_cam.shake = shake_px;
+            let mut rng = rand::rng();
+            CamStepInput {
+                player,
+                aim_dir,
+                aim_dis,
+                viewdist: cam_viewdist_for(wep),
+                poi,
+                shake_scale,
+                timescale: 0.0,
+                jx: rng.random_range(-1.0..1.0),
+                jy: rng.random_range(-1.0..1.0),
             }
-            None => (Vec2::X, 0.0),
-        };
-        let aim_dis = aim_dis.min(crate::render::CAM_MAX_LOOK);
-        // GML POI chain: Portal, then victory/sit markers (the
-        // `BecomeNothing`/`NothingDeath` kinds have no port counterpart
-        // yet) — nearest instance wins, cap only for portals.
-        let poi = nearest_poi(world, player);
-        let shake_scale = world
-            .get_resource::<crate::savedata_part::SaveData>()
-            .map(|s| s.settings.screenshake.clamp(0.0, 2.0))
-            .unwrap_or(1.0);
-        // Trauma feeds GML `BackCont.shake` in px (max 20 at full
-        // trauma). Trauma owns the decay (1.5/s in `step_fx`), so the
-        // GML-law decay inside the step is parked (`timescale = 0`).
-        let shake_px = world
-            .get_resource::<repame_fx::Trauma>()
-            .map(|t| t.amount * t.max_translation_px)
-            .unwrap_or(0.0);
-        self.gml_cam.shake = shake_px;
-        let mut rng = rand::rng();
-        CamStepInput {
-            player,
-            aim_dir,
-            aim_dis,
-            viewdist: cam_viewdist_for(wep),
-            poi,
-            shake_scale,
-            timescale: 0.0,
-            jx: rng.random_range(-1.0..1.0),
-            jy: rng.random_range(-1.0..1.0),
-        }
         };
         #[cfg(target_os = "android")]
         let step_in = {
-        let world = &mut self.sim.world;
-        let player = player_pos(world).unwrap_or(rest);
-        let wep = world
-            .query::<(&Pos, &crate::comps_a::Player, &crate::comps_a::Inventory)>()
-            .iter(world)
-            .next()
-            .map(|(_, _, inv)| inv.weapons[0])
-            .unwrap_or(crate::data::WeaponId::NONE);
-        let shake_scale = world
-            .get_resource::<crate::savedata_part::SaveData>()
-            .map(|s| s.settings.screenshake.clamp(0.0, 2.0))
-            .unwrap_or(1.0);
-        let shake_px = world
-            .get_resource::<repame_fx::Trauma>()
-            .map(|t| t.amount * t.max_translation_px)
-            .unwrap_or(0.0);
-        self.gml_cam.shake = shake_px;
-        let mut rng = rand::rng();
-        CamStepInput {
-            player,
-            aim_dir,
-            aim_dis,
-            viewdist: cam_viewdist_for(wep),
-            poi: nearest_poi(world, player),
-            shake_scale,
-            timescale: 0.0,
-            jx: rng.random_range(-1.0..1.0),
-            jy: rng.random_range(-1.0..1.0),
-        }
+            let world = &mut self.sim.world;
+            let player = player_pos(world).unwrap_or(rest);
+            let wep = world
+                .query::<(&Pos, &crate::comps_a::Player, &crate::comps_a::Inventory)>()
+                .iter(world)
+                .next()
+                .map(|(_, _, inv)| inv.weapons[0])
+                .unwrap_or(crate::data::WeaponId::NONE);
+            let shake_scale = world
+                .get_resource::<crate::savedata_part::SaveData>()
+                .map(|s| s.settings.screenshake.clamp(0.0, 2.0))
+                .unwrap_or(1.0);
+            let shake_px = world
+                .get_resource::<repame_fx::Trauma>()
+                .map(|t| t.amount * t.max_translation_px)
+                .unwrap_or(0.0);
+            self.gml_cam.shake = shake_px;
+            let mut rng = rand::rng();
+            CamStepInput {
+                player,
+                aim_dir,
+                aim_dis,
+                viewdist: cam_viewdist_for(wep),
+                poi: nearest_poi(world, player),
+                shake_scale,
+                timescale: 0.0,
+                jx: rng.random_range(-1.0..1.0),
+                jy: rng.random_range(-1.0..1.0),
+            }
         };
         const STEP_DT: f32 = 1.0 / SIM_HZ as f32;
         let vw_vh = self.view_world_size;
@@ -1198,7 +1199,9 @@ impl App {
     }
 
     fn stage_physical(&mut self, key: PhysicalKey, down: bool, is_repeat: bool) {
-        self.staging.borrow_mut().stage_physical(key, down, is_repeat);
+        self.staging
+            .borrow_mut()
+            .stage_physical(key, down, is_repeat);
     }
 
     /// Window focus changed (shell forwards winit `Focused`). Losing
@@ -1324,7 +1327,9 @@ impl App {
             .get_resource::<InputMapState>()
             .map(|s| KeyBindings::from_keymap(&s.session.map))
             .unwrap_or_default();
-        self.sim.world.init_resource::<crate::savedata_part::SaveData>();
+        self.sim
+            .world
+            .init_resource::<crate::savedata_part::SaveData>();
         self.sim
             .world
             .resource_mut::<crate::savedata_part::SaveData>()
@@ -1428,7 +1433,8 @@ impl App {
             self.cursor_img_key = None;
             return;
         };
-        let frames = crate::render::strip_frames_pub(assets, "images/sprCrosshair.png").max(1) as i32;
+        let frames =
+            crate::render::strip_frames_pub(assets, "images/sprCrosshair.png").max(1) as i32;
         let path = dir.join("images").join("sprCrosshair.png");
         let Ok((sw, sh, rgba)) = crate::render::decode_png(&path) else {
             self.cursor_img = None;
@@ -1627,9 +1633,8 @@ impl App {
             let id = contact.id as i64;
             if contact.just_pressed {
                 touch_menu_positions.push((id, contact.pos));
-            } else if let Some((_, position)) = touch_menu_positions
-                .iter_mut()
-                .find(|entry| entry.0 == id)
+            } else if let Some((_, position)) =
+                touch_menu_positions.iter_mut().find(|entry| entry.0 == id)
             {
                 *position = contact.pos;
             }
@@ -1818,8 +1823,11 @@ impl App {
                     .copied()
                     .filter(|c| !menu_owned_key(*c))
                     .collect();
-                let sampled: HashSet<KeyCode> =
-                    just.iter().copied().filter(|c| !menu_owned_key(*c)).collect();
+                let sampled: HashSet<KeyCode> = just
+                    .iter()
+                    .copied()
+                    .filter(|c| !menu_owned_key(*c))
+                    .collect();
                 (held, sampled)
             } else {
                 (staged_held.clone(), just.clone())
@@ -2072,7 +2080,6 @@ impl App {
                     }
                 }
             }
-
         } else if game_over {
             if let Some(click) = staging_clicks.last().copied() {
                 let viewport_dp = self.view_viewport_dp;
@@ -2085,7 +2092,6 @@ impl App {
                     apply_menu_action(&mut self.sim.world, action);
                 }
             }
-
         } else if state == AppState::MainMenu {
             // Settings/Credits/Stats open over the buttons (GML MenuOptions
             // / DrawStats parity): route through the live overlay kind so
@@ -2110,7 +2116,6 @@ impl App {
                     apply_menu_action(&mut self.sim.world, action);
                 }
             }
-
         } else if state == AppState::Title {
             // Settings/Credits open over the campfire: route those through
             // the menu router (mouse + RMB-back); otherwise pods / GO /
@@ -2138,7 +2143,6 @@ impl App {
                     apply_menu_action(&mut self.sim.world, action);
                 }
             }
-
         } else if offer_open {
             // Mutation/ultra offer: right-button is silent (never confirms
             // or eats the left click).
@@ -2180,14 +2184,12 @@ impl App {
                     break;
                 }
             }
-
         } else if let Some(_click) = staging_clicks.last().copied() {
             // Splash/Loading advance on any mouse button (bevy `boot_intro`
             // any-key/mouse law).
 
             self.sim.world.resource_mut::<NtInput>().press_interact();
         } else {
-
         }
     }
 
@@ -2321,9 +2323,7 @@ impl App {
                             }
                         };
                         if update {
-                            if let Some(mut menu) =
-                                self.sim.world.get_resource_mut::<MenuState>()
-                            {
+                            if let Some(mut menu) = self.sim.world.get_resource_mut::<MenuState>() {
                                 if in_submenu {
                                     menu.play_cursor = i;
                                 } else {
@@ -2374,7 +2374,9 @@ impl App {
                     return;
                 }
                 let roster = crate::state::menus::visible_roster(
-                    self.sim.world.get_resource::<crate::savedata_part::SaveData>(),
+                    self.sim
+                        .world
+                        .get_resource::<crate::savedata_part::SaveData>(),
                 );
                 let slot_h = self
                     .assets
@@ -2402,9 +2404,7 @@ impl App {
                             .map(|m| m.title_cursor)
                             .unwrap_or(0);
                         if cur != i {
-                            if let Some(mut menu) =
-                                self.sim.world.get_resource_mut::<MenuState>()
-                            {
+                            if let Some(mut menu) = self.sim.world.get_resource_mut::<MenuState>() {
                                 menu.title_cursor = i;
                                 menu.title_pod_pointed = true;
                             }
@@ -2462,12 +2462,7 @@ impl App {
                 let mut pointed = None;
                 for i in 0..n {
                     let cx = start_x + i as f32 * step;
-                    let card_y = icon_y
-                        + menu
-                            .mutation_appear_y
-                            .get(i)
-                            .copied()
-                            .unwrap_or(0.0)
+                    let card_y = icon_y + menu.mutation_appear_y.get(i).copied().unwrap_or(0.0)
                         - if menu.mutation_selected == Some(i) {
                             1.0
                         } else {
@@ -2597,8 +2592,7 @@ impl App {
         // over everything — splash reel, menus, campfire, death
         // screen alike. Pause/overlay are the only hides (GML
         // `PauseImage` / `MenuOptions` take over the pointer there).
-        let hide_os_cursor =
-            keyboard_mode && !paused_now && overlay_now == OverlayMenu::None;
+        let hide_os_cursor = keyboard_mode && !paused_now && overlay_now == OverlayMenu::None;
         // GML `game_end` parity for the QUIT row (bevy `AppExit` has no
         // headless window service; the desktop shell exits here).
         if self
@@ -2709,9 +2703,9 @@ impl App {
             // Uses the live cursor unprojection when available so the
             // crosshair tracks the on-screen cursor as the camera moves
             // (same source as aim; falls back to the last Hover).
-            self.sim.world.insert_resource(crate::render::HoverWorld(
-                self.live_cursor_world(),
-            ));
+            self.sim
+                .world
+                .insert_resource(crate::render::HoverWorld(self.live_cursor_world()));
             // Blob shadows first (GML `shad` surface: under the actors).
             // Every layer stamps its z-ladder rung (render.rs `Z_*`,
             // GML `__global_object_depths` order): without rungs every
@@ -3278,14 +3272,11 @@ impl App {
                     } => {
                         staging.pick_down(button);
                         if button == PointerButton::Primary {
-                            let d =
-                                repose_core::locals::effective_density_scale().max(1e-6);
+                            let d = repose_core::locals::effective_density_scale().max(1e-6);
                             staging.stage_click(world, screen, d);
                         }
                     }
-                    PickEvent::Click {
-                        button, ..
-                    } => {
+                    PickEvent::Click { button, .. } => {
                         staging.pick_up(button);
                     }
                     PickEvent::Hover { .. } => {}
@@ -3315,14 +3306,11 @@ impl App {
                     } => {
                         staging.pick_down(button);
                         if button == PointerButton::Primary {
-                            let d =
-                                repose_core::locals::effective_density_scale().max(1e-6);
+                            let d = repose_core::locals::effective_density_scale().max(1e-6);
                             staging.stage_click(world, screen, d);
                         }
                     }
-                    PickEvent::Click {
-                        button, ..
-                    } => {
+                    PickEvent::Click { button, .. } => {
                         staging.pick_up(button);
                     }
                     PickEvent::Hover { .. } => {}
@@ -3377,7 +3365,8 @@ impl App {
         // pointer: the closure only touches staged input through it,
         // like the viewport `PickEvent` closures below.
         let capture_app: *mut App = self as *mut App;
-        let capture_preview = move |ke: KeyEvent| unsafe { (*capture_app).preview_capture_key(&ke) };
+        let capture_preview =
+            move |ke: KeyEvent| unsafe { (*capture_app).preview_capture_key(&ke) };
         let focus = remember(FocusRequester::new);
         let fr_positioned = (*focus).clone();
         let focus_staging = self.staging.clone();
@@ -3465,9 +3454,7 @@ impl App {
         // the quit-to-menu room recenters the camera (0,0) over black
         // with a fresh live spiral — the previous run's look point and
         // drain never carry over.
-        if matches!(state, AppState::MainMenu)
-            && !matches!(self.was_state, AppState::MainMenu)
-        {
+        if matches!(state, AppState::MainMenu) && !matches!(self.was_state, AppState::MainMenu) {
             self.gml_cam.snap = true;
         }
         // GML `Menu/Create_0:104-110` + `Menu/Step_1` verbatim: the
@@ -3481,8 +3468,7 @@ impl App {
         // view camera directly here.)
         if matches!(state, AppState::Title) {
             let vw_vh = self.view_world_size;
-            let focus =
-                title_cam_focus(&mut self.sim.world).unwrap_or(Vec2::new(64.0, 64.0));
+            let focus = title_cam_focus(&mut self.sim.world).unwrap_or(Vec2::new(64.0, 64.0));
             let snap = !matches!(self.was_state, AppState::Title);
             title_camera_step(
                 &mut self.gml_cam,
@@ -4247,7 +4233,6 @@ pub fn root_view(sched: &mut Scheduler, ctx: &RenderContext, app: &mut App, dt: 
     app.view(sched, ctx, dt)
 }
 
-
 #[cfg(test)]
 mod cursor_staging_tests {
     use super::*;
@@ -4618,10 +4603,7 @@ mod cursor_staging_tests {
             !out.take_fire_pressed(),
             "menu-owned Space must not pulse fire"
         );
-        assert!(
-            !out.fire_held,
-            "menu-owned Space must not hold fire"
-        );
+        assert!(!out.fire_held, "menu-owned Space must not hold fire");
     }
 
     /// Context switch: arrows via `handle_key` (focus-routed) must still
@@ -4666,10 +4648,7 @@ mod cursor_staging_tests {
         let mut app = App::new_with_seed(4242);
         app.sim.world.insert_resource(AppState::MainMenu);
         app.sim.world.insert_resource(OverlayMenu::Settings);
-        app.sim
-            .world
-            .resource_mut::<MenuState>()
-            .settings_page = 13;
+        app.sim.world.resource_mut::<MenuState>().settings_page = 13;
         let rows = crate::render::settings_hot_rows(13, 320.0);
         let row = rows[0];
         // `route_menu_click` takes canvas dp + viewport dp: GUI px
@@ -4677,12 +4656,7 @@ mod cursor_staging_tests {
         let k = 3.0f32;
         let viewport_dp = [1280.0f32, 720.0];
         let dp = [row.cx * k, row.gy * k];
-        let action = route_menu_click(
-            &mut app.sim.world,
-            MenuOverlay::Settings,
-            dp,
-            viewport_dp,
-        );
+        let action = route_menu_click(&mut app.sim.world, MenuOverlay::Settings, dp, viewport_dp);
         assert!(
             matches!(action, Some(crate::audio::UiAction::RemapControl(_))),
             "click on row 0 must arm a remap, got {action:?}"
@@ -4698,9 +4672,7 @@ mod cursor_staging_tests {
 /// through save + asset lookups since cwd is `/` on device.
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
-pub extern "C" fn android_main(
-    android_app: winit::platform::android::activity::AndroidApp,
-) {
+pub extern "C" fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
     rlobkit_app_events::android_log::init(env!("CARGO_PKG_NAME"), "warn");
     rlobkit_app_events::system_bars::set_immersive_sticky(true);
     repose_core::locals::set_theme_default(repose_core::locals::Theme::default());

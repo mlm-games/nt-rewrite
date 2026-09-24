@@ -372,6 +372,9 @@ pub struct Enemy {
     pub rad_drop: usize,
     pub drop_chance: usize,
     pub weapon_chance: usize,
+    /// GML `givekill`: false for the kinds that clear it at creation
+    /// (`FastRat`, `BigDogMissile`) and for maggot conversions.
+    pub give_kill: bool,
 }
 
 #[derive(Component)]
@@ -388,6 +391,8 @@ pub struct EnemyBrain {
     pub strafe_timer: Timer,
     pub melee: Timer,
 
+    pub wkick: f32,
+
     pub walk: f32,
 
     pub ammo: u8,
@@ -395,6 +400,34 @@ pub struct EnemyBrain {
     pub slash_delay: f32,
 
     pub gunangle: f32,
+
+    pub heading: f32,
+
+    pub rage: f32,
+
+    pub fire: u8,
+
+    pub friction: f32,
+
+    pub close: bool,
+
+    pub wepangle: f32,
+
+    pub wepflip: f32,
+
+    pub weapon_alarm: f32,
+
+    pub burrow_state: u8,
+
+    pub burrow_alarm0: f32,
+
+    pub burrow_alarm1: f32,
+
+    pub burrow_angle: f32,
+
+    pub sniper_aiming: bool,
+
+    pub maggot_spawn_charging: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1214,7 +1247,12 @@ pub fn camper_strips(gml: usize, frog_far: bool) -> CamperStrips {
             "images/sprDefault.png",
         ),
     };
-    CamperStrips { slct, to, menu, from }
+    CamperStrips {
+        slct,
+        to,
+        menu,
+        from,
+    }
 }
 
 /// GML camper menu-strip name verbatim (`scrCampfireMenuCreate`:
@@ -1289,5 +1327,3 @@ impl Default for FloorTransition {
         }
     }
 }
-
-

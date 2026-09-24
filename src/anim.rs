@@ -446,9 +446,9 @@ pub fn backfill_spawn_anims(world: &mut World) {
                 // Hyper orbit crystals are bevy-parity visual markers (tinted
                 // sprite, no strip table or anim); giving them `EnemySprites`
                 // would drag them into the enemy anim/hurt queries.
-                orbit.is_none().then(|| {
-                    (e, enemy.kind, sprites.is_some(), anim.is_some())
-                })
+                orbit
+                    .is_none()
+                    .then(|| (e, enemy.kind, sprites.is_some(), anim.is_some()))
             })
             .collect()
     };
@@ -463,19 +463,16 @@ pub fn backfill_spawn_anims(world: &mut World) {
         // Corpses carry `PropSprites` without `Prop` and already seed their
         // own dead-strip oneshot at spawn; only live props backfill here.
         let mut pq = world.query::<(&Prop, Entity)>();
-        let live: std::collections::HashSet<Entity> =
-            pq.iter(world).map(|(_, e)| e).collect();
+        let live: std::collections::HashSet<Entity> = pq.iter(world).map(|(_, e)| e).collect();
         q.iter(world)
             .filter_map(|(sprites, anim, e)| {
-                live.contains(&e).then(|| {
-                    (e, sprites.idle.to_string(), anim.is_some())
-                })
+                live.contains(&e)
+                    .then(|| (e, sprites.idle.to_string(), anim.is_some()))
             })
             .collect()
     };
     let catalog = world.resource::<AnimCatalog>();
-    let mut enemy_inserts: Vec<(Entity, Option<EnemySprites>, Option<SpriteAnim>)> =
-        Vec::new();
+    let mut enemy_inserts: Vec<(Entity, Option<EnemySprites>, Option<SpriteAnim>)> = Vec::new();
     for (e, kind, has_sprites, has_anim) in &enemy_rows {
         let idle = idle_of(*kind);
         let sprites = if *has_sprites {
@@ -490,9 +487,7 @@ pub fn backfill_spawn_anims(world: &mut World) {
         let anim = if *has_anim {
             None
         } else {
-            catalog
-                .def(idle)
-                .map(|def| SpriteAnim::new(idle, def))
+            catalog.def(idle).map(|def| SpriteAnim::new(idle, def))
         };
         if sprites.is_some() || anim.is_some() {
             enemy_inserts.push((*e, sprites, anim));
@@ -792,7 +787,6 @@ pub fn derive_hurt_path(idle: &'static str) -> &'static str {
     }
 }
 
-
 pub fn derive_dead_path(idle: &'static str) -> &'static str {
     let base = if idle.contains("sprMutant") {
         if idle.contains("sprMutant1BIdle") {
@@ -992,7 +986,6 @@ pub fn derive_dead_path(idle: &'static str) -> &'static str {
     }
 }
 
-
 pub fn derive_walk_path(idle: &'static str) -> Option<&'static str> {
     match idle {
         "images/sprBanditIdle.png" => Some("images/sprBanditWalk.png"),
@@ -1041,3 +1034,9 @@ pub fn derive_walk_path(idle: &'static str) -> Option<&'static str> {
     }
 }
 
+pub fn derive_charge_path(idle: &'static str) -> Option<&'static str> {
+    match idle {
+        "images/sprMSpawnIdle.png" => Some("images/sprMSpawnChrg.png"),
+        _ => None,
+    }
+}

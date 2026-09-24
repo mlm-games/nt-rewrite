@@ -435,23 +435,32 @@ pub fn sample_keyboard_mapped(
     let (fire_held, fire_pressed, spec_held_now, spec_pressed_now, swap_pressed, pick_pressed) =
         match keymap {
             Some(state) => {
-                let fire = state.session.map.active(&crate::keymap::NtAction::Fire, false);
-                let spec = state.session.map.active(&crate::keymap::NtAction::Spec, false);
-                let swap = state.session.map.active(&crate::keymap::NtAction::Swap, false);
-                let pick = state.session.map.active(&crate::keymap::NtAction::Pick, false);
+                let fire = state
+                    .session
+                    .map
+                    .active(&crate::keymap::NtAction::Fire, false);
+                let spec = state
+                    .session
+                    .map
+                    .active(&crate::keymap::NtAction::Spec, false);
+                let swap = state
+                    .session
+                    .map
+                    .active(&crate::keymap::NtAction::Swap, false);
+                let pick = state
+                    .session
+                    .map
+                    .active(&crate::keymap::NtAction::Pick, false);
                 let fire_edge = entry_pressed(&fire, just_pressed, mouse, true);
                 let spec_edge = entry_pressed(&spec, just_pressed, mouse, false);
-                let shift_held = held.contains(&KeyCode::ShiftLeft)
-                    || held.contains(&KeyCode::ShiftRight);
+                let shift_held =
+                    held.contains(&KeyCode::ShiftLeft) || held.contains(&KeyCode::ShiftRight);
                 let shift_edge = just_pressed.contains(&KeyCode::ShiftLeft)
                     || just_pressed.contains(&KeyCode::ShiftRight);
                 (
                     entry_held(&fire, held, mouse) || mouse.left_held || fire_edge,
                     fire_edge || mouse.left_pressed,
-                    entry_held(&spec, held, mouse)
-                        || mouse.right_held
-                        || spec_edge
-                        || shift_held,
+                    entry_held(&spec, held, mouse) || mouse.right_held || spec_edge || shift_held,
                     spec_edge || mouse.right_pressed || shift_edge,
                     entry_pressed(&swap, just_pressed, mouse, true),
                     entry_pressed(&pick, just_pressed, mouse, true),
@@ -573,9 +582,10 @@ fn keycode_for_entry(entry: &repame_input::KeymapEntry) -> Option<KeyCode> {
     match entry {
         KeymapEntry::Key(chord) => keycode_for_chord(&chord.key),
         KeymapEntry::Physical(key) => keycode_for_physical(*key),
-        KeymapEntry::None | KeymapEntry::Mouse(_) | KeymapEntry::Pad(_) | KeymapEntry::Axis { .. } => {
-            None
-        }
+        KeymapEntry::None
+        | KeymapEntry::Mouse(_)
+        | KeymapEntry::Pad(_)
+        | KeymapEntry::Axis { .. } => None,
     }
 }
 
@@ -647,8 +657,7 @@ fn keycode_for_glyph(c: char) -> Option<KeyCode> {
 /// to their own positions, the rest by name. Used only to drop stuck
 /// levels in the polled repair — never to stage edges.
 pub fn physical_key_for_code(code: KeyCode) -> Option<PhysicalKey> {
-    physical_keys_for_code(&code)
-        .and_then(|keys| keys.first().copied())
+    physical_keys_for_code(&code).and_then(|keys| keys.first().copied())
 }
 pub fn physical_keys_for_code(code: &KeyCode) -> Option<&'static [PhysicalKey]> {
     use repose_core::input::PhysicalKey as P;
@@ -943,14 +952,7 @@ pub fn sample_touch(
     split_fire: bool,
     output: &mut NtInput,
 ) {
-    sample_touch_full(
-        contacts,
-        window_width,
-        scale,
-        split_fire,
-        false,
-        output,
-    )
+    sample_touch_full(contacts, window_width, scale, split_fire, false, output)
 }
 
 /// [`sample_touch`] with the stick-regions gate. GML
@@ -1060,9 +1062,10 @@ pub fn sample_touch_full(
     let gone = |id: i64| lifted.contains(&id);
 
     // Ability corner (outer top-right): press edge only.
-    if contacts.iter().any(|c| {
-        c.just_pressed && c.start.y < 96.0 && c.start.x >= width - 96.0
-    }) {
+    if contacts
+        .iter()
+        .any(|c| c.just_pressed && c.start.y < 96.0 && c.start.x >= width - 96.0)
+    {
         output.ability_pressed = true;
     }
     // Cycle corner (inner top-right) folds into the swap-button
@@ -1083,9 +1086,9 @@ pub fn sample_touch_full(
     // `get_nearest_touch(rad)` claim in GML — the corner tap below and
     // the button claim are one gesture).
     let swap_idx = nearest_free(swap_home, btn_capture, &held).or_else(|| {
-        contacts.iter().position(|c| {
-            c.just_pressed && c.start.y < 96.0 && c.start.x >= width - 192.0
-        })
+        contacts
+            .iter()
+            .position(|c| c.just_pressed && c.start.y < 96.0 && c.start.x >= width - 192.0)
     });
     if let Some(i) = swap_idx {
         held.push(contacts[i].id as i64);
@@ -1119,7 +1122,9 @@ pub fn sample_touch_full(
                 output.press_fire();
             }
         }
-        if lifted.iter().any(|id| *id == split_btn_touch && split_btn_touch >= 0)
+        if lifted
+            .iter()
+            .any(|id| *id == split_btn_touch && split_btn_touch >= 0)
             || output.touch_released_fire
         {
             output.fire_held = false;
@@ -1140,9 +1145,7 @@ pub fn sample_touch_full(
     if stick_regions {
         for c in contacts.iter().filter(|c| c.just_pressed) {
             let left_half = c.start.x <= width * 0.5;
-            if left_half == (move_stick.touch >= 0)
-                || held.contains(&(c.id as i64))
-            {
+            if left_half == (move_stick.touch >= 0) || held.contains(&(c.id as i64)) {
                 continue;
             }
             let anchor = if left_half {
@@ -1173,13 +1176,10 @@ pub fn sample_touch_full(
     }
     if move_stick.touch < 0 {
         if let Some(i) = contacts.iter().position(|c| {
-            c.just_pressed
-                && c.start.x < width * 0.5
-                && !held.contains(&(c.id as i64))
-                && {
-                    let r = TOUCH_STICK_RADIUS * 1.75 * (scale + 0.5);
-                    c.start.distance(move_stick.anchor) <= r
-                }
+            c.just_pressed && c.start.x < width * 0.5 && !held.contains(&(c.id as i64)) && {
+                let r = TOUCH_STICK_RADIUS * 1.75 * (scale + 0.5);
+                c.start.distance(move_stick.anchor) <= r
+            }
         }) {
             let c = &contacts[i];
             move_stick.touch = c.id as i64;
@@ -1384,12 +1384,7 @@ mod keymap_tests {
         });
         contact_id(id, start, pos, just_pressed)
     }
-    fn contact_id(
-        id: u64,
-        start: [f32; 2],
-        pos: [f32; 2],
-        just_pressed: bool,
-    ) -> TouchContact {
+    fn contact_id(id: u64, start: [f32; 2], pos: [f32; 2], just_pressed: bool) -> TouchContact {
         TouchContact {
             id,
             start: Vec2::from(start),
@@ -1479,7 +1474,10 @@ mod keymap_tests {
         // the camera lean glides home instead of snapping.
         let attack_id = out.attack_stick.map(|s| s.touch).unwrap_or(-1);
         let attack_vdis = out.attack_stick.map(|s| s.vdis).unwrap_or(0.0);
-        assert!(attack_vdis > 40.0, "vdis must chase the held dis, got {attack_vdis}");
+        assert!(
+            attack_vdis > 40.0,
+            "vdis must chase the held dis, got {attack_vdis}"
+        );
         let mut lifted = NtInput::default();
         lifted.move_stick = out.move_stick;
         lifted.attack_stick = out.attack_stick;
@@ -1638,7 +1636,10 @@ mod keymap_tests {
             true,
             &mut out,
         );
-        assert!(out.take_interact_pressed(), "third-finger act tap must pulse");
+        assert!(
+            out.take_interact_pressed(),
+            "third-finger act tap must pulse"
+        );
         assert!(out.move_axis.length() > 0.5, "move claim survives");
         assert!(out.fire_held, "attack claim survives");
     }
@@ -1807,7 +1808,8 @@ mod keymap_tests {
     #[test]
     fn mouse_rebound_fire_still_clicks() {
         let mut s = state();
-        s.session.map
+        s.session
+            .map
             .set_keyboard(NtAction::Fire, KeymapEntry::Mouse(PointerButton::Primary));
         let mouse = MouseState {
             left_held: true,
@@ -1840,7 +1842,10 @@ mod keymap_tests {
         s.begin_capture(NtAction::North, KeymapDevice::KeyboardMouse);
         s.resolve_capture(Some(chord('z')));
         assert_eq!(s.session.map.keyboard(&NtAction::North), chord('z'));
-        assert_eq!(s.session.map.gamepad(&NtAction::North), s.session.map.gamepad(&NtAction::North));
+        assert_eq!(
+            s.session.map.gamepad(&NtAction::North),
+            s.session.map.gamepad(&NtAction::North)
+        );
     }
 
     #[test]

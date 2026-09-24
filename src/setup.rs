@@ -48,7 +48,7 @@ use crate::data::{
     WEAPON_RUSTY_REVOLVER, WeaponId, ammo_max, area_for_floor, race_starter_weapon,
     resolve_start_weapon,
 };
-use crate::enemies::{difficulty_multiplier, spawn_enemy_at};
+use crate::enemies::{EnemySpawnContext, difficulty_multiplier, spawn_enemy_at};
 use crate::enemy_data::enemy_def;
 use crate::environment::{
     EnvironmentHazardSpec, PropDeathEffect, ProximityMine, PulseSprite, SurfacePulse,
@@ -98,7 +98,12 @@ pub fn spawn_player(commands: &mut Commands, pos: glam::Vec2) -> Entity {
 }
 
 /// Enemy spawn with table stats (hp/radius from `enemy_def`).
-pub fn spawn_enemy(commands: &mut Commands, kind: EnemyKind, pos: glam::Vec2) -> Entity {
+pub fn spawn_enemy(
+    commands: &mut Commands,
+    kind: EnemyKind,
+    pos: glam::Vec2,
+    give_kill: bool,
+) -> Entity {
     let def = enemy_def(kind);
     commands
         .spawn((
@@ -111,6 +116,7 @@ pub fn spawn_enemy(commands: &mut Commands, kind: EnemyKind, pos: glam::Vec2) ->
                 rad_drop: def.rad_drop,
                 drop_chance: def.drop_chance,
                 weapon_chance: def.weapon_chance,
+                give_kill,
             },
             Team::Enemy,
             Pos(pos),
@@ -538,9 +544,9 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
         // toggle; completion persists via `tutorial_done` (GML
         // `save game.tutorial=false`), so finished tutorials never
         // replay even on fresh profiles (`total_runs == 0`).
-        let tutorial = world.get_resource::<SaveData>().is_some_and(|s| {
-            !s.tutorial_done && (s.settings.show_tutorial || s.total_runs == 0)
-        });
+        let tutorial = world
+            .get_resource::<SaveData>()
+            .is_some_and(|s| !s.tutorial_done && (s.settings.show_tutorial || s.total_runs == 0));
         let mut run = world.resource_mut::<Run>();
         run.floor = 1;
         run.world = 1;
@@ -659,10 +665,9 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
             let mut half = false;
             let mut rogue = race == RaceId::Rogue;
             let mut q = world.query::<(&crate::comps_a::Health, &crate::comps_a::RaceState)>();
-            for (hp, rs) in q.iter(world) {
+            if let Some((hp, rs)) = q.iter(world).next() {
                 half = hp.hp * 2 < hp.max;
                 rogue = rs.race == RaceId::Rogue;
-                break;
             }
             let r = world.resource::<crate::comps_a::Run>();
             (
@@ -838,12 +843,7 @@ fn prop_candidates(kind: PropKind) -> &'static [&'static str] {
 fn prop_stats(kind: PropKind, loop_count: u32) -> (f32, i32, bool, Option<PropDeathEffect>) {
     match kind {
         PropKind::Cactus | PropKind::NightCactus => (24.0, 2, false, None),
-        PropKind::BigSkull => (
-            32.0,
-            50,
-            false,
-            Some(PropDeathEffect::dust_ring()),
-        ),
+        PropKind::BigSkull => (32.0, 50, false, Some(PropDeathEffect::dust_ring())),
         PropKind::Barrel => (24.0, 1, true, None),
         PropKind::Pipe => (24.0, 1, false, None),
         PropKind::Tires => (28.0, 6, false, None),
@@ -861,34 +861,14 @@ fn prop_stats(kind: PropKind, loop_count: u32) -> (f32, i32, bool, Option<PropDe
         PropKind::Tube => (20.0, 2, false, None),
         PropKind::MutantTube => (24.0, 24, false, None),
         PropKind::Pillar => (24.0, 70, false, None),
-        PropKind::SmallGenerator => (
-            24.0,
-            40,
-            false,
-            Some(PropDeathEffect::small_generator()),
-        ),
-        PropKind::Anchor => (
-            28.0,
-            50,
-            false,
-            Some(PropDeathEffect::dust_ring()),
-        ),
+        PropKind::SmallGenerator => (24.0, 40, false, Some(PropDeathEffect::small_generator())),
+        PropKind::Anchor => (28.0, 50, false, Some(PropDeathEffect::dust_ring())),
         PropKind::WaterPlant => (20.0, 2, false, None),
         PropKind::OasisBarrel => (22.0, 2, false, None),
         PropKind::WaterMine => (20.0, 20, false, Some(PropDeathEffect::mine())),
-        PropKind::MoneyPile => (
-            22.0,
-            1,
-            false,
-            Some(PropDeathEffect::money()),
-        ),
+        PropKind::MoneyPile => (22.0, 1, false, Some(PropDeathEffect::money())),
         PropKind::YVStatue => (22.0, 15, false, None),
-        PropKind::Bush => (
-            22.0,
-            1,
-            false,
-            Some(PropDeathEffect::leaves()),
-        ),
+        PropKind::Bush => (22.0, 1, false, Some(PropDeathEffect::leaves())),
         PropKind::BigFlower => (24.0, 8, false, None),
         PropKind::PizzaBox => (22.0, 4, false, None),
         PropKind::PlantPot => (20.0, 3, false, None),
@@ -935,7 +915,10 @@ fn pick_prop_idle(
     // GML `Car/Create_0.gml:8-12` verbatim: `area_city` swaps the whole
     // triple to the frozen strips (hurt/dead resolve from this idle).
     if kind == PropKind::Car && run.area == AreaId::City {
-        return ("images/sprFrozenCar.png", prop_hash_flip(run.gen_seed, pos, 0x53));
+        return (
+            "images/sprFrozenCar.png",
+            prop_hash_flip(run.gen_seed, pos, 0x53),
+        );
     }
     let seed = run.gen_seed;
     let candidates = prop_candidates(kind);
@@ -986,10 +969,7 @@ fn prop_hurt_dead_paths(idle: &'static str) -> (&'static str, &'static str) {
             ("images/sprPlantPotHurt.png", "images/sprPlantPotDead.png")
         }
         "images/sprCarIdle.png" => ("images/sprCarHurt.png", "images/sprScorchmark.png"),
-        "images/sprFrozenCar.png" => (
-            "images/sprFrozenCarHurt.png",
-            "images/sprScorchmark.png",
-        ),
+        "images/sprFrozenCar.png" => ("images/sprFrozenCarHurt.png", "images/sprScorchmark.png"),
         "images/sprMine.png" | "images/sprMineIdle.png" => {
             ("images/sprMine.png", "images/sprMine.png")
         }
@@ -1475,6 +1455,10 @@ pub fn spawn_secret_entrances(
                     false,
                     false,
                     run.loop_count,
+                    EnemySpawnContext {
+                        subarea: run.floor_in_area,
+                        blood_crown: run.blood_crown,
+                    },
                 );
             }
         }
@@ -1599,6 +1583,10 @@ pub fn spawn_level(
     }
 
     let difficulty = difficulty_multiplier(run.floor);
+    let spawn_context = EnemySpawnContext {
+        subarea: run.floor_in_area,
+        blood_crown: run.blood_crown,
+    };
     for (kind, pos) in &plan.enemies {
         spawn_enemy_at(
             commands,
@@ -1609,6 +1597,7 @@ pub fn spawn_level(
             false,
             false,
             run.loop_count,
+            spawn_context,
         );
     }
 
@@ -1633,6 +1622,7 @@ pub fn spawn_level(
                     false,
                     false,
                     run.loop_count,
+                    spawn_context,
                 );
             }
         }
@@ -1664,6 +1654,7 @@ pub fn spawn_level(
                     false,
                     false,
                     run.loop_count,
+                    spawn_context,
                 );
             }
             other => {
@@ -1685,6 +1676,7 @@ pub fn spawn_level(
                     false,
                     false,
                     run.loop_count,
+                    spawn_context,
                 );
             }
         }
@@ -1851,10 +1843,7 @@ pub fn setup_title_campfire(world: &mut World) {
     // arm) — up to 4 satellite cells, duplicates popping themselves
     // (`Floor/Create_0` overlap arm, matched by `seen` here).
     for _ in 0..4 {
-        let c = (
-            rng.random_range(0..=4),
-            rng.random_range(0..=4),
-        );
+        let c = (rng.random_range(0..=4), rng.random_range(0..=4));
         if seen.insert(c) {
             floors.push(c);
         }
@@ -2125,7 +2114,7 @@ pub fn setup_title_campfire(world: &mut World) {
                             5.0 / 30.0,
                             crate::time::TimerMode::Once,
                         ),
-                    scale: 1.0,
+                        scale: 1.0,
                     },
                     Pos(clear_at),
                 ));
@@ -2176,7 +2165,7 @@ pub fn setup_title_campfire(world: &mut World) {
                                 5.0 / 30.0,
                                 crate::time::TimerMode::Once,
                             ),
-                        scale: 1.0,
+                            scale: 1.0,
                         },
                         Pos(at + off),
                     ));
@@ -2679,12 +2668,12 @@ mod verbatim_title_to_first_level {
     /// future gate edit must keep all four screens exact.
     #[test]
     fn transition_cover_law_matches_gml_per_screen() {
-        use crate::state::AppState;
-        use crate::{MenuOverlay, menu_overlay_kind};
         use crate::comps_a::{PendingMutation, PendingUltra};
         use crate::comps_b::FloorTransition;
+        use crate::state::AppState;
         use crate::state::OverlayMenu;
         use crate::state::menus::MenuState;
+        use crate::{MenuOverlay, menu_overlay_kind};
         let menu = MenuState::default();
         let overlay = OverlayMenu::None;
         let cover_of = |state: AppState,
@@ -2718,8 +2707,7 @@ mod verbatim_title_to_first_level {
             (generation_screen, bg_opaque, kind)
         };
         let fresh = World::new();
-        let (is_cover, opaque, kind) =
-            cover_of(AppState::Loading, overlay, &menu, &fresh);
+        let (is_cover, opaque, kind) = cover_of(AppState::Loading, overlay, &menu, &fresh);
         assert!(is_cover && opaque && kind == Some(MenuOverlay::Loading));
         // Offer path: `menu_overlay_kind` reads the `mutation_count`
         // mirror, which `tick_ingame_menu` syncs from `Pending*` at the
@@ -2732,14 +2720,13 @@ mod verbatim_title_to_first_level {
         });
         offer.insert_resource(crate::state::menus::MenuState::default());
         {
-            let (count, is_ultra) =
-                if let Some(ultra) = offer.get_resource::<PendingUltra>() {
-                    (ultra.choices.len(), true)
-                } else if let Some(pending) = offer.get_resource::<PendingMutation>() {
-                    (pending.choices.len(), false)
-                } else {
-                    (0, false)
-                };
+            let (count, is_ultra) = if let Some(ultra) = offer.get_resource::<PendingUltra>() {
+                (ultra.choices.len(), true)
+            } else if let Some(pending) = offer.get_resource::<PendingMutation>() {
+                (pending.choices.len(), false)
+            } else {
+                (0, false)
+            };
             let offer_key = crate::state::menus::mutation_offer_key(
                 offer.get_resource::<PendingMutation>(),
                 offer.get_resource::<PendingUltra>(),
@@ -2759,11 +2746,9 @@ mod verbatim_title_to_first_level {
             active: true,
             ..Default::default()
         });
-        let (is_cover, opaque, _) =
-            cover_of(AppState::InGame, OverlayMenu::None, &menu, &ft);
+        let (is_cover, opaque, _) = cover_of(AppState::InGame, OverlayMenu::None, &menu, &ft);
         assert!(is_cover && opaque);
-        let (is_cover, opaque, kind) =
-            cover_of(AppState::Title, OverlayMenu::None, &menu, &fresh);
+        let (is_cover, opaque, kind) = cover_of(AppState::Title, OverlayMenu::None, &menu, &fresh);
         assert!(!is_cover && !opaque && kind == Some(MenuOverlay::Title));
     }
 

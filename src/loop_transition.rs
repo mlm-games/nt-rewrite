@@ -12,7 +12,7 @@ use repame_fx::Trauma;
 use repame_sim::SimTime;
 
 use crate::audio::{QueuedReactiveCue, ReactiveCue};
-use crate::combat::PendingEnemySpawn;
+use crate::combat::queue_enemy_spawn;
 use crate::comps_a::{GameCleanup, LevelCleanup, Run, Toast};
 use crate::comps_b::{
     CampfirePhase, CampfireProp, CampfireState, Enemy, IdpdRaidState, LoopTransition, YvCouch,
@@ -48,7 +48,12 @@ pub fn begin_throne_campfire(
     // crib: idle `sprYVBossGamingIdle`). Offset is a port choice — GML
     // places it in the crib room layout, which has no fixed anchor to
     // the fire here — kept clear of the flames on +x.
-    commands.spawn((GameCleanup, LevelCleanup, YvCouch::idle(), Pos(pos + glam::Vec2::new(72.0, 0.0))));
+    commands.spawn((
+        GameCleanup,
+        LevelCleanup,
+        YvCouch::idle(),
+        Pos(pos + glam::Vec2::new(72.0, 0.0)),
+    ));
 
     toast.show("REST");
     trauma.add(0.10);
@@ -158,16 +163,13 @@ pub fn tick_campfire(
 
                 let spawn = anchor + glam::Vec2::new(0.0, 84.0);
 
-                commands.spawn((
-                    GameCleanup,
-                    LevelCleanup,
-                    PendingEnemySpawn {
-                        kind: EnemyKind::ThroneII,
-                        pos: spawn,
-                        difficulty: 1.0 + transition.last_completed_loop as f32 * 0.45,
-                        loops: run.loop_count,
-                    },
-                ));
+                queue_enemy_spawn(
+                    &mut commands,
+                    EnemyKind::ThroneII,
+                    spawn,
+                    1.0 + transition.last_completed_loop as f32 * 0.45,
+                    run.loop_count,
+                );
 
                 trauma.add(0.45);
                 commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::ThroneRises)));
@@ -200,4 +202,3 @@ pub fn tick_yv_couch(
         crate::comps_b::yv_couch_step(&mut couch, steps, fps, frames);
     }
 }
-
