@@ -4206,7 +4206,7 @@ const GUI_MID: [u8; 4] = [153, 153, 153, 255];
 const GUI_UIDARK: [u8; 4] = [51, 51, 51, 255];
 const GUI_WHITE: [u8; 4] = [255, 255, 255, 255];
 const GUI_RED2: [u8; 4] = [221, 56, 45, 255];
-const GUI_GREEN: [u8; 4] = [98, 220, 88, 255];
+const GUI_HIDDEN: [u8; 4] = [0, 0, 0, 0];
 
 fn gui_body(text: impl Into<String>, gx: f32, gy: f32, color: [u8; 4]) -> MenuGuiText {
     MenuGuiText {
@@ -4266,6 +4266,120 @@ fn gui_button(text: impl Into<String>, gx: f32, gy: f32, color: [u8; 4]) -> Menu
 /// centers ink on `gy`; passing `gy = button_y - 4` reproduces the
 /// footprint. `left` selects the branch (MENU/RETRY style vs
 /// mirrored); center-x keeps the ~2px surface-pad shift.
+fn push_shadowed_sprite(
+    out: &mut Vec<SpriteInstance>,
+    assets: &RenderAssets,
+    path: &str,
+    frame: i32,
+    x: f32,
+    y: f32,
+    view: [f32; 4],
+    gm: HudGuiMap,
+    flip_x: bool,
+    tint: [f32; 4],
+) {
+    for (dx, dy) in [(1.0, 1.0), (1.0, 0.0), (0.0, 1.0)] {
+        if let Some(sprite) = assets.sprite_for(
+            path,
+            frame,
+            hud_gui_to_world(gm, view, x + dx, y + dy),
+            flip_x,
+            0.0,
+            [0.0, 0.0, 0.0, 1.0],
+        ) {
+            out.push(sprite);
+        }
+    }
+    if let Some(sprite) = assets.sprite_for(
+        path,
+        frame,
+        hud_gui_to_world(gm, view, x, y),
+        flip_x,
+        0.0,
+        tint,
+    ) {
+        out.push(sprite);
+    }
+}
+
+pub(crate) fn letterbox_sprites(
+    assets: &RenderAssets,
+    canvas_dp: [f32; 2],
+    world_size: [f32; 2],
+    cam: &Camera2d,
+) -> Vec<SpriteInstance> {
+    let view = view_rect_world(canvas_dp, world_size, cam);
+    let gm = hud_gui_map(view);
+    let vw = view[2];
+    let margin = ((vw - 320.0) * 0.5).max(0.0);
+    let mut out = Vec::new();
+    let scale = 36.0 / 35.0;
+    for (y, flip_y) in [(0.0, false), (242.0, true)] {
+        if let Some(mut sprite) = assets.sprite_for_full(
+            "images/sprLetterbox.png",
+            3,
+            hud_gui_to_world(gm, view, margin, y),
+            false,
+            flip_y,
+            0.0,
+            [1.0; 4],
+        ) {
+            sprite.size.y *= scale;
+            out.push(sprite);
+        }
+    }
+    out
+}
+
+fn push_settings_slider(
+    out: &mut Vec<SpriteInstance>,
+    assets: &RenderAssets,
+    view: [f32; 4],
+    gm: HudGuiMap,
+    x: f32,
+    y: f32,
+    value: f32,
+    max: f32,
+) {
+    let width = 112.0;
+    let fraction = (value / max).clamp(0.0, 1.0);
+    let fill_width = (width * fraction + 5.0).clamp(5.0, width + 5.0);
+    if let Some(sprite) = assets.sprite_sized(
+        "images/sprOptionSlider.png",
+        0,
+        hud_gui_to_world(gm, view, x, y - 4.0),
+        Vec2::new(width, 19.0),
+        false,
+        [1.0; 4],
+    ) {
+        out.push(sprite);
+    }
+    if let Some(sprite) = assets.sprite_sized(
+        "images/sprOptionSlider.png",
+        1,
+        hud_gui_to_world(gm, view, x + fill_width * 0.5, y - 4.0),
+        Vec2::new(fill_width, 19.0),
+        false,
+        [1.0; 4],
+    ) {
+        out.push(sprite);
+    }
+    if let Some(sprite) = assets.sprite_for(
+        "images/sprSliderEnd.png",
+        0,
+        hud_gui_to_world(gm, view, x + fill_width + 4.0, y - 2.0),
+        false,
+        0.0,
+        [1.0; 4],
+    ) {
+        out.push(sprite);
+    }
+}
+
+fn settings_option_button(text: impl Into<String>, cx: f32, y: f32) -> MenuGuiText {
+    gui_center(text, cx, y, GUI_MID)
+}
+
 fn gui_pause_button(
     text: impl Into<String>,
     button_x: f32,
@@ -5604,29 +5718,53 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 .and_then(|m| m.pause_confirm);
             if let Some(confirm) = confirm {
                 let right = if confirm == 0 { "QUIT" } else { "RETRY" };
-                let right_color = if confirm == 0 { GUI_RED2 } else { GUI_GREEN };
                 vec![
-                    gui_button("BACK", 52.0, 192.0, GUI_MID),
-                    gui_button(right, vw - 52.0, 192.0, right_color),
+                    gui_button("BACK", 52.0, 192.0, GUI_HIDDEN),
+                    gui_button(right, vw - 52.0, 192.0, GUI_HIDDEN),
                 ]
             } else {
-                vec![
+                let mut out = vec![
                     MenuGuiText {
                         text: "PAUSED".to_string(),
                         gx: cx + 1.0,
                         gy: 52.0 + 1.0 - yoff,
-                        color: GUI_WHITE,
+                        color: GUI_HIDDEN,
                         px: 10.0,
                         centered: true,
                         middle_y: true,
                         right: false,
                         bold: false,
                     },
-                    gui_pause_button("MENU", 45.0, 176.0, true, GUI_MID),
-                    gui_pause_button("RETRY", 60.0, 208.0, true, GUI_MID),
-                    gui_pause_button("SETTINGS", vw - 68.0, 176.0, false, GUI_MID),
-                    gui_pause_button("CONTINUE", vw - 78.0, 208.0, false, GUI_MID),
-                ]
+                    gui_pause_button("MENU", 45.0, 176.0, true, GUI_HIDDEN),
+                    gui_pause_button("RETRY", 60.0, 208.0, true, GUI_HIDDEN),
+                    gui_pause_button("SETTINGS", vw - 68.0, 176.0, false, GUI_HIDDEN),
+                    gui_pause_button("CONTINUE", vw - 78.0, 208.0, false, GUI_HIDDEN),
+                ];
+                if let Some(run) = world.get_resource::<Run>() {
+                    out.push(MenuGuiText {
+                        text: run_area_string(run),
+                        gx: cx - 60.0,
+                        gy: 106.0,
+                        color: GUI_WHITE,
+                        px: 7.0,
+                        centered: false,
+                        middle_y: true,
+                        right: false,
+                        bold: false,
+                    });
+                    out.push(MenuGuiText {
+                        text: run.total_kills.to_string(),
+                        gx: cx + 23.0,
+                        gy: 106.0,
+                        color: GUI_WHITE,
+                        px: 7.0,
+                        centered: false,
+                        middle_y: true,
+                        right: false,
+                        bold: false,
+                    });
+                }
+                out
             }
         }
         crate::MenuOverlay::Settings => settings_gui_texts(world, vw),
@@ -5754,13 +5892,13 @@ pub fn settings_hot_rows(page: u8, vw: f32) -> Vec<SettingHotRow> {
     };
     let tog = |gy: f32, op: SettingHotOp| SettingHotRow {
         gy,
-        cx: 140.0,
+        cx: cx - 20.0,
         hw: 100.0,
         op,
     };
     let val = |gy: f32, op: SettingHotOp| SettingHotRow {
         gy,
-        cx: 200.0,
+        cx: cx + 32.0,
         hw: 60.0,
         op,
     };
@@ -5828,19 +5966,19 @@ pub fn settings_hot_rows(page: u8, vw: f32) -> Vec<SettingHotRow> {
         ],
         4 => vec![
             tog(48.0, SettingHotOp::Toggle("gamepad_enabled")),
-            tog(62.0, SettingHotOp::Toggle("aim_assist")),
-            tog(76.0, SettingHotOp::Toggle("auto_aim")),
-            tog(90.0, SettingHotOp::Toggle("volume_controls")),
-            tog(104.0, SettingHotOp::Toggle("split_fire")),
-            tog(118.0, SettingHotOp::Toggle("fixed_sight")),
-            tog(125.0, SettingHotOp::Toggle("hidden_sticks")),
-            tog(132.0, SettingHotOp::Toggle("stick_regions")),
-            val(132.0, SettingHotOp::Cycle("gamepad_type")),
-            val(146.0, SettingHotOp::Slider("controls_scale")),
-            btn(160.0, SettingHotOp::Category(13)),
-            btn(176.0, SettingHotOp::Category(15)),
-            btn(192.0, SettingHotOp::Category(16)),
-            btn(228.0, SettingHotOp::Back),
+            val(62.0, SettingHotOp::Cycle("gamepad_type")),
+            tog(76.0, SettingHotOp::Toggle("aim_assist")),
+            tog(90.0, SettingHotOp::Toggle("auto_aim")),
+            tog(104.0, SettingHotOp::Toggle("volume_controls")),
+            tog(118.0, SettingHotOp::Toggle("split_fire")),
+            tog(132.0, SettingHotOp::Toggle("fixed_sight")),
+            tog(146.0, SettingHotOp::Toggle("hidden_sticks")),
+            tog(160.0, SettingHotOp::Toggle("stick_regions")),
+            val(174.0, SettingHotOp::Slider("controls_scale")),
+            btn(188.0, SettingHotOp::Category(13)),
+            btn(204.0, SettingHotOp::Category(15)),
+            btn(220.0, SettingHotOp::Category(16)),
+            btn(240.0, SettingHotOp::Back),
         ],
         13 => {
             // GML `Controls_Remapping_Keys` verbatim: one `keybind` row
@@ -6033,7 +6171,7 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
     let mut out = Vec::new();
     match page {
         0 => {
-            out.push(gui_center("SETTINGS", cx, 24.0, GUI_MID));
+            out.push(gui_button("SETTINGS", cx, 24.0, GUI_MID));
             for (i, (label, _)) in [
                 ("AUDIO", 1u8),
                 ("VIDEO", 2),
@@ -6044,12 +6182,13 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             .iter()
             .enumerate()
             {
-                out.push(gui_button(*label, cx, 72.0 + i as f32 * 24.0, GUI_MID));
+                let color = if i < 4 { GUI_HIDDEN } else { GUI_MID };
+                out.push(gui_button(*label, cx, 72.0 + i as f32 * 24.0, color));
             }
-            out.push(gui_button("BACK", cx, 220.0, GUI_GRAY));
+            out.push(gui_button("BACK", cx, 220.0, GUI_HIDDEN));
         }
         1 => {
-            out.push(gui_center("AUDIO", cx, 24.0, GUI_MID));
+            out.push(gui_button("AUDIO", cx, 24.0, GUI_MID));
             for (gy, label, val) in [
                 (56.0, "MASTER VOLUME", s.master_volume),
                 (76.0, "MUSIC VOLUME", s.music_volume),
@@ -6074,7 +6213,7 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
         }
         2 => {
-            out.push(gui_center("VIDEO", cx, 24.0, GUI_MID));
+            out.push(gui_button("VIDEO", cx, 24.0, GUI_MID));
             let mut y = 48.0;
             out.push(gui_body("CROSSHAIR", 80.0, y, GUI_CREAM));
             out.push(gui_body(
@@ -6114,13 +6253,13 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
                 GUI_GRAY,
             ));
             y += 18.0;
-            out.push(gui_button("DISPLAY SETTINGS", cx, y, GUI_MID));
+            out.push(settings_option_button("DISPLAY SETTINGS", cx, y));
             // DISPLAY lands at y=192; BACK at 200 would overlap its
             // 10px button box, so sit BACK at 220 like the OPTIONS page.
             out.push(gui_button("BACK", cx, 220.0, GUI_GRAY));
         }
         9 => {
-            out.push(gui_center("DISPLAY", cx, 24.0, GUI_MID));
+            out.push(gui_button("DISPLAY", cx, 24.0, GUI_MID));
             let mut y = 56.0;
             push_toggle(&mut out, "WIDESCREEN", y, s.widescreen);
             y += 20.0;
@@ -6138,7 +6277,7 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             // COLOR/DATA leaves live under PROFILE in GML; the port
             // surfaces all three here so they stay reachable without
             // the text-entry pages).
-            out.push(gui_center("GAME", cx, 24.0, GUI_MID));
+            out.push(gui_button("GAME", cx, 24.0, GUI_MID));
             let mut y = 48.0;
             for (label, on) in [
                 ("BOSS INTROS", s.boss_intros),
@@ -6149,16 +6288,30 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
                 ("ACHIEVEMENT#POPUPS", s.achievements_popup),
                 ("AUTO PAUSE", s.auto_pause),
             ] {
-                push_toggle(&mut out, label, y, on);
+                if label.contains('#') {
+                    let parts: Vec<&str> = label.split('#').collect();
+                    let first = parts.first().copied().unwrap_or(label);
+                    let second = parts.get(1).copied().unwrap_or("");
+                    out.push(gui_body(first, 80.0, y - 4.0, GUI_CREAM));
+                    out.push(gui_body(second, 80.0, y + 4.0, GUI_CREAM));
+                    out.push(gui_body(
+                        if on { "ON" } else { "OFF" },
+                        200.0,
+                        y,
+                        GUI_GRAY,
+                    ));
+                } else {
+                    push_toggle(&mut out, label, y, on);
+                }
                 y += 14.0;
             }
-            out.push(gui_button("VIEW CREDITS", cx, y, GUI_MID));
+            out.push(settings_option_button("VIEW CREDITS", cx, y));
             y += 16.0;
-            out.push(gui_button("PROFILE", cx, y, GUI_MID));
+            out.push(settings_option_button("PROFILE", cx, y));
             y += 16.0;
-            out.push(gui_button("COLOR", cx, y, GUI_MID));
+            out.push(settings_option_button("COLOR", cx, y));
             y += 16.0;
-            out.push(gui_button("DATA", cx, y, GUI_MID));
+            out.push(settings_option_button("DATA", cx, y));
             out.push(gui_button("BACK", cx, 228.0, GUI_GRAY));
         }
         4 => {
@@ -6170,7 +6323,7 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             // the `(GAMEPAD)`/`(KEYBOARD)` suffix the port cannot know),
             // CHARACTER PREFERENCES + EXPERIMENTAL OPTIONS (mobile-only
             // in GML). Names use the GML loc defaults.
-            out.push(gui_center("CONTROLS", cx, 24.0, GUI_MID));
+            out.push(gui_button("CONTROLS", cx, 24.0, GUI_MID));
             let mut y = 48.0;
             push_toggle(&mut out, "GAMEPAD", y, s.gamepad_enabled);
             y += 14.0;
@@ -6203,15 +6356,15 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
                 GUI_GRAY,
             ));
             y += 14.0;
-            out.push(gui_button("REMAP CONTROLS", cx, y, GUI_MID));
+            out.push(settings_option_button("REMAP CONTROLS", cx, y));
             y += 16.0;
-            out.push(gui_button("CHARACTER PREFERENCES", cx, y, GUI_MID));
+            out.push(settings_option_button("CHARACTER PREFERENCES", cx, y));
             y += 16.0;
-            out.push(gui_button("EXPERIMENTAL OPTIONS", cx, y, GUI_MID));
+            out.push(settings_option_button("EXPERIMENTAL OPTIONS", cx, y));
             out.push(gui_button("BACK", cx, 228.0, GUI_GRAY));
         }
         10 => {
-            out.push(gui_center("PROFILE", cx, 24.0, GUI_MID));
+            out.push(gui_button("PROFILE", cx, 24.0, GUI_MID));
             out.push(gui_body("PROFILE NAME", 80.0, 48.0, GUI_CREAM));
             out.push(gui_body(
                 if s.profile_name.is_empty() {
@@ -6234,11 +6387,11 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
                 68.0,
                 GUI_GRAY,
             ));
-            out.push(gui_button("COLOR", cx, 88.0, GUI_MID));
+            out.push(settings_option_button("COLOR", cx, 88.0));
             out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
         }
         11 => {
-            out.push(gui_center("COLOR", cx, 24.0, GUI_MID));
+            out.push(gui_button("COLOR", cx, 24.0, GUI_MID));
             out.push(gui_center(
                 format!(
                     "HEX: {}",
@@ -6252,17 +6405,17 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
                 60.0,
                 GUI_CREAM,
             ));
-            out.push(gui_button("CYCLE COLOR", cx, 90.0, GUI_MID));
+            out.push(settings_option_button("CYCLE COLOR", cx, 90.0));
             out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
         }
         12 => {
-            out.push(gui_center("DATA", cx, 24.0, GUI_MID));
-            out.push(gui_button("RESET OPTIONS", cx, 80.0, GUI_CREAM));
-            out.push(gui_button("ERASE PROGRESS", cx, 110.0, GUI_RED2));
+            out.push(gui_button("DATA", cx, 24.0, GUI_MID));
+            out.push(settings_option_button("RESET OPTIONS", cx, 80.0));
+            out.push(gui_center("ERASE PROGRESS", cx, 110.0, GUI_RED2));
             out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
         }
         13 => {
-            out.push(gui_center("REMAP", cx, 24.0, GUI_MID));
+            out.push(gui_button("REMAP", cx, 24.0, GUI_MID));
             let keymap = world
                 .get_resource::<crate::keymap::InputMapState>()
                 .map(|s| s.session.map.clone())
@@ -6282,11 +6435,11 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
                 out.push(gui_body(text, 200.0, y, GUI_GRAY));
                 y += 16.0;
             }
-            out.push(gui_button("DEFAULT PRESET", cx, 196.0, GUI_CREAM));
+            out.push(settings_option_button("DEFAULT PRESET", cx, 196.0));
             out.push(gui_button("BACK", cx, 212.0, GUI_GRAY));
         }
         15 => {
-            out.push(gui_center("CHAR PREFS", cx, 24.0, GUI_MID));
+            out.push(gui_button("CHAR PREFS", cx, 24.0, GUI_MID));
             let prefs = [
                 s.cprefs_eyes,
                 s.cprefs_melting,
@@ -6312,7 +6465,7 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             // (`options_keyboard`), STICK REGIONS, HIDE JOYSTICKS
             // (hidden while regions are on — the repositioning sticks
             // never sit at home).
-            out.push(gui_center("EXPERIMENTAL", cx, 24.0, GUI_MID));
+            out.push(gui_button("EXPERIMENTAL", cx, 24.0, GUI_MID));
             push_toggle(&mut out, "KEYBOARD MODE", 48.0, s.keyboard_enabled);
             push_toggle(&mut out, "STICK REGIONS", 66.0, s.stick_regions);
             if !s.stick_regions {
@@ -6321,7 +6474,7 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
         }
         5 => {
-            out.push(gui_center("LANGUAGE", cx, 24.0, GUI_MID));
+            out.push(gui_button("LANGUAGE", cx, 24.0, GUI_MID));
             let mut y = 60.0;
             for lang in crate::state::menus::AVAILABLE_LANGUAGES {
                 let current = lang == s.language;
@@ -6330,9 +6483,9 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
                     gx: cx,
                     gy: y,
                     color: if current { GUI_WHITE } else { GUI_MID },
-                    px: 10.0,
+                    px: 7.0,
                     centered: true,
-                    middle_y: false,
+                    middle_y: true,
                     right: false,
                     bold: false,
                 });
@@ -6341,6 +6494,16 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
         }
         _ => {}
+    }
+    for row in &mut out {
+        if (row.gx - 80.0).abs() < 0.1 {
+            row.gx = cx - 130.0;
+        } else if (row.gx - 200.0).abs() < 0.1 {
+            row.gx = cx + 32.0;
+        }
+        if row.text == "BACK" {
+            row.color = GUI_HIDDEN;
+        }
     }
     // Keyboard cursor highlight (bevy hover parity): the cursor row
     // renders white so arrow-key nav is visible, not blind.
@@ -6351,7 +6514,7 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
     if cursor != usize::MAX {
         if let Some(row) = settings_hot_rows(page, vw).get(cursor) {
             for t in out.iter_mut() {
-                if (t.gy - row.gy).abs() < 0.5 {
+                if t.color != GUI_HIDDEN && (t.gy - row.gy).abs() < 0.5 {
                     t.color = GUI_WHITE;
                 }
             }
@@ -9490,21 +9653,166 @@ pub fn menu_sprites(
                 }
             }
         }
-        crate::MenuOverlay::Pause => {
-            // GML `UberCont/Draw_0` paused branch sprite layer verbatim:
-            // frozen `pausespr` screenshot (shell-owned surface, not
-            // drawn here) + corner `sprCharSplat` pair at `(view_left,
-            // view_bottom-31)` / mirrored at `(view_right,
-            // view_bottom-31)` + FULL roadmap at `(view_center,
-            // view_center)` (`pos = 1000`, i.e. the whole run). The
-            // `PAUSED` bigname + buttons ride the text layer. Ordered
-            // campfire portraits need the room actors the port
-            // despawns on pause, so only the splat pair + roadmap draw
-            // here.
+        crate::MenuOverlay::Settings => {
             let cx = vw * 0.5;
+            let menu = world.get_resource::<MenuState>().cloned();
+            let page = menu.as_ref().map(|m| m.settings_page).unwrap_or(0);
+            let cursor = menu
+                .as_ref()
+                .map(|m| m.settings_cursor)
+                .unwrap_or(usize::MAX);
+            let save = world
+                .get_resource::<crate::savedata_part::SaveData>()
+                .cloned()
+                .unwrap_or_default();
+            let settings = &save.settings;
+            if menu
+                .as_ref()
+                .is_some_and(|m| m.settings_splat > 0.0 && m.settings_cursor != usize::MAX)
+                && let Some(row) = settings_hot_rows(page, vw).get(cursor)
+                && !matches!(row.op, SettingHotOp::Back)
+            {
+                if let Some(s) = assets.sprite_for(
+                    "images/sprMainMenuSplat.png",
+                    menu
+                        .as_ref()
+                        .map(|m| m.settings_splat.floor() as i32)
+                        .unwrap_or(0)
+                        .min(3),
+                    gui_to_world(row.cx, row.gy),
+                    false,
+                    0.0,
+                    [1.0; 4],
+                ) {
+                    out.push(s);
+                }
+            }
+            if page == 0 {
+                for (i, frame) in [0, 1, 2, 3].into_iter().enumerate() {
+                    let tint = if cursor == i {
+                        [1.0; 4]
+                    } else {
+                        [0.5, 0.5, 0.5, 1.0]
+                    };
+                    push_shadowed_sprite(
+                        &mut out,
+                        assets,
+                        "images/sprOptionsButtons.png",
+                        frame,
+                        cx,
+                        72.0 + i as f32 * 24.0,
+                        view,
+                        gm,
+                        false,
+                        tint,
+                    );
+                }
+            }
+            let slider_x = cx + 26.0;
+            match page {
+                1 => {
+                    for (y, value) in [
+                        (56.0, settings.master_volume),
+                        (76.0, settings.music_volume),
+                        (96.0, settings.ambience_volume),
+                        (116.0, settings.sfx_volume),
+                    ] {
+                        push_settings_slider(
+                            &mut out, assets, view, gm, slider_x, y, value, 1.0,
+                        );
+                    }
+                }
+                2 => {
+                    push_settings_slider(
+                        &mut out,
+                        assets,
+                        view,
+                        gm,
+                        slider_x,
+                        84.0,
+                        settings.screenshake,
+                        2.0,
+                    );
+                    push_settings_slider(
+                        &mut out,
+                        assets,
+                        view,
+                        gm,
+                        slider_x,
+                        102.0,
+                        settings.freezeframes,
+                        1.0,
+                    );
+                }
+                4 => {
+                    push_settings_slider(
+                        &mut out,
+                        assets,
+                        view,
+                        gm,
+                        slider_x,
+                        174.0,
+                        settings.controls_scale,
+                        1.0,
+                    );
+                }
+                _ => {}
+            }
+            let back_hover = menu.as_ref().is_some_and(|m| m.settings_back_hover);
+            push_shadowed_sprite(
+                &mut out,
+                assets,
+                "images/sprBackButton.png",
+                if back_hover { 1 } else { 0 },
+                if cfg!(target_os = "android") { 24.0 } else { 16.0 },
+                20.0,
+                view,
+                gm,
+                false,
+                if back_hover { [1.0; 4] } else { [0.7, 0.7, 0.7, 1.0] },
+            );
+        }
+        crate::MenuOverlay::Pause => {
+            let cx = vw * 0.5;
+            let menu = world.get_resource::<MenuState>().cloned();
+            let confirm = menu.as_ref().and_then(|m| m.pause_confirm);
+            let splat = menu
+                .as_ref()
+                .map(|m| m.pause_splat.floor().clamp(0.0, 3.0) as i32)
+                .unwrap_or(0);
+            let player = world
+                .query::<(&RaceState, &Health)>()
+                .iter(world)
+                .next()
+                .map(|(race, health)| (race.race, health.hp));
+            if let Some((race, hp)) = player {
+                let skin = world
+                    .get_resource::<crate::savedata_part::SaveData>()
+                    .map(|save| save.race_loadout(race).preferred_skin)
+                    .unwrap_or(0);
+                let area = world
+                    .get_resource::<Run>()
+                    .map(|run| run.area)
+                    .unwrap_or(AreaId::Desert);
+                if let Some((path, frame)) = big_portrait_for(race, skin, Some(hp), area) {
+                    if let Some(s) = assets.sprite_for(
+                        path,
+                        frame,
+                        gui_to_world(
+                            -2.0 - menu.as_ref().map(|m| m.pause_portrait_anim).unwrap_or(0.0),
+                            260.0,
+                        ),
+                        false,
+                        0.0,
+                        [1.0; 4],
+                    ) {
+                        out.push(s);
+                    }
+                }
+            }
             if let Some(s) = assets.sprite_for(
                 "images/sprCharSplat.png",
-                0,
+                splat,
                 gui_to_world(0.0, 240.0 - 31.0),
                 false,
                 0.0,
@@ -9514,7 +9822,7 @@ pub fn menu_sprites(
             }
             if let Some(s) = assets.sprite_for(
                 "images/sprCharSplat.png",
-                0,
+                splat,
                 gui_to_world(vw, 240.0 - 31.0),
                 true,
                 0.0,
@@ -9532,6 +9840,77 @@ pub fn menu_sprites(
                     &wps,
                     1000,
                 ));
+            }
+            let yoff = world
+                .get_resource::<Run>()
+                .is_some_and(|run| run.hardmode)
+                .then_some(4.0)
+                .unwrap_or(0.0);
+            if let Some(s) = assets.sprite_for(
+                "images/sprPaused.png",
+                0,
+                gui_to_world(cx + 1.0, 53.0 - yoff),
+                false,
+                0.0,
+                [0.0, 0.0, 0.0, 1.0],
+            ) {
+                out.push(s);
+            }
+            if let Some(s) = assets.sprite_for(
+                "images/sprPaused.png",
+                0,
+                gui_to_world(cx, 52.0 - yoff),
+                false,
+                0.0,
+                [1.0; 4],
+            ) {
+                out.push(s);
+            }
+            let labels: &[&str] = if confirm.is_some() {
+                &["BACK", if confirm == Some(0) { "QUIT" } else { "RETRY" }]
+            } else {
+                &["MENU", "RETRY", "SETTINGS", "CONTINUE"]
+            };
+            let positions: &[(f32, f32, i32)] = if confirm.is_some() {
+                &[(52.0, 192.0, 4), (vw - 52.0, 192.0, if confirm == Some(0) { 5 } else { 6 })]
+            } else {
+                &[
+                    (45.0, 176.0, 0),
+                    (60.0, 208.0, 1),
+                    (vw - 68.0, 176.0, 2),
+                    (vw - 78.0, 208.0, 3),
+                ]
+            };
+            let hover = menu
+                .as_ref()
+                .map(|m| m.hover_label.as_str())
+                .unwrap_or("");
+            for (i, (label, (x, y, frame))) in labels.iter().zip(positions.iter()).enumerate() {
+                let appear = menu
+                    .as_ref()
+                    .and_then(|m| m.pause_appear.get(i).copied())
+                    .unwrap_or(0.0);
+                if appear >= 2.0 {
+                    continue;
+                }
+                let selected = hover == *label;
+                let tint = if selected {
+                    [1.0; 4]
+                } else {
+                    [0.5, 0.5, 0.5, 1.0]
+                };
+                push_shadowed_sprite(
+                    &mut out,
+                    assets,
+                    "images/sprPauseButton.png",
+                    *frame,
+                    *x,
+                    *y + appear,
+                    view,
+                    gm,
+                    false,
+                    tint,
+                );
             }
         }
         crate::MenuOverlay::Unlock => {

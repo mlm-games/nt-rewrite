@@ -341,6 +341,10 @@ pub struct MenuState {
     pub mutation_toast_shift_pending: bool,
     /// Pause quit/restart confirm (bevy `pause_confirm`: 0 quit, 1 restart).
     pub pause_confirm: Option<u8>,
+    pub pause_cursor: usize,
+    pub pause_splat: f32,
+    pub pause_appear: [f32; 4],
+    pub pause_portrait_anim: f32,
     /// Hardmode armed for the next run (GML PlayButton image 3; needs
     /// the loop-2 unlock).
     pub hardmode_selected: bool,
@@ -365,6 +369,10 @@ pub struct MenuState {
     /// Mouse moves own `pointed_item` directly while `mouse_active` and
     /// never write this; `tick_settings_nav` only runs off it).
     pub settings_cursor: usize,
+    pub settings_splat: f32,
+    pub settings_splat_page: u8,
+    pub settings_splat_cursor: usize,
+    pub settings_back_hover: bool,
     /// Pending unlock popups (producer deferred; see module docs).
     pub unlock_queue: Vec<UnlockPopup>,
     /// Credits section index (GML `Credits.show` over `credittext`).
@@ -438,6 +446,10 @@ impl Default for MenuState {
             mutation_toast_offset: 0.0,
             mutation_toast_shift_pending: false,
             pause_confirm: None,
+            pause_cursor: 0,
+            pause_splat: 0.0,
+            pause_appear: [1.0, 2.0, 3.0, 3.0],
+            pause_portrait_anim: 0.0,
             hardmode_selected: false,
             settings_page: 0,
             settings_page_stack: Vec::new(),
@@ -447,7 +459,11 @@ impl Default for MenuState {
             credits_section: 0,
             credits_t: 0.0,
             credits_scroll: 0.0,
-            settings_cursor: 0,
+            settings_cursor: usize::MAX,
+            settings_splat: 0.0,
+            settings_splat_page: 0,
+            settings_splat_cursor: usize::MAX,
+            settings_back_hover: false,
             unlock_queue: Vec::new(),
             game_over: None,
             go_death_pos: 0.0,
@@ -947,7 +963,11 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 menu.settings_page = 0;
                 menu.settings_page_stack.clear();
                 menu.pause_confirm = None;
-                menu.settings_cursor = 0;
+                menu.settings_cursor = usize::MAX;
+                menu.settings_splat = 0.0;
+                menu.settings_splat_page = 0;
+                menu.settings_splat_cursor = usize::MAX;
+                menu.settings_back_hover = false;
             }
             world.init_resource::<OverlayMenu>();
             *world.resource_mut::<OverlayMenu>() = OverlayMenu::Settings;
@@ -1102,7 +1122,7 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                     menu.settings_page_stack.push(cur);
                 }
                 menu.settings_page = cat;
-                menu.settings_cursor = 0;
+                menu.settings_cursor = usize::MAX;
             }
             emit_cue(world, &UiAction::SettingsCategory(cat));
         }
@@ -1110,7 +1130,7 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             let should_close = {
                 match world.get_resource_mut::<MenuState>() {
                     Some(mut menu) => {
-                        menu.settings_cursor = 0;
+                        menu.settings_cursor = usize::MAX;
                         if let Some(prev) = menu.settings_page_stack.pop() {
                             menu.settings_page = prev;
                             false
@@ -1140,6 +1160,10 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
                     menu.settings_page = 0;
                     menu.settings_page_stack.clear();
+                    menu.pause_confirm = None;
+                    menu.pause_cursor = 0;
+                    menu.pause_splat = 0.0;
+                    menu.pause_appear = [1.0, 2.0, 3.0, 3.0];
                 }
                 emit_cue(world, &UiAction::SettingsBack);
             } else {
@@ -1150,12 +1174,16 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
         UiAction::ShowPauseConfirm(kind) => {
             if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
                 menu.pause_confirm = Some(kind);
+                menu.pause_cursor = 0;
+                menu.pause_appear = [2.0, 2.0, 0.0, 0.0];
             }
             emit_cue(world, &UiAction::ShowPauseConfirm(kind));
         }
         UiAction::CancelPauseConfirm => {
             if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
                 menu.pause_confirm = None;
+                menu.pause_cursor = 0;
+                menu.pause_appear = [1.0, 2.0, 3.0, 3.0];
             }
             emit_cue(world, &UiAction::CancelPauseConfirm);
         }
@@ -1465,10 +1493,11 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             emit_cue(world, &action);
         }
         UiAction::SettingResetOptions => {
-            // Bevy resets the whole save (progress included) — mirrored.
             world.init_resource::<SaveData>();
-            *world.resource_mut::<SaveData>() = SaveData::default();
-            debug_assert_eq!(world.resource::<SaveData>().version, SAVE_VERSION);
+            let mut save = world.resource_mut::<SaveData>();
+            save.settings = SaveData::default().settings;
+            debug_assert_eq!(save.version, SAVE_VERSION);
+            drop(save);
             mark_dirty(world);
             emit_cue(world, &UiAction::SettingResetOptions);
         }
@@ -1525,7 +1554,7 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                     menu.settings_page_stack.push(cur);
                 }
                 menu.settings_page = cat;
-                menu.settings_cursor = 0;
+                menu.settings_cursor = usize::MAX;
             }
             emit_cue(world, &UiAction::SettingOpenSubcategory(cat));
         }
@@ -2088,20 +2117,32 @@ fn tick_settings_nav(world: &mut World, nav_v: i8, nav_h: i8, confirm: bool) {
         }
         next
     };
+    let raw_cursor = world
+        .get_resource::<MenuState>()
+        .map(|m| m.settings_cursor)
+        .unwrap_or(usize::MAX);
     if nav_v != 0 {
+        let next = if raw_cursor == usize::MAX {
+            if nav_v < 0 { n - 1 } else { 0 }
+        } else {
+            step(raw_cursor.min(n - 1), nav_v as i16)
+        };
         if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
-            let cur = menu.settings_cursor.min(n - 1);
-            menu.settings_cursor = step(cur, nav_v as i16);
+            menu.settings_cursor = next;
         }
         emit_sfx(world, hover_sfx());
     }
-    // Re-clamp after page jumps (cursor resets to 0 on drill, but a
-    // language set keeps the page with new length). A cursor parked on
-    // the regions-hidden row steps off it.
     let mut cursor = world
         .get_resource::<MenuState>()
-        .map(|m| m.settings_cursor.min(n - 1))
-        .unwrap_or(0);
+        .map(|m| m.settings_cursor)
+        .unwrap_or(usize::MAX);
+    if cursor == usize::MAX {
+        return;
+    }
+    // Re-clamp after page jumps (cursor resets to the GML unselected
+    // sentinel on drill, but a language set keeps the page with new
+    // length). A cursor parked on the regions-hidden row steps off it.
+    cursor = cursor.min(n - 1);
     if Some(cursor) == hidden {
         cursor = step(cursor, 1);
         if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
@@ -2157,6 +2198,50 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
             apply_mutation_mirror(&mut menu, count, is_ultra, offer_key);
         }
         tick_mutation_anim(world);
+    }
+
+    if world
+        .get_resource::<OverlayMenu>()
+        .is_some_and(|overlay| *overlay == OverlayMenu::Pause)
+    {
+        let steps = world
+            .get_resource::<repame_sim::SimTime>()
+            .map(|time| (time.delta_secs * 30.0).max(0.0))
+            .unwrap_or(1.0);
+        if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+            menu.pause_splat = (menu.pause_splat + steps).min(3.0);
+            for appear in &mut menu.pause_appear {
+                *appear = (*appear - steps).max(0.0);
+            }
+            menu.pause_portrait_anim = match menu.pause_portrait_anim {
+                180.0 => 90.0,
+                90.0 => -2.0,
+                -2.0 => 0.0,
+                value => value,
+            };
+        }
+    }
+    if world
+        .get_resource::<OverlayMenu>()
+        .is_some_and(|overlay| *overlay == OverlayMenu::Settings)
+    {
+        let steps = world
+            .get_resource::<repame_sim::SimTime>()
+            .map(|time| (time.delta_secs * 30.0).max(0.0))
+            .unwrap_or(1.0);
+        let (page, cursor) = world
+            .get_resource::<MenuState>()
+            .map(|menu| (menu.settings_page, menu.settings_cursor))
+            .unwrap_or((0, usize::MAX));
+        if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+            if page != menu.settings_splat_page || cursor != menu.settings_splat_cursor {
+                menu.settings_splat = 0.0;
+                menu.settings_splat_page = page;
+                menu.settings_splat_cursor = cursor;
+            } else if cursor != usize::MAX {
+                menu.settings_splat = (menu.settings_splat + steps).min(3.0);
+            }
+        }
     }
 
     let game_over = world.get_resource::<Run>().is_some_and(|run| run.game_over);
@@ -2334,7 +2419,9 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
     // (`game_restart()` — same path as the death RETRY: immediate
     // restart through Loading). GML gates only on typing/console/
     // public lobbies, none of which the port implements.
-    if edge.restart_pressed {
+    if edge.restart_pressed
+        && *world.resource::<OverlayMenu>() == OverlayMenu::None
+    {
         goto_state(world, AppState::Loading);
         return;
     }
@@ -2383,6 +2470,42 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
                 }
                 _ => {}
             }
+        }
+    }
+    if overlay_kind == OverlayMenu::Pause {
+        let pause_kind = world
+            .get_resource::<MenuState>()
+            .and_then(|m| m.pause_confirm);
+        let count = if pause_kind.is_some() { 2 } else { 4 };
+        let delta = if nav_v != 0 {
+            nav_v as i16
+        } else if count > 2 && nav_h != 0 {
+            nav_h as i16 * 2
+        } else {
+            0
+        };
+        if delta != 0 {
+            let index = world
+                .get_resource::<MenuState>()
+                .map(|menu| {
+                    (menu.pause_cursor as i16 + delta).rem_euclid(count as i16) as usize
+                })
+                .unwrap_or(0);
+            let label = if let Some(kind) = pause_kind {
+                if index == 0 {
+                    "BACK"
+                } else if kind == 0 {
+                    "QUIT"
+                } else {
+                    "RETRY"
+                }
+            } else {
+                ["MENU", "RETRY", "SETTINGS", "CONTINUE"][index]
+            };
+            if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+                menu.pause_cursor = index;
+            }
+            emit_hover_if_changed(world, label);
         }
     }
     match overlay_kind {

@@ -65,7 +65,7 @@ use repame_anim::{AnimCatalog, AtlasDesc};
 use repame_sim::{Sim, SimTime};
 use repame_sprite::{
     BatchDesc, Camera2d, FrameInput, GeomHandle, PickEvent, SpriteBatch, SpriteInstance,
-    Viewport2d, Viewport2dGpu,
+    Viewport2d, Viewport2dGpu, Viewport2dGpuWithId,
 };
 use repose_canvas::Embedded;
 use repose_core::PaddingValues;
@@ -91,8 +91,8 @@ use crate::render::{
     crosshair_sprites, decode_png, fainted_bar_sprites, fog_sprites, fx_instances, fx_texts,
     gml_camera_step, gml_view_scale, gml_view_size, hud_gui_texts_dp, hud_sprites, menu_gui_texts,
     menu_gui_texts_dp, menu_gui_texts_vw, menu_sprites, portal_indicator_sprites, shadow_sprites,
-    sideart_sprites, spiral_figures, splash_sprites, stamp_z, title_cam_focus, title_camera_step,
-    touch_sprites, view_rect_world, world_camera, world_instances,
+    letterbox_sprites, sideart_sprites, spiral_figures, splash_sprites, stamp_z, title_cam_focus,
+    title_camera_step, touch_sprites, view_rect_world, world_camera, world_instances,
 };
 use crate::schedule::build_sim_schedule;
 use crate::setup::setup_run_with_seed;
@@ -223,6 +223,7 @@ pub struct App {
     /// art changes (frame/tint/pixels/scale); cleared when assets unload.
     cursor_img: Option<std::sync::Arc<repose_core::CustomCursorImage>>,
     cursor_img_key: Option<(i32, [u32; 3], u64, u32)>,
+    last_live_frame: Option<FrameInput>,
     /// Decoded vortex background textures for `vortex_tex_area`
     /// (slots: spiral, bolt, debris, proto, idpd, idpd2).
     vortex_tex: Vec<VortexTexture>,
@@ -349,6 +350,7 @@ impl App {
             assets_dir: None,
             cursor_img: None,
             cursor_img_key: None,
+            last_live_frame: None,
             vortex_tex: Vec::new(),
             vortex_tex_area: None,
             window_focused: true,
@@ -412,6 +414,7 @@ impl App {
         self.assets_dir = Some(dir.to_path_buf());
         self.cursor_img = None;
         self.cursor_img_key = None;
+        self.last_live_frame = None;
         self.vortex_tex.clear();
         self.vortex_tex_area = None;
         Ok(())
@@ -1180,10 +1183,18 @@ impl App {
                 }
             }
             Key::Backspace => {
-                // GML REMAP cancel key (Backspace clears the pending
-                // rebind). Position-staged so layouts agree.
                 if down && !ke.is_repeat {
-                    self.cancel_remap_capture();
+                    let overlay = self
+                        .sim
+                        .world
+                        .get_resource::<OverlayMenu>()
+                        .copied()
+                        .unwrap_or_default();
+                    if overlay == OverlayMenu::Settings {
+                        self.menu_actions.push(UiAction::SettingsBack);
+                    } else {
+                        self.cancel_remap_capture();
+                    }
                 }
             }
             _ => {}
@@ -1731,9 +1742,10 @@ impl App {
         // Gameplay is gated off in both places, so the arrows are free.
         {
             let settings_open = overlay == OverlayMenu::Settings;
+            let pause_open = overlay == OverlayMenu::Pause;
             let mut dv: i8 = 0;
             let mut dh: i8 = 0;
-            if state == AppState::MainMenu || settings_open {
+            if state == AppState::MainMenu || settings_open || pause_open {
                 if just.contains(&KeyCode::ArrowUp) {
                     dv -= 1;
                 }
@@ -1741,7 +1753,7 @@ impl App {
                     dv += 1;
                 }
             }
-            if settings_open {
+            if settings_open || pause_open {
                 if just.contains(&KeyCode::ArrowLeft) {
                     dh -= 1;
                 }
@@ -1813,6 +1825,12 @@ impl App {
                     )
                 })
                 .unwrap_or((0.5, false, false));
+            let pad_pause_confirm = self
+                .sim
+                .world
+                .get_resource::<MenuState>()
+                .and_then(|menu| menu.pause_confirm)
+                .is_some();
             let mut input = self.sim.world.resource_mut::<NtInput>();
             // Menu screens own Space/arrows: strip their edges before the
             // gameplay sampler so one press can't both confirm a menu
@@ -1835,29 +1853,51 @@ impl App {
             crate::input::sample_keyboard_mapped(&held, &just, &mouse, Some(&keymap), &mut input);
             let pads = self.staging.borrow_mut().take_pads();
             self.pad_live = self.staging.borrow().pad_live;
-            let menu_cycle = if offer_open {
+            if pads.iter().any(|pad| pad.east_pressed) {
+                match overlay {
+                    OverlayMenu::Settings => self.menu_actions.push(UiAction::SettingsBack),
+                    OverlayMenu::Pause => {
+                        let action = if pad_pause_confirm {
+                            UiAction::CancelPauseConfirm
+                        } else {
+                            UiAction::Resume
+                        };
+                        self.menu_actions.push(action);
+                    }
+                    _ => {}
+                }
+            }
+            let menu_gamepad = offer_open
+                || matches!(overlay, OverlayMenu::Pause | OverlayMenu::Settings);
+            let menu_cycle = if menu_gamepad {
                 input.take_cycle_weapon()
             } else {
                 0
             };
-            let menu_slot = if offer_open {
+            let menu_slot = if menu_gamepad {
                 input.take_weapon_slot()
             } else {
                 None
             };
-            if offer_open {
-                let step = pads.iter().fold(0_i8, |value, pad| {
-                    value.saturating_add(
-                        i8::from(pad.dpad_right_pressed)
-                            .saturating_sub(i8::from(pad.dpad_left_pressed)),
+            if menu_gamepad {
+                let (dv, dh) = pads.iter().fold((0_i8, 0_i8), |(value, horizontal), pad| {
+                    (
+                        value.saturating_add(
+                            i8::from(pad.dpad_down_pressed)
+                                .saturating_sub(i8::from(pad.dpad_up_pressed)),
+                        ),
+                        horizontal.saturating_add(
+                            i8::from(pad.dpad_right_pressed)
+                                .saturating_sub(i8::from(pad.dpad_left_pressed)),
+                        ),
                     )
                 });
-                if step != 0 {
-                    input.push_menu_nav(0, step);
+                if dv != 0 || dh != 0 {
+                    input.push_menu_nav(dv, dh);
                 }
             }
             sample_gamepads_mapped(&pads, Some(&keymap), &mut input);
-            if offer_open {
+            if menu_gamepad {
                 let _ = input.take_cycle_weapon();
                 let _ = input.take_weapon_slot();
                 if menu_cycle != 0 {
@@ -2077,6 +2117,49 @@ impl App {
                         route_menu_click(&mut self.sim.world, kind, click.dp, viewport_dp)
                     {
                         apply_menu_action(&mut self.sim.world, action);
+                    }
+                }
+            }
+            if !released_touch_clicks.is_empty() {
+                let viewport_dp = self.view_viewport_dp;
+                let kind = menu_overlay_kind(
+                    state,
+                    overlay,
+                    &self.sim.world.resource::<MenuState>(),
+                    game_over,
+                );
+                let gml_view = gml_view_size(viewport_dp);
+                let sx = if viewport_dp[0] > 1e-6 {
+                    gml_view[0] / viewport_dp[0]
+                } else {
+                    1.0
+                };
+                let sy = if viewport_dp[1] > 1e-6 {
+                    gml_view[1] / viewport_dp[1]
+                } else {
+                    1.0
+                };
+                for point in released_touch_clicks.drain(..) {
+                    let action = if kind == Some(MenuOverlay::Mutation) {
+                        crate::render::mutation_icon_hit_action(
+                            &mut self.sim.world,
+                            point.x * sx,
+                            point.y * sy,
+                            gml_view[0],
+                        )
+                    } else {
+                        kind.and_then(|kind| {
+                            route_menu_click(
+                                &mut self.sim.world,
+                                kind,
+                                [point.x, point.y],
+                                viewport_dp,
+                            )
+                        })
+                    };
+                    if let Some(action) = action {
+                        apply_menu_action(&mut self.sim.world, action);
+                        break;
                     }
                 }
             }
@@ -2346,6 +2429,14 @@ impl App {
                     .get_resource::<MenuState>()
                     .map(|m| m.settings_page)
                     .unwrap_or(0);
+                let back_x = if cfg!(target_os = "android") { 24.0 } else { 16.0 };
+                let back_hover = gx >= back_x - 20.0
+                    && gx <= back_x + 20.0
+                    && gy >= 0.0
+                    && gy <= 40.0;
+                if let Some(mut menu) = self.sim.world.get_resource_mut::<MenuState>() {
+                    menu.settings_back_hover = back_hover;
+                }
                 let rows = crate::render::settings_hot_rows(page, vw);
                 if let Some((idx, _)) = rows
                     .iter()
@@ -2502,14 +2593,34 @@ impl App {
                     .world
                     .get_resource::<MenuState>()
                     .and_then(|m| m.pause_confirm);
+                let mut pointed = false;
                 for t in &rows {
                     if menu_button_action(kind, &t.text, confirm).is_none() {
                         continue;
                     }
                     if (gx - t.gx).abs() <= 60.0 && (gy - t.gy).abs() <= 11.0 {
+                        pointed = true;
+                        if kind == MenuOverlay::Pause {
+                            let index = match t.text.as_str() {
+                                "MENU" | "BACK" => 0,
+                                "RETRY" => 1,
+                                "SETTINGS" => 2,
+                                "CONTINUE" => 3,
+                                "QUIT" => 1,
+                                _ => 0,
+                            };
+                            if let Some(mut menu) = self.sim.world.get_resource_mut::<MenuState>() {
+                                menu.pause_cursor = index;
+                            }
+                        }
                         crate::state::menus::emit_hover_if_changed(&mut self.sim.world, &t.text);
                         break;
                     }
+                }
+                if !pointed
+                    && let Some(mut menu) = self.sim.world.get_resource_mut::<MenuState>()
+                {
+                    menu.hover_label.clear();
                 }
             }
             _ => {}
@@ -2696,6 +2807,7 @@ impl App {
         // needs `&mut self`). `None` when assets are absent or the gate
         // is off — the refresh then clears the payload.
         let mut cursor_req: Option<(i32, [f32; 4])> = None;
+        let mut chrome_sprites: Vec<SpriteInstance> = Vec::new();
         let (mut sprites, texts) = if self.assets.is_some() {
             let assets = self.assets.as_ref().expect("checked");
             // Cursor world position for the GML crosshair distance
@@ -2980,7 +3092,14 @@ impl App {
                     Z_MENU
                 };
                 stamp_z(&mut menu, menu_z);
-                s.extend(menu);
+                if matches!(
+                    kind,
+                    MenuOverlay::Pause | MenuOverlay::Settings | MenuOverlay::GameOver
+                ) {
+                    chrome_sprites = menu;
+                } else {
+                    s.extend(menu);
+                }
             }
             // Hardware cursor (GML `UberCont/Draw_75` verbatim): in
             // keyboard mode the OS cursor carries `sprCrosshair[opt_crosshair]`
@@ -3186,15 +3305,16 @@ impl App {
         // the scrim `UiBox` above (bevy parity: one 230-black layer
         // over everything, background included), never the viewport
         // tint (that would double-dim the sprites).
-        let dim_menu = matches!(
-            menu_kind,
-            Some(MenuOverlay::Pause)
-                | Some(MenuOverlay::Settings)
-                | Some(MenuOverlay::Credits)
-                | Some(MenuOverlay::GameOver)
-                | Some(MenuOverlay::Stats)
-                | Some(MenuOverlay::Unlock)
-        );
+        let dim_menu = state == AppState::InGame
+            && matches!(
+                menu_kind,
+                Some(MenuOverlay::Pause)
+                    | Some(MenuOverlay::Settings)
+                    | Some(MenuOverlay::Credits)
+                    | Some(MenuOverlay::GameOver)
+                    | Some(MenuOverlay::Stats)
+                    | Some(MenuOverlay::Unlock)
+            );
         let overlay_color = crate::effects::flash_rgba(&self.sim.world);
 
         // GML `scrGameIsGenerationScreen` keeps PlayerHUD text off for
@@ -3204,7 +3324,10 @@ impl App {
         // HP/level/ammo/FLOOR from painting over the spiral.
         let hud_rows = if state == AppState::InGame
             && !cover_chrome_off
-            && matches!(menu_kind, None | Some(MenuOverlay::Mutation))
+            && matches!(
+                menu_kind,
+                None | Some(MenuOverlay::Mutation) | Some(MenuOverlay::Pause)
+            )
         {
             hud_overlay_lines(&mut self.sim.world, viewport_dp)
         } else {
@@ -3234,6 +3357,10 @@ impl App {
             }
         }
 
+        if state != AppState::InGame {
+            self.last_live_frame = None;
+        }
+
         // Viewport input snapshot (owned from here on; handlers below only
         // touch staged input through the raw pointer).
         let frame = FrameInput {
@@ -3247,6 +3374,12 @@ impl App {
             background,
             overlay_color,
             chroma: 0.0,
+        };
+        let display_frame = if paused {
+            self.last_live_frame.clone().unwrap_or_else(|| frame.clone())
+        } else {
+            self.last_live_frame = Some(frame.clone());
+            frame
         };
 
         let staging = self.staging.clone();
@@ -3262,7 +3395,7 @@ impl App {
                 .as_ref()
                 .map(|a| a.batch_desc())
                 .unwrap_or_default();
-            Viewport2dGpu(frame, geom, uploads, desc, move |ev| {
+            Viewport2dGpu(display_frame, geom, uploads, desc, move |ev| {
                 let mut staging = staging.borrow_mut();
                 match ev {
                     PickEvent::Press {
@@ -3296,7 +3429,7 @@ impl App {
         } else {
             let geom = GeomHandle::new();
             let staging = self.staging.clone();
-            Viewport2d(frame, geom, move |ev| {
+            Viewport2d(display_frame, geom, move |ev| {
                 let mut staging = staging.borrow_mut();
                 match ev {
                     PickEvent::Press {
@@ -3327,6 +3460,44 @@ impl App {
                     }
                 }
             })
+        };
+        let chrome_view: Option<View> = if !chrome_sprites.is_empty() {
+            let chrome_frame = FrameInput {
+                cam: self.cam,
+                world_size,
+                viewport_dp,
+                sprites: chrome_sprites,
+                texts: Vec::new(),
+                background: None,
+                overlay_color: None,
+                chroma: 0.0,
+            };
+            if self.assets.is_some() {
+                let desc = self
+                    .assets
+                    .as_ref()
+                    .map(|a| a.batch_desc())
+                    .unwrap_or_default();
+                let mut view = Viewport2dGpuWithId(
+                    chrome_frame,
+                    GeomHandle::new(),
+                    self.assets
+                        .as_ref()
+                        .map(|a| a.take_uploads())
+                        .unwrap_or_default(),
+                    desc,
+                    "viewport2d.menu",
+                    |_| {},
+                );
+                view.modifier = view.modifier.hit_passthrough();
+                Some(view)
+            } else {
+                let mut view = Viewport2d(chrome_frame, GeomHandle::new(), |_| {});
+                view.modifier = view.modifier.hit_passthrough();
+                Some(view)
+            }
+        } else {
+            None
         };
 
         // Focusable root so hardware keys reach the staging feed (same
@@ -3492,11 +3663,18 @@ impl App {
         // `scrLetterbox(false,0)`). Loading IS letterboxed: GML
         // `GenCont/Create_0` ends with `scrLetterbox(true)`, so the
         // GENERATING screen sits between the bars.
-        let bare_room = matches!(
-            menu_kind,
-            Some(MenuOverlay::Splash | MenuOverlay::MainMenu | MenuOverlay::Title)
-        );
+        let bare_room = state != AppState::InGame
+            && matches!(
+                menu_kind,
+                Some(MenuOverlay::Splash)
+                    | Some(MenuOverlay::MainMenu)
+                    | Some(MenuOverlay::Title)
+                    | Some(MenuOverlay::Settings)
+                    | Some(MenuOverlay::Credits)
+                    | Some(MenuOverlay::Stats)
+            );
         let letterboxed = (!live_now && !bare_room) || boss_intro || transitioning;
+        let mut letterbox_view: Option<View> = None;
         if letterboxed {
             // GML `LETTERBOX_SIZE 36` view px tall (`scrLetterbox`):
             // 36 GUI px → dp at the live GUI scale (720p → 108 dp).
@@ -3523,13 +3701,38 @@ impl App {
                     bar(),
                 ]),
             );
+            if let Some(assets) = self.assets.as_ref() {
+                let art = letterbox_sprites(assets, viewport_dp, world_size, &self.cam);
+                if !art.is_empty() {
+                    let frame = FrameInput {
+                        cam: self.cam,
+                        world_size,
+                        viewport_dp,
+                        sprites: art,
+                        texts: Vec::new(),
+                        background: None,
+                        overlay_color: None,
+                        chroma: 0.0,
+                    };
+                    let mut view = Viewport2dGpuWithId(
+                        frame,
+                        GeomHandle::new(),
+                        assets.take_uploads(),
+                        assets.batch_desc(),
+                        "viewport2d.letterbox",
+                        |_| {},
+                    );
+                    view.modifier = view.modifier.hit_passthrough();
+                    letterbox_view = Some(view);
+                }
+            }
         }
         if let Some(rows) = menu_rows {
             // GML `GameOver/Draw_0:7-10` dims with `draw_set_alpha(0.7)`
             // (178/255); pause/settings/credits/stats sit on the
             // near-opaque bevy `scrim` (230/255). The Draw_75 cursor
             // draws after, so it stays full-bright over the dim.
-            let scrim_alpha = if menu_kind == Some(MenuOverlay::GameOver) {
+            let scrim_alpha = if matches!(menu_kind, Some(MenuOverlay::Pause | MenuOverlay::GameOver)) {
                 178
             } else {
                 230
@@ -3541,6 +3744,12 @@ impl App {
                         .background(Color::from_rgba(0, 0, 0, scrim_alpha))
                         .hit_passthrough(),
                 ));
+            }
+            if let Some(chrome) = chrome_view {
+                layers.push(chrome);
+            }
+            if let Some(letterbox) = letterbox_view.take() {
+                layers.push(letterbox);
             }
             if !rows.is_empty() {
                 // Plain text rows (GML draws the buttons as text;
@@ -4092,6 +4301,10 @@ fn route_menu_click(
     // Settings rows route through the hot table (per-row toggle /
     // stepper semantics live there, next to the layout).
     if kind == MenuOverlay::Settings {
+        let back_x = if cfg!(target_os = "android") { 24.0 } else { 16.0 };
+        if gx >= back_x - 20.0 && gx <= back_x + 20.0 && gy >= 0.0 && gy <= 40.0 {
+            return Some(UiAction::SettingsBack);
+        }
         let page = world
             .get_resource::<MenuState>()
             .map(|m| m.settings_page)
@@ -4105,6 +4318,23 @@ fn route_menu_click(
         .into_iter()
         .find_map(|t| {
             let action = menu_button_action(kind, &t.text, confirm)?;
+            if kind == MenuOverlay::Pause {
+                let index = match t.text.as_str() {
+                    "MENU" | "BACK" => 0,
+                    "RETRY" | "QUIT" => 1,
+                    "SETTINGS" => 2,
+                    "CONTINUE" => 3,
+                    _ => usize::MAX,
+                };
+                if index != usize::MAX
+                    && world
+                        .get_resource::<MenuState>()
+                        .and_then(|m| m.pause_appear.get(index).copied())
+                        .is_some_and(|appear| appear >= 2.0)
+                {
+                    return None;
+                }
+            }
             // Bevy `bigname_button_at` parity: every menu button owns a
             // fixed 120x22 GUI box centered on its (gx, gy) (the dp text
             const HW: f32 = 60.0;

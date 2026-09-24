@@ -140,6 +140,10 @@ impl VortexPass {
 }
 
 impl WgpuCallback for VortexPass {
+    fn resource_key(&self) -> Option<&str> {
+        self.pass.resource_key()
+    }
+
     fn prepare(
         &self,
         device: &wgpu::Device,

@@ -410,7 +410,7 @@ pub fn goto_state(world: &mut World, next: AppState) {
             world.init_resource::<menus::MenuState>();
             if let Some(mut menu) = world.get_resource_mut::<menus::MenuState>() {
                 menu.main_menu_cursor = 0;
-                menu.settings_cursor = 0;
+                menu.settings_cursor = usize::MAX;
                 menu.play_submenu = false;
                 menu.play_cursor = 0;
             }
@@ -510,11 +510,20 @@ pub fn reset_pause_state(world: &mut World) {
     }
     if let Some(mut menu) = world.get_resource_mut::<menus::MenuState>() {
         menu.pause_confirm = None;
+        menu.pause_cursor = 0;
+        menu.pause_splat = 0.0;
+        menu.pause_appear = [1.0, 2.0, 3.0, 3.0];
+        menu.pause_portrait_anim = 0.0;
+        menu.hover_label.clear();
         menu.settings_page = 0;
         menu.settings_page_stack.clear();
         menu.mutation_selected = None;
         menu.game_over = None;
-        menu.settings_cursor = 0;
+        menu.settings_cursor = usize::MAX;
+        menu.settings_splat = 0.0;
+        menu.settings_splat_page = 0;
+        menu.settings_splat_cursor = usize::MAX;
+        menu.settings_back_hover = false;
         menu.play_submenu = false;
         menu.play_cursor = 0;
     }
@@ -629,13 +638,24 @@ pub fn tick_escape_pause(
             *overlay = OverlayMenu::Pause;
             pending.0 = None;
             menu.pause_confirm = None;
+            menu.pause_cursor = 0;
+            menu.pause_splat = 0.0;
+            menu.pause_appear = [1.0, 2.0, 3.0, 3.0];
+            menu.pause_portrait_anim = 180.0;
+            menu.hover_label.clear();
             menu.settings_page = 0;
             menu.settings_page_stack.clear();
+            menu.settings_splat = 0.0;
+            menu.settings_splat_page = 0;
+            menu.settings_splat_cursor = usize::MAX;
         }
         OverlayMenu::Pause => {
             if menu.pause_confirm.is_some() {
                 // Bevy: Escape dismisses the quit/restart confirm first.
                 menu.pause_confirm = None;
+                menu.pause_cursor = 0;
+                menu.pause_appear = [1.0, 2.0, 3.0, 3.0];
+                menu.hover_label.clear();
                 return;
             }
             // Esc on the pause menu resumes through the same delayed
@@ -652,15 +672,19 @@ pub fn tick_escape_pause(
                 } else {
                     menu.settings_page = 0;
                 }
-                menu.settings_cursor = 0;
+                menu.settings_cursor = usize::MAX;
             } else if paused.0 {
                 *overlay = OverlayMenu::Pause;
                 menu.settings_page = 0;
                 menu.settings_page_stack.clear();
-                menu.settings_cursor = 0;
+                menu.settings_cursor = usize::MAX;
+                menu.pause_confirm = None;
+                menu.pause_cursor = 0;
+                menu.pause_appear = [1.0, 2.0, 3.0, 3.0];
+                menu.hover_label.clear();
             } else {
                 *overlay = OverlayMenu::None;
-                menu.settings_cursor = 0;
+                menu.settings_cursor = usize::MAX;
             }
         }
         // `None` while already paused (Resume path owns that edge).
