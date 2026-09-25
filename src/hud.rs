@@ -59,7 +59,7 @@ pub struct HudState {
     pub ammo: [i32; 6],
     /// Per-visible-slot ammo for the weapon icons (-1 = melee / no slot,
     /// bevy `weapon_ammo` law).
-    pub weapon_ammo: [i32; 2],
+    pub weapon_ammo: Vec<i32>,
     pub ability: String,
     pub ability_ready: bool,
     pub crown: String,
@@ -116,7 +116,7 @@ impl Default for HudState {
             ],
             weapon_cursed: vec![false, false],
             ammo: [0; 6],
-            weapon_ammo: [0, 0],
+            weapon_ammo: vec![0, 0],
             ability: "Flip".to_string(),
             ability_ready: true,
             crown: "NONE".to_string(),
@@ -385,19 +385,16 @@ pub fn sync_hud_state(world: &World) -> HudState {
         hud.weapon_cursed = (0..inv.weapon_slots).map(|i| inv.cursed[i]).collect();
         hud.ammo = inv.ammo;
 
-        let t1 = weapon_meta(inv.weapons[0]).wep_type as usize;
-        let t2 = if inv.weapon_slots > 1 {
-            weapon_meta(inv.weapons[1]).wep_type as usize
-        } else {
-            0
-        };
-        hud.weapon_ammo = [inv.ammo[t1.min(5)], inv.ammo[t2.min(5)]];
-        if t1 == 0 {
-            hud.weapon_ammo[0] = -1;
-        }
-        if t2 == 0 || inv.weapon_slots <= 1 {
-            hud.weapon_ammo[1] = -1;
-        }
+        hud.weapon_ammo = (0..inv.weapon_slots)
+            .map(|slot| {
+                let ammo_type = weapon_meta(inv.weapons[slot]).wep_type as usize;
+                if ammo_type == 0 {
+                    -1
+                } else {
+                    inv.ammo[ammo_type.min(5)]
+                }
+            })
+            .collect();
         hud.ability = ability_name(player.ability).to_string();
         hud.ability_ready = player.ability_cooldown.is_finished();
         hud.crown = crown_short_name(player.crown).to_string();

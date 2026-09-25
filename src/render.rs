@@ -3345,7 +3345,7 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                         facing
                     };
                     (
-                        back && gun.slot as usize == inv.current,
+                        back && gun.slot == 0,
                         inv.shine.floor() as i32,
                         upright < 0.0,
                         gun.slot == 1,
@@ -3624,15 +3624,16 @@ fn hud_gui_left(
     }
 }
 
-/// GML weapon-row draw order: `_wep` at position 0, `_bwep` at 1,
-/// then `extra_weps` (`scrDrawPlayerHUD` iterates `_hud_weapon_index`
-/// 0, 1, 2... — position 0 is ALWAYS the primary slot, never the
-/// active one; swapping guns swaps `_wep`/`_bwep` sim-side instead).
-/// Returns inventory slot indices in draw order
-/// (unbounded — Steroids/Cuz extras draw past two slots).
 fn hud_weapon_order(hud: &HudState) -> Vec<usize> {
-    let n = hud.weapon_ids.len().max(1);
-    (0..n).collect()
+    let current = hud.current_weapon;
+    if current < hud.weapon_ids.len() && hud.weapon_ids[current] != WeaponId::NONE {
+        let mut order = Vec::with_capacity(hud.weapon_ids.len());
+        order.push(current);
+        order.extend((0..hud.weapon_ids.len()).filter(|slot| *slot != current));
+        order
+    } else {
+        (0..hud.weapon_ids.len()).collect()
+    }
 }
 
 /// GML weapon-row x positions: 24, then +44, then +20 per extra
@@ -3787,7 +3788,12 @@ pub fn hud_gui_texts(world: &mut World) -> Vec<HudGuiText> {
             .get_resource::<crate::comps_a::Toast>()
             .is_some_and(|t| t.text == "EMPTY" || t.text == "NOT ENOUGH RADS");
         if dry {
-            let primary = hud.weapon_ids.first().copied().unwrap_or(WeaponId::NONE);
+            let primary_slot = order.first().copied().unwrap_or(hud.current_weapon);
+            let primary = hud
+                .weapon_ids
+                .get(primary_slot)
+                .copied()
+                .unwrap_or(WeaponId::NONE);
             let pmeta = weapon_meta(primary);
             let ptype = pmeta.wep_type as usize;
             let cost = pmeta.wep_cost as i32;

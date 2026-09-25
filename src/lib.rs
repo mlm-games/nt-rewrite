@@ -929,7 +929,7 @@ impl App {
                 .query::<(&Pos, &crate::comps_a::Player, &crate::comps_a::Inventory)>()
                 .iter(world)
                 .next()
-                .map(|(_, _, inv)| inv.weapons[0])
+                .map(|(_, _, inv)| inv.weapons[inv.current])
                 .unwrap_or(crate::data::WeaponId::NONE);
             // GML `KeyCont.dis_fire`: cursor distance in world px. The
             // lean caps at 48 px (bevy `player_aim` `MAX_LOOK` parity: the
@@ -990,7 +990,7 @@ impl App {
                 .query::<(&Pos, &crate::comps_a::Player, &crate::comps_a::Inventory)>()
                 .iter(world)
                 .next()
-                .map(|(_, _, inv)| inv.weapons[0])
+                .map(|(_, _, inv)| inv.weapons[inv.current])
                 .unwrap_or(crate::data::WeaponId::NONE);
             let shake_scale = world
                 .get_resource::<crate::savedata_part::SaveData>()
@@ -2396,22 +2396,25 @@ impl App {
                     apply_menu_action(&mut self.sim.world, action);
                 }
             }
-        } else if offer_open {
+        } else if offer_open
+            && menu_overlay_kind(
+                state,
+                overlay,
+                &self.sim.world.resource::<MenuState>(),
+                game_over,
+            ) == Some(MenuOverlay::Mutation)
+        {
             // Mutation/ultra offer: right-button is silent (never confirms
             // or eats the left click).
             if let Some(click) = staging_clicks.last().copied() {
                 let viewport_dp = self.view_viewport_dp;
                 let vw = crate::render::gml_view_size(viewport_dp)[0];
                 let k = (viewport_dp[1].max(1.0) / 240.0).max(1e-6);
-                let point = self.menu_gui_point().unwrap_or([
-                    click.dp[0] / k,
-                    click.dp[1] / k,
-                ]);
                 if k.is_finite()
                     && let Some(action) = crate::render::mutation_icon_hit_action(
                         &mut self.sim.world,
-                        point[0],
-                        point[1],
+                        click.dp[0] / k,
+                        click.dp[1] / k,
                         vw,
                     )
                 {
