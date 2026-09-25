@@ -3675,7 +3675,16 @@ impl App {
         } else {
             None
         };
-        let vortex_above = vortex_layer.is_some();
+        // GML depth law: LOWER depth draws IN FRONT (manual: "-1000 is
+        // drawn on top of -100, which is drawn on top of 0"), and
+        // `scrDrawSpiral` opens with `draw_clear(c_black)` at
+        // `SpiralCont` depth -101. `Logo` sits at -10000 — the frontmost
+        // rung, shared with `MainMenuButton` — so the boot-reel logo
+        // paints OVER the cleared spiral, not under it. Only the logo
+        // needs the pass underneath: it is the sole sprite in the
+        // viewport then, and `Z_SPIRAL_FIGURES` < `Z_SPLASH` keeps the
+        // spiral center figures behind the logo as in GML.
+        let vortex_above = vortex_layer.is_some() && !splash_logo;
         if !vortex_above {
             sprites.extend(std::mem::take(&mut spiral_figure_sprites));
         }
