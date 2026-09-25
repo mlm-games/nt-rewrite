@@ -1628,13 +1628,13 @@ fn apply_cprefs_toggle(save: &mut SaveData, idx: usize) -> bool {
     true
 }
 
-/// Slider law (bevy `SettingSlider` arm verbatim: 0..2 clamp, with the
-/// `controls_scale` 0..1 sub-clamp).
+/// Slider law (GML `MenuOptions/Other_10`: screenshake is 0..2; the
+/// other scalar sliders are 0..1).
 fn apply_setting_slider(save: &mut SaveData, key: &str, value: f32) -> bool {
     let v = value.clamp(0.0, 2.0);
     match key {
         "screenshake" => save.settings.screenshake = v,
-        "freezeframes" => save.settings.freezeframes = v,
+        "freezeframes" => save.settings.freezeframes = v.clamp(0.0, 1.0),
         "controls_scale" => save.settings.controls_scale = v.clamp(0.0, 1.0),
         _ => return false,
     }

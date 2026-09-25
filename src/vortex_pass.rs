@@ -11,7 +11,9 @@
 //! A future game background brings its own shader + snapshot in its own
 //! module and never touches this one.
 
-use repame_sprite::{FullscreenDesc, FullscreenPass, FullscreenTexture, TextureFilter};
+use std::sync::Arc;
+
+use repame_sprite::{FullscreenDesc, FullscreenPass, FullscreenTextureRef, TextureFilter};
 use repose_render_wgpu::{CallbackRenderPass, CallbackResources, ScreenDescriptor, WgpuCallback};
 
 pub const VORTEX_WISPS: usize = 128;
@@ -98,7 +100,7 @@ pub struct VortexTexture {
     pub slot: u32,
     pub w: u32,
     pub h: u32,
-    pub rgba: Vec<u8>,
+    pub rgba: Arc<[u8]>,
 }
 
 /// Per-frame snapshot pass. `Send + Sync` for the compositor thread.
@@ -126,14 +128,7 @@ impl VortexPass {
         }
     }
 
-    /// Queue art uploads. The pass keeps no history: `FullscreenPass`
-    /// only uploads what each `prepare` hands it, and a fresh pass
-    /// object is built every mounted frame, so every mounted frame
-    /// must carry the textures — not just the first. Unlike the sprite
-    /// batch (which gen-skips resident atlas blits), the fullscreen
-    /// path has no generation check (`fullscreen.rs` only skips texture
-    /// *creation* on same w/h) — the per-frame `rgba.clone()` +
-    /// `write_texture` run while mounted.
+    /// Queue art uploads. The pass keeps no history.
     pub fn extend_textures(&mut self, textures: impl IntoIterator<Item = VortexTexture>) {
         self.textures.extend(textures);
     }
@@ -154,14 +149,14 @@ impl WgpuCallback for VortexPass {
     ) -> Vec<wgpu::CommandBuffer> {
         // translate+delegate: the engine owns upload mechanics, the game
         // owns what the bytes mean.
-        let uploads: Vec<FullscreenTexture> = self
+        let uploads: Vec<FullscreenTextureRef<'_>> = self
             .textures
             .iter()
-            .map(|t| FullscreenTexture {
+            .map(|t| FullscreenTextureRef {
                 slot: t.slot,
                 w: t.w,
                 h: t.h,
-                rgba: t.rgba.clone(),
+                rgba: t.rgba.as_ref(),
             })
             .collect();
         self.pass.prepare_with(

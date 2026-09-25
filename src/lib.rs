@@ -91,13 +91,14 @@ use crate::render::{
     crosshair_sprites, decode_png, fainted_bar_sprites, fog_sprites, fx_instances, fx_texts,
     gml_camera_step, gml_view_scale, gml_view_size, hud_gui_texts_dp, hud_sprites, menu_gui_texts,
     menu_gui_texts_dp, menu_gui_texts_vw, menu_sprites, portal_indicator_sprites, shadow_sprites,
-    letterbox_sprites, sideart_sprites, spiral_figures, splash_sprites, stamp_z, title_cam_focus,
-    title_camera_step, touch_sprites, view_rect_world, world_camera, world_instances,
+    letterbox_sprites, settings_slider_hit, settings_slider_value, SettingSliderTarget,
+    sideart_sprites, spiral_figures, splash_sprites, stamp_z, title_cam_focus, title_camera_step,
+    touch_sprites, view_rect_world, world_camera, world_instances,
 };
 use crate::schedule::build_sim_schedule;
 use crate::setup::setup_run_with_seed;
 use crate::spatial::Pos;
-use crate::state::menus::{MenuEdge, MenuState, apply_menu_action};
+use crate::state::menus::{MenuEdge, MenuState, apply_menu_action, emit_sfx};
 use crate::state::{AppState, OverlayMenu};
 use crate::vortex::{SpiralCtl, gml_area_for_area};
 
@@ -168,6 +169,19 @@ pub fn ensure_nt_font() {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
 pub struct TickCount(pub u64);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsSliderPointer {
+    Mouse,
+    Touch(u64),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SettingsSliderDrag {
+    page: u8,
+    target: SettingSliderTarget,
+    pointer: SettingsSliderPointer,
+}
+
 /// The game: fixed-step sim plus presentational (view-layer) state.
 ///
 /// `sim`/`schedule`/`spiral` are sim-pure; `cam`, `held`/`edges`/`clicks`/
@@ -191,6 +205,8 @@ pub struct App {
     /// Previous frame's app state (entering InGame snaps the camera on
     /// the fresh player instead of swooping from the menu look point).
     was_state: AppState,
+    last_splash_mode: u8,
+    letterbox_frame: f32,
     /// Previous fixed step's app state (drives the spiral lifecycle in
     /// [`App::advance`]: Loading entry re-warms, InGame entry kills —
     /// separate from the view-side `was_state`, which updates a frame
@@ -276,6 +292,7 @@ pub struct App {
     /// handlers stage here; drained through [`apply_menu_action`] at
     /// the top of [`App::feed_input`], before the sim advances).
     menu_actions: Vec<UiAction>,
+    settings_slider_drag: Option<SettingsSliderDrag>,
     // -- last-frame diagnostics (headless-observable) --
     last_sprite_count: usize,
     last_touch_count: usize,
@@ -314,11 +331,14 @@ impl App {
         let frame = sim.world.resource::<state::CurrentFrame>().0;
         sim.world.resource_mut::<CombatFrame>().0 = frame;
 
-        let area = sim
-            .world
-            .get_resource::<crate::comps_a::Run>()
-            .map(|r| r.area)
-            .unwrap_or(AreaId::Desert);
+        let area = if setup {
+            sim.world
+                .get_resource::<crate::comps_a::Run>()
+                .map(|r| r.area)
+                .unwrap_or(AreaId::Desert)
+        } else {
+            AreaId::Campfire
+        };
         let spiral =
             SpiralCtl::warmed_up_for_gml_area_seeded_in_view(gml_area_for_area(area), seed, 426.0);
         // GML `BackCont` boot: the 320x240-base view opens snapped
@@ -341,6 +361,8 @@ impl App {
             },
             was_transitioning: false,
             was_state: AppState::default(),
+            last_splash_mode: 0,
+            letterbox_frame: 0.0,
             adv_state: AppState::default(),
             adv_cover: false,
             adv_seed: 0,
@@ -368,6 +390,7 @@ impl App {
             view_density: 1.0,
             view_world_size: [426.0, 240.0],
             menu_actions: Vec::new(),
+            settings_slider_drag: None,
             last_sprite_count: 0,
             last_touch_count: 0,
             last_bg_alpha: 1.0,
@@ -463,7 +486,7 @@ impl App {
                 slot: slot as u32,
                 w,
                 h,
-                rgba,
+                rgba: rgba.into(),
             });
         }
         out
@@ -629,16 +652,46 @@ impl App {
                     .query::<&crate::comps_b::CampfireState>()
                     .iter(&self.sim.world)
                     .any(|c| matches!(c.phase, crate::comps_b::CampfirePhase::SpawnThroneII));
-            // Pause freezes the spiral: GML `UberCont/Step_1`
-            // `instance_deactivate_all` leaves `SpiralCont` (not in the
-            // activate list) frozen while the pause menu is up. Sounds
-            // drain below regardless (already gated on audibility).
+            // Ordinary pause freezes the spiral: GML
+            // `UberCont/Step_1` deactivates the room. Generation covers
+            // are the exception: `GenCont`/`LevCont` keep drawing their
+            // live spiral even though the offer sets the global pause
+            // flag. Sounds follow the same gate below.
             let paused = self
                 .sim
                 .world
                 .get_resource::<crate::state::Paused>()
                 .is_some_and(|p| p.0);
-            if !paused {
+            let state = self
+                .sim
+                .world
+                .get_resource::<AppState>()
+                .copied()
+                .unwrap_or_default();
+            let splash_mode = self
+                .sim
+                .world
+                .get_resource::<crate::state::SplashState>()
+                .map(|splash| splash.mode)
+                .unwrap_or(0);
+            let spiral_cover = self
+                .sim
+                .world
+                .get_resource::<crate::comps_b::FloorTransition>()
+                .is_some_and(|transition| transition.active)
+                || self
+                    .sim
+                    .world
+                    .get_resource::<crate::comps_a::PendingMutation>()
+                    .is_some()
+                || self
+                    .sim
+                    .world
+                    .get_resource::<crate::comps_a::PendingUltra>()
+                    .is_some();
+            let splash_without_cont = state == AppState::Splash
+                && (splash_mode < 4 || self.last_splash_mode < 4);
+            if (!paused || spiral_cover) && !splash_without_cont {
                 self.spiral.step(1.0);
             }
             // GML `scrDrawSpiral` bolt/debris one-shots fire inline in
@@ -646,7 +699,9 @@ impl App {
             // per wisp (non-menu only), flyby `sndPortalFlyby{1..4}` once
             // per debris mote at `xscale > 1.3` (any caller). Drain here,
             // right after the step, so each fires exactly once.
-            self.drain_spiral_sounds();
+            if !splash_without_cont && (!paused || spiral_cover) {
+                self.drain_spiral_sounds();
+            }
             // Lifecycle FIRST, drift second: the drift rewarm skips the
             // InGame-entry tick itself (see maybe_rewarm_spiral), so the
             // entry kill lands on the post-transition spiral while
@@ -693,6 +748,17 @@ impl App {
         // the same tick the kill just drained (the load-end double
         // start, ticks 185→150 over live play).
         let mut killed_this_tick = false;
+        let splash_mode = self
+            .sim
+            .world
+            .get_resource::<crate::state::SplashState>()
+            .map(|splash| splash.mode)
+            .unwrap_or(0);
+        if state == AppState::Splash && splash_mode >= 4 && self.last_splash_mode < 4 {
+            let view_w = self.spiral.view_w;
+            self.spiral = SpiralCtl::warmed_up_for_gml_area_seeded_in_view(0, seed, view_w);
+        }
+        self.last_splash_mode = if state == AppState::Splash { splash_mode } else { 0 };
         if state == AppState::Loading && self.adv_state != AppState::Loading {
             let view_w = self.spiral.view_w;
             self.spiral = SpiralCtl::warmed_up_for_gml_area_seeded_in_view(
@@ -734,6 +800,17 @@ impl App {
             && self.adv_state != AppState::MainMenu
             && self.adv_state != AppState::Splash
             && !self.spiral.alive
+        {
+            let view_w = self.spiral.view_w;
+            self.spiral = SpiralCtl::warmed_up_for_gml_area_seeded_in_view(0, seed, view_w);
+        }
+        if state == AppState::MainMenu
+            && self
+                .sim
+                .world
+                .get_resource::<OverlayMenu>()
+                .is_some_and(|overlay| *overlay == OverlayMenu::Credits)
+            && self.spiral.is_done()
         {
             let view_w = self.spiral.view_w;
             self.spiral = SpiralCtl::warmed_up_for_gml_area_seeded_in_view(0, seed, view_w);
@@ -1222,6 +1299,9 @@ impl App {
     /// pads); the `window_focused` mirror just tracks it.
     pub fn set_window_focused(&mut self, focused: bool) {
         self.staging.borrow_mut().set_window_focused(focused);
+        if !focused {
+            self.settings_slider_drag = None;
+        }
         self.window_focused = self.staging.borrow().window_focused;
     }
 
@@ -1650,7 +1730,8 @@ impl App {
                 *position = contact.pos;
             }
         }
-        let mut released_touch_clicks = Vec::new();
+        let mut released_touch_clicks: Vec<(i64, Vec2)> = Vec::new();
+        let mut slider_touch_ids: HashSet<i64> = HashSet::new();
         let state = self
             .sim
             .world
@@ -1677,6 +1758,85 @@ impl App {
             .world
             .get_resource::<crate::comps_a::Run>()
             .is_some_and(|r| r.game_over);
+        let mut slider_click_consumed = false;
+        if overlay != OverlayMenu::Settings {
+            self.finish_settings_slider_drag();
+        } else {
+            let page = self
+                .sim
+                .world
+                .get_resource::<MenuState>()
+                .map(|menu| menu.settings_page)
+                .unwrap_or(0);
+            let vw = gml_view_size(self.view_viewport_dp)[0];
+            if self
+                .settings_slider_drag
+                .is_some_and(|drag| drag.page != page)
+            {
+                self.finish_settings_slider_drag();
+            }
+            if let Some(drag) = self.settings_slider_drag {
+                match drag.pointer {
+                    SettingsSliderPointer::Mouse => {
+                        if !staging_lmb {
+                            self.finish_settings_slider_drag();
+                        } else if let Some(px) = self.polled_pointer_px {
+                            let d = self.view_density.max(1e-6);
+                            let k = (self.view_viewport_dp[1].max(1.0) / 240.0).max(1e-6);
+                            self.update_settings_slider_drag(px.x / d / k, vw);
+                        }
+                    }
+                    SettingsSliderPointer::Touch(id) => {
+                        if let Some(contact) = touch_contacts_snap
+                            .iter()
+                            .find(|contact| contact.id == id)
+                        {
+                            if let Some([gx, _]) = self.settings_gui_point_dp([contact.pos.x, contact.pos.y])
+                            {
+                                self.update_settings_slider_drag(gx, vw);
+                            }
+                        } else {
+                            slider_touch_ids.insert(id as i64);
+                            self.finish_settings_slider_drag();
+                        }
+                    }
+                }
+            }
+            if self.settings_slider_drag.is_none()
+                && let Some(click) = staging_clicks.last().copied()
+                && let Some([gx, gy]) = self.settings_gui_point_dp(click.dp)
+                && let Some((_, target)) = settings_slider_hit(page, gx, gy, vw)
+            {
+                self.begin_settings_slider_drag(
+                    page,
+                    target,
+                    SettingsSliderPointer::Mouse,
+                    gx,
+                    vw,
+                );
+                slider_click_consumed = true;
+            }
+            if self.settings_slider_drag.is_none() {
+                for contact in touch_contacts_snap.iter().filter(|contact| contact.just_pressed) {
+                    let Some([gx, gy]) =
+                        self.settings_gui_point_dp([contact.pos.x, contact.pos.y])
+                    else {
+                        continue;
+                    };
+                    let Some((_, target)) = settings_slider_hit(page, gx, gy, vw) else {
+                        continue;
+                    };
+                    self.begin_settings_slider_drag(
+                        page,
+                        target,
+                        SettingsSliderPointer::Touch(contact.id),
+                        gx,
+                        vw,
+                    );
+                    slider_touch_ids.insert(contact.id as i64);
+                }
+            }
+        }
         // Read the pending offer directly, not the `MenuState` mirror
         // (the mirror updates inside the schedule, a frame after the
         // offer opens/closes — the stale frame fired the gun on level-up
@@ -1940,7 +2100,7 @@ impl App {
                     if self.last_touch_ids.contains(&id) {
                         still_down.push((id, position));
                     } else {
-                        released_touch_clicks.push(position);
+                        released_touch_clicks.push((id, position));
                     }
                 }
                 touch_menu_positions = still_down;
@@ -2104,7 +2264,9 @@ impl App {
                 apply_menu_action(&mut self.sim.world, UiAction::SettingsBack);
             } else if rmb_down && overlay == OverlayMenu::Credits {
                 apply_menu_action(&mut self.sim.world, UiAction::CloseOverlay);
-            } else if let Some(click) = staging_clicks.last().copied() {
+            } else if !slider_click_consumed
+                && let Some(click) = staging_clicks.last().copied()
+            {
                 let viewport_dp = self.view_viewport_dp;
                 let kind = menu_overlay_kind(
                     state,
@@ -2139,7 +2301,10 @@ impl App {
                 } else {
                     1.0
                 };
-                for point in released_touch_clicks.drain(..) {
+                for (id, point) in released_touch_clicks.drain(..) {
+                    if slider_touch_ids.contains(&id) {
+                        continue;
+                    }
                     let action = if kind == Some(MenuOverlay::Mutation) {
                         crate::render::mutation_icon_hit_action(
                             &mut self.sim.world,
@@ -2184,7 +2349,9 @@ impl App {
                 apply_menu_action(&mut self.sim.world, UiAction::SettingsBack);
             } else if rmb_down && matches!(overlay, OverlayMenu::Credits | OverlayMenu::Stats) {
                 apply_menu_action(&mut self.sim.world, UiAction::CloseOverlay);
-            } else if let Some(click) = staging_clicks.last().copied() {
+            } else if !slider_click_consumed
+                && let Some(click) = staging_clicks.last().copied()
+            {
                 let viewport_dp = self.view_viewport_dp;
                 let kind = menu_overlay_kind(
                     state,
@@ -2207,7 +2374,9 @@ impl App {
                 apply_menu_action(&mut self.sim.world, UiAction::SettingsBack);
             } else if rmb_down && overlay == OverlayMenu::Credits {
                 apply_menu_action(&mut self.sim.world, UiAction::CloseOverlay);
-            } else if let Some(click) = staging_clicks.last().copied() {
+            } else if !slider_click_consumed
+                && let Some(click) = staging_clicks.last().copied()
+            {
                 let viewport_dp = self.view_viewport_dp;
                 if overlay == OverlayMenu::Settings || overlay == OverlayMenu::Credits {
                     let kind = menu_overlay_kind(
@@ -2256,7 +2425,10 @@ impl App {
             } else {
                 1.0
             };
-            for point in released_touch_clicks {
+            for (id, point) in released_touch_clicks {
+                if slider_touch_ids.contains(&id) {
+                    continue;
+                }
                 if let Some(action) = crate::render::mutation_icon_hit_action(
                     &mut self.sim.world,
                     point.x * sx,
@@ -2332,6 +2504,135 @@ impl App {
             return None;
         }
         Some([px.x / d / k, px.y / d / k])
+    }
+
+    fn settings_gui_point_dp(&self, dp: [f32; 2]) -> Option<[f32; 2]> {
+        let k = (self.view_viewport_dp[1].max(1.0) / 240.0).max(1e-6);
+        if !k.is_finite() {
+            return None;
+        }
+        Some([dp[0] / k, dp[1] / k])
+    }
+
+    fn settings_slider_current(&self, target: SettingSliderTarget) -> Option<f32> {
+        let save = self.sim.world.get_resource::<crate::savedata_part::SaveData>()?;
+        Some(match target {
+            SettingSliderTarget::Volume(crate::render::VolumeChannel::Master) => {
+                save.settings.master_volume
+            }
+            SettingSliderTarget::Volume(crate::render::VolumeChannel::Music) => {
+                save.settings.music_volume
+            }
+            SettingSliderTarget::Volume(crate::render::VolumeChannel::Ambience) => {
+                save.settings.ambience_volume
+            }
+            SettingSliderTarget::Volume(crate::render::VolumeChannel::Sfx) => save.settings.sfx_volume,
+            SettingSliderTarget::Slider("screenshake") => save.settings.screenshake,
+            SettingSliderTarget::Slider("freezeframes") => save.settings.freezeframes,
+            SettingSliderTarget::Slider("controls_scale") => save.settings.controls_scale,
+            SettingSliderTarget::Slider(_) => 0.0,
+        })
+    }
+
+    fn apply_settings_slider_live(&mut self, target: SettingSliderTarget, value: f32) {
+        let value = match target {
+            SettingSliderTarget::Volume(_) => value.clamp(0.0, 1.0),
+            SettingSliderTarget::Slider("screenshake") => value.clamp(0.0, 2.0),
+            SettingSliderTarget::Slider(_) => value.clamp(0.0, 1.0),
+        };
+        self.sim.world.init_resource::<crate::savedata_part::SaveData>();
+        {
+            let mut save = self
+                .sim
+                .world
+                .resource_mut::<crate::savedata_part::SaveData>();
+            match target {
+                SettingSliderTarget::Volume(crate::render::VolumeChannel::Master) => {
+                    save.settings.master_volume = value;
+                }
+                SettingSliderTarget::Volume(crate::render::VolumeChannel::Music) => {
+                    save.settings.music_volume = value;
+                }
+                SettingSliderTarget::Volume(crate::render::VolumeChannel::Ambience) => {
+                    save.settings.ambience_volume = value;
+                }
+                SettingSliderTarget::Volume(crate::render::VolumeChannel::Sfx) => {
+                    save.settings.sfx_volume = value;
+                }
+                SettingSliderTarget::Slider("screenshake") => save.settings.screenshake = value,
+                SettingSliderTarget::Slider("freezeframes") => save.settings.freezeframes = value,
+                SettingSliderTarget::Slider("controls_scale") => {
+                    save.settings.controls_scale = value;
+                }
+                SettingSliderTarget::Slider(_) => {}
+            }
+        }
+        if let SettingSliderTarget::Volume(channel) = target {
+            self.sim.world.init_resource::<crate::audio::AudioChannels>();
+            let mut channels = self.sim.world.resource_mut::<crate::audio::AudioChannels>();
+            match channel {
+                crate::render::VolumeChannel::Master => channels.master = value,
+                crate::render::VolumeChannel::Music => channels.music = value,
+                crate::render::VolumeChannel::Sfx => channels.sfx = value,
+                crate::render::VolumeChannel::Ambience => {}
+            }
+        }
+        self.sim.world.init_resource::<crate::comps_a::SaveDirty>();
+        self.sim
+            .world
+            .resource_mut::<crate::comps_a::SaveDirty>()
+            .0 = true;
+    }
+
+    fn begin_settings_slider_drag(
+        &mut self,
+        page: u8,
+        target: SettingSliderTarget,
+        pointer: SettingsSliderPointer,
+        gx: f32,
+        vw: f32,
+    ) {
+        let value = settings_slider_value(target, gx, vw);
+        self.apply_settings_slider_live(target, value);
+        self.settings_slider_drag = Some(SettingsSliderDrag {
+            page,
+            target,
+            pointer,
+        });
+        emit_sfx(
+            &mut self.sim.world,
+            crate::audio::AudioCue {
+                name: "sndSlider",
+                volume: 0.5,
+                variance: 0.0,
+            },
+        );
+    }
+
+    fn update_settings_slider_drag(&mut self, gx: f32, vw: f32) {
+        let Some(drag) = self.settings_slider_drag else {
+            return;
+        };
+        let value = settings_slider_value(drag.target, gx, vw);
+        if self
+            .settings_slider_current(drag.target)
+            .is_none_or(|current| (current - value).abs() > 0.0001)
+        {
+            self.apply_settings_slider_live(drag.target, value);
+        }
+    }
+
+    fn finish_settings_slider_drag(&mut self) {
+        if self.settings_slider_drag.take().is_some() {
+            emit_sfx(
+                &mut self.sim.world,
+                crate::audio::AudioCue {
+                    name: "sndSliderLetGo",
+                    volume: 0.5,
+                    variance: 0.0,
+                },
+            );
+        }
     }
 
     /// GML `mouse_ui_hovered` Step parity, run once per `feed_input`
@@ -2747,8 +3048,15 @@ impl App {
         let area = self
             .sim
             .world
-            .get_resource::<crate::comps_a::Run>()
-            .map(|r| r.area)
+            .get_resource::<AppState>()
+            .is_some_and(|state| *state == AppState::Splash)
+            .then_some(AreaId::Campfire)
+            .or_else(|| {
+                self.sim
+                    .world
+                    .get_resource::<crate::comps_a::Run>()
+                    .map(|r| r.area)
+            })
             .unwrap_or(AreaId::Desert);
         let state = self
             .sim
@@ -2771,9 +3079,16 @@ impl App {
             let menu = self.sim.world.resource_mut::<MenuState>();
             menu_overlay_kind(state, overlay, &menu, run_game_over)
         };
-        // GML `Vlambeer/Create_0`: the `SpiralCont` exists from room
-        // start — modes 0-3 are black + text with the spiral behind,
-        // not a flat clear (`Alarm_0` only adds the `Logo` sprite).
+        // GML `Vlambeer/Alarm_0`: modes 0-2 are flat boot cards, while
+        // mode 4 creates `SpiralCont` + `Logo`; the spiral then persists
+        // through the main-menu handoff.
+        let splash_mode = self
+            .sim
+            .world
+            .get_resource::<crate::state::SplashState>()
+            .map(|splash| splash.mode)
+            .unwrap_or(0);
+        let splash_logo = menu_kind == Some(MenuOverlay::Splash) && splash_mode >= 4;
         let paused = self
             .sim
             .world
@@ -2784,6 +3099,21 @@ impl App {
             .world
             .get_resource::<crate::comps_a::Run>()
             .is_some_and(|r| r.game_over);
+        let spiral_cover = self
+            .sim
+            .world
+            .get_resource::<crate::comps_b::FloorTransition>()
+            .is_some_and(|transition| transition.active)
+            || self
+                .sim
+                .world
+                .get_resource::<crate::comps_a::PendingMutation>()
+                .is_some()
+            || self
+                .sim
+                .world
+                .get_resource::<crate::comps_a::PendingUltra>()
+                .is_some();
 
         // Follow camera: the GML `BackCont` look point steps at
         // 30 Hz in [`App::step_camera_fixed`] (frozen over
@@ -2950,18 +3280,12 @@ impl App {
             // center), not the world camera — GML draws figures at
             // `view + cont.x/y` (view-local coords), independent of
             // the room camera.
-            // Temporary Android kill-switch: the fullscreen vortex pass
-            // is implicated in the mode-4 Adreno KGSL kill, so while
-            // that is investigated the spiral figures stay off too —
-            // flat room colour everywhere, desktop keeps GML parity.
-            let vortex_off = cfg!(target_os = "android");
-            let vortex_mounted_later = !vortex_off
-                && self.assets.is_some()
+            let vortex_mounted_later = self.assets.is_some()
                 && !self.vortex_tex.is_empty()
-                && !matches!(
-                    menu_kind,
-                    Some(MenuOverlay::Title) | Some(MenuOverlay::Splash)
-                )
+                && !matches!(menu_kind, Some(MenuOverlay::Title))
+                && (!matches!(menu_kind, Some(MenuOverlay::Splash)) || splash_logo)
+                && (!paused || spiral_cover)
+                && !game_over
                 && (self.spiral.alive || !self.spiral.is_done());
             if vortex_mounted_later {
                 let gui_view = gml_view_size(viewport_dp);
@@ -3206,7 +3530,7 @@ impl App {
         // Vortex snapshot -> mounted background pass. `bg_alpha` is
         // GML `scrDrawSpiral` verbatim: `draw_clear(c_black)` runs in
         // every caller EXCEPT `Menu` — i.e. opaque black behind the
-        // spiral on Logo/Splash/MainMenu/Loading/covers, transparent
+        // logo spiral, MainMenu, Loading, and run covers; transparent
         // over the campfire camp on Title. InGame mounts the pass only
         // while a floor transition or mutation/ultra cover runs (the
         // only spiral callers in a run).
@@ -3247,22 +3571,17 @@ impl App {
                 self.vortex_tex_area = Some(gml_area);
             }
         }
-        // The vortex layer mounts only where a GML spiral caller
-        // exists. Splash modes 0-4 draw flat black + text/logo with no
-        // `SpiralCont` on screen (`Vlambeer` destroys itself at mode 3,
-        // the `Logo` phase draws `sprLogo` + glow only), so Splash never
-        // mounts. Correlated on-device: gating Splash stopped the mode-4
-        // errno-35 + LMK signal-9 kill, and MainMenu mounts the same
-        // pass successfully — cold-mount-equals-death is unproven.
-        // Temporary Android kill-switch while the KGSL kill is
-        // investigated: no fullscreen pass at all (flat room colour
-        // stands in via `background` below); desktop keeps GML parity.
+        // The vortex layer mounts only where a GML spiral caller exists.
+        // `Vlambeer/Alarm_0` creates `SpiralCont` at the mode-3 → 4
+        // transition; the pass stays absent for modes 0-3, then remains
+        // and the main-menu handoff. Paused/GameOver draw their captured
+        // room or dead-run panel instead of a live spiral.
         let splash = menu_kind == Some(MenuOverlay::Splash);
-        let vortex_off = cfg!(target_os = "android");
-        let mut vortex_layer = if !vortex_off
-            && self.assets.is_some()
+        let mut vortex_layer = if self.assets.is_some()
             && !self.vortex_tex.is_empty()
-            && !splash
+            && (!splash || splash_logo)
+            && (!paused || spiral_cover)
+            && !game_over
             && (self.spiral.alive || !self.spiral.is_done())
         {
             let mut pass = VortexPass::new(snap);
@@ -3375,10 +3694,24 @@ impl App {
             overlay_color,
             chroma: 0.0,
         };
-        let display_frame = if paused {
+        let live_offer = menu_kind == Some(MenuOverlay::Mutation)
+            || self
+                .sim
+                .world
+                .get_resource::<crate::comps_a::PendingMutation>()
+                .is_some()
+            || self
+                .sim
+                .world
+                .get_resource::<crate::comps_a::PendingUltra>()
+                .is_some();
+        let freeze_surface = paused && !live_offer;
+        let display_frame = if freeze_surface {
             self.last_live_frame.clone().unwrap_or_else(|| frame.clone())
         } else {
-            self.last_live_frame = Some(frame.clone());
+            if !paused {
+                self.last_live_frame = Some(frame.clone());
+            }
             frame
         };
 
@@ -3566,20 +3899,17 @@ impl App {
         // HUD overlay (GML `scrDrawPlayerHUD` + `scrDrawMiscHUD`
         // verbatim): Silkscreen rows at 320x240 GUI positions over the
         // viewport.
-        // Bottom-up: transparent drain passes sit ABOVE the sprite
-        // viewport, opaque covers sit BELOW it. GML draws the spiral
-        // inside the caller's draw event, i.e. over the room actors
-        // behind it: `TopCont/Draw_0` redraws leftover `Spiral` wisps
-        // at depth -15 (in front of `Floor` 8) during the live-game
-        // drain, and `Menu/Draw_0` calls `scrDrawSpiral()` before its
-        // own chrome. `bg_alpha` tells the two apart: 0 means a
-        // transparent drain (Title remnant, live InGame drain) whose
-        // wisps must paint over tiles/player/HUD bars; 1 means an
-        // opaque cover (Splash logo, MainMenu, Loading, offers, floor
-        // transition) whose chrome (logo, buttons, roadmap, cards)
-        // lives in the viewport and must stay over the black.
+        // Bottom-up: the live InGame drain sits above the sprite
+        // viewport, while the Title remnant sits behind the camp; opaque
+        // covers sit below their chrome. GML draws the spiral inside
+        // the caller's draw event: `TopCont/Draw_0` redraws live-game
+        // wisps in front of actors, while `Menu/Draw_0` calls
+        // `scrDrawSpiral()` behind the title room. `bg_alpha` tells
+        // those paths apart.
         let mut layers = Vec::new();
-        let vortex_above = vortex_layer.is_some() && self.last_bg_alpha < 0.5;
+        let vortex_above = vortex_layer.is_some()
+            && state == AppState::InGame
+            && self.last_bg_alpha < 0.5;
         if !vortex_above {
             if let Some(vortex) = vortex_layer.take() {
                 layers.push(vortex);
@@ -3600,7 +3930,6 @@ impl App {
         // GML `scrLetterbox` (36 px bars): cinematic chrome over menus,
         // transitions, game over, and boss intros — but NOT the
         // campfire title (`Menu/Create_0`: `scrLetterbox(false, 0)`).
-        let live_now = state == AppState::InGame && menu_kind.is_none() && !paused && !game_over;
         let boss_intro = self
             .sim
             .world
@@ -3637,6 +3966,7 @@ impl App {
         // filling the right. (The fixed-step camera only runs InGame,
         // and only InGame consumes `snap`, so menus step + place the
         // view camera directly here.)
+        let entered_title = state == AppState::Title && self.was_state != AppState::Title;
         if matches!(state, AppState::Title) {
             let vw_vh = self.view_world_size;
             let focus = title_cam_focus(&mut self.sim.world).unwrap_or(Vec2::new(64.0, 64.0));
@@ -3659,50 +3989,55 @@ impl App {
             self.cam.offset = Vec2::ZERO;
         }
         self.was_state = state;
+        if entered_title {
+            self.letterbox_frame = 0.0;
+        }
 
-        // `scrLetterbox(false,0)`). Loading IS letterboxed: GML
-        // `GenCont/Create_0` ends with `scrLetterbox(true)`, so the
-        // GENERATING screen sits between the bars.
-        let bare_room = state != AppState::InGame
-            && matches!(
-                menu_kind,
-                Some(MenuOverlay::Splash)
-                    | Some(MenuOverlay::MainMenu)
-                    | Some(MenuOverlay::Title)
-                    | Some(MenuOverlay::Settings)
-                    | Some(MenuOverlay::Credits)
-                    | Some(MenuOverlay::Stats)
-            );
-        let letterboxed = (!live_now && !bare_room) || boss_intro || transitioning;
+        // GML keeps an explicit `UberCont.letterbox` flag rather than
+        // deriving it from the current room. The logo/main-menu branch
+        // enables it in `Vlambeer/Create_0`; `Menu/Create_0` disables it
+        // for the campfire title; `GenCont`, `LevCont`, pause, and
+        // GameOver enable it again. Credits explicitly disables it.
+        let letterboxed = match state {
+            AppState::Splash | AppState::Loading => true,
+            AppState::MainMenu => menu_kind != Some(MenuOverlay::Credits),
+            AppState::Title => false,
+            AppState::InGame => {
+                matches!(
+                    menu_kind,
+                    Some(
+                        MenuOverlay::Pause
+                            | MenuOverlay::Settings
+                            | MenuOverlay::Mutation
+                            | MenuOverlay::GameOver
+                    )
+                ) || boss_intro
+                    || transitioning
+                    || spiral_cover
+            }
+        };
+        let letterbox_target = if letterboxed { 3.0 } else { 0.0 };
+        let letterbox_step = (dt.as_secs_f32() * 30.0).clamp(0.0, 1.0);
+        if self.letterbox_frame < letterbox_target {
+            self.letterbox_frame = (self.letterbox_frame + letterbox_step).min(letterbox_target);
+        } else if self.letterbox_frame > letterbox_target {
+            self.letterbox_frame = (self.letterbox_frame - letterbox_step).max(letterbox_target);
+        }
+        let letterbox_visible = self.letterbox_frame > 0.0;
         let mut letterbox_view: Option<View> = None;
-        if letterboxed {
+        if letterbox_visible {
             // GML `LETTERBOX_SIZE 36` view px tall (`scrLetterbox`):
             // 36 GUI px → dp at the live GUI scale (720p → 108 dp).
             let bar_dp = 36.0 * (viewport_dp[1].max(1.0) / 240.0);
-            let bar = || {
-                UiBox(
-                    Modifier::new()
-                        .fill_max_width()
-                        .height(Dp(bar_dp))
-                        .background(Color::from_rgba(0, 0, 0, 255))
-                        .hit_passthrough(),
-                )
-            };
-            let spacer = UiBox(
-                Modifier::new()
-                    .fill_max_width()
-                    .fill_max_height()
-                    .hit_passthrough(),
-            );
-            layers.push(
-                Column(Modifier::new().fill_max_size().hit_passthrough()).child(vec![
-                    bar(),
-                    spacer,
-                    bar(),
-                ]),
-            );
+            let mut has_art = false;
             if let Some(assets) = self.assets.as_ref() {
-                let art = letterbox_sprites(assets, viewport_dp, world_size, &self.cam);
+                let art = letterbox_sprites(
+                    assets,
+                    viewport_dp,
+                    world_size,
+                    &self.cam,
+                    self.letterbox_frame.floor() as i32,
+                );
                 if !art.is_empty() {
                     let frame = FrameInput {
                         cam: self.cam,
@@ -3724,7 +4059,32 @@ impl App {
                     );
                     view.modifier = view.modifier.hit_passthrough();
                     letterbox_view = Some(view);
+                    has_art = true;
                 }
+            }
+            if !has_art {
+                let bar = || {
+                    UiBox(
+                        Modifier::new()
+                            .fill_max_width()
+                            .height(Dp(bar_dp))
+                            .background(Color::from_rgba(0, 0, 0, 255))
+                            .hit_passthrough(),
+                    )
+                };
+                let spacer = UiBox(
+                    Modifier::new()
+                        .fill_max_width()
+                        .fill_max_height()
+                        .hit_passthrough(),
+                );
+                layers.push(
+                    Column(Modifier::new().fill_max_size().hit_passthrough()).child(vec![
+                        bar(),
+                        spacer,
+                        bar(),
+                    ]),
+                );
             }
         }
         if let Some(rows) = menu_rows {
@@ -3748,9 +4108,6 @@ impl App {
             if let Some(chrome) = chrome_view {
                 layers.push(chrome);
             }
-            if let Some(letterbox) = letterbox_view.take() {
-                layers.push(letterbox);
-            }
             if !rows.is_empty() {
                 // Plain text rows (GML draws the buttons as text;
                 layers.push(
@@ -3758,6 +4115,12 @@ impl App {
                         .child(rows.iter().map(gui_text_layer).collect::<Vec<_>>()),
                 );
             }
+            if let Some(letterbox) = letterbox_view.take() {
+                layers.push(letterbox);
+            }
+        }
+        if let Some(letterbox) = letterbox_view.take() {
+            layers.push(letterbox);
         }
         ZStack(root_mod).child(layers)
     }

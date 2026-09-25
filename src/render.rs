@@ -4307,19 +4307,46 @@ pub(crate) fn letterbox_sprites(
     canvas_dp: [f32; 2],
     world_size: [f32; 2],
     cam: &Camera2d,
+    frame: i32,
 ) -> Vec<SpriteInstance> {
+    if frame <= 0 {
+        return Vec::new();
+    }
     let view = view_rect_world(canvas_dp, world_size, cam);
     let gm = hud_gui_map(view);
     let vw = view[2];
-    let margin = ((vw - 320.0) * 0.5).max(0.0);
+    let top_x = 0.0;
+    let bottom_x = vw;
     let mut out = Vec::new();
+    let margin = vw - 320.0;
+    if margin > 0.0 {
+        for (cx, cy, sx, sy) in [
+            (margin * 0.5, 222.0, margin, 36.0),
+            (vw - margin * 0.5, 17.0, margin, 36.0),
+        ] {
+            if let Some(mut rect) = assets.sprite_sized(
+                "images/sprMapDot.png",
+                0,
+                hud_gui_to_world(gm, view, cx, cy),
+                Vec2::new(sx, sy),
+                false,
+                [0.0, 0.0, 0.0, 1.0],
+            ) {
+                rect.anchor = Vec2::new(0.5, 0.5);
+                out.push(rect);
+            }
+        }
+    }
     let scale = 36.0 / 35.0;
-    for (y, flip_y) in [(0.0, false), (242.0, true)] {
+    for (x, y, flip_x, flip_y) in [
+        (top_x, -1.0, false, false),
+        (bottom_x, 242.0, true, true),
+    ] {
         if let Some(mut sprite) = assets.sprite_for_full(
             "images/sprLetterbox.png",
-            3,
-            hud_gui_to_world(gm, view, margin, y),
-            false,
+            frame,
+            hud_gui_to_world(gm, view, x, y),
+            flip_x,
             flip_y,
             0.0,
             [1.0; 4],
@@ -4329,6 +4356,65 @@ pub(crate) fn letterbox_sprites(
         }
     }
     out
+}
+
+pub(crate) const SETTINGS_SLIDER_X_OFFSET: f32 = 26.0;
+pub(crate) const SETTINGS_SLIDER_WIDTH: f32 = 112.0;
+const SETTINGS_SLIDER_FILL_BASE: f32 = 102.0;
+const SETTINGS_SLIDER_DRAG_WIDTH: f32 = 113.0;
+const SETTINGS_SLIDER_ROW_HALF_WIDTH: f32 = 130.0;
+const SETTINGS_SLIDER_ROW_EXTRA: f32 = 96.0;
+const SETTINGS_SLIDER_HIT_HALF_HEIGHT: f32 = 9.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SettingSliderTarget {
+    Volume(VolumeChannel),
+    Slider(&'static str),
+}
+
+pub(crate) fn settings_slider_hit(
+    page: u8,
+    gx: f32,
+    gy: f32,
+    vw: f32,
+) -> Option<(usize, SettingSliderTarget)> {
+    let row_left = vw * 0.5 - SETTINGS_SLIDER_ROW_HALF_WIDTH;
+    let row_right = vw * 0.5 + SETTINGS_SLIDER_ROW_HALF_WIDTH + SETTINGS_SLIDER_ROW_EXTRA;
+    settings_hot_rows(page, vw).iter().enumerate().find_map(|(idx, row)| {
+        let target = match row.op {
+            SettingHotOp::Volume(channel) => SettingSliderTarget::Volume(channel),
+            SettingHotOp::Slider(key) => SettingSliderTarget::Slider(key),
+            _ => return None,
+        };
+        ((gy - row.gy).abs() <= SETTINGS_SLIDER_HIT_HALF_HEIGHT
+            && gx >= row_left - 4.0
+            && gx <= row_right + 4.0)
+            .then_some((idx, target))
+    })
+}
+
+pub(crate) fn settings_slider_value(target: SettingSliderTarget, gx: f32, vw: f32) -> f32 {
+    let left = vw * 0.5 + SETTINGS_SLIDER_X_OFFSET;
+    let fraction = ((gx - left) / SETTINGS_SLIDER_DRAG_WIDTH).clamp(0.0, 1.0);
+    let max = match target {
+        SettingSliderTarget::Volume(_) | SettingSliderTarget::Slider("controls_scale") => 1.0,
+        SettingSliderTarget::Slider("screenshake") => 2.0,
+        SettingSliderTarget::Slider(_) => 1.0,
+    };
+    fraction * max
+}
+
+pub(crate) fn settings_slider_action(target: SettingSliderTarget, value: f32) -> UiAction {
+    match target {
+        SettingSliderTarget::Volume(VolumeChannel::Master) => UiAction::SetMasterVol(value),
+        SettingSliderTarget::Volume(VolumeChannel::Music) => UiAction::SetMusicVol(value),
+        SettingSliderTarget::Volume(VolumeChannel::Ambience) => UiAction::SetAmbienceVol(value),
+        SettingSliderTarget::Volume(VolumeChannel::Sfx) => UiAction::SetSfxVol(value),
+        SettingSliderTarget::Slider(key) => UiAction::SettingSlider {
+            key: key.to_string(),
+            value,
+        },
+    }
 }
 
 fn push_settings_slider(
@@ -4341,9 +4427,9 @@ fn push_settings_slider(
     value: f32,
     max: f32,
 ) {
-    let width = 112.0;
+    let width = SETTINGS_SLIDER_WIDTH;
     let fraction = (value / max).clamp(0.0, 1.0);
-    let fill_width = (width * fraction + 5.0).clamp(5.0, width + 5.0);
+    let fill = SETTINGS_SLIDER_FILL_BASE * fraction;
     if let Some(sprite) = assets.sprite_sized(
         "images/sprOptionSlider.png",
         0,
@@ -4354,26 +4440,82 @@ fn push_settings_slider(
     ) {
         out.push(sprite);
     }
-    if let Some(sprite) = assets.sprite_sized(
-        "images/sprOptionSlider.png",
-        1,
-        hud_gui_to_world(gm, view, x + fill_width * 0.5, y - 4.0),
-        Vec2::new(fill_width, 19.0),
-        false,
-        [1.0; 4],
+    if let Some(sprite) = settings_slider_part(
+        assets,
+        view,
+        gm,
+        x,
+        y - 5.0,
+        4.0,
+        0.0,
+        fill + 5.0,
+        20.0,
     ) {
         out.push(sprite);
     }
     if let Some(sprite) = assets.sprite_for(
         "images/sprSliderEnd.png",
         0,
-        hud_gui_to_world(gm, view, x + fill_width + 4.0, y - 2.0),
+        hud_gui_to_world(gm, view, x + fill + 4.0, y + 2.0),
         false,
         0.0,
         [1.0; 4],
     ) {
         out.push(sprite);
     }
+}
+
+fn settings_slider_part(
+    assets: &RenderAssets,
+    view: [f32; 4],
+    gm: HudGuiMap,
+    x: f32,
+    y: f32,
+    source_x: f32,
+    source_y: f32,
+    width: f32,
+    height: f32,
+) -> Option<SpriteInstance> {
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    let (uv, def) = assets.uv("images/sprOptionSlider.png", 1)?;
+    let source_width = def.w as f32;
+    let source_height = def.h as f32;
+    if source_width <= 0.0 || source_height <= 0.0 {
+        return None;
+    }
+    let x0 = source_x.clamp(0.0, source_width);
+    let y0 = source_y.clamp(0.0, source_height);
+    let x1 = (source_x + width).clamp(x0, source_width);
+    let y1 = (source_y + height).clamp(y0, source_height);
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    let uv_min = Vec2::new(
+        uv.min[0] + (uv.max[0] - uv.min[0]) * (x0 / source_width),
+        uv.min[1] + (uv.max[1] - uv.min[1]) * (y0 / source_height),
+    );
+    let uv_max = Vec2::new(
+        uv.min[0] + (uv.max[0] - uv.min[0]) * (x1 / source_width),
+        uv.min[1] + (uv.max[1] - uv.min[1]) * (y1 / source_height),
+    );
+    let size = Vec2::new(width * gm.s, height * gm.s);
+    let top_left = hud_gui_to_world(gm, view, x, y);
+    Some(SpriteInstance {
+        center: top_left + size * 0.5,
+        rotation: 0.0,
+        size,
+        anchor: Vec2::new(0.5, 0.5),
+        flip_x: false,
+        flip_y: false,
+        uv_min,
+        uv_max,
+        color: tint_to_linear([1.0; 4]),
+        page: uv.page,
+        z: 0.0,
+        blend: SpriteBlend::Alpha,
+    })
 }
 
 fn settings_option_button(text: impl Into<String>, cx: f32, y: f32) -> MenuGuiText {
@@ -5830,8 +5972,8 @@ fn push_toggle(out: &mut Vec<MenuGuiText>, label: &str, y: f32, on: bool) {
 // row DOES, shared by mouse hit-testing (`settings_click_action`) and
 // keyboard nav (`tick_settings_nav` in `menus.rs`). `gy` mirrors
 // `settings_gui_texts` exactly (same literals); `cx`/`hw` is the mouse
-// hit box in GUI px (centered buttons at `vw/2`, value cells at 200,
-// toggle rows spanning 40..240).
+// hit box in GUI px (centered buttons at `vw/2`, value cells at `cx+32`,
+// and slider hits use the rendered track geometry).
 // ---------------------------------------------------------------------------
 
 /// Player color presets cycled by the COLOR page button (bevy verbatim).
@@ -6129,7 +6271,8 @@ pub fn settings_hot_action(world: &mut World, page: u8, idx: usize, dir: i8) -> 
 }
 
 /// Mouse hit-test for a settings page: GUI-px click → [`UiAction`].
-/// Stepper direction comes from the click half (left = -1, right = +1).
+/// Slider clicks use the horizontal track position; list rows keep their
+/// click-half direction.
 pub fn settings_click_action(
     world: &mut World,
     page: u8,
@@ -6137,6 +6280,10 @@ pub fn settings_click_action(
     gy: f32,
     vw: f32,
 ) -> Option<UiAction> {
+    if let Some((_, target)) = settings_slider_hit(page, gx, gy, vw) {
+        let value = settings_slider_value(target, gx, vw);
+        return Some(settings_slider_action(target, value));
+    }
     let rows = settings_hot_rows(page, vw);
     // Tight vertical band (rows sit 14px apart on dense pages).
     const HH: f32 = 7.0;
@@ -6145,7 +6292,7 @@ pub fn settings_click_action(
         .enumerate()
         .find(|(_, r)| (gy - r.gy).abs() <= HH && (gx - r.cx).abs() <= r.hw)?;
     let dir = match row.op {
-        SettingHotOp::Slider(_) | SettingHotOp::Cycle(_) | SettingHotOp::Volume(_) => {
+        SettingHotOp::Cycle(_) => {
             if gx >= row.cx { 1 } else { -1 }
         }
         _ => 0,
@@ -9708,7 +9855,7 @@ pub fn menu_sprites(
                     );
                 }
             }
-            let slider_x = cx + 26.0;
+            let slider_x = cx + SETTINGS_SLIDER_X_OFFSET;
             match page {
                 1 => {
                     for (y, value) in [
