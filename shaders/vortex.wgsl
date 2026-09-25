@@ -131,6 +131,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // SpiralKind discriminant + jungle-debris flag (see Rust glob docs).
     let kind = g.glob_b.w - floor(g.glob_b.w / 4.0) * 4.0;
     let debris_big = g.glob_b.w >= 4.0;
+    let draw_details = g.flags.y > 0.5;
     var acc = vec4<f32>(
         g.glob_a.z * bg_alpha,
         g.glob_a.w * bg_alpha,
@@ -156,22 +157,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         if (s <= 0.0) { continue; }
         if (s > thresh && !(lanim > 0.0 && lanim < 6.0)) { continue; }
 
-        // IDPD2 variant rides in the rot sign (CPU); art is 128px single.
-        let idpd2 = d.w < 0.0;
-        let rot = abs(d.w);
-        let c = cos(rot);
-        let sn = sin(rot);
-        var rel = gui - d.xy;
-        rel = vec2<f32>(c * rel.x + sn * rel.y, -sn * rel.x + c * rel.y);
-
         if (g.flags.x > 0.5 && lanim > 0.0 && lanim < 6.0) {
             let frame = clamp(floor(lanim), 0.0, BOLT_FRAMES - 1.0);
+            let rot = abs(d.w);
             let bolt_rot = rot - 0.7853982 + stream.y;
             let bc = cos(bolt_rot);
             let bs = sin(bolt_rot);
             var lrel = gui - d.xy;
             lrel = vec2<f32>(bc * lrel.x + bs * lrel.y, -bs * lrel.x + bc * lrel.y);
-            let buv = (lrel / s + vec2<f32>(180.0, 0.0)) / vec2<f32>(176.0, 176.0);
+            let buv = (lrel / s + vec2<f32>(180.0, 88.0)) / vec2<f32>(176.0, 176.0);
             if (all(buv > vec2<f32>(0.0)) & all(buv < vec2<f32>(1.0))) {
                 let bolt_uv_x = (frame * 176.0 + 0.5 + buv.x * 175.0) / 1056.0;
                 let bolt_uv_y = (0.5 + buv.y * 175.0) / 176.0;
@@ -183,6 +177,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 }
             }
         }
+
+        // IDPD2 variant rides in the rot sign (CPU); art is 128px single.
+        let idpd2 = d.w < 0.0;
+        let rot = abs(d.w);
+        let c = cos(rot);
+        let sn = sin(rot);
+        var rel = gui - d.xy;
+        rel = vec2<f32>(c * rel.x + sn * rel.y, -sn * rel.x + c * rel.y);
 
         if (kind > 1.5 && kind < 2.5) {
             // IDPD: single 128x128 frame, origin centre.
@@ -205,7 +207,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
         let suv = rel / (32.0 * s * 10.0) * 0.5 + vec2<f32>(0.5, 0.5);
         if (all(suv > vec2<f32>(0.0)) & all(suv < vec2<f32>(1.0))) {
-        let sframe = f32(u32(floor(age * (2.0 / 30.0))) % 2u);
+        var sframe = f32(u32(floor(age * (2.0 / 30.0))) % 2u);
+            if (stream.w > 0.5) {
+                sframe = 1.0;
+            }
             // Half-texel inset to avoid atlas bleeding (sprite is 64x64 in 128x64 strip)
             let uv_x = (sframe * 64.0 + 0.5 + suv.x * 63.0) / 128.0;
             let uv_y = (0.5 + suv.y * 63.0) / 64.0;
@@ -222,6 +227,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         }
     }
 
+    if draw_details {
     // SpiralDebris pass - drawn AFTER all wisps (scrDrawSpiral order), on top.
     // CPU supplies [x, y, rot_rad, frame + xscale/32]; x < -100 = empty slot.
     // Jungle debris (sprDebris105) uses 16px frames instead of 8px.
@@ -304,6 +310,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 acc = source_over(acc, vec3<f32>(0.0), stex.a * sblack);
             }
         }
+    }
     }
     if (acc.a > 0.0001) {
         return vec4<f32>(acc.rgb / acc.a, acc.a);

@@ -220,6 +220,7 @@ pub struct App {
     /// (`GenCont`/`LevCont` build a fresh `SpiralCont`); falling edge
     /// kills it (`GenCont/Destroy` destroys it at generation end).
     adv_cover: bool,
+    cover_rewarm_pending: bool,
     adv_throne_ii: bool,
     /// Run seed the spiral was last warmed/killed for. `setup_run`
     /// writes `AppState::InGame` directly mid-schedule (not via an
@@ -371,6 +372,7 @@ impl App {
             letterbox_frame: 0.0,
             adv_state: AppState::default(),
             adv_cover: false,
+            cover_rewarm_pending: false,
             adv_throne_ii: false,
             adv_seed: 0,
             adv_area: 0,
@@ -423,7 +425,7 @@ impl App {
     /// a single PNG to internal storage.
     pub fn load_assets_from(&mut self, dir: &Path) -> anyhow::Result<()> {
         let assets = RenderAssets::load(dir)?;
-        let text = crate::render::read_asset_ron(&dir.join("images").join("anims.ron"))?;
+        let text = crate::render::read_asset_catalog(dir)?;
         let catalog = AnimCatalog::from_ron(
             &text,
             AtlasDesc {
@@ -722,7 +724,8 @@ impl App {
             // per wisp (non-menu only), flyby `sndPortalFlyby{1..4}` once
             // per debris mote at `xscale > 1.3` (any caller). Drain here,
             // right after the step, so each fires exactly once.
-            if !splash_without_cont && (!paused || spiral_cover) {
+            let full_spiral = state != AppState::InGame || self.spiral.alive || spiral_cover;
+            if !splash_without_cont && (!paused || spiral_cover) && full_spiral {
                 self.drain_spiral_sounds();
             }
             // Lifecycle FIRST, drift second: the drift rewarm skips the
@@ -789,6 +792,22 @@ impl App {
             .get_resource::<crate::state::SplashState>()
             .map(|splash| splash.mode)
             .unwrap_or(0);
+        let cover = state == AppState::InGame
+            && (self
+                .sim
+                .world
+                .get_resource::<crate::comps_b::FloorTransition>()
+                .is_some_and(|f| f.active)
+                || self
+                    .sim
+                    .world
+                    .get_resource::<crate::comps_a::PendingMutation>()
+                    .is_some()
+                || self
+                    .sim
+                    .world
+                    .get_resource::<crate::comps_a::PendingUltra>()
+                    .is_some());
         if state == AppState::Splash && splash_mode >= 4 && self.last_splash_mode < 4 {
             let view_w = self.spiral.view_w;
             self.spiral = SpiralCtl::warmed_up_for_gml_area_seeded_in_view(0, seed, view_w);
@@ -804,19 +823,18 @@ impl App {
             self.adv_seed = seed;
             self.adv_area = gml_area_for_area(area);
         }
-        // `setup_run` writes InGame directly mid-schedule (no observable
-        // edge: `tick_loading` → `setup_run` runs inside the same fixed
-        // step, so `adv_state` is already InGame here). Key the entry
-        // kill off the run-seed change instead: a fresh seed in InGame
-        // means a new run just landed (`GenCont/Destroy` destroys the
-        // cont at generation end). The drift rewarm below runs after
-        // and only tracks settled states, so it cannot resurrect this
-        // kill on later ticks (seed matches by then).
+        // A generation seed change normally marks a new run and drains
+        // the old cont. During an active generation cover it instead
+        // identifies the fresh room and is rewarmed below.
         if state == AppState::InGame && seed != self.adv_seed {
-            self.spiral.kill();
             self.adv_seed = seed;
             self.adv_area = gml_area_for_area(area);
-            killed_this_tick = true;
+            if cover {
+                self.cover_rewarm_pending = true;
+            } else {
+                self.spiral.kill();
+                killed_this_tick = true;
+            }
         }
         if state == AppState::InGame && throne_ii_active && !self.adv_throne_ii {
             let view_w = self.spiral.view_w;
@@ -877,37 +895,23 @@ impl App {
             self.spiral.kill();
             killed_this_tick = true;
         }
-        let cover = state == AppState::InGame
-            && (self
-                .sim
-                .world
-                .get_resource::<crate::comps_b::FloorTransition>()
-                .is_some_and(|f| f.active)
-                || self
-                    .sim
-                    .world
-                    .get_resource::<crate::comps_a::PendingMutation>()
-                    .is_some()
-                || self
-                    .sim
-                    .world
-                    .get_resource::<crate::comps_a::PendingUltra>()
-                    .is_some());
-        // Latch: a tick that killed never rewarms. The cover edge still
-        // records so the NEXT tick rewarms if the cover is genuinely
-        // held (one tick of delay, invisible); the falling edge still
-        // kills (already dead — no-op).
-        if killed_this_tick {
-            // no rewarm this tick
-        } else if cover && !self.adv_cover {
-            let view_w = self.spiral.view_w;
-            self.spiral = SpiralCtl::warmed_up_for_gml_area_seeded_in_view(
-                gml_area_for_area(area),
-                seed,
-                view_w,
-            );
-        } else if !cover && self.adv_cover {
-            self.spiral.kill();
+        if cover {
+            if killed_this_tick {
+                self.cover_rewarm_pending = true;
+            } else if !self.adv_cover || self.cover_rewarm_pending {
+                let view_w = self.spiral.view_w;
+                self.spiral = SpiralCtl::warmed_up_for_gml_area_seeded_in_view(
+                    gml_area_for_area(area),
+                    seed,
+                    view_w,
+                );
+                self.cover_rewarm_pending = false;
+            }
+        } else {
+            if self.adv_cover {
+                self.spiral.kill();
+            }
+            self.cover_rewarm_pending = false;
         }
         self.adv_state = state;
         self.adv_cover = cover;
@@ -1089,25 +1093,16 @@ impl App {
         if !matches!(state, AppState::Loading | AppState::InGame) {
             return;
         }
-        // The lifecycle owns the InGame-entry kill above (it stamps
-        // `adv_seed` on the kill tick), so drift here only fires on a
-        // LATER seed change — a real portal/new-run area/seed change in
-        // settled play. Comparing against the lifecycle's stamp (not
-        // the spiral's own seed) is what stops the load-end double
-        // start: on the entry tick both read the fresh seed and the
-        // rewarm stays quiet.
+        // The lifecycle owns generation-cover seed changes and stamps
+        // the current floor seed. Drift here therefore only handles a
+        // seed change outside a cover, which is a new run boundary.
         let run = self.sim.world.get_resource::<crate::comps_a::Run>();
         let (area, seed) = run
             .map(|r| (r.area, r.gen_seed))
             .unwrap_or((AreaId::Desert, 0));
         if seed != self.adv_seed {
-            // Fresh seed in InGame = a new run just landed: GML
-            // `GenCont/Destroy` destroys the cont at generation end, so
-            // kill (drain), never rewarm. The mid-run floor swap does
-            // NOT change the seed (`tick_floor_transition` keeps it;
-            // only secret/loop routing re-derives it and those ride a
-            // cover rewarm below), so this arm cannot fire in settled
-            // play.
+            // A seed change outside a generation cover is a new run
+            // boundary. GML `GenCont/Destroy` drains that old cont.
             self.spiral.kill();
             self.adv_seed = seed;
         } else if gml_area_for_area(area) != self.adv_area {
@@ -3160,21 +3155,22 @@ impl App {
             .get_resource::<crate::state::Paused>()
             .is_some_and(|p| p.0);
         let game_over = crate::state::menus::game_over_visible(&self.sim.world);
-        let spiral_cover = self
+        let ft_active = self
             .sim
             .world
             .get_resource::<crate::comps_b::FloorTransition>()
-            .is_some_and(|transition| transition.active)
-            || self
-                .sim
-                .world
-                .get_resource::<crate::comps_a::PendingMutation>()
-                .is_some()
+            .is_some_and(|transition| transition.active);
+        let pending_pick = self
+            .sim
+            .world
+            .get_resource::<crate::comps_a::PendingMutation>()
+            .is_some()
             || self
                 .sim
                 .world
                 .get_resource::<crate::comps_a::PendingUltra>()
                 .is_some();
+        let spiral_cover = state == AppState::Loading || ft_active || pending_pick;
 
         if matches!(state, AppState::Title) {
             let vw_vh = self.view_world_size;
@@ -3223,6 +3219,7 @@ impl App {
         let mut chrome_sprites: Vec<SpriteInstance> = Vec::new();
         let mut front_chrome_sprites: Vec<SpriteInstance> = Vec::new();
         let mut spiral_figure_sprites: Vec<SpriteInstance> = Vec::new();
+        let mut cover_hud_sprites: Vec<SpriteInstance> = Vec::new();
         let (mut sprites, texts) = if self.assets.is_some() {
             let assets = self.assets.as_ref().expect("checked");
             // Cursor world position for the GML crosshair distance
@@ -3252,14 +3249,11 @@ impl App {
             // draw scripts own that chrome, not `TopCont` — so the
             // TopCont-sourced HUD bars stay off but the Menu chrome
             // stays on).
-            let generation_screen = matches!(
-                menu_kind,
-                Some(MenuOverlay::Loading) | Some(MenuOverlay::Mutation)
-            ) || self
-                .sim
-                .world
-                .get_resource::<crate::comps_b::FloorTransition>()
-                .is_some_and(|f| f.active);
+            let generation_screen = spiral_cover
+                || matches!(
+                    menu_kind,
+                    Some(MenuOverlay::Loading) | Some(MenuOverlay::Mutation)
+                );
             let playing = !generation_screen;
             let mut s = if playing {
                 shadow_sprites(&mut self.sim.world, assets)
@@ -3398,7 +3392,11 @@ impl App {
                 hud_sprites(&mut self.sim.world, assets, hud_view, hud_dt)
             };
             stamp_z(&mut h, Z_HUD);
-            s.extend(h);
+            if pending_pick {
+                cover_hud_sprites = h;
+            } else {
+                s.extend(h);
+            }
             // Touch controls (`scrDrawMobileControls`, `TopCont/Draw_64`
             // tail): sticks + buttons over the HUD, under splash/menus.
             // GML gate verbatim (`TopCont/Draw_64:23`): `drawcontrols`
@@ -3481,7 +3479,11 @@ impl App {
             // GameOver chrome use a separate viewport so the letterbox
             // and vortex passes can be placed between the room and the
             // menu layer at their GML depth boundaries.
-            if let Some(kind) = menu_kind {
+            if let Some(kind) = if ft_active {
+                Some(MenuOverlay::Loading)
+            } else {
+                menu_kind
+            } {
                 let mut menu = menu_sprites(
                     kind,
                     &mut self.sim.world,
@@ -3602,7 +3604,7 @@ impl App {
         // Canvas text rides above the opaque vortex pass, so the HUD
         // rows need the same gate or HP/level/ammo/FLOOR paints over
         // the spiral mid-transition.
-        let cover_chrome_off = menu_kind == Some(MenuOverlay::Loading)
+        let cover_chrome_off = state == AppState::Loading
             || self
                 .sim
                 .world
@@ -3628,38 +3630,17 @@ impl App {
         // over the campfire camp on Title. InGame mounts the pass only
         // while a floor transition or mutation/ultra cover runs (the
         // only spiral callers in a run).
-        let ft_active = self
-            .sim
-            .world
-            .get_resource::<crate::comps_b::FloorTransition>()
-            .is_some_and(|f| f.active);
-        let pending_pick = self
-            .sim
-            .world
-            .get_resource::<crate::comps_a::PendingMutation>()
-            .is_some()
-            || self
-                .sim
-                .world
-                .get_resource::<crate::comps_a::PendingUltra>()
-                .is_some();
-        let bg_alpha = match state {
-            AppState::Title => 0.0,
-            AppState::Splash | AppState::MainMenu | AppState::Loading => 1.0,
-            AppState::InGame => {
-                if ft_active || pending_pick {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
+        let full_spiral = match state {
+            AppState::Title | AppState::Splash | AppState::MainMenu | AppState::Loading => true,
+            AppState::InGame => ft_active || pending_pick || self.spiral.alive,
         };
-        let draw_bolts = !matches!(state, AppState::Title);
-        let snap = self.spiral.snapshot_with_lightning_and_origin(
-            bg_alpha,
-            draw_bolts,
-            [self.gml_cam.x, self.gml_cam.y],
-        );
+        let (bg_alpha, draw_bolts, draw_details) = match state {
+            AppState::Title => (0.0, false, true),
+            AppState::Splash | AppState::MainMenu | AppState::Loading => (1.0, true, true),
+            AppState::InGame if full_spiral => (1.0, true, true),
+            AppState::InGame => (0.0, false, false),
+        };
+        let snap = self.spiral.snapshot_with_render_mode(bg_alpha, draw_bolts, draw_details);
         self.last_bg_alpha = snap.bg_alpha;
         // Vortex art follows the GML area (debris strip is per-area);
         // decode once per area, not per frame.
@@ -3683,7 +3664,7 @@ impl App {
             && (!splash || splash_logo)
             && (!paused || spiral_cover)
             && !game_over
-            && (self.spiral.alive || !self.spiral.is_done())
+            && (self.spiral.alive || !self.spiral.is_done() || spiral_cover)
         {
             let mut pass = VortexPass::new(snap);
             pass.extend_textures(self.vortex_tex.clone());
@@ -3694,9 +3675,7 @@ impl App {
         } else {
             None
         };
-        let vortex_above = vortex_layer.is_some()
-            && state == AppState::Title
-            && self.last_bg_alpha < 0.5;
+        let vortex_above = vortex_layer.is_some();
         if !vortex_above {
             sprites.extend(std::mem::take(&mut spiral_figure_sprites));
         }
@@ -3717,7 +3696,7 @@ impl App {
         // sets a colour; `Vlambeer/Draw_0` clears black). Live gameplay
         // past the spiral drain and GameOver (whose spiral died at
         // generation end) also fall back to the flat room colour.
-        let background = if vortex_layer.is_some() {
+        let background = if vortex_layer.is_some() && bg_alpha > 0.0 {
             None
         } else if matches!(
             menu_kind,
@@ -3759,8 +3738,16 @@ impl App {
         } else {
             Vec::new()
         };
-        let mut menu_rows =
-            menu_kind.map(|k| menu_gui_texts_dp(k, &mut self.sim.world, viewport_dp));
+        let gen_cover = state == AppState::Loading || ft_active;
+        let mut menu_rows = if gen_cover {
+            Some(menu_gui_texts_dp(
+                MenuOverlay::Loading,
+                &mut self.sim.world,
+                viewport_dp,
+            ))
+        } else {
+            menu_kind.map(|k| menu_gui_texts_dp(k, &mut self.sim.world, viewport_dp))
+        };
         // GML `TutCont/Draw_64` verbatim: the step instruction bar draws
         // at the letterbox bottom until the exit portal exists — over
         // live HUD, never instead of it.
@@ -3936,7 +3923,12 @@ impl App {
                 Some(view)
             }
         };
-        let chrome_view = make_chrome_view(chrome_sprites, "viewport2d.menu");
+        let mut chrome_view = make_chrome_view(chrome_sprites, "viewport2d.menu");
+        let cover_hud_view = if pending_pick {
+            make_chrome_view(cover_hud_sprites, "viewport2d.cover.hud")
+        } else {
+            None
+        };
         let front_chrome_view =
             make_chrome_view(front_chrome_sprites, "viewport2d.menu.front");
         let spiral_figure_view = if vortex_above {
@@ -4032,7 +4024,7 @@ impl App {
         if let Some(figures) = spiral_figure_view {
             layers.push(figures);
         }
-        if !hud_rows.is_empty() {
+        if !pending_pick && !hud_rows.is_empty() {
             layers.push(
                 ZStack(Modifier::new().fill_max_size().hit_passthrough())
                     .child(hud_rows.iter().map(gui_text_layer).collect::<Vec<_>>()),
@@ -4219,7 +4211,9 @@ impl App {
                     layers.push(letterbox);
                 }
             }
-            if let Some(chrome) = chrome_view {
+            if !gen_cover
+                && let Some(chrome) = chrome_view.take()
+            {
                 layers.push(chrome);
             }
             if !rows.is_empty() {
@@ -4229,10 +4223,26 @@ impl App {
                         .child(rows.iter().map(gui_text_layer).collect::<Vec<_>>()),
                 );
             }
+            if gen_cover
+                && let Some(chrome) = chrome_view.take()
+            {
+                layers.push(chrome);
+            }
             if !letterbox_before_content {
                 if let Some(letterbox) = letterbox_view.take() {
                     layers.push(letterbox);
                 }
+            }
+        }
+        if pending_pick {
+            if !hud_rows.is_empty() {
+                layers.push(
+                    ZStack(Modifier::new().fill_max_size().hit_passthrough())
+                        .child(hud_rows.iter().map(gui_text_layer).collect::<Vec<_>>()),
+                );
+            }
+            if let Some(hud) = cover_hud_view {
+                layers.push(hud);
             }
         }
         if let Some(letterbox) = letterbox_view.take() {
@@ -4351,10 +4361,13 @@ fn init_schedule_resources(world: &mut World) {
 }
 
 /// Resolve the art dir: `$NT_ASSETS` -> exe-dir `assets` -> cwd `assets`.
-/// Returns `None` when no dir holds `images/anims.ron` (placeholder path
-/// stays active).
+/// Returns `None` when no dir holds an animation catalog (placeholder
+/// path stays active).
 pub fn resolve_assets_dir() -> Option<PathBuf> {
-    let has_catalog = |p: &Path| p.join("images").join("anims.ron").is_file();
+    let has_catalog = |p: &Path| {
+        p.join("images").join("anims.ron").is_file()
+            || p.join("images").join("anims.json").is_file()
+    };
     if let Ok(p) = std::env::var("NT_ASSETS") {
         let p = PathBuf::from(p);
         if has_catalog(&p) {

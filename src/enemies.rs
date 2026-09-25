@@ -38,9 +38,9 @@ use crate::combat::{
 };
 use crate::comps_a::{
     ARENA_H, ARENA_W, BossIntro, BouncesLeft, CurrentFrame, DamageSource, Euphoria, FloorMask,
-    GameCleanup, GrenadeFuse, Health, Hitbox, Homing, LevelCleanup, NextHurt, Player, Projectile,
-    ProjectileFade, ProjectileFriction, ProjectileTyp, Run, ScarierFace, ShellWallBounce,
-    SplitOnDeath, Team, Toast, Velocity, WallCell, WallTile, apply_gml_friction,
+    GameCleanup, GrenadeFuse, Health, HeavyHeart, Hitbox, Homing, LevelCleanup, NextHurt, Player,
+    Projectile, ProjectileFade, ProjectileFriction, ProjectileTyp, Run, ScarierFace,
+    ShellWallBounce, SplitOnDeath, Team, Toast, Velocity, WallCell, WallTile, apply_gml_friction,
     gml_motion_add_clamp,
 };
 use crate::comps_b::{
@@ -122,6 +122,7 @@ pub struct EnemySpawnContext {
     pub subarea: u32,
     pub blood_crown: bool,
     pub scarier_face: bool,
+    pub heavy_heart: bool,
 }
 
 /// Full enemy spawn: base bundle from [`crate::setup::spawn_enemy`]
@@ -189,7 +190,7 @@ fn spawn_enemy_impl(
     pos: glam::Vec2,
     difficulty: f32,
     scarier_face: bool,
-    _heavy_heart: bool,
+    heavy_heart: bool,
     loops: u32,
     context: EnemySpawnContext,
     give_kill: bool,
@@ -226,7 +227,11 @@ fn spawn_enemy_impl(
     } else {
         def.speed * (0.9 + 0.02 * difficulty)
     };
-    let weapon_chance = def.weapon_chance;
+    let weapon_chance = if heavy_heart || context.heavy_heart {
+        def.weapon_chance + 9
+    } else {
+        def.weapon_chance
+    };
 
     let mut ec = commands.entity(e);
     ec.insert(Enemy {
@@ -416,7 +421,7 @@ fn spawn_enemy_impl(
                 pos,
                 difficulty,
                 scarier_face,
-                _heavy_heart,
+                heavy_heart,
                 loops,
                 context,
                 true,
@@ -460,12 +465,14 @@ pub fn flush_pending_enemy_spawns(
     catalog: Res<repame_anim::AnimCatalog>,
     run: Res<Run>,
     scarier: Res<ScarierFace>,
+    heavy_heart: Res<HeavyHeart>,
     pending: Query<(Entity, &PendingEnemySpawn)>,
 ) {
     let context = EnemySpawnContext {
         subarea: run.floor_in_area,
         blood_crown: run.blood_crown,
         scarier_face: scarier.0,
+        heavy_heart: heavy_heart.0,
     };
     let mut rng = rand::rng();
     for (entity, spawn) in pending.iter() {
@@ -476,7 +483,7 @@ pub fn flush_pending_enemy_spawns(
             spawn.pos,
             spawn.difficulty,
             false,
-            false,
+            heavy_heart.0,
             spawn.loops,
             context,
             spawn.give_kill,
@@ -3842,6 +3849,7 @@ pub fn tick_delayed_boss_spawns(
     catalog: Res<repame_anim::AnimCatalog>,
     run: Res<Run>,
     scarier: Res<ScarierFace>,
+    heavy_heart: Res<HeavyHeart>,
     mask: Res<FloorMask>,
     mut trauma: ResMut<Trauma>,
     mut hitstop: ResMut<HitStop>,
@@ -3941,6 +3949,7 @@ pub fn tick_delayed_boss_spawns(
             subarea: run.floor_in_area,
             blood_crown: run.blood_crown,
             scarier_face: scarier.0,
+            heavy_heart: heavy_heart.0,
         },
     );
 
@@ -5234,14 +5243,25 @@ pub fn tick_corpses(
     time: Res<SimTime>,
     mask: Res<FloorMask>,
     mut commands: Commands,
-    walls: Query<&Pos, (With<WallCell>, With<WallTile>)>,
-    mut q: Query<(
-        Entity,
-        &mut Corpse,
-        Option<&mut Velocity>,
-        Option<&mut Pos>,
-        Option<&mut CorpseCollision>,
-    )>,
+    walls: Query<
+        &Pos,
+        (
+            With<WallCell>,
+            With<WallTile>,
+            Without<Corpse>,
+            Without<crate::comps_b::GroundPhysics>,
+        ),
+    >,
+    mut q: Query<
+        (
+            Entity,
+            &mut Corpse,
+            Option<&mut Velocity>,
+            Option<&mut Pos>,
+            Option<&mut CorpseCollision>,
+        ),
+        With<Corpse>,
+    >,
     mut gibs: Query<
         (&mut Pos, &mut crate::comps_b::GroundPhysics),
         (Without<Corpse>, Without<Pickup>),

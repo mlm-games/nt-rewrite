@@ -53,6 +53,7 @@ use crate::comps_b::{
     GmlImage, GroundDecalTint, HazardCloud, HurtAnim, MaggotSpawnCharge, Mote, MoteScale,
     NativeAngle, NativeDepth, NativeFlip, NativeScale, OpenedChest, Pickup, PickupKind,
     PickupLifetime, Portal, PortalClear, PortalShock, PortalStrike, Prop, PropSprites, Shield,
+    CrownObject,
     StaticFx, SwingFx, Telekinesis, ThroneCarpet, ThroneSit, TitleCampChar, TitleCampfire,
     TitleLogMenu, TitleTv, ToxicGasState, WeaponVisual, YvCouch,
 };
@@ -151,7 +152,7 @@ impl RenderAssets {
     /// Full production load: `assets_dir` holds `images/anims.ron` +
     /// the strip PNGs (e.g. `./assets`).
     pub fn load(assets_dir: &Path) -> anyhow::Result<Self> {
-        let text = crate::render::read_asset_ron(&assets_dir.join("images").join("anims.ron"))?;
+        let text = crate::render::read_asset_catalog(assets_dir)?;
         Self::build(
             &text,
             assets_dir,
@@ -177,7 +178,7 @@ impl RenderAssets {
         size: u32,
         max_pages: u32,
     ) -> anyhow::Result<Self> {
-        let text = crate::render::read_asset_ron(&assets_dir.join("images").join("anims.ron"))?;
+        let text = crate::render::read_asset_catalog(assets_dir)?;
         let raw: BTreeMap<String, AnimDef> = ron::from_str(&text)?;
         let want: std::collections::HashSet<String> = names
             .iter()
@@ -365,6 +366,21 @@ pub(crate) fn read_asset_ron(path: &Path) -> anyhow::Result<String> {
     Ok(String::from_utf8(read_asset_bytes(path)?)?)
 }
 
+pub(crate) fn read_asset_catalog(assets_dir: &Path) -> anyhow::Result<String> {
+    let ron = assets_dir.join("images").join("anims.ron");
+    match read_asset_ron(&ron) {
+        Ok(text) => Ok(text),
+        Err(ron_error) => {
+            let json = assets_dir.join("images").join("anims.json");
+            let text = read_asset_ron(&json).map_err(|json_error| {
+                anyhow::anyhow!("asset catalog unavailable: {ron_error}; {json_error}")
+            })?;
+            let raw: BTreeMap<String, AnimDef> = serde_json::from_str(&text)?;
+            Ok(ron::ser::to_string(&raw)?)
+        }
+    }
+}
+
 /// Asset bytes, portable across desktop (plain files) and Android
 /// (APK `assets/`, read through the NDK `AAssetManager` — plain
 /// `std::fs` paths never resolve inside the APK). Paths are matched by
@@ -495,9 +511,9 @@ fn area_sprites(floor: u32) -> (&'static str, &'static str, &'static str) {
     let rf = ((floor.max(1) - 1) % 15) + 1;
     match rf {
         3 => (
-            "images/sprFloor0.png",
-            "images/sprWall0Bot.png",
-            "images/sprWall0Top.png",
+            "images/sprFloor1.png",
+            "images/sprWall1Bot.png",
+            "images/sprWall1Top.png",
         ),
         4 => (
             "images/sprFloor2.png",
@@ -551,7 +567,7 @@ fn area_sprites_full(
     let (f, b, t) = area_sprites(floor);
     let rf = ((floor.max(1) - 1) % 15) + 1;
     let n: u8 = match rf {
-        3 => 0,
+        3 => 1,
         4 => 2,
         5..=7 => 3,
         8 => 4,
@@ -1939,21 +1955,27 @@ fn add_fingerprint(value: u64, sum: &mut u64, xor: &mut u64) {
     *xor ^= value.rotate_left(17);
 }
 
-fn static_world_key(world: &World, assets: &RenderAssets) -> Option<StaticWorldKey> {
-    let run = world.get_resource::<Run>()?;
-    let mask = world.get_resource::<FloorMask>()?;
-    let mut floor_sum = 0;
-    let mut floor_xor = 0;
-    for &(x, y) in &mask.cells {
-        add_fingerprint(cell_fingerprint(x, y), &mut floor_sum, &mut floor_xor);
-    }
+fn static_world_key(world: &mut World, assets: &RenderAssets) -> Option<StaticWorldKey> {
+    let (floor, area, seed) = {
+        let run = world.get_resource::<Run>()?;
+        (run.floor, run.area, run.gen_seed)
+    };
+    let (floor_cells, floor_hash) = {
+        let mask = world.get_resource::<FloorMask>()?;
+        let mut floor_sum = 0;
+        let mut floor_xor = 0;
+        for &(x, y) in &mask.cells {
+            add_fingerprint(cell_fingerprint(x, y), &mut floor_sum, &mut floor_xor);
+        }
+        (mask.cells.len(), floor_sum ^ floor_xor)
+    };
     let mut wall_sum = 0;
     let mut wall_xor = 0;
     let mut wall_count = 0;
     for (cell, pos) in world.query::<(&WallCell, &Pos)>().iter(world) {
         let value = cell_fingerprint(cell.0, cell.1)
-            ^ pos.0.x.to_bits().rotate_left(7)
-            ^ pos.0.y.to_bits().rotate_left(29);
+            ^ u64::from(pos.0.x.to_bits()).rotate_left(7)
+            ^ u64::from(pos.0.y.to_bits()).rotate_left(29);
         add_fingerprint(value, &mut wall_sum, &mut wall_xor);
         wall_count += 1;
     }
@@ -1970,12 +1992,12 @@ fn static_world_key(world: &World, assets: &RenderAssets) -> Option<StaticWorldK
         );
     }
     Some(StaticWorldKey {
-        floor: run.floor,
-        area: run.area,
-        seed: run.gen_seed,
+        floor,
+        area,
+        seed,
         assets_gen: assets.uploads_gen,
-        floor_cells: mask.cells.len(),
-        floor_hash: floor_sum ^ floor_xor,
+        floor_cells,
+        floor_hash,
         wall_cells: wall_count,
         wall_hash: wall_sum ^ wall_xor,
         active_wall_hash: active_sum ^ active_xor,
@@ -2011,6 +2033,7 @@ pub fn world_instances_cached(
         .as_deref()
         .map(|sprites| sprites.to_vec())
         .unwrap_or_default();
+    let mut wall_shadows = Vec::new();
     let mut wall_trans = cached_wall_trans
         .as_deref()
         .map(|sprites| sprites.to_vec())
@@ -2107,6 +2130,7 @@ pub fn world_instances_cached(
                 }
             }
         }
+        let floor_end = out.len();
         // Walls: GML law (`GenCont/Alarm_0` + `SubTopCont/Draw_0`): Out
         // skirt always (neighbor-cropped), Bot iff the screen-south tile
         // is floor (`place_meeting(x, y + 16, Floor)` on the wall
@@ -2119,23 +2143,14 @@ pub fn world_instances_cached(
             .iter(world)
             .copied()
             .collect();
-        walls.sort_by_key(|c| (c.1, c.0));
+        walls.sort_by_key(|c| (c.0, c.1));
         let wall_set: HashSet<(i32, i32)> = walls.iter().map(|c| (c.0, c.1)).collect();
         let out_frames = strip_frames(assets, wall_out_png);
         let bot_frames = strip_frames(assets, wall_bot_png);
         let top_frames = strip_frames(assets, wall_top_png);
-        for cell in &walls {
-            let (wx, wy) = (cell.0, cell.1);
-            // GML `Wall/Create_0:34` verbatim: `place_meeting(x, y + 16,
-            // Floor)` on the 16x16 wall body (origin (0,0) at the cell
-            // top-left). The south point owns exactly one floor cell.
-            let south_tile = (
-                (wx as f32 * 16.0 / TILE).floor() as i32,
-                ((wy as f32 * 16.0 + 16.0) / TILE).floor() as i32,
-            );
-            let floor_south = cells.contains(&south_tile);
-            let raw = wall_body_raw(seed, wx, wy);
-            if has(wall_out_png) {
+        if has(wall_out_png) {
+            for cell in walls.iter().rev() {
+                let (wx, wy) = (cell.0, cell.1);
                 let frame = (wall_out_raw(seed, wx, wy) % out_frames.max(1) as usize) as i32;
                 if let Some(mut s) = wall_out_part(
                     assets,
@@ -2150,6 +2165,18 @@ pub fn world_instances_cached(
                     wall_out.push(s);
                 }
             }
+        }
+        for cell in &walls {
+            let (wx, wy) = (cell.0, cell.1);
+            // GML `Wall/Create_0:34` verbatim: `place_meeting(x, y + 16,
+            // Floor)` on the 16x16 wall body (origin (0,0) at the cell
+            // top-left). The south point owns exactly one floor cell.
+            let south_tile = (
+                (wx as f32 * 16.0 / TILE).floor() as i32,
+                ((wy as f32 * 16.0 + 16.0) / TILE).floor() as i32,
+            );
+            let floor_south = cells.contains(&south_tile);
+            let raw = wall_body_raw(seed, wx, wy);
             if floor_south && has(wall_bot_png) {
                 let frame = (raw % bot_frames.max(1) as usize) as i32;
                 if let Some(s) = place_top_left(
@@ -2158,7 +2185,7 @@ pub fn world_instances_cached(
                     frame,
                     Vec2::new(wx as f32 * 16.0, wy as f32 * 16.0),
                     [1.0; 4],
-                    GRID_OVERLAP,
+                    0.0,
                 ) {
                     out.push(s);
                 }
@@ -2171,7 +2198,7 @@ pub fn world_instances_cached(
                     frame,
                     Vec2::new(wx as f32 * 16.0, wy as f32 * 16.0 - 8.0),
                     [1.0; 4],
-                    GRID_OVERLAP,
+                    0.0,
                 ) {
                     s.z = Z_WALL_SUBTOP;
                     wall_top.push(s);
@@ -2206,49 +2233,31 @@ pub fn world_instances_cached(
                 wall_trans.push(s);
             }
         }
-        // Wall drop shadows (GML `scrShadows` wall half: the Out crop
-        // flipped under each wall with no `TopSmall` at `(x, y + 16)`,
-        // drawn into the `shad` surface and composited under the actors
-        // by `BackCont/Draw_0`). Cropped the same way so interior
-        // skirts stay hidden; tint is flat black 0.4 (the area shadow
-        // colors are not ported yet).
+        // Wall drop shadows (GML `scrShadows` wall half: the full Out
+        // sprite flipped under each wall with no `TopSmall` at
+        // `(x, y + 16)`).
         if has(wall_out_png) {
-            for cell in &walls {
+            for cell in walls.iter().rev() {
                 let (wx, wy) = (cell.0, cell.1);
                 if trans_set.contains(&(wx, wy + 1)) {
                     continue;
                 }
                 let frame = (wall_out_raw(seed, wx, wy) % out_frames.max(1) as usize) as i32;
-                let crop = wall_out_crop(&wall_set, wx, wy);
-                let (l, _r, w, h) = crop;
-                if w <= 0.0 || h <= 0.0 {
-                    continue;
-                }
-                // Flipped crop spans [y+18-h, y+18] (GML draws the
-                // Out strip at (x, y+18) with yscale -1). Same crop
-                // window, recentered on the shadow span.
-                if assets.uv(wall_out_png, frame).is_some() {
-                    let size = Vec2::new(w.min(24.0), h.min(32.0));
-                    if let Some(mut s) = wall_out_part(
-                        assets,
-                        wall_out_png,
-                        frame,
-                        wx,
-                        wy,
-                        crop,
-                        [0.0, 0.0, 0.0, 0.4],
-                    ) {
-                        s.flip_y = true;
-                        s.z = Z_SHADOW;
-                        s.center = Vec2::new(
-                            wx as f32 * 16.0 - 4.0 + l + size.x * 0.5,
-                            wy as f32 * 16.0 + 18.0 - size.y * 0.5,
-                        );
-                        out.push(s);
-                    }
+                if let Some(mut s) = assets.sprite_for_full(
+                    wall_out_png,
+                    frame,
+                    Vec2::new(wx as f32 * 16.0, wy as f32 * 16.0 + 18.0),
+                    false,
+                    true,
+                    0.0,
+                    [0.0, 0.0, 0.0, 0.4],
+                ) {
+                    s.z = Z_SHADOW;
+                    wall_shadows.push(s);
                 }
             }
         }
+        out.splice(floor_end..floor_end, wall_shadows.drain(..));
         }
         if let Some(key) = key {
             cache.key = Some(key);
@@ -5194,6 +5203,12 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             let progress = world
                 .get_resource::<crate::state::LoadingState>()
                 .map(|l| l.progress)
+                .or_else(|| {
+                    world
+                        .get_resource::<crate::comps_b::FloorTransition>()
+                        .filter(|f| f.active)
+                        .map(|f| f.progress)
+                })
                 .unwrap_or(1.0);
             let pct = (progress.clamp(0.0, 1.0) * 100.0).round() as u32;
             // GML `GenCont/Draw_0:13-18`: Venuz verifying branch.
@@ -5202,8 +5217,9 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 .iter(world)
                 .any(|rs| rs.race == crate::data::RaceId::Venuz);
             let deep_enough = world
-                .get_resource::<crate::comps_a::Run>()
-                .is_some_and(|r| r.floor >= 10);
+                .query::<&crate::comps_a::Player>()
+                .iter(world)
+                .any(|p| p.level >= 10);
             let verb = if deep_enough && is_venuz {
                 "VERIFYING"
             } else {
@@ -5215,26 +5231,31 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 66.0,
                 GUI_GRAY,
             )];
-            // Tip is picked once per load (stable across draws).
-            let tip = {
-                let fresh = world
-                    .get_resource::<crate::state::LoadingState>()
-                    .map(|l| l.tip.clone())
-                    .unwrap_or_default();
-                if fresh.is_empty() {
-                    let picked = world
-                        .get_resource::<crate::comps_a::Run>()
-                        .map(crate::progression::pick_loading_tip)
-                        .unwrap_or_else(|| "KILL ENEMIES TO LEVEL UP".to_string());
-                    if let Some(mut loading) =
-                        world.get_resource_mut::<crate::state::LoadingState>()
-                    {
-                        loading.tip = picked.clone();
-                    }
-                    picked
-                } else {
-                    fresh
+            let tip = if let Some(loading) = world.get_resource::<crate::state::LoadingState>()
+                && !loading.tip.is_empty()
+            {
+                loading.tip.clone()
+            } else if let Some(transition) = world
+                .get_resource::<crate::comps_b::FloorTransition>()
+                .filter(|f| f.active)
+                && !transition.tip.is_empty()
+            {
+                transition.tip.clone()
+            } else {
+                let picked = world
+                    .get_resource::<crate::comps_a::Run>()
+                    .map(crate::progression::pick_loading_tip)
+                    .unwrap_or_else(|| "KILL ENEMIES TO LEVEL UP".to_string());
+                if let Some(mut loading) =
+                    world.get_resource_mut::<crate::state::LoadingState>()
+                {
+                    loading.tip = picked.clone();
+                } else if let Some(mut transition) =
+                    world.get_resource_mut::<crate::comps_b::FloorTransition>()
+                {
+                    transition.tip = picked.clone();
                 }
+                picked
             };
             out.push(gui_center(format!("@s{tip}"), cx, 144.0, GUI_GRAY));
             if let Some(run) = world.get_resource::<crate::comps_a::Run>() {
@@ -10453,12 +10474,15 @@ pub fn spiral_figures(
         return out;
     }
 
+    let has_crown_object = world.query::<&CrownObject>().iter(world).next().is_some();
     let mut crown = CrownKind::None;
     let mut hurts: Vec<String> = Vec::new();
     {
         let mut q = world.query::<(&Player, Option<&PlayerAnim>)>();
         for (player, anim) in q.iter(world) {
-            crown = player.crown;
+            if has_crown_object && crown == CrownKind::None {
+                crown = player.crown;
+            }
             hurts.push(anim.map(|pa| pa.hurt.to_string()).unwrap_or_default());
         }
     }

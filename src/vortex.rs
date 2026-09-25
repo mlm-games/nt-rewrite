@@ -18,8 +18,8 @@
 //! `Normal` — there is no loop-count branch in the reference.
 
 use crate::vortex_pass::{
-    VARD_CELL_SIZES, VARD_FRAME_COUNTS, VORTEX_DEBRIS, VORTEX_VARDS, VORTEX_WISPS,
-    VortexSnapshot, vard_slot,
+    VARD_CELL_SIZES, VARD_FRAME_COUNTS, VORTEX_DEBRIS, VORTEX_VARDS, VORTEX_WISPS, VortexSnapshot,
+    vard_slot,
 };
 use bevy_ecs::prelude::*;
 use repame_sim::SimTime;
@@ -349,6 +349,7 @@ pub struct SpiralCtl {
     /// Per-ring-slot lightning streams, indexed exactly like `ring`.
     pub streams: Vec<WispStream>,
     wisp_initial: Vec<f32>,
+    wisp_frozen: Vec<bool>,
     /// GML `SpiralCont.bossfight` verbatim (`instance_exists(Nothing2) ||
     /// instance_exists(Nothing2Appear) || instance_exists(NothingSpiral)`):
     /// while set, no `SpiralDebris` births. GML `Nothing2/Create_0`
@@ -427,6 +428,7 @@ impl SpiralCtl {
             view_w,
             streams: vec![WispStream::dead(); MAX_WISPS],
             wisp_initial: vec![0.0; MAX_WISPS],
+            wisp_frozen: vec![false; MAX_WISPS],
         };
         ctl.angle = ctl.random01() * 360.0;
         for _ in 0..WARMUP_TICKS {
@@ -451,6 +453,12 @@ impl SpiralCtl {
         if self.alive {
             self.alive = false;
             self.death_tick = Some(self.ticks);
+            for slot in 0..MAX_WISPS {
+                let birth = self.ring[slot][2];
+                if birth >= 0.0 && self.wisp_scale_at(birth) < 0.01 {
+                    self.wisp_frozen[slot] = true;
+                }
+            }
         }
     }
 
@@ -551,6 +559,10 @@ impl SpiralCtl {
         min + (max - min) * self.random01()
     }
 
+    fn random_int(&mut self, min: i32, max: i32) -> f32 {
+        min as f32 + (self.random01() * (max - min + 1) as f32).floor()
+    }
+
     fn tick_once(&mut self) {
         self.ticks += 1.0;
         // GML `Spiral/Step_0` bolt clock first: live wisps advance
@@ -569,7 +581,7 @@ impl SpiralCtl {
 
             let angle_inc = spiral_angle_inc(self.angle, kind);
             let jitter = if kind == SpiralKind::Proto {
-                self.random_range(-1.0, 1.0)
+                self.random_int(-1, 1)
             } else {
                 0.0
             };
@@ -615,6 +627,7 @@ impl SpiralCtl {
                 } else {
                     0.0
                 };
+                self.wisp_frozen[slot] = false;
                 self.streams[slot] = WispStream {
                     lanim: -stream_hash01(self.seed, birth, 0, STREAM_HEAD_SALT) * 300.0,
                     langle: stream_hash01(self.seed, birth, 0, STREAM_ANGLE_SALT)
@@ -651,10 +664,10 @@ impl SpiralCtl {
                             alive: true,
                             xstart: x,
                             ystart: y,
-                            dist: self.random_range(10.0, 145.0),
+                            dist: self.random_int(10, 145),
                             angle: self.random_range(0.0, 360.0),
-                            turnspeed: self.random_range(-4.0, 4.0),
-                            rotspeed: self.random_range(-8.0, 8.0),
+                            turnspeed: self.random_int(-4, 4),
+                            rotspeed: self.random_int(-8, 8),
                             xscale: 0.0,
                             grow: 0.0,
                             image_angle,
@@ -730,7 +743,7 @@ impl SpiralCtl {
             alive: true,
             xstart: x,
             ystart: y,
-            dist: self.random_range(10.0, 145.0),
+            dist: self.random_int(10, 145),
             angle: self.random_range(0.0, 360.0),
             grow: 0.0,
             xscale: 0.0,
@@ -754,9 +767,9 @@ impl SpiralCtl {
             alive: true,
             xstart: x,
             ystart: y,
-            dist: self.random_range(10.0, 145.0),
+            dist: self.random_int(10, 145),
             angle: self.random_range(0.0, 360.0),
-            turnspeed: self.random_range(-4.0, 4.0),
+            turnspeed: self.random_int(-4, 4),
             rotspeed: self.random_range(20.0, 30.0)
                 * if self.random01() < 0.5 { 1.0 } else { -1.0 },
             grow: 0.0,
@@ -800,6 +813,9 @@ impl SpiralCtl {
             d.grow += 0.0005;
             d.xscale += d.grow / 1.5;
             d.grow = (d.grow + 1.0) * (1.0 + 0.001 * d.xscale) - 1.0;
+            if self.alive && self.kind == SpiralKind::Proto {
+                d.grow *= d.xscale * 0.1 + 1.0;
+            }
             if drain {
                 d.grow *= 1.5;
             }
@@ -849,6 +865,9 @@ impl SpiralCtl {
         v.grow += 0.0005;
         v.xscale += v.grow / 1.5;
         v.grow = (v.grow + 1.0) * (1.0 + 0.001 * v.xscale) - 1.0;
+        if self.alive && self.kind == SpiralKind::Proto {
+            v.grow *= v.xscale * 0.1 + 1.0;
+        }
         if drain {
             v.grow *= 1.5;
         }
@@ -910,19 +929,15 @@ impl SpiralCtl {
         self.snapshot_with_lightning(bg_alpha, true)
     }
 
-    pub fn snapshot_with_lightning(
-        &self,
-        bg_alpha: f32,
-        draw_bolts: bool,
-    ) -> VortexSnapshot {
-        self.snapshot_with_lightning_and_origin(bg_alpha, draw_bolts, [0.0, 0.0])
+    pub fn snapshot_with_lightning(&self, bg_alpha: f32, draw_bolts: bool) -> VortexSnapshot {
+        self.snapshot_with_render_mode(bg_alpha, draw_bolts, true)
     }
 
-    pub fn snapshot_with_lightning_and_origin(
+    pub fn snapshot_with_render_mode(
         &self,
         bg_alpha: f32,
         draw_bolts: bool,
-        origin: [f32; 2],
+        draw_details: bool,
     ) -> VortexSnapshot {
         let mut wisps = [[-1.0; 4]; VORTEX_WISPS];
         for (dst, src) in wisps.iter_mut().zip(self.ring.iter()) {
@@ -932,19 +947,24 @@ impl SpiralCtl {
         for (dst, src) in debris.iter_mut().zip(self.debris_ring.iter()) {
             *dst = *src;
         }
-        let mut streams = [[-1.0, 0.0, 0.0]; VORTEX_WISPS];
+        let mut streams = [[-1.0, 0.0, 0.0, 0.0]; VORTEX_WISPS];
         for (slot, (dst, src)) in streams.iter_mut().zip(self.streams.iter()).enumerate() {
             let scale = self.ring[slot][2]
                 .ge(&0.0)
                 .then(|| self.wisp_scale_at(self.ring[slot][2]))
                 .unwrap_or(0.0);
-            *dst = [src.lanim, src.langle, scale];
+            *dst = [
+                src.lanim,
+                src.langle,
+                scale,
+                if self.wisp_frozen[slot] { 1.0 } else { 0.0 },
+            ];
         }
         let mut stars = [[-1000.0, 0.0, 0.0, 0.0]; VORTEX_WISPS];
-        for (dst, src) in stars.iter_mut().zip(self.stars.iter()) {
-            if !src.alive {
-                continue;
-            }
+        for (dst, src) in stars
+            .iter_mut()
+            .zip(self.stars.iter().filter(|src| src.alive))
+        {
             *dst = [src.draw_x, src.draw_y, src.xscale, src.frame];
         }
         let mut vards = [[-1000.0, 0.0, 0.0, 0.0]; VORTEX_VARDS];
@@ -982,12 +1002,8 @@ impl SpiralCtl {
             thresh: self.thresh(),
             kindpacked: self.kindpacked(),
             draw_bolts: if draw_bolts { 1.0 } else { 0.0 },
-            view: [
-                origin[0] + self.view_w / 2.0,
-                origin[1] + GUI_H / 2.0,
-                self.view_w,
-                GUI_H,
-            ],
+            draw_details: if draw_details { 1.0 } else { 0.0 },
+            view: [self.view_w / 2.0, GUI_H / 2.0, self.view_w, GUI_H],
         }
     }
 }

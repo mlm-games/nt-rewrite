@@ -2270,6 +2270,7 @@ pub fn tick_floor_transition(
     mut carried: ResMut<PortalCarriedWeapons>,
     open_mind: Res<OpenMind>,
     scarier: Res<ScarierFace>,
+    heavy_heart: Res<HeavyHeart>,
 ) {
     if !ft.active {
         return;
@@ -2338,6 +2339,7 @@ pub fn tick_floor_transition(
                 &catalog,
                 &run,
                 scarier.0,
+                heavy_heart.0,
                 &plan,
                 &mut mask,
             );

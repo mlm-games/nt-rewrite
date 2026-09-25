@@ -13,9 +13,7 @@
 
 use std::sync::Arc;
 
-use repame_sprite::{
-    FullscreenDesc, FullscreenPass, FullscreenTextureUpload, TextureFilter,
-};
+use repame_sprite::{FullscreenDesc, FullscreenPass, FullscreenTextureUpload, TextureFilter};
 use repose_render_wgpu::{CallbackRenderPass, CallbackResources, ScreenDescriptor, WgpuCallback};
 
 pub const VORTEX_WISPS: usize = 128;
@@ -43,7 +41,9 @@ pub const VARD_CELL_SIZES: [(f32, f32); 7] = [
 pub const VARD_FRAME_COUNTS: [usize; 7] = [3, 3, 1, 3, 1, 3, 7];
 
 pub fn vard_slot(path: &str) -> Option<usize> {
-    VARD_VARIANTS.iter().position(|candidate| *candidate == path)
+    VARD_VARIANTS
+        .iter()
+        .position(|candidate| *candidate == path)
 }
 
 /// Plain-data snapshot. Field-for-field the nt tick outputs: ring and
@@ -57,7 +57,7 @@ pub fn vard_slot(path: &str) -> Option<usize> {
 pub struct VortexSnapshot {
     pub wisps: [[f32; 4]; VORTEX_WISPS],
     pub debris: [[f32; 4]; VORTEX_DEBRIS],
-    pub streams: [[f32; 3]; VORTEX_WISPS],
+    pub streams: [[f32; 4]; VORTEX_WISPS],
     pub stars: [[f32; 4]; VORTEX_WISPS],
     pub vards: [[f32; 4]; VORTEX_VARDS],
     pub vard_meta: [[f32; 4]; VORTEX_VARDS],
@@ -68,6 +68,7 @@ pub struct VortexSnapshot {
     pub thresh: f32,
     pub kindpacked: f32,
     pub draw_bolts: f32,
+    pub draw_details: f32,
     pub view: [f32; 4],
 }
 
@@ -76,7 +77,7 @@ impl VortexSnapshot {
         Self {
             wisps: [[-1.0, -1.0, -1.0, -1.0]; VORTEX_WISPS],
             debris: [[-1000.0, 0.0, 0.0, 0.0]; VORTEX_DEBRIS],
-            streams: [[-1.0, 0.0, 0.0]; VORTEX_WISPS],
+            streams: [[-1.0, 0.0, 0.0, 0.0]; VORTEX_WISPS],
             stars: [[-1000.0, 0.0, 0.0, 0.0]; VORTEX_WISPS],
             vards: [[-1000.0, 0.0, 0.0, 0.0]; VORTEX_VARDS],
             vard_meta: [[0.0; 4]; VORTEX_VARDS],
@@ -87,6 +88,7 @@ impl VortexSnapshot {
             thresh: 2.5,
             kindpacked: 0.0,
             draw_bolts: 0.0,
+            draw_details: 1.0,
             view,
         }
     }
@@ -121,7 +123,7 @@ impl VortexSnapshot {
         raw.extend_from_slice(&[self.ticks, self.drain_bias, self.bg_rgb[0], self.bg_rgb[1]]);
         raw.extend_from_slice(&[self.bg_rgb[2], self.bg_alpha, self.thresh, self.kindpacked]);
         raw.extend_from_slice(&self.view);
-        raw.extend_from_slice(&[self.draw_bolts, 0.0, 0.0, 0.0]);
+        raw.extend_from_slice(&[self.draw_bolts, self.draw_details, 0.0, 0.0]);
         raw
     }
 }

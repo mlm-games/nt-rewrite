@@ -715,7 +715,15 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
     world.resource_scope(|world, mut mask: Mut<FloorMask>| {
         world.resource_scope(|world, catalog: Mut<AnimCatalog>| {
             let mut commands = world.commands();
-            spawn_level(&mut commands, &catalog, &run, false, &plan, &mut mask);
+            spawn_level(
+                &mut commands,
+                &catalog,
+                &run,
+                false,
+                false,
+                &plan,
+                &mut mask,
+            );
         })
     });
     world.flush();
@@ -1380,6 +1388,7 @@ pub fn spawn_secret_entrances(
     catalog: &repame_anim::AnimCatalog,
     run: &Run,
     scarier_face: bool,
+    heavy_heart: bool,
 ) {
     let slot: Option<(SecretTarget, glam::Vec2, f32)> = match (run.area, run.floor_in_area) {
         (AreaId::Sewers, _) => Some((
@@ -1460,6 +1469,7 @@ pub fn spawn_secret_entrances(
                         subarea: run.floor_in_area,
                         blood_crown: run.blood_crown,
                         scarier_face,
+                        heavy_heart,
                     },
                 );
             }
@@ -1517,6 +1527,7 @@ pub fn spawn_level(
     catalog: &repame_anim::AnimCatalog,
     run: &Run,
     scarier_face: bool,
+    heavy_heart: bool,
     plan: &LevelPlan,
     mask: &mut FloorMask,
 ) {
@@ -1530,7 +1541,7 @@ pub fn spawn_level(
     }
     spawn_wall_tiles(&mut *commands, wall_set.into_iter().collect(), &floor_set);
 
-    spawn_secret_entrances(commands, catalog, run, scarier_face);
+    spawn_secret_entrances(commands, catalog, run, scarier_face, heavy_heart);
 
     let mut events = plan.population_events.clone();
     if events.is_empty() {
@@ -1595,6 +1606,7 @@ pub fn spawn_level(
         subarea: run.floor_in_area,
         blood_crown: run.blood_crown,
         scarier_face,
+        heavy_heart,
     };
     let mut enemy_count = 0usize;
     for event in &events {
