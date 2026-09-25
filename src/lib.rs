@@ -90,7 +90,8 @@ use crate::render::{
     Z_SPIRAL_FIGURES, Z_SPLASH, Z_TOUCH, background_color, bloom_sprites, cam_viewdist_for,
     crosshair_sprites, decode_png, fainted_bar_sprites, fog_sprites, fx_instances, fx_texts,
     gml_camera_step, gml_view_scale, gml_view_size, hud_gui_texts_dp, hud_sprites, menu_gui_texts,
-    menu_gui_texts_dp, menu_gui_texts_vw, menu_sprites, portal_indicator_sprites, shadow_sprites,
+    menu_gui_texts_dp, menu_gui_texts_vw, menu_sprites, pause_button_sprites,
+    portal_indicator_sprites, shadow_sprites,
     letterbox_sprites, settings_slider_hit, settings_slider_value, SettingSliderTarget,
     sideart_sprites, spiral_figures, splash_sprites, stamp_z, title_cam_focus, title_camera_step,
     touch_sprites, view_rect_world, world_camera, world_instances,
@@ -3138,6 +3139,7 @@ impl App {
         // is off — the refresh then clears the payload.
         let mut cursor_req: Option<(i32, [f32; 4])> = None;
         let mut chrome_sprites: Vec<SpriteInstance> = Vec::new();
+        let mut front_chrome_sprites: Vec<SpriteInstance> = Vec::new();
         let (mut sprites, texts) = if self.assets.is_some() {
             let assets = self.assets.as_ref().expect("checked");
             // Cursor world position for the GML crosshair distance
@@ -3395,12 +3397,10 @@ impl App {
             }
             // Menu art sprites (char pods, portrait, loadout, splats).
             // `Menu` draws these in `Draw_0`/`Draw_74` on every screen
-            // it owns (campfire title AND generation covers — the offer
-            // row is `LevCont` chrome but the pods/portraits persist
-            // underneath in GML, just buried under the opaque spiral).
-            // They ride the sprite viewport UNDER the opaque vortex
-            // pass, so covers stay clean while the title keeps its
-            // camp chrome.
+            // it owns. Title, Loading, Mutation, Pause, Settings, and
+            // GameOver chrome use a separate viewport so the letterbox
+            // and vortex passes can be placed between the room and the
+            // menu layer at their GML depth boundaries.
             if let Some(kind) = menu_kind {
                 let mut menu = menu_sprites(
                     kind,
@@ -3410,6 +3410,15 @@ impl App {
                     world_size,
                     &self.cam,
                 );
+                if kind == MenuOverlay::Pause {
+                    front_chrome_sprites = pause_button_sprites(
+                        &mut self.sim.world,
+                        assets,
+                        viewport_dp,
+                        world_size,
+                        &self.cam,
+                    );
+                }
                 let menu_z = if menu_kind == Some(MenuOverlay::Mutation) {
                     Z_HUD - 1.0
                 } else {
@@ -3418,7 +3427,12 @@ impl App {
                 stamp_z(&mut menu, menu_z);
                 if matches!(
                     kind,
-                    MenuOverlay::Pause | MenuOverlay::Settings | MenuOverlay::GameOver
+                    MenuOverlay::Title
+                        | MenuOverlay::Loading
+                        | MenuOverlay::Mutation
+                        | MenuOverlay::Pause
+                        | MenuOverlay::Settings
+                        | MenuOverlay::GameOver
                 ) {
                     chrome_sprites = menu;
                 } else {
@@ -3794,12 +3808,15 @@ impl App {
                 }
             })
         };
-        let chrome_view: Option<View> = if !chrome_sprites.is_empty() {
+        let make_chrome_view = |sprites: Vec<SpriteInstance>, id: &'static str| {
+            if sprites.is_empty() {
+                return None;
+            }
             let chrome_frame = FrameInput {
                 cam: self.cam,
                 world_size,
                 viewport_dp,
-                sprites: chrome_sprites,
+                sprites,
                 texts: Vec::new(),
                 background: None,
                 overlay_color: None,
@@ -3819,7 +3836,7 @@ impl App {
                         .map(|a| a.take_uploads())
                         .unwrap_or_default(),
                     desc,
-                    "viewport2d.menu",
+                    id,
                     |_| {},
                 );
                 view.modifier = view.modifier.hit_passthrough();
@@ -3829,9 +3846,10 @@ impl App {
                 view.modifier = view.modifier.hit_passthrough();
                 Some(view)
             }
-        } else {
-            None
         };
+        let chrome_view = make_chrome_view(chrome_sprites, "viewport2d.menu");
+        let front_chrome_view =
+            make_chrome_view(front_chrome_sprites, "viewport2d.menu.front");
 
         // Focusable root so hardware keys reach the staging feed (same
         // shape as the rozvp pilot root). `on_focus_changed(false)` is
@@ -3899,16 +3917,15 @@ impl App {
         // HUD overlay (GML `scrDrawPlayerHUD` + `scrDrawMiscHUD`
         // verbatim): Silkscreen rows at 320x240 GUI positions over the
         // viewport.
-        // Bottom-up: the live InGame drain sits above the sprite
-        // viewport, while the Title remnant sits behind the camp; opaque
-        // covers sit below their chrome. GML draws the spiral inside
-        // the caller's draw event: `TopCont/Draw_0` redraws live-game
-        // wisps in front of actors, while `Menu/Draw_0` calls
-        // `scrDrawSpiral()` behind the title room. `bg_alpha` tells
-        // those paths apart.
+        // Bottom-up: live-game and Title remnant drains sit above the
+        // sprite viewport; opaque covers sit below their chrome. The
+        // GML depth table puts `Menu`/`TopCont` in front of the floor,
+        // so the Title transition intentionally draws its remaining
+        // spiral over the campfire map while the room chrome stays
+        // above it.
         let mut layers = Vec::new();
         let vortex_above = vortex_layer.is_some()
-            && state == AppState::InGame
+            && matches!(state, AppState::Title | AppState::InGame)
             && self.last_bg_alpha < 0.5;
         if !vortex_above {
             if let Some(vortex) = vortex_layer.take() {
@@ -3995,8 +4012,9 @@ impl App {
 
         // GML keeps an explicit `UberCont.letterbox` flag rather than
         // deriving it from the current room. The logo/main-menu branch
-        // enables it in `Vlambeer/Create_0`; `Menu/Create_0` disables it
-        // for the campfire title; `GenCont`, `LevCont`, pause, and
+        // enables it in `Vlambeer/Create_0`; `Menu/Create_0` disables the
+        // controller flag for the campfire title, whose Menu draw calls
+        // `scrDrawLetterbox` directly; `GenCont`, `LevCont`, pause, and
         // GameOver enable it again. Credits explicitly disables it.
         let letterboxed = match state {
             AppState::Splash | AppState::Loading => true,
@@ -4016,6 +4034,7 @@ impl App {
                     || spiral_cover
             }
         };
+        let title_menu_letterbox = state == AppState::Title;
         let letterbox_target = if letterboxed { 3.0 } else { 0.0 };
         let letterbox_step = (dt.as_secs_f32() * 30.0).clamp(0.0, 1.0);
         if self.letterbox_frame < letterbox_target {
@@ -4023,7 +4042,12 @@ impl App {
         } else if self.letterbox_frame > letterbox_target {
             self.letterbox_frame = (self.letterbox_frame - letterbox_step).max(letterbox_target);
         }
-        let letterbox_visible = self.letterbox_frame > 0.0;
+        let letterbox_visible = title_menu_letterbox || self.letterbox_frame > 0.0;
+        let letterbox_frame = if title_menu_letterbox {
+            3
+        } else {
+            self.letterbox_frame.floor() as i32
+        };
         let mut letterbox_view: Option<View> = None;
         if letterbox_visible {
             // GML `LETTERBOX_SIZE 36` view px tall (`scrLetterbox`):
@@ -4036,7 +4060,7 @@ impl App {
                     viewport_dp,
                     world_size,
                     &self.cam,
-                    self.letterbox_frame.floor() as i32,
+                    letterbox_frame,
                 );
                 if !art.is_empty() {
                     let frame = FrameInput {
@@ -4078,15 +4102,15 @@ impl App {
                         .fill_max_height()
                         .hit_passthrough(),
                 );
-                layers.push(
-                    Column(Modifier::new().fill_max_size().hit_passthrough()).child(vec![
-                        bar(),
-                        spacer,
-                        bar(),
-                    ]),
-                );
+                letterbox_view = Some(Column(
+                    Modifier::new().fill_max_size().hit_passthrough(),
+                ).child(vec![bar(), spacer, bar()]));
             }
         }
+        let letterbox_before_content = matches!(
+            menu_kind,
+            Some(MenuOverlay::Title | MenuOverlay::Loading | MenuOverlay::Mutation | MenuOverlay::GameOver)
+        );
         if let Some(rows) = menu_rows {
             // GML `GameOver/Draw_0:7-10` dims with `draw_set_alpha(0.7)`
             // (178/255); pause/settings/credits/stats sit on the
@@ -4097,13 +4121,26 @@ impl App {
             } else {
                 230
             };
-            if dim_menu {
+            if !letterbox_before_content && dim_menu {
                 layers.push(UiBox(
                     Modifier::new()
                         .fill_max_size()
                         .background(Color::from_rgba(0, 0, 0, scrim_alpha))
                         .hit_passthrough(),
                 ));
+            }
+            if letterbox_before_content {
+                if let Some(letterbox) = letterbox_view.take() {
+                    layers.push(letterbox);
+                }
+                if dim_menu {
+                    layers.push(UiBox(
+                        Modifier::new()
+                            .fill_max_size()
+                            .background(Color::from_rgba(0, 0, 0, scrim_alpha))
+                            .hit_passthrough(),
+                    ));
+                }
             }
             if let Some(chrome) = chrome_view {
                 layers.push(chrome);
@@ -4115,12 +4152,17 @@ impl App {
                         .child(rows.iter().map(gui_text_layer).collect::<Vec<_>>()),
                 );
             }
-            if let Some(letterbox) = letterbox_view.take() {
-                layers.push(letterbox);
+            if !letterbox_before_content {
+                if let Some(letterbox) = letterbox_view.take() {
+                    layers.push(letterbox);
+                }
             }
         }
         if let Some(letterbox) = letterbox_view.take() {
             layers.push(letterbox);
+        }
+        if let Some(front_chrome) = front_chrome_view {
+            layers.push(front_chrome);
         }
         ZStack(root_mod).child(layers)
     }

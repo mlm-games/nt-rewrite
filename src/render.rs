@@ -9922,7 +9922,6 @@ pub fn menu_sprites(
         crate::MenuOverlay::Pause => {
             let cx = vw * 0.5;
             let menu = world.get_resource::<MenuState>().cloned();
-            let confirm = menu.as_ref().and_then(|m| m.pause_confirm);
             let splat = menu
                 .as_ref()
                 .map(|m| m.pause_splat.floor().clamp(0.0, 3.0) as i32)
@@ -10013,52 +10012,7 @@ pub fn menu_sprites(
             ) {
                 out.push(s);
             }
-            let labels: &[&str] = if confirm.is_some() {
-                &["BACK", if confirm == Some(0) { "QUIT" } else { "RETRY" }]
-            } else {
-                &["MENU", "RETRY", "SETTINGS", "CONTINUE"]
-            };
-            let positions: &[(f32, f32, i32)] = if confirm.is_some() {
-                &[(52.0, 192.0, 4), (vw - 52.0, 192.0, if confirm == Some(0) { 5 } else { 6 })]
-            } else {
-                &[
-                    (45.0, 176.0, 0),
-                    (60.0, 208.0, 1),
-                    (vw - 68.0, 176.0, 2),
-                    (vw - 78.0, 208.0, 3),
-                ]
-            };
-            let hover = menu
-                .as_ref()
-                .map(|m| m.hover_label.as_str())
-                .unwrap_or("");
-            for (i, (label, (x, y, frame))) in labels.iter().zip(positions.iter()).enumerate() {
-                let appear = menu
-                    .as_ref()
-                    .and_then(|m| m.pause_appear.get(i).copied())
-                    .unwrap_or(0.0);
-                if appear >= 2.0 {
-                    continue;
-                }
-                let selected = hover == *label;
-                let tint = if selected {
-                    [1.0; 4]
-                } else {
-                    [0.5, 0.5, 0.5, 1.0]
-                };
-                push_shadowed_sprite(
-                    &mut out,
-                    assets,
-                    "images/sprPauseButton.png",
-                    *frame,
-                    *x,
-                    *y + appear,
-                    view,
-                    gm,
-                    false,
-                    tint,
-                );
-            }
+
         }
         crate::MenuOverlay::Unlock => {
             // GML `UnlockScreen/Other_10` sprite layer verbatim: the
@@ -10102,6 +10056,67 @@ pub fn menu_sprites(
             }
         }
         _ => {}
+    }
+    out
+}
+
+pub fn pause_button_sprites(
+    world: &mut World,
+    assets: &RenderAssets,
+    canvas_dp: [f32; 2],
+    world_size: [f32; 2],
+    cam: &Camera2d,
+) -> Vec<SpriteInstance> {
+    let view = view_rect_world(canvas_dp, world_size, cam);
+    let gm = hud_gui_map(view);
+    let vw = view[2];
+    let menu = world.get_resource::<MenuState>().cloned();
+    let confirm = menu.as_ref().and_then(|m| m.pause_confirm);
+    let labels: &[&str] = if confirm.is_some() {
+        &["BACK", if confirm == Some(0) { "QUIT" } else { "RETRY" }]
+    } else {
+        &["MENU", "RETRY", "SETTINGS", "CONTINUE"]
+    };
+    let positions: &[(f32, f32, i32)] = if confirm.is_some() {
+        &[(52.0, 192.0, 4), (vw - 52.0, 192.0, if confirm == Some(0) { 5 } else { 6 })]
+    } else {
+        &[
+            (45.0, 176.0, 0),
+            (60.0, 208.0, 1),
+            (vw - 68.0, 176.0, 2),
+            (vw - 78.0, 208.0, 3),
+        ]
+    };
+    let hover = menu
+        .as_ref()
+        .map(|m| m.hover_label.as_str())
+        .unwrap_or("");
+    let mut out = Vec::new();
+    for (i, (label, (x, y, frame))) in labels.iter().zip(positions.iter()).enumerate() {
+        let appear = menu
+            .as_ref()
+            .and_then(|m| m.pause_appear.get(i).copied())
+            .unwrap_or(0.0);
+        if appear >= 2.0 {
+            continue;
+        }
+        let tint = if hover == *label {
+            [1.0; 4]
+        } else {
+            [0.5, 0.5, 0.5, 1.0]
+        };
+        push_shadowed_sprite(
+            &mut out,
+            assets,
+            "images/sprPauseButton.png",
+            *frame,
+            *x,
+            *y + appear,
+            view,
+            gm,
+            false,
+            tint,
+        );
     }
     out
 }
