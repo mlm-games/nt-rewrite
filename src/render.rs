@@ -3625,6 +3625,9 @@ fn hud_gui_left(
 }
 
 fn hud_weapon_order(hud: &HudState) -> Vec<usize> {
+    if hud.weapon_ids.is_empty() {
+        return vec![0];
+    }
     let current = hud.current_weapon;
     if current < hud.weapon_ids.len() && hud.weapon_ids[current] != WeaponId::NONE {
         let mut order = Vec::with_capacity(hud.weapon_ids.len());
@@ -4119,13 +4122,8 @@ pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
         return Vec::new();
     }
     let player_alive = world.query::<&Player>().iter(world).next().is_some();
-    // GML `scrDrawMiscHUD:68` draws ultras/skills when `GameOver ||
-    // Player || paused || romInit` — the dead player's held icons stay
-    // on the game-over screen. `Run.game_over` carries the GameOver
-    // half (the entity is gone after death).
-    let game_over = world
-        .get_resource::<crate::comps_a::Run>()
-        .is_some_and(|r| r.game_over);
+    // GML `scrDrawMiscHUD:68` draws held icons when GameOver exists.
+    let game_over = crate::state::menus::game_over_visible(world);
     if !player_alive && !game_over {
         return Vec::new();
     }
@@ -4304,6 +4302,38 @@ fn push_shadowed_sprite(
         0.0,
         tint,
     ) {
+        out.push(sprite);
+    }
+}
+
+fn push_shadowed_gui(
+    out: &mut Vec<SpriteInstance>,
+    assets: &RenderAssets,
+    path: &str,
+    frame: i32,
+    gx: f32,
+    gy: f32,
+    mul: f32,
+    tint: [f32; 4],
+    view: [f32; 4],
+    gm: HudGuiMap,
+) {
+    for (dx, dy) in [(1.0, 1.0), (1.0, 0.0), (0.0, 1.0)] {
+        if let Some(sprite) = hud_gui_place(
+            assets,
+            path,
+            frame,
+            gx + dx,
+            gy + dy,
+            mul,
+            [0.0, 0.0, 0.0, 1.0],
+            gm,
+            view,
+        ) {
+            out.push(sprite);
+        }
+    }
+    if let Some(sprite) = hud_gui_place(assets, path, frame, gx, gy, mul, tint, gm, view) {
         out.push(sprite);
     }
 }
@@ -4507,6 +4537,18 @@ fn settings_slider_part(
 
 fn settings_option_button(text: impl Into<String>, cx: f32, y: f32) -> MenuGuiText {
     gui_center(text, cx, y, GUI_MID)
+}
+
+fn push_gameover_text(out: &mut Vec<MenuGuiText>, text: MenuGuiText) {
+    for (dx, dy) in [(1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+        let mut shadow = text.clone();
+        shadow.gx += dx;
+        shadow.gy += dy;
+        shadow.color = [0, 0, 0, 255];
+        shadow.bold = false;
+        out.push(shadow);
+    }
+    out.push(text);
 }
 
 fn gui_pause_button(
@@ -5715,110 +5757,123 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 if run.won && hq_final {
                     text = "THE STRUGGLE IS OVER";
                 }
-                out.push(MenuGuiText {
-                    text: text.to_string(),
-                    gx: cx,
-                    gy: 48.0,
-                    color: GUI_WHITE,
-                    px: 7.0,
-                    centered: true,
-                    // GML draws the struggle `draw_set_valign(fa_top)` at
-                    // `view_yview + 48` (top-anchored, not middle).
-                    middle_y: false,
-                    right: false,
-                    bold: false,
-                });
-                // GML `scrDrawRoadmap:23-24` verbatim: the area/kill
-                // strings ride the roadmap at `(drawx-60, drawy-14)` /
-                // `(drawx+23, drawy-14)` with `drawx = cx-48`.
-                out.push(MenuGuiText {
-                    text: run_area_string(run),
-                    gx: cx - 108.0,
-                    gy: 106.0 - offsety,
-                    color: GUI_WHITE,
-                    px: 7.0,
-                    centered: false,
-                    middle_y: true,
-                    right: false,
-                    bold: false,
-                });
-                out.push(MenuGuiText {
-                    text: run.total_kills.to_string(),
-                    gx: cx - 25.0,
-                    gy: 106.0 - offsety,
-                    color: GUI_WHITE,
-                    px: 7.0,
-                    centered: false,
-                    middle_y: true,
-                    right: false,
-                    bold: false,
-                });
+                push_gameover_text(
+                    &mut out,
+                    MenuGuiText {
+                        text: text.to_string(),
+                        gx: cx,
+                        gy: 48.0,
+                        color: GUI_WHITE,
+                        px: 7.0,
+                        centered: true,
+                        middle_y: false,
+                        right: false,
+                        bold: false,
+                    },
+                );
+                push_gameover_text(
+                    &mut out,
+                    MenuGuiText {
+                        text: run_area_string(run),
+                        gx: cx - 108.0,
+                        gy: 106.0 - offsety,
+                        color: GUI_WHITE,
+                        px: 7.0,
+                        centered: false,
+                        middle_y: true,
+                        right: false,
+                        bold: false,
+                    },
+                );
+                push_gameover_text(
+                    &mut out,
+                    MenuGuiText {
+                        text: run.total_kills.to_string(),
+                        gx: cx - 25.0,
+                        gy: 106.0 - offsety,
+                        color: GUI_WHITE,
+                        px: 7.0,
+                        centered: false,
+                        middle_y: true,
+                        right: false,
+                        bold: false,
+                    },
+                );
                 if run.won {
-                    out.push(MenuGuiText {
-                        text: "COMPLETION TIME".to_string(),
-                        gx: cx + 86.0,
-                        gy: 95.0 - offsety,
-                        color: GUI_WHITE,
-                        px: 7.0,
-                        centered: true,
-                        middle_y: true,
-                        right: false,
-                        bold: false,
-                    });
-                    out.push(MenuGuiText {
-                        text: run_timer_string(run.tottimer),
-                        gx: cx + 86.0,
-                        gy: 110.0 - offsety,
-                        color: GUI_GRAY,
-                        px: 7.0,
-                        centered: true,
-                        middle_y: true,
-                        right: false,
-                        bold: false,
-                    });
+                    push_gameover_text(
+                        &mut out,
+                        MenuGuiText {
+                            text: "COMPLETION TIME".to_string(),
+                            gx: cx + 86.0,
+                            gy: 95.0 - offsety,
+                            color: GUI_WHITE,
+                            px: 7.0,
+                            centered: true,
+                            middle_y: true,
+                            right: false,
+                            bold: false,
+                        },
+                    );
+                    push_gameover_text(
+                        &mut out,
+                        MenuGuiText {
+                            text: run_timer_string(run.tottimer),
+                            gx: cx + 86.0,
+                            gy: 110.0 - offsety,
+                            color: GUI_GRAY,
+                            px: 7.0,
+                            centered: true,
+                            middle_y: true,
+                            right: false,
+                            bold: false,
+                        },
+                    );
                 } else {
-                    out.push(MenuGuiText {
-                        text: "KILLED BY".to_string(),
-                        gx: cx + 86.0,
-                        gy: 95.0 - offsety,
-                        color: GUI_WHITE,
-                        px: 7.0,
-                        centered: true,
-                        middle_y: true,
-                        right: false,
-                        bold: false,
-                    });
+                    push_gameover_text(
+                        &mut out,
+                        MenuGuiText {
+                            text: "KILLED BY".to_string(),
+                            gx: cx + 86.0,
+                            gy: 95.0 - offsety,
+                            color: GUI_WHITE,
+                            px: 7.0,
+                            centered: true,
+                            middle_y: true,
+                            right: false,
+                            bold: false,
+                        },
+                    );
                 }
             } else {
-                out.push(gui_center("GAME OVER", cx, 100.0, GUI_WHITE));
+                push_gameover_text(
+                    &mut out,
+                    gui_center("GAME OVER", cx, 100.0, GUI_WHITE),
+                );
             }
-            // GML `PauseButton`s ride `ystart + offsety` at
-            // `(center, center+58)` and `(center, center+90)` with
-            // `appear = 3 + image` (image 0 MENU appear 3, image 1 RETRY
-            // appear 4). `PauseButton/Draw_0` draws at `_dy = y + appear`
-            // (a few px low while appearing — never parked off-screen),
-            // so the buttons are clickable from the first frame. Event-run
-            // swaps (`sprGameOverResult`, weekly keeps button 0 as RETRY
-            // else destroys it) need the event systems the port lacks —
-            // both buttons draw at once.
-            let appear = world
+            let (appear, _hover) = world
                 .get_resource::<MenuState>()
-                .map(|m| m.go_appear.max(0.0))
-                .unwrap_or(0.0);
-            out.push(gui_pause_button(
-                "MENU",
-                cx,
-                120.0 + 58.0 + offsety + appear,
-                true,
-                GUI_MID,
-            ));
-            out.push(gui_pause_button(
-                "RETRY",
-                cx,
-                120.0 + 90.0 + offsety + appear,
-                true,
-                GUI_MID,
-            ));
+                .map(|menu| (menu.go_appear.max(0.0), menu.hover_label.as_str()))
+                .unwrap_or((0.0, ""));
+            let menu_appear = appear;
+            let retry_appear = appear + 1.0;
+            if menu_appear < 2.0 {
+                out.push(gui_pause_button(
+                    "MENU",
+                    cx,
+                    120.0 + 58.0 + offsety + menu_appear,
+                    true,
+                    GUI_HIDDEN,
+                ));
+            }
+            if retry_appear < 2.0 {
+                out.push(gui_pause_button(
+                    "RETRY",
+                    cx,
+                    120.0 + 90.0 + offsety + retry_appear,
+                    true,
+                    GUI_HIDDEN,
+                ));
+            }
             out
         }
         crate::MenuOverlay::Pause => {
@@ -6676,6 +6731,64 @@ pub fn menu_gui_texts_dp(
     gui_texts_dp(canvas_dp, menu_gui_texts_vw(kind, world, vw))
 }
 
+fn ability_hud_sprites(
+    assets: &RenderAssets,
+    view: [f32; 4],
+    gm: HudGuiMap,
+    held_race: RaceId,
+    ultra: Option<UltraMutationId>,
+    mutations: &[MutationId],
+    patience_used: bool,
+) -> Vec<SpriteInstance> {
+    let mut out = Vec::new();
+    let mut x = view[2] - 12.0;
+    let mut y = 13.0;
+    if let Some(ultra) = ultra
+        && let Some(sprite) = assets.sprite_scaled_rotated(
+            "images/sprEGIconHUD.png",
+            ultra_hud_frame(held_race, ultra),
+            hud_gui_to_world(gm, view, x, y),
+            gm.s,
+            0.0,
+            [1.0; 4],
+        )
+    {
+        out.push(sprite);
+        x -= 16.0;
+        if x <= 120.0 {
+            x = view[2] - 12.0;
+            y += 16.0;
+        }
+    }
+    y -= 1.0;
+    for mutation in mutations {
+        let base = (
+            "images/sprSkillIconHUD.png",
+            crate::hud::mutation_skill_index(*mutation) as i32,
+        );
+        let overlay = (*mutation == MutationId::Patience && patience_used)
+            .then_some(("images/sprPatienceIconHUD.png", 0));
+        for (path, frame) in [Some(base), overlay].into_iter().flatten() {
+            if let Some(sprite) = assets.sprite_scaled_rotated(
+                path,
+                frame,
+                hud_gui_to_world(gm, view, x, y),
+                gm.s,
+                0.0,
+                [1.0; 4],
+            ) {
+                out.push(sprite);
+            }
+        }
+        x -= 16.0;
+        if x <= 120.0 {
+            x = view[2] - 12.0;
+            y += 16.0;
+        }
+    }
+    out
+}
+
 /// Sprite HUD bars (GML `scrDrawPlayerHUD` regions verbatim, bevy
 /// `spawn_hud_art` GUI positions): health bar frame 2 at GUI (20,4)
 /// with ghost/live fills at (22,7) width `84*frac`, rad bar at (4,4),
@@ -6701,9 +6814,7 @@ pub fn hud_sprites(
     let player_alive = world.query::<&Player>().iter(world).next().is_some();
     // Same `scrDrawMiscHUD:68` game-over law as the text rows above:
     // held ultras/skills stay visible once the player is gone.
-    let game_over = world
-        .get_resource::<crate::comps_a::Run>()
-        .is_some_and(|r| r.game_over);
+    let game_over = crate::state::menus::game_over_visible(world);
     if !player_alive && !game_over {
         return out;
     }
@@ -7016,90 +7127,15 @@ pub fn hud_sprites(
         }
     }
 
-    // Held ultra + skill icons (GML `scrDrawMiscHUD:68-113` verbatim):
-    // ultras on `sprEGIconHUD` with the held ultra's own frame at y=13,
-    // then skills on `sprSkillIconHUD` at the GML skill id at y=12
-    // (the `_py--` runs once after the ultra loop, even with zero
-    // ultras — so the skill row is ALWAYS y=12, never 13). Patience
-    // (`mut_patience` with a stored `patienceskill`) draws
-    // `sprSkillIconHUD` + `sprPatienceIconHUD` at the SAME `_px` with a
-    // single advance. Top-right from GUI `view_width - 12` in 16 px
-    // steps, wrapping at x<=120 (rows stack +16).
-    {
-        let vw = view[2];
-        let held_race = race_skin.map(|(r, _)| r).unwrap_or(RaceId::Fish);
-        let mut ultras: Vec<(&str, i32)> = Vec::new();
-        if let Some(u) = ultra {
-            ultras.push(("images/sprEGIconHUD.png", ultra_hud_frame(held_race, u)));
-        }
-        // Each skill slot is (base, optional patience overlay drawn at the
-        // same cursor before the single advance).
-        let mut skills: Vec<((&str, i32), Option<(&str, i32)>)> = Vec::new();
-        for m in &mutations {
-            let base = (
-                "images/sprSkillIconHUD.png",
-                crate::hud::mutation_skill_index(*m) as i32,
-            );
-            let overlay = if *m == MutationId::Patience && patience_used {
-                Some(("images/sprPatienceIconHUD.png", 0))
-            } else {
-                None
-            };
-            skills.push((base, overlay));
-        }
-        let mut x = vw - 12.0;
-        let mut y = 13.0;
-        for (path, frame) in ultras {
-            if let Some(s) = assets.sprite_scaled_rotated(
-                path,
-                frame,
-                hud_gui_to_world(gm, view, x, y),
-                gm.s,
-                0.0,
-                [1.0; 4],
-            ) {
-                out.push(s);
-            }
-            x -= 16.0;
-            if x <= 120.0 {
-                x = vw - 12.0;
-                y += 16.0;
-            }
-        }
-        // GML `_py--` runs unconditionally after the ultra loop: the
-        // skill row is ALWAYS y=12 (the old `y == 13.0` guard wrongly
-        // kept y=13 when no ultra was held).
-        y -= 1.0;
-        for ((path, frame), overlay) in skills {
-            if let Some(s) = assets.sprite_scaled_rotated(
-                path,
-                frame,
-                hud_gui_to_world(gm, view, x, y),
-                gm.s,
-                0.0,
-                [1.0; 4],
-            ) {
-                out.push(s);
-            }
-            if let Some((opath, oframe)) = overlay {
-                if let Some(s) = assets.sprite_scaled_rotated(
-                    opath,
-                    oframe,
-                    hud_gui_to_world(gm, view, x, y),
-                    gm.s,
-                    0.0,
-                    [1.0; 4],
-                ) {
-                    out.push(s);
-                }
-            }
-            x -= 16.0;
-            if x <= 120.0 {
-                x = vw - 12.0;
-                y += 16.0;
-            }
-        }
-    }
+    out.extend(ability_hud_sprites(
+        assets,
+        view,
+        gm,
+        race_skin.map(|(race, _)| race).unwrap_or(RaceId::Fish),
+        ultra,
+        &mutations,
+        patience_used,
+    ));
 
     // Weapon strip (GML `scrDrawPlayerHUD:99-146` verbatim): `_wep`
     // at GUI x=24, `_bwep` at 68, then +20 for extras, y=16 (slot
@@ -9562,29 +9598,30 @@ pub fn menu_sprites(
             }
         }
         crate::MenuOverlay::GameOver => {
-            // GML `GameOver/Draw_0` sprite layer verbatim: roadmap at
-            // `(_x - 48, _y - offsety)` with prefix `round(death_pos)`,
-            // `sprKilledBySplat[splatimg]` at `(_x + 86,
-            // _y - offsety - 32)`, `sprGameOverCenterSplat[splatimg]` at
-            // `(_x, view_bottom - 32)`. `_x/_y` is the view center
-            // (`vw/2`, 120 at 240 high).
             let (offsety, death_pos, splat) = world
                 .get_resource::<MenuState>()
                 .map(|m| (m.go_offsety, m.go_death_pos, m.go_splat))
                 .unwrap_or((0.0, 0.0, 0.0));
-            let splat_frame = splat.floor().clamp(0.0, 2.0) as i32;
+            let screen = world
+                .get_resource::<MenuState>()
+                .and_then(|menu| menu.game_over.clone());
+            let (waypoints, area) = world
+                .get_resource::<Run>()
+                .map(|run| (run.waypoints.clone(), Some(run.area)))
+                .unwrap_or_else(|| (Vec::new(), None));
+            let prefix = death_pos.round() as usize;
             let cx = vw * 0.5;
-            if let Some(s) = assets.sprite_for(
-                "images/sprGameOverCenterSplat.png",
-                splat_frame,
-                gui_to_world(cx, 240.0 - 32.0),
-                false,
-                0.0,
-                [1.0; 4],
-            ) {
-                out.push(s);
-            }
-            if let Some(s) = assets.sprite_for(
+            let splat_frame = splat.floor().clamp(0.0, 2.0) as i32;
+
+            out.extend(roadmap_sprites(
+                assets,
+                &gui_to_world,
+                cx - 48.0,
+                120.0 - offsety,
+                &waypoints,
+                prefix,
+            ));
+            if let Some(sprite) = assets.sprite_for(
                 "images/sprKilledBySplat.png",
                 splat_frame,
                 gui_to_world(cx + 86.0, 120.0 - offsety - 32.0),
@@ -9592,84 +9629,44 @@ pub fn menu_sprites(
                 0.0,
                 [1.0; 4],
             ) {
-                out.push(s);
+                out.push(sprite);
             }
-            if let Some(run) = world.get_resource::<Run>() {
-                let wps = run.waypoints.clone();
-                let prefix = death_pos.round() as usize;
-                out.extend(roadmap_sprites(
-                    assets,
-                    &gui_to_world,
-                    cx - 48.0,
-                    120.0 - offsety,
-                    &wps,
-                    prefix,
-                ));
-                // GML `GameOver/Draw_0` deathcause icon verbatim:
-                // `draw_sprite(scrDeathCauseGetSprite(cause), -1,
-                // _x+86, _y-offsety)` — `-1` rides the GameOver
-                // `image_speed = 0.4`, i.e. `floor(death_pos * 0.4)`
-                // over the strip frames here.
-                if let Some(path) = world
-                    .get_resource::<MenuState>()
-                    .and_then(|m| m.game_over)
-                    .and_then(|g| g.deathcause_sprite)
-                {
-                    let frames = strip_frames(assets, path).max(1) as f32;
-                    let frame = ((death_pos * 0.4).floor() % frames) as i32;
-                    if let Some(s) = assets.sprite_for(
-                        path,
-                        frame,
-                        gui_to_world(cx + 86.0, 120.0 - offsety),
-                        false,
-                        0.0,
-                        [1.0; 4],
-                    ) {
-                        out.push(s);
-                    }
+            if let Some(path) = screen.as_ref().and_then(|screen| screen.deathcause_sprite) {
+                let frames = strip_frames(assets, path).max(1) as f32;
+                let frame = ((death_pos * 0.4).floor() % frames) as i32;
+                if let Some(sprite) = assets.sprite_for(
+                    path,
+                    frame,
+                    gui_to_world(cx + 86.0, 120.0 - offsety),
+                    false,
+                    0.0,
+                    [1.0; 4],
+                ) {
+                    out.push(sprite);
                 }
-                // GML `scrDrawRoadmap:158-197` player icons verbatim:
-                // `sprMapIcon[skin]` at the final cursor (secret row
-                // included), `sprMapIconChickenHeadless[skin]` for a
-                // dead Chicken, `sprMapIconRebelBHooded` for a B-skin
-                // Rebel in the city (GML `area_city` = port
-                // `FrozenCity`). Single-player draws one icon with no
-                // co-op offset.
-                let (cursor_x, cursor_y) =
-                    roadmap_cursor_pos(&wps, prefix, cx - 48.0, 120.0 - offsety);
-                let players: Vec<(RaceId, u8, i32, AreaId)> = {
-                    let area = run.area;
-                    let save = world
-                        .get_resource::<crate::savedata_part::SaveData>()
-                        .cloned();
-                    world
-                        .query::<(&crate::comps_a::RaceState, &Health)>()
-                        .iter(world)
-                        .filter(|(rs, _)| rs.race != crate::data::RaceId::Random)
-                        .map(|(rs, h)| {
-                            let skin = save
-                                .as_ref()
-                                .map(|s| s.race_loadout(rs.race).preferred_skin)
-                                .unwrap_or(0);
-                            (rs.race, skin, h.hp, area)
-                        })
-                        .collect()
+            }
+            if let Some(screen) = screen.as_ref()
+                && let Some(race) = screen.race
+                && let Some(area) = area
+            {
+                let skin = screen.skin.map(|skin| skin as u8).unwrap_or(0);
+                let (path, frame) = if race == RaceId::Chicken && screen.hp <= 0 {
+                    ("images/sprMapIconChickenHeadless.png", i32::from(skin))
+                } else if race == RaceId::Rebel
+                    && skin == 1
+                    && area == AreaId::FrozenCity
+                {
+                    ("images/sprMapIconRebelBHooded.png", 0)
+                } else {
+                    (
+                        "images/sprMapIcon.png",
+                        crate::state::menus::race_skin_subimage(race as usize, skin),
+                    )
                 };
-                for (race, skin, hp, area) in players {
-                    let (path, frame) = if race == RaceId::Chicken && hp <= 0 {
-                        ("images/sprMapIconChickenHeadless.png", skin as i32)
-                    } else if race == RaceId::Rebel && skin == 1 && area == AreaId::FrozenCity {
-                        ("images/sprMapIconRebelBHooded.png", 0)
-                    } else {
-                        (
-                            "images/sprMapIcon.png",
-                            crate::state::menus::race_skin_subimage(race as usize, skin),
-                        )
-                    };
-                    if frame < 0 {
-                        continue;
-                    }
-                    if let Some(s) = assets.sprite_for(
+                if frame >= 0 {
+                    let (cursor_x, cursor_y) =
+                        roadmap_cursor_pos(&waypoints, prefix, cx - 48.0, 120.0 - offsety);
+                    if let Some(sprite) = assets.sprite_for(
                         path,
                         frame,
                         gui_to_world(cursor_x, cursor_y),
@@ -9677,9 +9674,67 @@ pub fn menu_sprites(
                         0.0,
                         [1.0; 4],
                     ) {
-                        out.push(s);
+                        out.push(sprite);
                     }
                 }
+            }
+            if let Some(sprite) = assets.sprite_for(
+                "images/sprGameOverCenterSplat.png",
+                splat_frame,
+                gui_to_world(cx, 240.0 - 32.0),
+                false,
+                0.0,
+                [1.0; 4],
+            ) {
+                out.push(sprite);
+            }
+            if let Some(screen) = screen.as_ref()
+                && let Some(race) = screen.race
+            {
+                out.extend(ability_hud_sprites(
+                    assets,
+                    view,
+                    gm,
+                    race,
+                    screen.ultra,
+                    &screen.mutations,
+                    screen.patience_used,
+                ));
+            }
+            let (appear, hover) = world
+                .get_resource::<MenuState>()
+                .map(|menu| (menu.go_appear.max(0.0), menu.hover_label.as_str()))
+                .unwrap_or((0.0, ""));
+            let buttons = [
+                ("MENU", 0, 120.0 + 58.0 + offsety + appear, appear),
+                (
+                    "RETRY",
+                    1,
+                    120.0 + 90.0 + offsety + appear + 1.0,
+                    appear + 1.0,
+                ),
+            ];
+            for (label, frame, gy, button_appear) in buttons {
+                if button_appear >= 2.0 {
+                    continue;
+                }
+                let tint = if hover == label {
+                    [1.0; 4]
+                } else {
+                    [0.5, 0.5, 0.5, 1.0]
+                };
+                push_shadowed_gui(
+                    &mut out,
+                    assets,
+                    "images/sprPauseButton.png",
+                    frame,
+                    cx + 2.0,
+                    gy,
+                    0.65,
+                    tint,
+                    view,
+                    gm,
+                );
             }
         }
         crate::MenuOverlay::Loading => {
@@ -10509,7 +10564,6 @@ pub fn hud_texts_dp(
 #[cfg(test)]
 mod verbatim_ui_layers {
     use super::*;
-    use crate::state::menus::MenuState;
 
     /// Reported bug verbatim: HUD bars/icons rendered behind floor
     /// ground. Every sprite used to share z=0, so the engine's
@@ -10543,40 +10597,6 @@ mod verbatim_ui_layers {
         assert!(v.iter().all(|s| s.z == Z_HUD));
     }
 
-    /// Reported bug verbatim: clicking MENU right after dying did
-    /// nothing — the game-over buttons parked a full screen below the
-    /// view (`+240`) while `appear` ticked down, so the first frames'
-    /// clicks missed. GML `PauseButton/Draw_0` draws at `_dy = y +
-    /// appear` from frame one, so the buttons sit at `ystart + offsety
-    /// + appear` here too: on-screen and clickable immediately.
-    #[test]
-    fn gameover_buttons_ride_appear_not_offscreen() {
-        let mut world = World::new();
-        world.insert_resource(Run {
-            area: AreaId::Desert,
-            ..Default::default()
-        });
-        world.init_resource::<MenuState>();
-        // Fresh capture: offsety=128, appear=4 (worst case).
-        let texts = menu_gui_texts_vw(crate::MenuOverlay::GameOver, &mut world, 426.0);
-        let menu = texts.iter().find(|t| t.text == "MENU").expect("MENU row");
-        let retry = texts.iter().find(|t| t.text == "RETRY").expect("RETRY row");
-        // ystart + offsety + appear, minus the 4px bigname-label lift
-        // (`gui_pause_button` centers the 10px ink on `button_y - 4`):
-        // 178+128+4-4 / 210+128+4-4.
-        assert!((menu.gy - 306.0).abs() < 1.0, "MENU gy {}", menu.gy);
-        assert!((retry.gy - 338.0).abs() < 1.0, "RETRY gy {}", retry.gy);
-        // Settle the anim: buttons land exactly on the GML ystarts.
-        if let Some(mut menu_state) = world.get_resource_mut::<MenuState>() {
-            menu_state.go_offsety = 0.0;
-            menu_state.go_appear = 0.0;
-        }
-        let texts = menu_gui_texts_vw(crate::MenuOverlay::GameOver, &mut world, 426.0);
-        let menu = texts.iter().find(|t| t.text == "MENU").expect("MENU row");
-        let retry = texts.iter().find(|t| t.text == "RETRY").expect("RETRY row");
-        assert!((menu.gy - 174.0).abs() < 1.0, "MENU gy {}", menu.gy);
-        assert!((retry.gy - 206.0).abs() < 1.0, "RETRY gy {}", retry.gy);
-    }
 }
 
 #[cfg(test)]

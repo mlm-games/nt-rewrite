@@ -27,9 +27,8 @@
 //! - Pause: `interact` resumes, `spec` closes the top overlay,
 //!   `MenuEdge::pause_pressed` (Escape) toggles with bevy's confirm/
 //!   settings-stack laws.
-//! - Game over: `MenuEdge::restart_pressed` (KeyR) restarts via Loading;
-//!   MENU/RETRY buttons route to `ConfirmPause(0/1)` (GML direct actions,
-//!   no confirm); stray clicks do nothing.
+//! - Game over: `MenuEdge::restart_pressed` (KeyR), MENU, and RETRY are
+//!   direct actions; stray clicks do nothing.
 //! - Splash: any key/mouse edge advances (bevy `boot_intro` law).
 //! - MainMenu: `interact` plays (bevy PLAY item).
 //!
@@ -246,10 +245,7 @@ pub fn race_skin_subimage(race_gml: usize, skin: u8) -> i32 {
     }
 }
 
-/// Game-over screen data (bevy `game_over_panel` reads verbatim:
-/// area, loop, kills, score, best, mutation count; toast stays in the
-/// `Toast` resource for the shell).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct GameOverScreen {
     pub world: u32,
     pub floor_in_world: u32,
@@ -259,10 +255,23 @@ pub struct GameOverScreen {
     pub high_score: u32,
     pub best_floor: u32,
     pub mutation_count: usize,
+    pub race: Option<RaceId>,
+    pub skin: Option<crate::data::SkinLetter>,
+    pub hp: i32,
+    pub ultra: Option<crate::data::UltraMutationId>,
+    pub mutations: Vec<crate::data::MutationId>,
+    pub patience_used: bool,
     /// GML `GameCont.deathcause` sprite (`GameOver/Draw_0`:
     /// `scrDeathCauseGetSprite`, `-1` animated frame). `None` when the
     /// cause is not a valid GML cause (contact/bullets/crowns).
     pub deathcause_sprite: Option<&'static str>,
+}
+
+pub fn game_over_visible(world: &World) -> bool {
+    world.get_resource::<Run>().is_some_and(|run| run.game_over)
+        && !world
+            .iter_entities()
+            .any(|entity| entity.contains::<Player>())
 }
 
 /// Snapshot the game-over screen (bevy `hud.rs` death-mutation law:
@@ -272,18 +281,27 @@ pub fn capture_game_over(world: &mut World) -> Option<GameOverScreen> {
     if !over {
         return None;
     }
-    // GML `GameOver/Create_0:55` verbatim: death deletes the save
-    // (`file_delete(savegame_file)`) so no recontinue is offered after
-    // death. The port has no recontinue flow yet (PLAY sub-rows deny),
-    // but the flags clear at capture so one can never resurrect a dead
-    // run. (Cleared here, not in the death system: that system's 16
-    // system-param cap is full.)
-    world.init_resource::<crate::state::BootFlags>();
-    if let Some(mut flags) = world.get_resource_mut::<crate::state::BootFlags>() {
-        flags.has_save_file = false;
-        flags.continued_run = false;
-    }
+    let player = world
+        .query::<(
+            &crate::comps_a::RaceState,
+            &crate::comps_a::Health,
+            &Player,
+        )>()
+        .iter(world)
+        .next()
+        .map(|(race_state, health, player)| {
+            (
+                Some(race_state.race),
+                Some(race_state.skin),
+                health.hp,
+                player.ultra,
+                player.mutations.clone(),
+                player.patience_used,
+            )
+        });
     let run = world.get_resource::<Run>()?;
+    let (race, skin, hp, ultra, mutations, patience_used) = player
+        .unwrap_or((None, None, 0, None, Vec::new(), false));
     let screen = GameOverScreen {
         world: run.world,
         floor_in_world: crate::worldgen::floor_in_world(run.floor),
@@ -298,12 +316,13 @@ pub fn capture_game_over(world: &mut World) -> Option<GameOverScreen> {
             .get_resource::<SaveData>()
             .map(|s| s.best_floor)
             .unwrap_or(0),
-        mutation_count: world
-            .query::<&Player>()
-            .iter(world)
-            .next()
-            .map(|p| p.mutations.len())
-            .unwrap_or(0),
+        mutation_count: mutations.len(),
+        race,
+        skin,
+        hp,
+        ultra,
+        mutations,
+        patience_used,
         deathcause_sprite: world
             .get_resource::<crate::comps_a::LastDamageTaken>()
             .and_then(|last| deathcause_sprite_for_hit(last.hit_id, last.enemy_kind)),
@@ -383,12 +402,8 @@ pub struct MenuState {
     pub credits_scroll: f32,
     /// Live game-over snapshot (`None` until the run ends).
     pub game_over: Option<GameOverScreen>,
-    /// GML `GameOver/Create_0` anim state verbatim: `death_pos` (waypoint
-    /// reveal prefix, +1/draw capped at `waypoints`), `offsety` (128 ->
-    /// 0 at 32/draw), `splatimg` (0 -> 2 at 0.7/draw once the
-    /// letterbox is open; the port has no letterbox gate so it always
-    /// animates), and the two `PauseButton` `appear = 3 + image`
-    /// stagger (3 MENU, 4 RETRY, -1/tick; buttons clickable at 0).
+    /// GML `GameOver/Create_0` anim state: `death_pos`, `offsety`,
+    /// `splatimg`, and the two `PauseButton` appearance counters.
     /// Reset on capture, ticked in `tick_ingame_menu`.
     pub go_death_pos: f32,
     pub go_offsety: f32,
@@ -2242,7 +2257,8 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
         }
     }
 
-    let game_over = world.get_resource::<Run>().is_some_and(|run| run.game_over);
+    let run_over = world.get_resource::<Run>().is_some_and(|run| run.game_over);
+    let game_over = game_over_visible(world);
 
     // GML `Portal/Alarm_1` tutorial arm verbatim: the tutorial exit
     // portal restarts the run (`game_restart()` — same path as the
@@ -2268,7 +2284,7 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
     // `UberCont/Step_1` swallows the pause request while a generation
     // cover runs (`GenCont`/`LevCont` rooms: floor transition or
     // mutation/ultra offer).
-    if edge.pause_pressed && !game_over {
+    if edge.pause_pressed && !run_over {
         let generating = world
             .get_resource::<crate::comps_b::FloorTransition>()
             .is_some_and(|f| f.active)
@@ -2304,8 +2320,8 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
 
     // Snapshot the game-over screen once per death (GML `GameOver/Create_0`
     // verbatim: `death_pos = 0`, `offsety = 128`, `splatimg = 0`, the two
-    // `PauseButton`s at `appear = 3 + image`).
-    let needs_capture = game_over
+    // `PauseButton`s at `appear = 4 + image`).
+    let needs_capture = run_over
         && world
             .get_resource::<MenuState>()
             .is_some_and(|menu| menu.game_over.is_none());
@@ -2313,6 +2329,8 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
         let screen = capture_game_over(world);
         if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
             menu.game_over = screen;
+            menu.pause_confirm = None;
+            menu.hover_label.clear();
             menu.go_death_pos = 0.0;
             menu.go_offsety = 128.0;
             menu.go_splat = 0.0;
@@ -2322,27 +2340,30 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
 
     // Fresh run clears a stale snapshot (bevy rebuilds the panel per
     // death; headless keeps it until the next death).
-    if !game_over
+    if !run_over
         && world
             .get_resource::<MenuState>()
             .is_some_and(|menu| menu.game_over.is_some())
+        && let Some(mut menu) = world.get_resource_mut::<MenuState>()
     {
-        if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
-            menu.game_over = None;
-            menu.go_death_pos = 0.0;
-            menu.go_offsety = 128.0;
-            menu.go_splat = 0.0;
-            menu.go_appear = 4.0;
-        }
+        menu.game_over = None;
+        menu.go_death_pos = 0.0;
+        menu.go_offsety = 128.0;
+        menu.go_splat = 0.0;
+        menu.go_appear = 4.0;
     }
 
     // GML `GameOver/Draw_0` anim verbatim (per-draw advances, here per
     // 30 Hz tick scaled by `dt * 30`): `death_pos` reveals one waypoint
     // per tick capped at the log length; `offsety` slides 128 -> 0 at
-    // 32/tick; `splatimg` eases 0 -> 2 at 0.7/tick (the GML
-    // `letterbox_frame >= 2` gate has no port counterpart, so it always
-    // animates once dead); `appear` ticks -1/step on the buttons.
+    // 32/tick; `splatimg` starts at draw 2 and eases to 2 at 0.7/tick;
+    // `appear` ticks -1/step on the buttons.
     if game_over {
+        world.init_resource::<crate::state::BootFlags>();
+        if let Some(mut flags) = world.get_resource_mut::<crate::state::BootFlags>() {
+            flags.has_save_file = false;
+            flags.continued_run = false;
+        }
         let dt = world
             .get_resource::<repame_sim::SimTime>()
             .map(|t| t.delta_secs)
@@ -2359,7 +2380,9 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
             if menu.go_offsety > 0.0 {
                 menu.go_offsety = approach(menu.go_offsety, 0.0, 32.0 * steps);
             }
-            menu.go_splat = approach(menu.go_splat, 2.0, 0.7 * steps);
+            if menu.go_death_pos >= 2.0 {
+                menu.go_splat = approach(menu.go_splat, 2.0, 0.7 * steps);
+            }
             if menu.go_appear > 0.0 {
                 menu.go_appear = (menu.go_appear - steps).max(0.0);
             }
@@ -2374,7 +2397,7 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
         // actually open — otherwise E / 1-4 / right-click would be
         // swallowed every tick and weapons could never be picked up.
         // `spec` is taken and dropped: ability lives in gameplay (gated),
-        let menu_open = game_over
+        let menu_open = run_over
             || world
                 .get_resource::<MenuState>()
                 .is_some_and(|menu| menu.mutation_count > 0)
@@ -2401,15 +2424,8 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
     };
 
     if game_over {
-        // Bevy `handle_death_restart` (KeyR) + game-over click in `lib.rs`
-        // (full-panel `QuitToTitle`). Keyboard interact/Enter never quits
-        // here — bevy has no such path.
         if edge.restart_pressed {
-            if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
-                menu.title_go_visible = false;
-                menu.mutation_selected = None;
-            }
-            goto_state(world, AppState::Loading);
+            apply_menu_action(world, UiAction::ConfirmPause(1));
         }
         return;
     }
@@ -2418,6 +2434,7 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
     // restart through Loading). GML gates only on typing/console/
     // public lobbies, none of which the port implements.
     if edge.restart_pressed
+        && !run_over
         && *world.resource::<OverlayMenu>() == OverlayMenu::None
     {
         goto_state(world, AppState::Loading);

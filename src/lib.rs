@@ -1750,15 +1750,12 @@ impl App {
             .get_resource::<OverlayMenu>()
             .copied()
             .unwrap_or_default();
-        // Bevy gates every InGame menu path on `run.game_over` only
-        // (`handle_pause_input`, `handle_mutation_keys`,
-        // `handle_death_restart`); the `MenuState.game_over` snapshot is
-        // display data for the render layer, never an input gate.
-        let game_over = self
+        let run_over = self
             .sim
             .world
             .get_resource::<crate::comps_a::Run>()
-            .is_some_and(|r| r.game_over);
+            .is_some_and(|run| run.game_over);
+        let game_over = crate::state::menus::game_over_visible(&self.sim.world);
         let mut slider_click_consumed = false;
         if overlay != OverlayMenu::Settings {
             self.finish_settings_slider_drag();
@@ -1860,7 +1857,7 @@ impl App {
         let live_play = state == AppState::InGame
             && !offer_open
             && !paused
-            && !game_over
+            && !run_over
             && overlay == OverlayMenu::None
             && self
                 .sim
@@ -1875,7 +1872,7 @@ impl App {
                     .world
                     .get_resource::<MenuState>()
                     .is_some_and(|m| !m.unlock_queue.is_empty()))
-            && !game_over;
+            && !run_over;
 
         // Context switch (Godot `_gui_input`-before-`_unhandled_input`
         // parity): one screen owns Space/arrows per frame. Menus consume
@@ -1944,7 +1941,7 @@ impl App {
         let mouse_down_edge = !staging_clicks.is_empty() && !touch_only_device;
         let mouse_down = (mouse_down_edge || (staging_lmb && !touch_only_device))
             && !menu_open
-            && !game_over
+            && !run_over
             && !offer_open
             && state != AppState::MainMenu
             && state != AppState::Title
@@ -1954,7 +1951,7 @@ impl App {
             left_held: mouse_down,
             left_pressed: mouse_down_edge
                 && !menu_open
-                && !game_over
+                && !run_over
                 && !offer_open
                 && state != AppState::MainMenu
                 && state != AppState::Title
@@ -2671,11 +2668,7 @@ impl App {
             .get_resource::<OverlayMenu>()
             .copied()
             .unwrap_or_default();
-        let game_over = self
-            .sim
-            .world
-            .get_resource::<crate::comps_a::Run>()
-            .is_some_and(|r| r.game_over);
+        let game_over = crate::state::menus::game_over_visible(&self.sim.world);
         let kind = menu_overlay_kind(
             state,
             overlay,
@@ -3078,11 +3071,7 @@ impl App {
             .get_resource::<OverlayMenu>()
             .copied()
             .unwrap_or_default();
-        let run_game_over = self
-            .sim
-            .world
-            .get_resource::<crate::comps_a::Run>()
-            .is_some_and(|r| r.game_over);
+        let run_game_over = crate::state::menus::game_over_visible(&self.sim.world);
         let menu_kind = {
             let menu = self.sim.world.resource_mut::<MenuState>();
             menu_overlay_kind(state, overlay, &menu, run_game_over)
@@ -3102,11 +3091,7 @@ impl App {
             .world
             .get_resource::<crate::state::Paused>()
             .is_some_and(|p| p.0);
-        let game_over = self
-            .sim
-            .world
-            .get_resource::<crate::comps_a::Run>()
-            .is_some_and(|r| r.game_over);
+        let game_over = crate::state::menus::game_over_visible(&self.sim.world);
         let spiral_cover = self
             .sim
             .world
@@ -4760,6 +4745,12 @@ fn route_menu_click(
                 {
                     return None;
                 }
+            } else if kind == MenuOverlay::GameOver
+                && world
+                    .get_resource::<MenuState>()
+                    .is_some_and(|menu| menu.go_appear > 0.0)
+            {
+                return None;
             }
             // Bevy `bigname_button_at` parity: every menu button owns a
             // fixed 120x22 GUI box centered on its (gx, gy) (the dp text
