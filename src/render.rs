@@ -1231,7 +1231,7 @@ fn trans_cells(
                     continue;
                 }
                 let frame =
-                    (wall_hash(seed, wx, wy, 0x41) as usize % trans_frames.max(1) as usize) as i32;
+                    (wall_hash(seed, wx, wy, 0x41) as usize % (trans_frames as usize + 1)) as i32;
                 out.push(((wx, wy), frame));
             }
         }
@@ -2145,6 +2145,11 @@ pub fn world_instances_cached(
             .collect();
         walls.sort_by_key(|c| (c.0, c.1));
         let wall_set: HashSet<(i32, i32)> = walls.iter().map(|c| (c.0, c.1)).collect();
+        let solid_wall_set: HashSet<(i32, i32)> = world
+            .query::<&WallCell>()
+            .iter(world)
+            .map(|cell| (cell.0, cell.1))
+            .collect();
         let out_frames = strip_frames(assets, wall_out_png);
         let bot_frames = strip_frames(assets, wall_bot_png);
         if has(wall_out_png) {
@@ -2157,7 +2162,7 @@ pub fn world_instances_cached(
                     frame,
                     wx,
                     wy,
-                    wall_out_crop(&wall_set, wx, wy),
+                    wall_out_crop(&solid_wall_set, wx, wy),
                     [1.0; 4],
                 ) {
                     s.z = Z_WALL_SUBTOP;
@@ -2176,13 +2181,8 @@ pub fn world_instances_cached(
             );
             let floor_south = cells.contains(&south_tile);
             let raw = wall_body_raw(seed, wx, wy);
-            let body_frame = if bot_frames == 0 {
-                0
-            } else {
-                (raw % bot_frames as usize) as i32
-            };
-            if floor_south && has(wall_bot_png) {
-                let frame = body_frame;
+            let frame = raw as i32;
+            if floor_south && has(wall_bot_png) && bot_frames > 0 {
                 if let Some(s) = place_top_left(
                     assets,
                     wall_bot_png,
@@ -2195,7 +2195,6 @@ pub fn world_instances_cached(
                 }
             }
             if has(wall_top_png) {
-                let frame = body_frame;
                 if let Some(mut s) = place_top_left(
                     assets,
                     wall_top_png,
