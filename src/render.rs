@@ -53,7 +53,7 @@ use crate::comps_b::{
     GmlImage, GroundDecalTint, HazardCloud, HurtAnim, MaggotSpawnCharge, Mote, MoteScale,
     NativeAngle, NativeDepth, NativeFlip, NativeScale, OpenedChest, Pickup, PickupKind,
     PickupLifetime, Portal, PortalClear, PortalShock, PortalStrike, Prop, PropSprites, Shield,
-    CrownObject,
+    CrownObject, InvisiWall,
     StaticFx, SwingFx, Telekinesis, ThroneCarpet, ThroneSit, TitleCampChar, TitleCampfire,
     TitleLogMenu, TitleTv, ToxicGasState, WeaponVisual, YvCouch,
 };
@@ -1072,12 +1072,12 @@ pub fn strip_frames_pub(assets: &RenderAssets, path: &str) -> u32 {
 /// (`SubTopCont/Draw_0:27`); the `topindex` roll (`Wall/Create_0:25-30`) is
 /// never read.
 fn wall_body_raw(seed: u64, wx: i32, wy: i32) -> usize {
-    if wall_hash(seed, wx, wy, 0x11) % 150 == 0 {
+    let base = if wall_hash(seed, wx, wy, 0x11) % 150 == 0 {
         3
     } else {
         [0usize, 0, 0, 0, 0, 0, 0, 1, 2][(wall_hash(seed, wx, wy, 0x12) % 9) as usize]
-            + [0usize, 4][(wall_hash(seed, wx, wy, 0x13) % 2) as usize]
-    }
+    };
+    base + [0usize, 4][(wall_hash(seed, wx, wy, 0x13) % 2) as usize]
 }
 
 /// GML `Wall/Create_0:32` Out variant verbatim:
@@ -2147,7 +2147,6 @@ pub fn world_instances_cached(
         let wall_set: HashSet<(i32, i32)> = walls.iter().map(|c| (c.0, c.1)).collect();
         let out_frames = strip_frames(assets, wall_out_png);
         let bot_frames = strip_frames(assets, wall_bot_png);
-        let top_frames = strip_frames(assets, wall_top_png);
         if has(wall_out_png) {
             for cell in walls.iter().rev() {
                 let (wx, wy) = (cell.0, cell.1);
@@ -2177,8 +2176,13 @@ pub fn world_instances_cached(
             );
             let floor_south = cells.contains(&south_tile);
             let raw = wall_body_raw(seed, wx, wy);
+            let body_frame = if bot_frames == 0 {
+                0
+            } else {
+                (raw % bot_frames as usize) as i32
+            };
             if floor_south && has(wall_bot_png) {
-                let frame = (raw % bot_frames.max(1) as usize) as i32;
+                let frame = body_frame;
                 if let Some(s) = place_top_left(
                     assets,
                     wall_bot_png,
@@ -2191,7 +2195,7 @@ pub fn world_instances_cached(
                 }
             }
             if has(wall_top_png) {
-                let frame = (raw % top_frames.max(1) as usize) as i32;
+                let frame = body_frame;
                 if let Some(mut s) = place_top_left(
                     assets,
                     wall_top_png,
@@ -7801,7 +7805,10 @@ pub fn shadow_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIns
             out.push(s);
         }
     }
-    let mut q = world.query::<(&Pos, &Prop)>();
+    let mut q = world.query_filtered::<
+        (&Pos, &Prop),
+        (Without<WallTile>, Without<InvisiWall>),
+    >();
     for (pos, _) in q.iter(world) {
         if assets.uv("images/shd32.png", 0).is_none() {
             break;
@@ -7826,7 +7833,14 @@ pub fn shadow_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIns
         if assets.uv("images/shd24.png", 0).is_none() {
             break;
         }
-        if let Some(s) = assets.sprite_for("images/shd24.png", 0, pos.0, false, 0.0, [1.0; 4]) {
+        if let Some(s) = assets.sprite_for(
+            "images/shd24.png",
+            0,
+            pos.0,
+            false,
+            0.0,
+            [1.0, 1.0, 1.0, 0.4],
+        ) {
             out.push(s);
         }
     }
