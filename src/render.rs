@@ -1189,14 +1189,27 @@ fn wall_out_part(
 /// 32px neighbors (`mcr_floor_create_tops`); each Top splits into 4
 /// `TopSmall`s at `(x, y)`, `(x+16, y)`, `(x, y+16)`, `(x+16, y+16)`
 /// (`Top/Create_0:11-14`), drawn from the Trans strip at `y - 8`
-/// (`SubTopCont/Draw_0:22-24`). Survivors: not on a wall or floor cell
-/// (`TopSmall/Create_0:1-4` + `Collision_Floor`), deduped
-/// (`Collision_TopSmall`). Returns the 16px Trans cells plus the per-cell
-/// frame (GML `image_index = irandom(image_number)`).
+/// (`SubTopCont/Draw_0:22-24`).
+///
+/// `TopSmall/Create_0:1-4` kills anything whose position meets a `Wall`, and
+/// `position_meeting` uses the bounding box, not the mask. `Wall/Create_0:11-14`
+/// writes the legacy GML bbox vars `l = 0, r = 0, w = 24, h = 24`, so every wall
+/// carries a 24x24 box anchored at its top-left sprite corner — `[x, x+23] x
+/// [y, y+23]`, while the wall art is only 16x16. (`mcr_wall_update_lrwh`, run
+/// later in `GenCont/Alarm_1`, only ever shrinks that box, and the first
+/// `mcr_floor_create_tops` pass already ran with the full 24x24 one.)
+/// The box therefore overshoots the wall cell by one cell east and south, so a
+/// survivor needs no wall at `(wx, wy)`, `(wx-1, wy)`, `(wx, wy-1)` nor
+/// `(wx-1, wy-1)`. That trim is why GML skirting is thinner on the south and
+/// east edges of a wall mass than on the north and west.
+///
+/// GML draws every `TopSmall` with sub-image `-1`, i.e. the strip's last frame
+/// (`SubTopCont/Draw_0:22`); the `image_index = irandom(image_number)` roll in
+/// `TopSmall/Create_0:7` is never read. Returns the 16px Trans cells with that
+/// one frame.
 fn trans_cells(
     cells: &HashSet<(i32, i32)>,
     wall_set: &HashSet<(i32, i32)>,
-    seed: u64,
     trans_frames: u32,
 ) -> Vec<((i32, i32), i32)> {
     let mut seen: HashSet<(i32, i32)> = HashSet::new();
@@ -1221,7 +1234,16 @@ fn trans_cells(
             for (sx, sy) in [(0.0, 0.0), (16.0, 0.0), (0.0, 16.0), (16.0, 16.0)] {
                 let wx = ((tx + sx) / 16.0).floor() as i32;
                 let wy = ((ty + sy) / 16.0).floor() as i32;
-                if wall_set.contains(&(wx, wy)) {
+                let mut wall_bbox_hit = false;
+                'bbox: for dx in [0i32, -1] {
+                    for dy in [0i32, -1] {
+                        if wall_set.contains(&(wx + dx, wy + dy)) {
+                            wall_bbox_hit = true;
+                            break 'bbox;
+                        }
+                    }
+                }
+                if wall_bbox_hit {
                     continue;
                 }
                 if cells.contains(&(wx.div_euclid(2), wy.div_euclid(2))) {
@@ -1230,9 +1252,7 @@ fn trans_cells(
                 if !seen.insert((wx, wy)) {
                     continue;
                 }
-                let frame =
-                    (wall_hash(seed, wx, wy, 0x41) as usize % (trans_frames as usize + 1)) as i32;
-                out.push(((wx, wy), frame));
+                out.push(((wx, wy), trans_frames as i32 - 1));
             }
         }
     }
@@ -2216,7 +2236,6 @@ pub fn world_instances_cached(
             trans_cells(
                 &cells,
                 &wall_set,
-                seed,
                 strip_frames(assets, wall_trans_png),
             )
         } else {
@@ -7745,103 +7764,197 @@ pub fn portal_indicator_sprites(
     out
 }
 
+#[derive(Clone, Copy)]
+struct ShadowSpec {
+    path: &'static str,
+    offset: Vec2,
+}
+
+impl ShadowSpec {
+    const fn new(path: &'static str, x: f32, y: f32) -> Self {
+        Self {
+            path,
+            offset: Vec2::new(x, y),
+        }
+    }
+}
+
+fn enemy_shadow(kind: EnemyKind) -> Option<ShadowSpec> {
+    let spec = match kind {
+        EnemyKind::Maggot | EnemyKind::RadMaggot => ShadowSpec::new("images/shd16.png", 0.0, 0.0),
+        EnemyKind::BigMaggot => ShadowSpec::new("images/shd32.png", 0.0, 0.0),
+        EnemyKind::FiredMaggot => return None,
+        EnemyKind::BigBandit | EnemyKind::BigBanditLoop => {
+            ShadowSpec::new("images/shd32.png", 0.0, 4.0)
+        }
+        EnemyKind::BigDog | EnemyKind::BigDogLoop => ShadowSpec::new("images/shd96.png", 0.0, 0.0),
+        EnemyKind::Hyper => ShadowSpec::new("images/shd64.png", 0.0, 16.0),
+        EnemyKind::IdpdVan => ShadowSpec::new("images/shd96.png", 0.0, -8.0),
+        EnemyKind::ProtoStatue => ShadowSpec::new("images/shd64.png", 0.0, 9.0),
+        EnemyKind::ScrapBossMissile => ShadowSpec::new("images/shd24.png", 0.0, 3.0),
+        EnemyKind::RobotGuard => ShadowSpec::new("images/shd24.png", 0.0, 1.0),
+        EnemyKind::FrogQueen => ShadowSpec::new("images/shd64.png", 0.0, 8.0),
+        EnemyKind::Guardian | EnemyKind::CrownGuardian => {
+            ShadowSpec::new("images/shd24.png", 0.0, 4.0)
+        }
+        EnemyKind::DogGuardian => ShadowSpec::new("images/shd64.png", 0.0, 7.0),
+        EnemyKind::ExploGuardian => ShadowSpec::new("images/shd32.png", 0.0, 8.0),
+        EnemyKind::Crab => ShadowSpec::new("images/shd48.png", 0.0, 0.0),
+        EnemyKind::Scorpion
+        | EnemyKind::GoldScorpion
+        | EnemyKind::Ratking
+        | EnemyKind::PopoFreak => ShadowSpec::new("images/shd32.png", 0.0, 4.0),
+        EnemyKind::SnowTank => ShadowSpec::new("images/shd32.png", 0.0, 5.0),
+        EnemyKind::GoldSnowtank => ShadowSpec::new("images/shd32.png", 0.0, 3.0),
+        EnemyKind::RhinoFreak => ShadowSpec::new("images/shd24.png", -2.0, 4.0),
+        EnemyKind::LaserCrystal
+        | EnemyKind::LightningCrystal
+        | EnemyKind::InvLaserCrystal => ShadowSpec::new("images/shd24.png", 0.0, 4.0),
+        EnemyKind::Jock
+        | EnemyKind::JungleFly
+        | EnemyKind::Salamander
+        | EnemyKind::FireBaller
+        | EnemyKind::SuperFireBaller => ShadowSpec::new("images/shd32.png", 0.0, 0.0),
+        _ => ShadowSpec::new("images/shd24.png", 0.0, 0.0),
+    };
+    Some(spec)
+}
+
+fn pickup_shadow(kind: PickupKind) -> Option<ShadowSpec> {
+    match kind {
+        PickupKind::Chest(ChestKind::BigWeapon) => None,
+        PickupKind::Chest(ChestKind::Rad)
+        | PickupKind::Chest(ChestKind::RadBig)
+        | PickupKind::Chest(ChestKind::RadMaggot) => {
+            Some(ShadowSpec::new("images/shd24.png", 0.0, 0.0))
+        }
+        PickupKind::Chest(_) => Some(ShadowSpec::new("images/shd24.png", 0.0, -1.0)),
+        _ => None,
+    }
+}
+
+fn prop_shadow(sprites: Option<&PropSprites>) -> ShadowSpec {
+    match sprites.map(|s| s.idle) {
+        Some("images/sprAnchor.png") => ShadowSpec::new("images/shd48.png", 0.0, 0.0),
+        Some("images/sprBigSkullOpen.png") => ShadowSpec::new("images/shd32.png", 0.0, 0.0),
+        _ => ShadowSpec::new("images/shd24.png", 0.0, 0.0),
+    }
+}
+
+fn push_shadow(
+    out: &mut Vec<SpriteInstance>,
+    assets: &RenderAssets,
+    pos: Vec2,
+    spec: ShadowSpec,
+) {
+    if let Some(s) = assets.sprite_for(
+        spec.path,
+        0,
+        pos + spec.offset,
+        false,
+        0.0,
+        [1.0, 1.0, 1.0, 0.4],
+    ) {
+        out.push(s);
+    }
+}
+
+fn push_pickup_shadow(
+    out: &mut Vec<SpriteInstance>,
+    assets: &RenderAssets,
+    pos: Vec2,
+    kind: PickupKind,
+) {
+    // `BigWeaponChest` is covered by both `with chestprop` and its own arm.
+    if matches!(kind, PickupKind::Chest(ChestKind::BigWeapon)) {
+        push_shadow(
+            out,
+            assets,
+            pos,
+            ShadowSpec::new("images/shd32.png", 0.0, -1.0),
+        );
+        push_shadow(
+            out,
+            assets,
+            pos,
+            ShadowSpec::new("images/shd32.png", 0.0, 0.0),
+        );
+        return;
+    }
+    if let Some(spec) = pickup_shadow(kind) {
+        push_shadow(out, assets, pos, spec);
+    }
+}
+
 /// Soft blob shadows under actors (GML `scrShadows` entity half,
-/// verbatim strips, drawn into the `shad` surface at alpha 0.4 and
-/// composited under the actors by `BackCont/Draw_0`):
-/// enemies + the player on `shd64`, pickups on `shd16`, props on
-/// `shd32`. Strips absent from the pack degrade to no shadow (same
-/// graceful fallback as every other optional strip; per-kind sizes
-/// like `shd96` for BigDog follow once the pack carries them).
-/// GML per-object `spr_shadow_x/y` offsets are not recorded by the
-/// sim, so blobs center on the actor (crowns keep the GML +3 y).
+/// composited under the actors by `BackCont/Draw_0`). The per-object
+/// `spr_shadow` values and offsets are resolved from the modeled kind;
+/// missing strips simply produce no shadow.
 pub fn shadow_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInstance> {
     let mut out = Vec::new();
     let mut q = world.query::<(&Pos, &Enemy)>();
-    for (pos, _) in q.iter(world) {
-        if assets.uv("images/shd64.png", 0).is_none() {
-            break;
-        }
-        if let Some(s) = assets.sprite_for(
-            "images/shd64.png",
-            0,
-            pos.0,
-            false,
-            0.0,
-            [1.0, 1.0, 1.0, 0.4],
-        ) {
-            out.push(s);
+    for (pos, enemy) in q.iter(world) {
+        if let Some(spec) = enemy_shadow(enemy.kind) {
+            push_shadow(&mut out, assets, pos.0, spec);
         }
     }
-    let mut q = world.query::<(&Pos, &Player)>();
-    for (pos, _) in q.iter(world) {
-        if assets.uv("images/shd64.png", 0).is_none() {
-            break;
-        }
-        if let Some(s) = assets.sprite_for(
-            "images/shd64.png",
-            0,
-            pos.0,
-            false,
-            0.0,
-            [1.0, 1.0, 1.0, 0.4],
-        ) {
-            out.push(s);
-        }
+    let mut q = world.query::<(&Pos, &Player, Option<&RaceState>)>();
+    for (pos, _, race) in q.iter(world) {
+        let spec = if race.is_some_and(|race| race.race == RaceId::BigDog) {
+            ShadowSpec::new("images/shd96.png", 0.0, 0.0)
+        } else {
+            ShadowSpec::new("images/shd24.png", 0.0, 0.0)
+        };
+        push_shadow(&mut out, assets, pos.0, spec);
     }
     let mut q = world.query::<(&Pos, &Pickup)>();
-    for (pos, _) in q.iter(world) {
-        if assets.uv("images/shd16.png", 0).is_none() {
-            break;
-        }
-        if let Some(s) = assets.sprite_for(
-            "images/shd16.png",
-            0,
-            pos.0,
-            false,
-            0.0,
-            [1.0, 1.0, 1.0, 0.4],
-        ) {
-            out.push(s);
-        }
+    for (pos, pickup) in q.iter(world) {
+        push_pickup_shadow(&mut out, assets, pos.0, pickup.kind);
     }
     let mut q = world.query_filtered::<
-        (&Pos, &Prop),
+        (&Pos, &Prop, Option<&PropSprites>),
         (Without<WallTile>, Without<InvisiWall>),
     >();
-    for (pos, _) in q.iter(world) {
-        if assets.uv("images/shd32.png", 0).is_none() {
-            break;
-        }
-        if let Some(s) = assets.sprite_for(
-            "images/shd32.png",
-            0,
-            pos.0,
-            false,
-            0.0,
-            [1.0, 1.0, 1.0, 0.4],
-        ) {
-            out.push(s);
-        }
+    for (pos, _, sprites) in q.iter(world) {
+        push_shadow(&mut out, assets, pos.0, prop_shadow(sprites));
     }
-    // Title campers (`CampChar/Create_0`: `spr_shadow = shd24`).
-    // Campfire/LogMenu/TV set no shadow in GML, so only campers.
-    // GML draws the blob opaque (no alpha arg in `scrShadows`); the
-    // strip's own soft edge carries the falloff.
+    // Title campers (`CampChar` uses shd24; BigDog overrides it to shd96).
     let mut q = world.query::<(&Pos, &TitleCampChar)>();
+    for (pos, camp) in q.iter(world) {
+        let spec = if camp.race_gml == RaceId::BigDog as usize {
+            ShadowSpec::new("images/shd96.png", 0.0, 0.0)
+        } else {
+            ShadowSpec::new("images/shd24.png", 0.0, 0.0)
+        };
+        push_shadow(&mut out, assets, pos.0, spec);
+    }
+    // Campfire, LogMenu, and TV are GML `prop` descendants.
+    let mut q = world.query::<(&Pos, &TitleCampfire)>();
     for (pos, _) in q.iter(world) {
-        if assets.uv("images/shd24.png", 0).is_none() {
-            break;
-        }
-        if let Some(s) = assets.sprite_for(
-            "images/shd24.png",
-            0,
+        push_shadow(
+            &mut out,
+            assets,
             pos.0,
-            false,
-            0.0,
-            [1.0, 1.0, 1.0, 0.4],
-        ) {
-            out.push(s);
-        }
+            ShadowSpec::new("images/shd24.png", 0.0, 0.0),
+        );
+    }
+    let mut q = world.query::<(&Pos, &TitleLogMenu)>();
+    for (pos, _) in q.iter(world) {
+        push_shadow(
+            &mut out,
+            assets,
+            pos.0,
+            ShadowSpec::new("images/shd24.png", 0.0, 0.0),
+        );
+    }
+    let mut q = world.query::<(&Pos, &TitleTv)>();
+    for (pos, _) in q.iter(world) {
+        push_shadow(
+            &mut out,
+            assets,
+            pos.0,
+            ShadowSpec::new("images/shd24.png", 0.0, 0.0),
+        );
     }
     out
 }
