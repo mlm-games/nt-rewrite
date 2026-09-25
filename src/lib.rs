@@ -2255,7 +2255,7 @@ impl App {
                     }
                 }
             }
-        } else if menu_open {
+        } else if menu_open && !offer_open {
             // Open menu over a live run: right-click steps back (GML
             // `BackButton` `mb_right` parity — Settings pops one level
             // via `SettingsBack`, Credits closes), left clicks route at
@@ -2403,11 +2403,15 @@ impl App {
                 let viewport_dp = self.view_viewport_dp;
                 let vw = crate::render::gml_view_size(viewport_dp)[0];
                 let k = (viewport_dp[1].max(1.0) / 240.0).max(1e-6);
+                let point = self.menu_gui_point().unwrap_or([
+                    click.dp[0] / k,
+                    click.dp[1] / k,
+                ]);
                 if k.is_finite()
                     && let Some(action) = crate::render::mutation_icon_hit_action(
                         &mut self.sim.world,
-                        click.dp[0] / k,
-                        click.dp[1] / k,
+                        point[0],
+                        point[1],
                         vw,
                     )
                 {
