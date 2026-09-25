@@ -3574,7 +3574,10 @@ impl App {
                 }
             }
         };
-        let snap = self.spiral.snapshot(bg_alpha);
+        let snap = self.spiral.snapshot_with_lightning(
+            bg_alpha,
+            !matches!(state, AppState::Title),
+        );
         self.last_bg_alpha = snap.bg_alpha;
         // Vortex art follows the GML area (debris strip is per-area);
         // decode once per area, not per frame.
@@ -4052,7 +4055,7 @@ impl App {
         if letterbox_visible {
             // GML `LETTERBOX_SIZE 36` view px tall (`scrLetterbox`):
             // 36 GUI px → dp at the live GUI scale (720p → 108 dp).
-            let bar_dp = 36.0 * (viewport_dp[1].max(1.0) / 240.0);
+            let bar_dp = (36.0 * (viewport_dp[1].max(1.0) / 240.0)).ceil();
             let mut has_art = false;
             if let Some(assets) = self.assets.as_ref() {
                 let art = letterbox_sprites(
@@ -4082,7 +4085,29 @@ impl App {
                         |_| {},
                     );
                     view.modifier = view.modifier.hit_passthrough();
-                    letterbox_view = Some(view);
+                    let mut children = Vec::new();
+                    let bar = Dp(bar_dp);
+                    let width = Dp(viewport_dp[0]);
+                    children.push(UiBox(
+                        Modifier::new()
+                            .absolute()
+                            .size(width, bar)
+                            .offset(Some(Dp(0.0)), Some(Dp(0.0)), None, None)
+                            .background(Color::from_rgba(0, 0, 0, 255))
+                            .hit_passthrough(),
+                    ));
+                    children.push(UiBox(
+                        Modifier::new()
+                            .absolute()
+                            .size(width, bar)
+                            .offset(Some(Dp(0.0)), Some(Dp(viewport_dp[1] - bar_dp)), None, None)
+                            .background(Color::from_rgba(0, 0, 0, 255))
+                            .hit_passthrough(),
+                    ));
+                    children.push(view);
+                    letterbox_view = Some(
+                        ZStack(Modifier::new().fill_max_size().hit_passthrough()).child(children),
+                    );
                     has_art = true;
                 }
             }

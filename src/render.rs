@@ -4318,25 +4318,6 @@ pub(crate) fn letterbox_sprites(
     let top_x = 0.0;
     let bottom_x = vw;
     let mut out = Vec::new();
-    let margin = vw - 320.0;
-    if margin > 0.0 {
-        for (cx, cy, sx, sy) in [
-            (margin * 0.5, 222.0, margin, 36.0),
-            (vw - margin * 0.5, 17.0, margin, 36.0),
-        ] {
-            if let Some(mut rect) = assets.sprite_sized(
-                "images/sprMapDot.png",
-                0,
-                hud_gui_to_world(gm, view, cx, cy),
-                Vec2::new(sx, sy),
-                false,
-                [0.0, 0.0, 0.0, 1.0],
-            ) {
-                rect.anchor = Vec2::new(0.5, 0.5);
-                out.push(rect);
-            }
-        }
-    }
     let scale = 36.0 / 35.0;
     for (x, y, flip_x, flip_y) in [
         (top_x, -1.0, false, false),
@@ -7777,6 +7758,7 @@ pub fn title_click_action(
             vw,
             crownsize,
             skinsize,
+            menu.loadout_frame,
             menu.loadout_open,
         ) {
             return Some(a);
@@ -7882,11 +7864,18 @@ fn loadout_click_action(
     vw: f32,
     crownsize: f32,
     skinsize: f32,
-    open: bool,
+    loadout_frame: f32,
+    loadout_open: bool,
 ) -> Option<UiAction> {
     use crate::savedata_part::SaveData;
     let (w, h) = (vw, 240.0);
-    if open && selected != 0 {
+    let fullview = loadout_frame >= 2.0;
+    let openaddy = if loadout_frame >= 2.0 && loadout_frame < 3.0 {
+        if loadout_open { 1.0 } else { -1.0 }
+    } else {
+        0.0
+    };
+    if fullview && selected != 0 {
         let save = world.get_resource::<SaveData>().cloned();
         let crown_row = save
             .as_ref()
@@ -7898,7 +7887,7 @@ fn loadout_click_action(
                 r[1] = true;
                 r
             });
-        let total_unlocked = crown_row.iter().filter(|b| **b).count();
+        let total_unlocked = crown_row.iter().skip(2).filter(|b| **b).count();
         let crowntop = 72.0;
         let crownbottom = h - 72.0;
         let space = crownbottom - crowntop;
@@ -7909,7 +7898,7 @@ fn loadout_click_action(
         // GML `point_in_circle(mx, my, crown_x, crown_y, crownsize * 0.5)`.
         let crown_r = crownsize * 0.5;
         let mut cx = crownright - crownsize * 3.0;
-        let mut cy = crowntop - 24.0;
+        let mut cy = crowntop + openaddy - 24.0;
         let mut crown_hit: Option<UiAction> = None;
         for id in 0..14u8 {
             if id == 0 && total_unlocked == 0 {
@@ -7920,7 +7909,7 @@ fn loadout_click_action(
                 crown_hit = Some(UiAction::SelectCrown(id));
             }
             cx += crownsize;
-            if cx >= crownright || id == 0 {
+            if cx >= crownright || id == 1 {
                 cx = crownleft;
                 cy += crownsize;
             }
@@ -7934,7 +7923,7 @@ fn loadout_click_action(
         let skins_y = (h / 2.0).floor() - (skinsize * 0.5) * skin_count as f32 - 2.0;
         // GML `point_in_circle(mx, my, skins_x, skins_y, 10)`.
         for j in 0..skin_count {
-            let sy = skins_y + j as f32 * skinsize;
+            let sy = skins_y + j as f32 * skinsize + openaddy;
             if (gx - skins_x).hypot(gy - sy) <= 10.0 {
                 return Some(UiAction::SelectSkin(j as u8));
             }
@@ -7969,7 +7958,7 @@ fn loadout_click_action(
         }
         return None;
     }
-    if !open && selected != 0 {
+    if !fullview && selected != 0 {
         // Closed-frame splat zone: GML closed `_splat_pointed` rect
         // `[splat_x - 109 div 2, splat_x] x [splat_y - 69 div 2, splat_y]`
         // (toggles only — GML offers no crown/weapon picking closed, and
@@ -7994,8 +7983,8 @@ pub fn race_max_skin_count(race: RaceId) -> usize {
     }
 }
 
-/// Loadout grid (`scrMenuDrawLoadout` verbatim geometry at the open
-/// frame: panel, crown grid, skin column, weapon row). `selected` is the
+/// Loadout grid (`scrMenuDrawLoadout` geometry and frame animation:
+/// panel, crown grid, skin column, weapon row). `selected` is the
 /// `CHAR_SELECT_ORDER` index. `vwvh` is the GML view size ([`gml_view_size`]);
 /// `to_world` maps view px to world.
 fn menu_loadout_sprites(
@@ -8003,6 +7992,8 @@ fn menu_loadout_sprites(
     assets: &RenderAssets,
     vwvh: [f32; 2],
     selected: usize,
+    loadout_frame: f32,
+    loadout_open: bool,
     to_world: &dyn Fn([f32; 2]) -> Vec2,
     out: &mut Vec<SpriteInstance>,
 ) {
@@ -8045,59 +8036,73 @@ fn menu_loadout_sprites(
     let weapons_x = ((crownright + crownleft) / 2.0).floor() - weaponsize * 0.5 * 2.0 + 20.0;
     let weapons_y = crownbottom + (crownsize / 2.0).floor() - 19.0;
     let splat = [w + 2.0, h - 36.0 + 2.0];
+    let loadout_frame = loadout_frame.clamp(0.0, 4.0);
+    let fullview = loadout_frame >= 2.0;
+    let openaddy = if loadout_frame >= 2.0 && loadout_frame < 3.0 {
+        if loadout_open { 1.0 } else { -1.0 }
+    } else {
+        0.0
+    };
 
-    // Panel + splat + arrow.
-    if let Some(open) = assets.native_size("images/sprLoadoutOpen.png") {
-        let xs = ((w - skins_x) / (open.x - crownsize * 2.0)).max(1.0);
-        let ys = (splat[1] - 36.0) / open.y + 0.05;
-        if let Some(s) = assets.sprite_stretched(
-            "images/sprLoadoutOpen.png",
-            2,
-            to_world([splat[0] - 2.0, splat[1]]),
-            Vec2::new(xs, ys),
+    // Panel + arrow.
+    if loadout_frame > 0.0 {
+        if let Some(open) = assets.native_size("images/sprLoadoutOpen.png") {
+            let xs = ((w - skins_x) / (open.x - crownsize * 2.0)).max(1.0);
+            let ys = (splat[1] - 36.0) / open.y + 0.05;
+            if let Some(s) = assets.sprite_stretched(
+                "images/sprLoadoutOpen.png",
+                loadout_frame.floor() as i32,
+                to_world([splat[0] - 2.0, splat[1]]),
+                Vec2::new(xs, ys),
+                0.0,
+                [1.0; 4],
+            ) {
+                out.push(s);
+            }
+        }
+        if let Some(s) = assets.sprite_for(
+            "images/sprLoadoutArrow.png",
+            i32::from(loadout_open),
+            to_world([splat[0] - 16.0, splat[1] - 16.0]),
+            false,
             0.0,
             [1.0; 4],
         ) {
             out.push(s);
         }
     }
-    // Splat + arrow (GML frame-0 draw: `draw_sprite_ext(sprLoadoutSplat,
-    // splatindex, splat_x, splat_y, 1, 1.05, ...)`; the y-stretch pins
-    // the bottom-right origin, same as GML).
-    if let Some(s) = assets.sprite_stretched(
-        "images/sprLoadoutSplat.png",
-        0,
-        to_world(splat),
-        Vec2::new(1.0, 1.05),
-        0.0,
-        [1.0; 4],
-    ) {
-        out.push(s);
-    }
-    if let Some(s) = assets.sprite_for(
-        "images/sprLoadoutArrow.png",
-        1,
-        to_world([splat[0] - 16.0, splat[1] - 16.0]),
-        false,
-        0.0,
-        [1.0; 4],
-    ) {
-        out.push(s);
+
+    if !fullview {
+        menu_loadout_closed_sprites(
+            world,
+            assets,
+            vwvh,
+            selected,
+            true,
+            false,
+            to_world,
+            out,
+        );
+        return;
     }
 
     // Crown grid (GML `crwn_random` (0) skipped when bare; wraps at
     // the right edge or the none crown).
-    let total_unlocked = crown_row.iter().filter(|b| **b).count();
-    let current = loadout.as_ref().map(|l| l.start_crown).unwrap_or(0);
+    let total_unlocked = crown_row.iter().skip(2).filter(|b| **b).count();
+    let current = loadout
+        .as_ref()
+        .map(|l| crate::savedata_part::crown_port_to_gml(l.start_crown))
+        .unwrap_or(1);
     let mut cx = crownright - crownsize * 3.0;
-    let mut cy = crowntop - 24.0;
+    let mut cy = crowntop + openaddy - 24.0;
     for id in 0..14u8 {
         if id == 0 && total_unlocked == 0 {
             cx += crownsize;
             continue;
         }
         let unlocked = crown_row.get(id as usize).copied().unwrap_or(false);
-        let tint = if unlocked && id == current {
+        let selected = unlocked && id == current;
+        let tint = if selected {
             [1.0; 4]
         } else {
             [0.5, 0.5, 0.5, 1.0]
@@ -8109,7 +8114,7 @@ fn menu_loadout_sprites(
                 "images/sprLockedLoadoutCrown.png"
             },
             id as i32,
-            to_world([cx, cy]),
+            to_world([cx, cy - if selected { 1.0 } else { 0.0 }]),
             false,
             0.0,
             tint,
@@ -8117,7 +8122,7 @@ fn menu_loadout_sprites(
             out.push(s);
         }
         cx += crownsize;
-        if cx >= crownright || id == 0 {
+        if cx >= crownright || id == 1 {
             cx = crownleft;
             cy += crownsize;
         }
@@ -8134,7 +8139,8 @@ fn menu_loadout_sprites(
     let mut sy = skins_y;
     for j in 0..skin_count {
         let open = skins.get(j).copied().unwrap_or(false);
-        let tint = if j as u8 == preferred {
+        let selected = open && j as u8 == preferred;
+        let tint = if selected {
             [1.0; 4]
         } else {
             [0.5, 0.5, 0.5, 1.0]
@@ -8146,7 +8152,10 @@ fn menu_loadout_sprites(
                 "images/sprLoadoutSkinLocked.png"
             },
             race_skin_subimage(race, j as u8),
-            to_world([skins_x, sy]),
+            to_world([
+                skins_x,
+                sy + openaddy - if selected { 1.0 } else { 0.0 },
+            ]),
             false,
             0.0,
             tint,
@@ -8180,7 +8189,8 @@ fn menu_loadout_sprites(
         } else {
             [0.5, 0.5, 0.5, 1.0]
         };
-        push_loadout_weapon(assets, wid, to_world([wx, weapons_y]), tint, out);
+        let offset = if chosen == wid { 2.0 } else { 0.0 } - openaddy;
+        push_loadout_weapon(assets, wid, to_world([wx, weapons_y - offset]), tint, out);
         wx += weaponsize;
     }
 }
@@ -8226,6 +8236,7 @@ fn menu_loadout_closed_sprites(
     vwvh: [f32; 2],
     selected: usize,
     available: bool,
+    include_chrome: bool,
     to_world: &dyn Fn([f32; 2]) -> Vec2,
     out: &mut Vec<SpriteInstance>,
 ) {
@@ -8236,7 +8247,7 @@ fn menu_loadout_closed_sprites(
         .cloned();
     let loadout = save.as_ref().map(|s| s.race_loadout(race).clone());
     let splat = [w + 2.0, h - 36.0 + 2.0];
-    if available {
+    if available && include_chrome {
         if let Some(s) = assets.sprite_stretched(
             "images/sprLoadoutSplat.png",
             0,
@@ -9357,10 +9368,17 @@ pub fn menu_sprites(
                 .get_resource::<SelectedCharacter>()
                 .map(|s| s.0 as usize)
                 .unwrap_or(0);
-            let (cursor, go_visible, loadout_open) = menu
+            let (cursor, go_visible, loadout_open, loadout_frame) = menu
                 .as_ref()
-                .map(|m| (m.title_cursor, m.title_go_visible, m.loadout_open))
-                .unwrap_or((0, false, false));
+                .map(|m| {
+                    (
+                        m.title_cursor,
+                        m.title_go_visible,
+                        m.loadout_open,
+                        m.loadout_frame,
+                    )
+                })
+                .unwrap_or((0, false, false, 0.0));
             let slot_h = assets
                 .native_size("images/sprCharSelect.png")
                 .map(|s| s.y)
@@ -9502,25 +9520,28 @@ pub fn menu_sprites(
                     out.push(s);
                 }
             }
-            // Loadout grid (`scrMenuDrawLoadout` verbatim geometry, open
-            // frame, no tooltips/animation) plus the closed-frame preview
-            // (splat + arrow + minis ride the closed frame in GML).
-            if loadout_open && selected != 0 {
+            // Loadout grid (`scrMenuDrawLoadout` geometry and frame
+            // animation) plus the closed-frame preview (splat + arrow +
+            // minis ride the closed frame in GML).
+            if selected != 0 && loadout_frame > 0.0 {
                 menu_loadout_sprites(
                     world,
                     assets,
                     [vw, 240.0],
                     selected,
+                    loadout_frame,
+                    loadout_open,
                     &|p| gui_to_world(p[0], p[1]),
                     &mut out,
                 );
-            } else if !loadout_open && selected != 0 {
+            } else if selected != 0 {
                 menu_loadout_closed_sprites(
                     world,
                     assets,
                     [vw, 240.0],
                     selected,
                     loadout_available_for_race(race),
+                    true,
                     &|p| gui_to_world(p[0], p[1]),
                     &mut out,
                 );

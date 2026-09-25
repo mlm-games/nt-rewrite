@@ -26,7 +26,8 @@ pub const VORTEX_TEXTURES: usize = 7;
 /// per-wisp lightning streams (`[lanim, langle_rad]`, indexed exactly
 /// like `wisps`; dead slots hold `lanim = -1`),
 /// `glob_a = (ticks, drain_bias, bg_r, bg_g)`,
-/// `glob_b = (bg_b, bg_alpha, thresh, kindpacked)`.
+/// `glob_b = (bg_b, bg_alpha, thresh, kindpacked)`, followed by the
+/// view rect and a flag slot for the GML menu bolt gate.
 /// The game ticks spiral state at 30 Hz (nt law) and hands this over.
 pub struct VortexSnapshot {
     pub wisps: [[f32; 4]; VORTEX_WISPS],
@@ -43,6 +44,7 @@ pub struct VortexSnapshot {
     pub bg_alpha: f32,
     pub thresh: f32,
     pub kindpacked: f32,
+    pub draw_bolts: f32,
     /// Look center + visible extent in wisp coord space. Snapshot
     /// overrides this per frame with the live GUI view (`view_w/2,
     /// 120, view_w, 240`); the constant is the 320x240-base fallback
@@ -64,13 +66,14 @@ impl VortexSnapshot {
             bg_alpha: 0.0,
             thresh: 2.5,
             kindpacked: 0.0,
+            draw_bolts: 0.0,
             view,
         }
     }
 
     fn uniform_words(&self) -> Vec<f32> {
         let mut raw = Vec::with_capacity(
-            VORTEX_WISPS * 4 + VORTEX_DEBRIS * 4 + VORTEX_WISPS * 4 + VORTEX_WISPS * 4 + 12,
+            VORTEX_WISPS * 4 + VORTEX_DEBRIS * 4 + VORTEX_WISPS * 4 + VORTEX_WISPS * 4 + 16,
         );
         for w in &self.wisps {
             raw.extend_from_slice(w);
@@ -88,6 +91,7 @@ impl VortexSnapshot {
         raw.extend_from_slice(&[self.ticks, self.drain_bias, self.bg_rgb[0], self.bg_rgb[1]]);
         raw.extend_from_slice(&[self.bg_rgb[2], self.bg_alpha, self.thresh, self.kindpacked]);
         raw.extend_from_slice(&self.view);
+        raw.extend_from_slice(&[self.draw_bolts, 0.0, 0.0, 0.0]);
         raw
     }
 }

@@ -2036,11 +2036,9 @@ pub fn tick_title_anim(world: &mut World) {
     let Some(mut menu) = world.get_resource_mut::<MenuState>() else {
         return;
     };
-    // Loadout open frame: GML approaches `sprite_get_number-1` when open
-    // else 0. The strip length is renderer-owned; the headless law uses 3
-    // frames (closed 0 → open 3) so `loadout_frame >= 2` still means full
-    // view like the bevy layer expects.
-    let target = if menu.loadout_open { 3.0 } else { 0.0 };
+    // Loadout open frame: GML approaches `sprite_get_number(sprLoadoutOpen)-1`
+    // when open and 0 when closed. The asset has five frames (0..4).
+    let target = if menu.loadout_open { 4.0 } else { 0.0 };
     menu.loadout_frame = approach_f(menu.loadout_frame, target, dt_steps);
     for i in 0..4 {
         if menu.textappear[i] != 0.0 {

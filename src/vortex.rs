@@ -835,6 +835,14 @@ impl SpiralCtl {
     /// stay sim-side — the snapshot carries no audio, the shell drains
     /// the flags directly (GML plays them inline in the draw script).
     pub fn snapshot(&self, bg_alpha: f32) -> VortexSnapshot {
+        self.snapshot_with_lightning(bg_alpha, bg_alpha > 0.5)
+    }
+
+    pub fn snapshot_with_lightning(
+        &self,
+        bg_alpha: f32,
+        draw_bolts: bool,
+    ) -> VortexSnapshot {
         let mut wisps = [[-1.0; 4]; VORTEX_WISPS];
         for (dst, src) in wisps.iter_mut().zip(self.ring.iter()) {
             *dst = *src;
@@ -876,6 +884,7 @@ impl SpiralCtl {
             bg_alpha,
             thresh: self.thresh(),
             kindpacked: self.kindpacked(),
+            draw_bolts: if draw_bolts { 1.0 } else { 0.0 },
             // Live GUI view rect: `display_set_gui_size(view)` makes GUI
             // px == view px 1:1, so the fullscreen quad maps uv 1:1 onto
             // `(view_w, 240)` centered at `(view_w/2, 120)` — GML draws
