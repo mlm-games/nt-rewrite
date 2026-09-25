@@ -171,38 +171,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         var rel = gui - d.xy;
         rel = vec2<f32>(c * rel.x + sn * rel.y, -sn * rel.x + c * rel.y);
 
-        // Lightning pass FIRST (scrDrawSpiral draws the bolt before the
-        // wisp's own white/black spiral passes cover it).
-        if (g.flags.x > 0.5) {
-            if (lanim > 0.0 && lanim < 6.0) {
-                let frame = clamp(floor(lanim), 0.0, BOLT_FRAMES - 1.0);
-                let langle = stream.y;
-                // Bolt rotation is image_angle + langle with NO +45 (the
-                // +45 in `rot` is wisp-art only): strip it back out here.
-                let lc = cos(rot - 0.7853982 + langle);
-                let ls = sin(rot - 0.7853982 + langle);
-                var lrel = gui - d.xy;
-                lrel = vec2<f32>(lc * lrel.x + ls * lrel.y, -ls * lrel.x + lc * lrel.y);
-                // GML origin (180, 88): the bolt art's ink sits LEFT of
-                // the draw point (opaque x 19..89 of the 176px cell, i.e.
-                // ~-92 GUI px), so recenter by the origin, not the cell
-                // half-extent.
-                let lbolt_half = vec2<f32>(88.0, 88.0) * s;
-                let buv = (lrel + vec2<f32>(92.0, 0.0) * s) / (lbolt_half * 2.0) + vec2<f32>(0.5, 0.5);
-                if (all(buv > vec2<f32>(0.0)) & all(buv < vec2<f32>(1.0))) {
-                    let bolt_uv_x = (frame * 176.0 + 0.5 + buv.x * 175.0) / 1056.0;
-                    let bolt_uv_y = (0.5 + buv.y * 175.0) / 176.0;
-                    let btex = textureSample(bolt_tex, lin_smp, vec2<f32>(bolt_uv_x, bolt_uv_y));
-                    // GML: white 1 then black 0.4 - s/2
-                    acc = source_over(acc, btex.rgb, btex.a);
-                    let bolt_black = clamp(0.4 - s * 0.5, 0.0, 1.0);
-                    if (bolt_black > 0.001) {
-                        acc = source_over(acc, vec3<f32>(0.0), btex.a * bolt_black);
-                    }
-                }
-            }
-        }
-
         if (kind > 1.5 && kind < 2.5) {
             // IDPD: single 128x128 frame, origin centre.
             let half_ext = 64.0 * s * 10.0;
@@ -300,6 +268,45 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             let sblack = clamp(1.0 - xs, 0.0, 1.0);
             if (sblack > 0.001) {
                 acc = source_over(acc, vec3<f32>(0.0), stex.a * sblack);
+            }
+        }
+    }
+    if (g.flags.x > 0.5) {
+        for (var k: u32 = 0u; k < N; k = k + 1u) {
+            let birth = base - (N - 1u - k);
+            if (birth < 1u) { continue; }
+            let slot = (birth - 1u) % N;
+            let d = g.wisps[slot];
+            if (d.z < 0.0) { continue; }
+            let age = tick_now - d.z;
+            if (age < 0.0) { continue; }
+            let scale_age = age + drain_bias;
+            var s = wisp_scale(scale_age);
+            if (kind > 0.5 && kind < 1.5) {
+                s = proto_scale(scale_age);
+            }
+            if (s <= 0.001) { continue; }
+            let stream = g.streams[slot];
+            let lanim = stream.x;
+            if (lanim <= 0.0 || lanim >= 6.0) { continue; }
+            let frame = clamp(floor(lanim), 0.0, BOLT_FRAMES - 1.0);
+            let langle = stream.y;
+            let rot = abs(d.w);
+            let lc = cos(rot - 0.7853982 + langle);
+            let ls = sin(rot - 0.7853982 + langle);
+            var lrel = gui - d.xy;
+            lrel = vec2<f32>(lc * lrel.x + ls * lrel.y, -ls * lrel.x + lc * lrel.y);
+            let lbolt_half = vec2<f32>(88.0, 88.0) * s;
+            let buv = (lrel + vec2<f32>(92.0, 0.0) * s) / (lbolt_half * 2.0) + vec2<f32>(0.5, 0.5);
+            if (all(buv > vec2<f32>(0.0)) & all(buv < vec2<f32>(1.0))) {
+                let bolt_uv_x = (frame * 176.0 + 0.5 + buv.x * 175.0) / 1056.0;
+                let bolt_uv_y = (0.5 + buv.y * 175.0) / 176.0;
+                let btex = textureSample(bolt_tex, lin_smp, vec2<f32>(bolt_uv_x, bolt_uv_y));
+                acc = source_over(acc, btex.rgb, btex.a);
+                let bolt_black = clamp(0.4 - s * 0.5, 0.0, 1.0);
+                if (bolt_black > 0.001) {
+                    acc = source_over(acc, vec3<f32>(0.0), btex.a * bolt_black);
+                }
             }
         }
     }

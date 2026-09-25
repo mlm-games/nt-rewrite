@@ -3116,6 +3116,28 @@ impl App {
                 .get_resource::<crate::comps_a::PendingUltra>()
                 .is_some();
 
+        if matches!(state, AppState::Title) {
+            let vw_vh = self.view_world_size;
+            let focus = title_cam_focus(&mut self.sim.world).unwrap_or(Vec2::new(64.0, 64.0));
+            let snap = !matches!(self.was_state, AppState::Title);
+            title_camera_step(
+                &mut self.gml_cam,
+                vw_vh[0],
+                vw_vh[1],
+                focus,
+                dt.as_secs_f32().clamp(0.0, 0.1),
+                snap,
+            );
+            self.cam = world_camera(
+                Vec2::new(
+                    self.gml_cam.x + vw_vh[0] * 0.5,
+                    self.gml_cam.y + vw_vh[1] * 0.5,
+                ),
+                gml_scale,
+            );
+            self.cam.offset = Vec2::ZERO;
+        }
+
         // Follow camera: the GML `BackCont` look point steps at
         // 30 Hz in [`App::step_camera_fixed`] (frozen over
         // pause/menus/game over, so menus keep the last camera).
@@ -3140,6 +3162,7 @@ impl App {
         let mut cursor_req: Option<(i32, [f32; 4])> = None;
         let mut chrome_sprites: Vec<SpriteInstance> = Vec::new();
         let mut front_chrome_sprites: Vec<SpriteInstance> = Vec::new();
+        let mut spiral_figure_sprites: Vec<SpriteInstance> = Vec::new();
         let (mut sprites, texts) = if self.assets.is_some() {
             let assets = self.assets.as_ref().expect("checked");
             // Cursor world position for the GML crosshair distance
@@ -3278,10 +3301,8 @@ impl App {
             // GameOver (the dead run's cont died at generation end).
             // Gated on the mounted vortex layer so figures never float
             // over the flat campfire camp or the game-over dim.
-            // NOTE: `center` is the vortex look point (GUI view
-            // center), not the world camera — GML draws figures at
-            // `view + cont.x/y` (view-local coords), independent of
-            // the room camera.
+            // NOTE: figures follow the live SpiralCont emitter position,
+            // which is view-local and independent of the room camera.
             let vortex_mounted_later = self.assets.is_some()
                 && !self.vortex_tex.is_empty()
                 && !matches!(menu_kind, Some(MenuOverlay::Title))
@@ -3289,14 +3310,13 @@ impl App {
                 && (!paused || spiral_cover)
                 && !game_over
                 && (self.spiral.alive || !self.spiral.is_done());
-            if vortex_mounted_later {
-                let gui_view = gml_view_size(viewport_dp);
-                let figs_center =
-                    Vec2::new(view[0] + gui_view[0] * 0.5, view[1] + gui_view[1] * 0.5);
+            if vortex_mounted_later && (self.spiral.alive || spiral_cover) {
+                let (emitter_x, emitter_y) = self.spiral.emitter_pos();
+                let figs_center = Vec2::new(view[0] + emitter_x, view[1] + emitter_y);
                 let mut figs =
                     spiral_figures(&mut self.sim.world, assets, figs_center, self.spiral.angle);
                 stamp_z(&mut figs, Z_SPIRAL_FIGURES);
-                s.extend(figs);
+                spiral_figure_sprites = figs;
             }
             // View-anchored HUD bars (Draw-GUI-64: above all world-space
             // layers). GML `GenCont/Draw_0` draws ONLY spiral +
@@ -3574,10 +3594,7 @@ impl App {
                 }
             }
         };
-        let snap = self.spiral.snapshot_with_lightning(
-            bg_alpha,
-            !matches!(state, AppState::Title),
-        );
+        let snap = self.spiral.snapshot_with_lightning(bg_alpha, true);
         self.last_bg_alpha = snap.bg_alpha;
         // Vortex art follows the GML area (debris strip is per-area);
         // decode once per area, not per frame.
@@ -3610,6 +3627,12 @@ impl App {
         } else {
             None
         };
+        let vortex_above = vortex_layer.is_some()
+            && matches!(state, AppState::Title | AppState::InGame)
+            && self.last_bg_alpha < 0.5;
+        if !vortex_above {
+            sprites.extend(std::mem::take(&mut spiral_figure_sprites));
+        }
         // The area fill only shows where GML paints it: `GenCont/Create_0`
         // `background_set_colour(scrAreaGetBackroundColor(GameCont.area))`
         // runs once per generated floor, and the campfire title inherits
@@ -3853,6 +3876,11 @@ impl App {
         let chrome_view = make_chrome_view(chrome_sprites, "viewport2d.menu");
         let front_chrome_view =
             make_chrome_view(front_chrome_sprites, "viewport2d.menu.front");
+        let spiral_figure_view = if vortex_above {
+            make_chrome_view(spiral_figure_sprites, "viewport2d.spiral.figures")
+        } else {
+            None
+        };
 
         // Focusable root so hardware keys reach the staging feed (same
         // shape as the rozvp pilot root). `on_focus_changed(false)` is
@@ -3927,9 +3955,6 @@ impl App {
         // spiral over the campfire map while the room chrome stays
         // above it.
         let mut layers = Vec::new();
-        let vortex_above = vortex_layer.is_some()
-            && matches!(state, AppState::Title | AppState::InGame)
-            && self.last_bg_alpha < 0.5;
         if !vortex_above {
             if let Some(vortex) = vortex_layer.take() {
                 layers.push(vortex);
@@ -3940,6 +3965,9 @@ impl App {
             if let Some(vortex) = vortex_layer.take() {
                 layers.push(vortex);
             }
+        }
+        if let Some(figures) = spiral_figure_view {
+            layers.push(figures);
         }
         if !hud_rows.is_empty() {
             layers.push(
@@ -3977,37 +4005,7 @@ impl App {
         if matches!(state, AppState::MainMenu) && !matches!(self.was_state, AppState::MainMenu) {
             self.gml_cam.snap = true;
         }
-        // GML `Menu/Create_0:104-110` + `Menu/Step_1` verbatim: the
-        // title view centers on the selected race's camper
-        // (`Menu.char[race]`; Random centers on `char[0]`, the
-        // Campfire at (64,64)) via `t_lerp` at 0.1 per step. The old
-        // code parked the view top-left at (64,64) — half a screen
-        // right/down of GML — leaving the camp left with background
-        // filling the right. (The fixed-step camera only runs InGame,
-        // and only InGame consumes `snap`, so menus step + place the
-        // view camera directly here.)
         let entered_title = state == AppState::Title && self.was_state != AppState::Title;
-        if matches!(state, AppState::Title) {
-            let vw_vh = self.view_world_size;
-            let focus = title_cam_focus(&mut self.sim.world).unwrap_or(Vec2::new(64.0, 64.0));
-            let snap = !matches!(self.was_state, AppState::Title);
-            title_camera_step(
-                &mut self.gml_cam,
-                vw_vh[0],
-                vw_vh[1],
-                focus,
-                dt.as_secs_f32().clamp(0.0, 0.1),
-                snap,
-            );
-            self.cam = world_camera(
-                Vec2::new(
-                    self.gml_cam.x + vw_vh[0] * 0.5,
-                    self.gml_cam.y + vw_vh[1] * 0.5,
-                ),
-                gml_view_scale(self.view_viewport_dp),
-            );
-            self.cam.offset = Vec2::ZERO;
-        }
         self.was_state = state;
         if entered_title {
             self.letterbox_frame = 0.0;
@@ -4132,10 +4130,9 @@ impl App {
                 ).child(vec![bar(), spacer, bar()]));
             }
         }
-        let letterbox_before_content = matches!(
-            menu_kind,
-            Some(MenuOverlay::Title | MenuOverlay::Loading | MenuOverlay::Mutation | MenuOverlay::GameOver)
-        );
+        let letterbox_before_content = menu_kind.is_some_and(|kind| {
+            !matches!(kind, MenuOverlay::Credits | MenuOverlay::Unlock)
+        });
         if let Some(rows) = menu_rows {
             // GML `GameOver/Draw_0:7-10` dims with `draw_set_alpha(0.7)`
             // (178/255); pause/settings/credits/stats sit on the
@@ -4146,7 +4143,7 @@ impl App {
             } else {
                 230
             };
-            if !letterbox_before_content && dim_menu {
+            if dim_menu {
                 layers.push(UiBox(
                     Modifier::new()
                         .fill_max_size()
@@ -4157,14 +4154,6 @@ impl App {
             if letterbox_before_content {
                 if let Some(letterbox) = letterbox_view.take() {
                     layers.push(letterbox);
-                }
-                if dim_menu {
-                    layers.push(UiBox(
-                        Modifier::new()
-                            .fill_max_size()
-                            .background(Color::from_rgba(0, 0, 0, scrim_alpha))
-                            .hit_passthrough(),
-                    ));
                 }
             }
             if let Some(chrome) = chrome_view {

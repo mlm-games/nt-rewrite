@@ -821,6 +821,14 @@ impl SpiralCtl {
         self.kind as u8 as f32 + if self.gml_area == 105 { 4.0 } else { 0.0 }
     }
 
+    pub fn emitter_pos(&self) -> (f32, f32) {
+        if matches!(self.kind, SpiralKind::Idpd | SpiralKind::Venuz) {
+            (self.view_w / 2.0, GUI_H / 2.0)
+        } else {
+            orbit(self.angle, self.view_w)
+        }
+    }
+
     /// Snapshot for the background pass. Produces exactly the type
     /// [`VortexPass`](crate::vortex_pass::VortexPass) consumes (converter, not
     /// an engine change): `glob_a = (ticks, drain_bias, bg_r, bg_g)`,
@@ -835,7 +843,7 @@ impl SpiralCtl {
     /// stay sim-side — the snapshot carries no audio, the shell drains
     /// the flags directly (GML plays them inline in the draw script).
     pub fn snapshot(&self, bg_alpha: f32) -> VortexSnapshot {
-        self.snapshot_with_lightning(bg_alpha, bg_alpha > 0.5)
+        self.snapshot_with_lightning(bg_alpha, true)
     }
 
     pub fn snapshot_with_lightning(

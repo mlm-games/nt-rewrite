@@ -7769,7 +7769,8 @@ pub fn title_click_action(
     // (sprite origin); `sprGoButtonSymbolic` origin is (0,-2) so the
     let roster =
         crate::state::menus::visible_roster(world.get_resource::<crate::savedata_part::SaveData>());
-    if menu.title_go_visible && 8.0 + roster.len() as f32 * go_step(roster.len()) < vw - 30.0 {
+    let last_pod_x = 8.0 + roster.len().saturating_sub(1) as f32 * go_step(roster.len());
+    if menu.title_go_visible && last_pod_x < vw - 30.0 {
         let go = go_button_pos([vw, 240.0], roster.len(), 19.0);
         let top = go[1] + 2.0;
         if gx >= go[0] && gx <= go[0] + TITLE_GO_W && gy >= top && gy <= top + TITLE_GO_H {
@@ -9415,6 +9416,8 @@ pub fn menu_sprites(
                     0.0,
                     tint,
                 ) {
+                    let mut s = s;
+                    s.z = Z_MENU + 1.0;
                     out.push(s);
                 }
                 // GML `Menu/Draw_74` verbatim: unlocked non-Random pods
@@ -9432,6 +9435,8 @@ pub fn menu_sprites(
                         0.0,
                         [1.0; 4],
                     ) {
+                        let mut s = s;
+                        s.z = Z_MENU + 1.0;
                         out.push(s);
                     }
                 }
@@ -9506,7 +9511,8 @@ pub fn menu_sprites(
             // created only if the pod row leaves room,
             // `_slot_x < view_width - 30`; single-player is always
             // `is_server`).
-            let go_space = 8.0 + roster.len() as f32 * go_step(roster.len()) < vw - 30.0;
+            let last_pod_x = 8.0 + roster.len().saturating_sub(1) as f32 * go_step(roster.len());
+            let go_space = last_pod_x < vw - 30.0;
             if go_visible && go_space {
                 let dp = go_button_pos([vw, 240.0], roster.len(), 19.0);
                 if let Some(s) = assets.sprite_for(
@@ -9517,6 +9523,8 @@ pub fn menu_sprites(
                     0.0,
                     [1.0; 4],
                 ) {
+                    let mut s = s;
+                    s.z = Z_MENU + 1.0;
                     out.push(s);
                 }
             }

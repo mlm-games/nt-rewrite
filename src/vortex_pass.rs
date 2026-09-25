@@ -27,7 +27,7 @@ pub const VORTEX_TEXTURES: usize = 7;
 /// like `wisps`; dead slots hold `lanim = -1`),
 /// `glob_a = (ticks, drain_bias, bg_r, bg_g)`,
 /// `glob_b = (bg_b, bg_alpha, thresh, kindpacked)`, followed by the
-/// view rect and a flag slot for the GML menu bolt gate.
+/// view rect and a flag slot for the portal-bolt pass.
 /// The game ticks spiral state at 30 Hz (nt law) and hands this over.
 pub struct VortexSnapshot {
     pub wisps: [[f32; 4]; VORTEX_WISPS],
