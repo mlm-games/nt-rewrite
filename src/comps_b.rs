@@ -1345,6 +1345,13 @@ pub struct Corpse {
     pub flip_x: bool,
 }
 
+#[derive(Component, Clone, Copy, Debug)]
+pub struct CorpseCollision {
+    pub source_size: i32,
+    pub radius: f32,
+    pub settled: bool,
+}
+
 // Flag Dying before deferred despawn.
 #[derive(Component, Debug, Default)]
 pub struct Dying;

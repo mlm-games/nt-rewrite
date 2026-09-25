@@ -33,6 +33,48 @@ pub struct EnemyDef {
     pub boss: bool,
 }
 
+pub fn gml_size(kind: EnemyKind) -> i32 {
+    match kind {
+        EnemyKind::Maggot
+        | EnemyKind::RadMaggot
+        | EnemyKind::FiredMaggot
+        | EnemyKind::Mimic
+        | EnemyKind::SuperMimic
+        | EnemyKind::WepMimic => 0,
+        EnemyKind::Scorpion
+        | EnemyKind::GoldScorpion
+        | EnemyKind::BigRat
+        | EnemyKind::Ratking
+        | EnemyKind::RobotGuard
+        | EnemyKind::LaserCrystal
+        | EnemyKind::Crab
+        | EnemyKind::RhinoFreak
+        | EnemyKind::SnowTank
+        | EnemyKind::GoldSnowtank
+        | EnemyKind::LightningCrystal
+        | EnemyKind::ExploGuardian
+        | EnemyKind::Jock
+        | EnemyKind::InvLaserCrystal
+        | EnemyKind::PopoFreak
+        | EnemyKind::MaggotSpawn => 2,
+        EnemyKind::BigBandit
+        | EnemyKind::BigBanditLoop
+        | EnemyKind::BigDog
+        | EnemyKind::BigDogLoop
+        | EnemyKind::FrogQueen
+        | EnemyKind::Technomancer
+        | EnemyKind::Guardian
+        | EnemyKind::CrownGuardian
+        | EnemyKind::IceFlower => 3,
+        EnemyKind::ProtoStatue | EnemyKind::Hyper => 4,
+        EnemyKind::HostileHorror | EnemyKind::DogGuardian | EnemyKind::YvBoss => 5,
+        EnemyKind::ThroneII => 6,
+        EnemyKind::IdpdVan => 7,
+        EnemyKind::Throne => 8,
+        _ => 1,
+    }
+}
+
 pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
     match kind {
         EnemyKind::Maggot => EnemyDef {

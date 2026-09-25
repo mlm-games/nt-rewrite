@@ -55,9 +55,10 @@ use crate::comps_a::{
     FireCooldown, FlameShellSlowDeath, FlameTrail, FloorMask, GameCleanup, GrenadeFuse,
     HammerheadBudget, Health, HitId, Hitbox, HitsAllTeams, Homing, Inventory, LevelCleanup,
     NextHurt, PendingWallBreak, PiercesLeft, Player, Projectile, ProjectileFade,
-    ProjectileFriction, ProjectileHitSet, ProjectileTyp, ProjectileVisual, RaceState, Run,
-    SaveDirty, ShellBonus, ShellWallBounce, SlashProjectile, SpawnGrace, SpawnHazardOnDeath,
-    SplitOnDeath, Sticky, Team, Toast, Velocity, WallCell, WallTile, gml_motion_add_clamp,
+    ProjectileFriction, ProjectileHitSet, ProjectileTyp, ProjectileVisual, RaceState,
+    RecycleGlandYield, Run, SaveDirty, ShellBonus, ShellWallBounce, SlashProjectile, SpawnGrace,
+    SpawnHazardOnDeath, SplitOnDeath, Sticky, Team, Toast, Velocity, WallCell, WallTile,
+    gml_motion_add_clamp,
 };
 use crate::comps_b::{
     Ally, BIG_DOG_MISSILE_DAMAGE, BIG_DOG_MISSILE_HP, BIG_DOG_MISSILE_RADIUS, BigDogMissileState,
@@ -152,6 +153,7 @@ pub struct FireArch {
     pub pickup: Option<SpawnsWeaponPickup>,
     pub beam: Option<BeamShot>,
     pub plasma: Option<PlasmaBurst>,
+    pub plasma_scale: f32,
     pub hits_all: bool,
 }
 
@@ -797,15 +799,6 @@ fn fire_one_gun(
             wv.wkick = def.recoil;
         }
     }
-    if player.recycle_gland
-        && def.ammo == AmmoKind::Bullets
-        && def.melee.is_none()
-        && rand::rng().random_range(0..5) == 0
-    {
-        let slot = inv.ammo_mut(AmmoKind::Bullets);
-        *slot = (*slot + 1).min(player.ammo_cap(AmmoKind::Bullets));
-    }
-
     if let Ok(mut charges) = pop_q.get_mut(shot.player_ent)
         && charges.0 > 0
     {
@@ -855,11 +848,11 @@ fn fire_one_gun(
 fn apply_weapon_mutation_mods(def: &mut WeaponDef, arch: &mut FireArch, player: &Player) {
     def.damage = ((def.damage as f32) * player.ultra_damage_mult).round() as i32;
 
-    if player.laser_brain && def.ammo == AmmoKind::Energy && def.melee.is_none() {
-        def.damage = ((def.damage as f32) * 1.35).round() as i32;
-        def.speed *= 1.15;
-        def.size *= 1.15;
-        def.projectile_radius *= 1.15;
+    if player.laser_brain && def.name == "DEVASTATOR" {
+        def.speed *= 0.6;
+    }
+    if player.laser_brain && arch.plasma.is_some() && def.name != "DEVASTATOR" {
+        arch.plasma_scale = 1.2;
     }
 
     if player.shotgun_shoulders && def.ammo == AmmoKind::Shells && def.melee.is_none() {
@@ -949,7 +942,8 @@ fn spawn_pellets(commands: &mut Commands, fx: &mut FireFx, shot: &GunShot, playe
     let mut def = shot.def;
     apply_weapon_mutation_mods(&mut def, &mut archetype, player);
 
-    if let Some(beam) = archetype.beam {
+    if let Some(mut beam) = archetype.beam {
+        beam.damage = def.damage;
         spawn_beam_shot(
             commands,
             muzzle,
@@ -1568,7 +1562,13 @@ pub fn spawn_player_projectile_with_source(
     }
     if let Some(plasma) = archetype.plasma {
         ec.insert(plasma);
-        ec.insert(crate::comps_a::PlasmaSize(1.0));
+        ec.insert(crate::comps_a::PlasmaSize(
+            if archetype.plasma_scale > 0.0 {
+                archetype.plasma_scale
+            } else {
+                1.0
+            },
+        ));
     }
     if archetype.hits_all {
         ec.insert(HitsAllTeams);
@@ -1580,6 +1580,24 @@ pub fn spawn_player_projectile_with_source(
     }
 
     if let Some(w) = weapon {
+        let full = weapon_meta(w).wep_name;
+        if weapon_ammo(w) == AmmoKind::Bullets {
+            let recycle_yield = if shell_kind == Some(ShellKind::Bullet2) {
+                0
+            } else if full.contains("BOUNCER") {
+                1
+            } else if full.contains("HEAVY REVOLVER")
+                || full.contains("HEAVY MACHINEGUN")
+                || full.contains("ULTRA REVOLVER")
+            {
+                2
+            } else {
+                1
+            };
+            if recycle_yield > 0 {
+                ec.insert(RecycleGlandYield(recycle_yield));
+            }
+        }
         let ammo = weapon_ammo(w);
         let typ = match ammo {
             AmmoKind::Bolts | AmmoKind::Energy => 2,

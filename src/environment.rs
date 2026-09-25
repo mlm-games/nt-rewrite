@@ -14,7 +14,7 @@ use crate::anim::SpriteAnim;
 use crate::combat::{Explosion, HitFlash};
 use crate::comps_a::{
     ARENA_H, ARENA_W, DamageSource, FloorMask, GameCleanup, Health, LevelCleanup, Player,
-    Projectile, ProjectileTyp, Team, Velocity,
+    Projectile, ProjectileTyp, Team, Velocity, boiling_veins_damage,
 };
 use crate::comps_b::{
     Dash, Enemy, FxAngle, GmlImage, GroundPhysics, Mote, MoteScale, MoteStrip, NativeAngle,
@@ -396,16 +396,16 @@ pub fn tick_environment_hazards(
                 continue;
             }
 
+            let mut damage = hazard.spec.damage;
             if is_player
                 && hazard.spec.kind == EnvironmentHazardKind::Fire
                 && let Some(player) = player
                 && player.boiling_veins
-                && health.hp <= player.veins_threshold
             {
-                continue;
+                damage = boiling_veins_damage(health.hp, damage, player.veins_threshold);
             }
 
-            health.hp -= hazard.spec.damage;
+            health.hp -= damage;
 
             if is_player {
                 health.invuln = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
@@ -417,7 +417,7 @@ pub fn tick_environment_hazards(
                 &mut commands,
                 target_pos.0.x,
                 target_pos.0.y,
-                format!("{}", hazard.spec.damage),
+                format!("{}", damage),
                 hazard.spec.kind.color(),
             );
         }

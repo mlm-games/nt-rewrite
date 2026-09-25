@@ -25,7 +25,7 @@ use repame_fx::Trauma;
 use repame_sim::SimTime;
 
 use crate::audio::{AudioCue, GameAudio, QueuedReactiveCue, ReactiveCue};
-use crate::comps_a::{ARENA_H, ARENA_W, GameCleanup, Player, Run, Toast};
+use crate::comps_a::{ARENA_H, ARENA_W, GameCleanup, Player, Run, ScarierFace, Toast};
 use crate::comps_b::{
     Enemy, IdpdRaidState, IdpdShieldUnit, IdpdVanBrain, LoopTransition, RaidWave,
 };
@@ -211,6 +211,7 @@ pub fn tick_idpd_raids(
     mut trauma: ResMut<Trauma>,
     mut raid: ResMut<IdpdRaidState>,
     mut run: ResMut<Run>,
+    scarier: Res<ScarierFace>,
     transition: Res<LoopTransition>,
     player_q: Query<&Pos, With<Player>>,
     enemies_q: Query<(), With<Enemy>>,
@@ -282,6 +283,7 @@ pub fn tick_idpd_raids(
         EnemySpawnContext {
             subarea: run.floor_in_area,
             blood_crown: run.blood_crown,
+            scarier_face: scarier.0,
         },
     );
     run.popolevel += portals as u32;
@@ -306,10 +308,11 @@ pub fn tick_idpd_raids(
     );
 }
 
-fn enemy_spawn_context(run: &Run) -> EnemySpawnContext {
+fn enemy_spawn_context(run: &Run, scarier_face: bool) -> EnemySpawnContext {
     EnemySpawnContext {
         subarea: run.floor_in_area,
         blood_crown: run.blood_crown,
+        scarier_face,
     }
 }
 
@@ -502,10 +505,11 @@ pub fn tick_idpd_vans(
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
     run: Res<Run>,
+    scarier: Res<ScarierFace>,
     mut vans: Query<(Entity, &Pos, &mut IdpdVanBrain), With<Enemy>>,
 ) {
     let dt = time.delta_secs;
-    let context = enemy_spawn_context(&run);
+    let context = enemy_spawn_context(&run, scarier.0);
     for (entity, pos, mut van) in vans.iter_mut() {
         if van.charges_left == 0 {
             continue;
@@ -561,6 +565,7 @@ pub fn hq_pressure(
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
     run: Res<Run>,
+    scarier: Res<ScarierFace>,
     player_q: Query<&Pos, With<Player>>,
     enemies_q: Query<(), With<Enemy>>,
     mut raid: ResMut<IdpdRaidState>,
@@ -586,7 +591,7 @@ pub fn hq_pressure(
 
     let player_pos = player.0;
     let points = edge_spawn_points_away_from(player_pos);
-    let context = enemy_spawn_context(&run);
+    let context = enemy_spawn_context(&run, scarier.0);
 
     spawn_grunt(
         &mut commands,

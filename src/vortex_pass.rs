@@ -13,18 +13,43 @@
 
 use std::sync::Arc;
 
-use repame_sprite::{FullscreenDesc, FullscreenPass, FullscreenTextureRef, TextureFilter};
+use repame_sprite::{
+    FullscreenDesc, FullscreenPass, FullscreenTextureUpload, TextureFilter,
+};
 use repose_render_wgpu::{CallbackRenderPass, CallbackResources, ScreenDescriptor, WgpuCallback};
 
 pub const VORTEX_WISPS: usize = 128;
 pub const VORTEX_DEBRIS: usize = 32;
-/// Art texture slots: spiral, bolt, debris, proto, idpd, idpd2, star.
-pub const VORTEX_TEXTURES: usize = 7;
+pub const VORTEX_VARDS: usize = 64;
+pub const VORTEX_TEXTURES: usize = 14;
+pub const VARD_VARIANTS: [&str; 7] = [
+    "images/sprBanditHurt.png",
+    "images/sprRatHurt.png",
+    "images/sprCarIdle.png",
+    "images/sprSpiderHurt.png",
+    "images/sprFrozenCar.png",
+    "images/sprFreak1Hurt.png",
+    "images/sprSlice.png",
+];
+pub const VARD_CELL_SIZES: [(f32, f32); 7] = [
+    (24.0, 24.0),
+    (24.0, 24.0),
+    (32.0, 32.0),
+    (24.0, 24.0),
+    (32.0, 32.0),
+    (24.0, 24.0),
+    (16.0, 8.0),
+];
+pub const VARD_FRAME_COUNTS: [usize; 7] = [3, 3, 1, 3, 1, 3, 7];
+
+pub fn vard_slot(path: &str) -> Option<usize> {
+    VARD_VARIANTS.iter().position(|candidate| *candidate == path)
+}
 
 /// Plain-data snapshot. Field-for-field the nt tick outputs: ring and
 /// debris arrays with nt's paddings (`NEG_ONE` wisps, `-1000` debris),
-/// per-wisp lightning streams (`[lanim, langle_rad]`, indexed exactly
-/// like `wisps`; dead slots hold `lanim = -1`),
+/// per-wisp lightning streams (`[lanim, langle_rad, xscale]`, indexed
+/// exactly like `wisps`; dead slots hold `lanim = -1`),
 /// `glob_a = (ticks, drain_bias, bg_r, bg_g)`,
 /// `glob_b = (bg_b, bg_alpha, thresh, kindpacked)`, followed by the
 /// view rect and a flag slot for the portal-bolt pass.
@@ -32,12 +57,10 @@ pub const VORTEX_TEXTURES: usize = 7;
 pub struct VortexSnapshot {
     pub wisps: [[f32; 4]; VORTEX_WISPS],
     pub debris: [[f32; 4]; VORTEX_DEBRIS],
-    /// Per-wisp `Spiral` bolt clock (`lanim`, `langle` in radians).
-    pub streams: [[f32; 2]; VORTEX_WISPS],
-    /// Venuz `SpiralStar` motes (`[x, y, xscale, frame]`, GML draw pos
-    /// already integrated; `x < -100` parks empty slots, same sentinel
-    /// convention as debris). Drawn after debris (GML `with` order).
+    pub streams: [[f32; 3]; VORTEX_WISPS],
     pub stars: [[f32; 4]; VORTEX_WISPS],
+    pub vards: [[f32; 4]; VORTEX_VARDS],
+    pub vard_meta: [[f32; 4]; VORTEX_VARDS],
     pub ticks: f32,
     pub drain_bias: f32,
     pub bg_rgb: [f32; 3],
@@ -45,21 +68,18 @@ pub struct VortexSnapshot {
     pub thresh: f32,
     pub kindpacked: f32,
     pub draw_bolts: f32,
-    /// Look center + visible extent in wisp coord space. Snapshot
-    /// overrides this per frame with the live GUI view (`view_w/2,
-    /// 120, view_w, 240`); the constant is the 320x240-base fallback
-    /// (warmups/tests without a live width).
     pub view: [f32; 4],
 }
 
 impl VortexSnapshot {
-    /// Empty sky: every slot parked, background transparent.
     pub fn empty(view: [f32; 4]) -> Self {
         Self {
             wisps: [[-1.0, -1.0, -1.0, -1.0]; VORTEX_WISPS],
             debris: [[-1000.0, 0.0, 0.0, 0.0]; VORTEX_DEBRIS],
-            streams: [[-1.0, 0.0]; VORTEX_WISPS],
+            streams: [[-1.0, 0.0, 0.0]; VORTEX_WISPS],
             stars: [[-1000.0, 0.0, 0.0, 0.0]; VORTEX_WISPS],
+            vards: [[-1000.0, 0.0, 0.0, 0.0]; VORTEX_VARDS],
+            vard_meta: [[0.0; 4]; VORTEX_VARDS],
             ticks: 0.0,
             drain_bias: 0.0,
             bg_rgb: [0.0, 0.0, 0.0],
@@ -73,7 +93,12 @@ impl VortexSnapshot {
 
     fn uniform_words(&self) -> Vec<f32> {
         let mut raw = Vec::with_capacity(
-            VORTEX_WISPS * 4 + VORTEX_DEBRIS * 4 + VORTEX_WISPS * 4 + VORTEX_WISPS * 4 + 16,
+            VORTEX_WISPS * 4
+                + VORTEX_DEBRIS * 4
+                + VORTEX_WISPS * 4
+                + VORTEX_WISPS * 4
+                + VORTEX_VARDS * 8
+                + 16,
         );
         for w in &self.wisps {
             raw.extend_from_slice(w);
@@ -81,12 +106,17 @@ impl VortexSnapshot {
         for d in &self.debris {
             raw.extend_from_slice(d);
         }
-        // Padded to vec4: uniform arrays need a 16-byte stride.
         for s in &self.streams {
-            raw.extend_from_slice(&[s[0], s[1], 0.0, 0.0]);
+            raw.extend_from_slice(&[s[0], s[1], s[2], 0.0]);
         }
         for s in &self.stars {
             raw.extend_from_slice(s);
+        }
+        for v in &self.vards {
+            raw.extend_from_slice(v);
+        }
+        for v in &self.vard_meta {
+            raw.extend_from_slice(v);
         }
         raw.extend_from_slice(&[self.ticks, self.drain_bias, self.bg_rgb[0], self.bg_rgb[1]]);
         raw.extend_from_slice(&[self.bg_rgb[2], self.bg_alpha, self.thresh, self.kindpacked]);
@@ -97,14 +127,36 @@ impl VortexSnapshot {
 }
 
 /// One art texture upload: tight `w`*`h`*4 RGBA8, row-major top first.
-/// `slot` selects the art (0 spiral, 1 bolt, 2 debris, 3 proto,
-/// 4 idpd, 5 idpd2, 6 star). Queued on load / area-switch frames only.
+/// `slot` selects the art. Queued on load / area-switch frames only.
 #[derive(Clone, Debug)]
 pub struct VortexTexture {
     pub slot: u32,
     pub w: u32,
     pub h: u32,
     pub rgba: Arc<[u8]>,
+    pub generation: u64,
+}
+
+impl FullscreenTextureUpload for VortexTexture {
+    fn slot(&self) -> u32 {
+        self.slot
+    }
+
+    fn width(&self) -> u32 {
+        self.w
+    }
+
+    fn height(&self) -> u32 {
+        self.h
+    }
+
+    fn rgba(&self) -> &[u8] {
+        self.rgba.as_ref()
+    }
+
+    fn generation(&self) -> Option<u64> {
+        Some(self.generation)
+    }
 }
 
 /// Per-frame snapshot pass. `Send + Sync` for the compositor thread.
@@ -124,7 +176,7 @@ impl VortexPass {
                 include_str!("../shaders/vortex.wgsl"),
                 FullscreenDesc {
                     texture_slots: VORTEX_TEXTURES as u32,
-                    filter: TextureFilter::Linear,
+                    filter: TextureFilter::Nearest,
                 },
             ),
             snapshot,
@@ -153,23 +205,13 @@ impl WgpuCallback for VortexPass {
     ) -> Vec<wgpu::CommandBuffer> {
         // translate+delegate: the engine owns upload mechanics, the game
         // owns what the bytes mean.
-        let uploads: Vec<FullscreenTextureRef<'_>> = self
-            .textures
-            .iter()
-            .map(|t| FullscreenTextureRef {
-                slot: t.slot,
-                w: t.w,
-                h: t.h,
-                rgba: t.rgba.as_ref(),
-            })
-            .collect();
         self.pass.prepare_with(
             device,
             queue,
             screen,
             resources,
             &f32_le_bytes(&self.snapshot.uniform_words()),
-            &uploads,
+            self.textures.as_slice(),
         )
     }
 

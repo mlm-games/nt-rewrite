@@ -17,15 +17,15 @@ use crate::comps_a::{
     FireCooldown, FlameShellSlowDeath, FlameTrail, FloorMask, GameCleanup, GrenadeFuse, Health,
     HitId, Hitbox, HitsAllTeams, Homing, Inventory, LastDamageTaken, LevelCleanup, LightningArc,
     NextHurt, PendingWallBreak, PiercesLeft, PlasmaSize, Player, Projectile, ProjectileFade,
-    ProjectileFriction, ProjectileHitSet, ProjectileTyp, RaceState, Run, SaveDirty, Score,
-    ShellBonus, ShellWallBounce, SlashProjectile, SpawnGrace, SpawnHazardOnDeath, SplitOnDeath,
-    Sticky, Team, Toast, Velocity, WallCell, WallTile,
+    ProjectileFriction, ProjectileHitSet, ProjectileTyp, RaceState, RecycleGlandYield, Run,
+    SaveDirty, Score, ShellBonus, ShellWallBounce, SlashProjectile, SpawnGrace, SpawnHazardOnDeath,
+    SplitOnDeath, Sticky, Team, Toast, Velocity, WallCell, WallTile, boiling_veins_damage,
 };
 use crate::comps_b::{
-    Beam, BigDogMissileState, ChestKind, Corpse, CustomExplosion, DeploysSentry, Dying, Enemy,
-    EnemyBrain, ExplosionVisual, GmlImage, GoldBarrelDrop, HazardCloud, LoopTransition,
-    NativeDepth, NativeExplosionKind, Pickup, PickupLifetime, PlasmaBurst, Portal, PortalPhase,
-    PortalShock, PortalState, Prop, PropNestMarkers, PropSprites, RadChestContainer,
+    Beam, BigDogMissileState, ChestKind, Corpse, CorpseCollision, CustomExplosion, DeploysSentry,
+    Dying, Enemy, EnemyBrain, ExplosionVisual, GmlImage, GoldBarrelDrop, HazardCloud, HurtAnim,
+    LoopTransition, NativeDepth, NativeExplosionKind, Pickup, PickupLifetime, PlasmaBurst, Portal,
+    PortalPhase, PortalShock, PortalState, Prop, PropNestMarkers, PropSprites, RadChestContainer,
     SecretEntrance, SentryTurret, Shield, SpawnsWeaponPickup, StaticFx, ThroneRoomState,
 };
 use crate::data::{AreaId, CrownKind, EnemyKind, HazardKind, MutationId, RaceId, WeaponId};
@@ -217,7 +217,7 @@ pub fn contact_damage(
         let away = (player_pos - enemy_pos.0).normalize_or_zero();
         apply_knockback(&mut player_vel.0, away, 120.0);
 
-        if enemy_def(enemy.kind).size <= 2.0
+        if crate::enemy_data::gml_size(enemy.kind) <= 2
             && let Some(mut evel) = enemy_vel
         {
             let push_enemy = (enemy_pos.0 - player_pos).normalize_or_zero();
@@ -417,6 +417,49 @@ fn spawn_maggot_explosion(commands: &mut Commands, particles: bool, pos: glam::V
     ));
 }
 
+fn corpse_launch_velocity(
+    velocity: glam::Vec2,
+    heading: f32,
+    hp: i32,
+    source_size: i32,
+    impact_wrists: bool,
+) -> glam::Vec2 {
+    let direction = if velocity.length_squared() > 1e-6 {
+        velocity.normalize()
+    } else {
+        glam::Vec2::from_angle(heading)
+    };
+    let mut speed = velocity.length() / 30.0 + (-hp as f32 / 5.0).max(0.0);
+    if impact_wrists {
+        speed += 8.0;
+    }
+    speed = speed.min(16.0);
+    if source_size > 0 {
+        speed /= source_size as f32;
+    }
+    direction * speed * 30.0
+}
+
+#[cfg(test)]
+mod corpse_launch_tests {
+    use super::corpse_launch_velocity;
+    use glam::Vec2;
+
+    #[test]
+    fn impact_wrists_uses_source_size_and_preserves_heading() {
+        let velocity = corpse_launch_velocity(Vec2::ZERO, 0.0, 0, 1, true);
+        assert_eq!(velocity, Vec2::X * 240.0);
+        let velocity = corpse_launch_velocity(Vec2::ZERO, 0.0, 0, 2, true);
+        assert_eq!(velocity, Vec2::X * 120.0);
+    }
+
+    #[test]
+    fn overflow_hp_launch_is_capped_before_source_size_division() {
+        let velocity = corpse_launch_velocity(Vec2::X * 600.0, 0.0, -400, 2, false);
+        assert_eq!(velocity, Vec2::X * 240.0);
+    }
+}
+
 /// Enemy death resolution, slice A: despawn + corpse slide, kill
 /// counting, Throne/ThroneII transitions, feel triggers, death burst,
 /// Throne boom, hit sting.
@@ -454,6 +497,7 @@ pub fn resolve_enemy_deaths(
             &Health,
             Option<&Enemy>,
             Option<&Velocity>,
+            Option<&EnemyBrain>,
             Option<&crate::comps_b::ProtoGuardian>,
         ),
         (Without<Prop>, Without<Player>, Without<Dying>),
@@ -472,13 +516,13 @@ pub fn resolve_enemy_deaths(
 
     let enemy_total = q
         .iter()
-        .filter(|(_, _, team, _, _, _, _)| **team == Team::Enemy)
+        .filter(|(_, _, team, _, _, _, _, _)| **team == Team::Enemy)
         .count();
     if enemy_total == 2 {
         audio.play_levelup(&mut cues);
     }
 
-    for (e, pos, team, health, enemy, enemy_vel, statue) in &mut q {
+    for (e, pos, team, health, enemy, enemy_vel, enemy_brain, statue) in &mut q {
         if *team != Team::Enemy || health.hp > 0 {
             continue;
         }
@@ -497,23 +541,37 @@ pub fn resolve_enemy_deaths(
 
         commands.entity(e).insert(Dying);
         commands.entity(e).despawn();
-        if !def.boss && !matches!(enemy.kind, EnemyKind::IdpdVan | EnemyKind::FrogEgg) {
+        if !def.boss {
             let idle = def.sprite;
             let dead = crate::dead_path_part::derive_dead_path(idle);
             if let Some(corpse_def) = catalog.def(dead) {
                 let mut corpse_anim = SpriteAnim::new(dead, corpse_def);
                 corpse_anim.oneshot = true;
-                let mut slide = enemy_vel.map(|v| v.0).unwrap_or(glam::Vec2::ZERO);
-                if player.mutations.contains(&MutationId::ImpactWrists) {
-                    slide += slide.normalize_or_zero() * 8.0 * 30.0;
-                }
-                let cap = 16.0 * 30.0 / def.size.max(1.0);
-                if slide.length() > cap {
-                    slide = slide.normalize_or_zero() * cap;
-                }
-                commands.spawn((
+                let active_corpse = !matches!(
+                    enemy.kind,
+                    EnemyKind::Crystal
+                        | EnemyKind::ProtoStatue
+                        | EnemyKind::SnowTank
+                        | EnemyKind::GoldSnowtank
+                );
+                let velocity = enemy_vel.map_or(glam::Vec2::ZERO, |v| v.0);
+                let heading = enemy_brain.map_or(0.0, |brain| brain.heading);
+                let source_size = crate::enemy_data::gml_size(enemy.kind);
+                let slide = if active_corpse {
+                    corpse_launch_velocity(
+                        velocity,
+                        heading,
+                        health.hp,
+                        source_size,
+                        player.mutations.contains(&MutationId::ImpactWrists),
+                    )
+                } else {
+                    glam::Vec2::ZERO
+                };
+                let mut corpse = commands.spawn((
                     GameCleanup,
                     LevelCleanup,
+                    Team::Player,
                     Corpse {
                         kind: enemy.kind,
                         life: GTimer::from_seconds(12.0, TimerMode::Once),
@@ -524,6 +582,13 @@ pub fn resolve_enemy_deaths(
                     Pos(pos),
                     Velocity(slide),
                 ));
+                if active_corpse {
+                    corpse.insert(CorpseCollision {
+                        source_size,
+                        radius: def.radius.max(4.0),
+                        settled: false,
+                    });
+                }
             }
         }
 
@@ -1101,6 +1166,117 @@ pub fn resolve_enemy_deaths(
     }
 }
 
+pub fn corpse_hits(
+    mut commands: Commands,
+    mut sets: ParamSet<(
+        Query<(Entity, &Pos, &CorpseCollision, &mut Velocity), With<Corpse>>,
+        Query<
+            (
+                Entity,
+                &Pos,
+                &Enemy,
+                &Hitbox,
+                &mut Health,
+                &mut NextHurt,
+                Option<&mut Velocity>,
+            ),
+            With<Enemy>,
+        >,
+    )>,
+    player_q: Query<&Player, With<Player>>,
+    audio: Res<GameAudio>,
+    frame: Res<CurrentFrame>,
+    mut cues: ResMut<Queue<AudioCue>>,
+) {
+    let impact_wrists = player_q
+        .single()
+        .is_ok_and(|player| player.mutations.contains(&MutationId::ImpactWrists));
+    let corpses: Vec<_> = {
+        let query = sets.p0();
+        query
+            .iter()
+            .map(|(entity, pos, collision, velocity)| (entity, pos.0, *collision, velocity.0))
+            .collect()
+    };
+
+    for (corpse_entity, corpse_pos, collision, mut corpse_speed) in corpses {
+        if corpse_speed.length() <= 60.0 {
+            continue;
+        }
+        let direction = corpse_speed.normalize();
+        let mut hit = false;
+        {
+            let mut targets = sets.p1();
+            for (
+                target_entity,
+                target_pos,
+                enemy,
+                hitbox,
+                mut health,
+                mut next_hurt,
+                mut target_velocity,
+            ) in &mut targets
+            {
+                if corpse_speed.length() <= 60.0 {
+                    break;
+                }
+                if health.hp <= 0 || next_hurt.0 > frame.0 {
+                    continue;
+                }
+                if collision.source_size < crate::enemy_data::gml_size(enemy.kind) - 1 {
+                    continue;
+                }
+                if corpse_pos.distance(target_pos.0) > collision.radius + hitbox.radius {
+                    continue;
+                }
+                let target_speed = target_velocity.as_ref().map_or(0.0, |v| v.0.length());
+                let was_moving = target_speed > 0.0;
+                let damage = if collision.settled {
+                    (1.0 + i32::from(impact_wrists) as f32 + target_speed / 150.0).round() as i32
+                } else {
+                    (target_speed / 150.0).round() as i32 + i32::from(impact_wrists) + 1
+                };
+                health.hp -= damage;
+                next_hurt.0 = frame.0 + 5;
+                if let Some(velocity) = target_velocity.as_deref_mut() {
+                    velocity.0 += direction * (corpse_speed.length() * 0.5);
+                }
+                if !collision.settled {
+                    HitFlash::apply(&mut commands, target_entity, [1.0, 0.4, 0.4, 1.0], 0.12);
+                    let idle = enemy_def(enemy.kind).sprite;
+                    commands.entity(target_entity).insert(HurtAnim {
+                        idle,
+                        walk: crate::anim::derive_walk_path(idle),
+                        hurt: crate::anim::derive_hurt_path(idle),
+                        timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
+                        was_moving,
+                    });
+                    audio.play_hit(&mut cues);
+                }
+                if impact_wrists {
+                    commands.spawn((
+                        GameCleanup,
+                        LevelCleanup,
+                        NativeDepth(-2.0),
+                        GmlImage::animated("images/sprImpactWrists.png", 5, 5.0 / 8.0, true),
+                        Pos(corpse_pos),
+                    ));
+                    cues.push(AudioCue {
+                        name: "ImpWristHit",
+                        volume: 0.2,
+                        variance: 0.0,
+                    });
+                }
+                corpse_speed *= 0.5;
+                hit = true;
+            }
+        }
+        if hit && let Ok((_, _, _, mut velocity)) = sets.p0().get_mut(corpse_entity) {
+            velocity.0 = direction * corpse_speed;
+        }
+    }
+}
+
 /// Death drops, run chained directly after [`resolve_enemy_deaths`].
 /// Split only because bevy_ecs caps systems at 16 params: iterating the
 /// [`DeathEvents`] record preserves bevy's per-death multiplicity exactly
@@ -1236,14 +1412,19 @@ pub fn resolve_death_drops(
         if player.mutations.contains(&MutationId::TriggerFingers)
             && let Ok(mut fc) = fire_q.single_mut()
         {
-            // GML `enemy/Destroy_0:23`: the killer's gun shines.
-            pinv.shine = 6.0;
+            let mut shine = false;
             if !fc.timer.is_finished() {
-                fc.timer = GTimer::from_seconds(fc.timer.remaining_secs() * 0.6, TimerMode::Once);
+                let ticks = (fc.timer.remaining_secs() * 30.0 * 0.6).floor().max(0.0);
+                fc.timer = GTimer::from_seconds(ticks / 30.0, TimerMode::Once);
+                shine = true;
             }
-            if fc.burst_left > 0 {
-                fc.burst_timer =
-                    GTimer::from_seconds(fc.burst_timer.remaining_secs() * 0.6, TimerMode::Once);
+            if !fc.timer_b.is_finished() {
+                let ticks = (fc.timer_b.remaining_secs() * 30.0 * 0.6).floor().max(0.0);
+                fc.timer_b = GTimer::from_seconds(ticks / 30.0, TimerMode::Once);
+                shine = true;
+            }
+            if shine {
+                pinv.shine = 6.0;
             }
         }
 
@@ -2112,7 +2293,7 @@ pub fn projectile_hits(
     mut cues: ResMut<Queue<AudioCue>>,
     mut secrets: ResMut<SecretTriggers>,
     mut last_damage: ResMut<LastDamageTaken>,
-    player_state: Query<&Player, With<Player>>,
+    mut player_state: Query<(&Player, &mut Inventory), With<Player>>,
     mut projectiles: Query<
         (
             Entity,
@@ -2145,6 +2326,7 @@ pub fn projectile_hits(
         Query<&SpriteAnim>,
         Query<Entity, With<HitsAllTeams>>,
         Query<Entity, With<SpawnGrace>>,
+        Query<&RecycleGlandYield>,
     )>,
     frame: Res<CurrentFrame>,
     time: Res<SimTime>,
@@ -2163,7 +2345,7 @@ pub fn projectile_hits(
         Without<Projectile>,
     >,
 ) {
-    let player = player_state.single().ok();
+    let mut player_state = player_state.single_mut().ok();
 
     let hits_all_set: std::collections::HashSet<Entity> = aux.p5().iter().collect();
     let grace_set: std::collections::HashSet<Entity> = aux.p6().iter().collect();
@@ -2207,6 +2389,15 @@ pub fn projectile_hits(
         let mut stuck_bolt = false;
         let is_disc = aux.p2().get(proj_e).is_ok();
         let is_plasma = aux.p1().get(proj_e).is_ok();
+        let recycle_yield = if *proj_team == Team::Player
+            && player_state
+                .as_ref()
+                .is_some_and(|(player, _)| player.recycle_gland)
+        {
+            aux.p7().get(proj_e).ok().map(|marker| marker.0)
+        } else {
+            None
+        };
         let mut passthrough = false;
         let mut plasma_died = false;
 
@@ -2318,6 +2509,29 @@ pub fn projectile_hits(
             let hp_before = health.hp;
             health.hp -= dmg;
             damaged = true;
+
+            if let Some(recycle_amount) = recycle_yield
+                && !missile_target
+                && rand::rng().random_bool(0.6)
+            {
+                if let Some((player, inventory)) = player_state.as_mut() {
+                    let slot = inventory.ammo_mut(crate::data::AmmoKind::Bullets);
+                    *slot = (*slot + i32::from(recycle_amount))
+                        .min(player.ammo_cap(crate::data::AmmoKind::Bullets));
+                    commands.spawn((
+                        GameCleanup,
+                        LevelCleanup,
+                        NativeDepth(-2.0),
+                        GmlImage::animated("images/sprRecycleGland.png", 8, 8.0 / 6.0, true),
+                        Pos(proj_pos.0),
+                    ));
+                    cues.push(AudioCue {
+                        name: "RecGlandProc",
+                        volume: 1.0,
+                        variance: 0.0,
+                    });
+                }
+            }
 
             if missile_target {
                 if let Some(state) = missile.as_deref_mut() {
@@ -2459,7 +2673,7 @@ pub fn projectile_hits(
         }
 
         if hit_player
-            && let Some(p) = &player
+            && let Some((p, _)) = &player_state
             && p.sharp_teeth
         {
             retaliate_sharp_teeth(&mut commands, proj.damage, hit_pos, &frame, &mut targets);
@@ -3415,7 +3629,7 @@ pub fn tick_hazard_clouds(
         Without<crate::comps_a::AbilityHazard>,
     >,
     mut targets: Query<
-        (Entity, &Pos, &Team, &mut Health),
+        (Entity, &Pos, &Team, &mut Health, Option<&Player>),
         (
             Without<HazardCloud>,
             Without<Projectile>,
@@ -3436,7 +3650,7 @@ pub fn tick_hazard_clouds(
         }
 
         let pos = cloud_pos.0;
-        for (_, target_pos, target_team, mut health) in &mut targets {
+        for (_, target_pos, target_team, mut health, player) in &mut targets {
             if *target_team == *cloud_team {
                 continue;
             }
@@ -3447,7 +3661,15 @@ pub fn tick_hazard_clouds(
                 continue;
             }
 
-            health.hp -= cloud.damage;
+            let mut damage = cloud.damage;
+            if cloud.kind == HazardKind::Fire
+                && *target_team == Team::Player
+                && let Some(player) = player
+                && player.boiling_veins
+            {
+                damage = boiling_veins_damage(health.hp, damage, player.veins_threshold);
+            }
+            health.hp -= damage;
             if *target_team == Team::Player {
                 health.invuln = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
 
@@ -3839,17 +4061,11 @@ pub fn apply_explosions(
         if boom.hits_player
             && let Ok((player_e, ppos, mut health, player, vel_opt, _, _)) = player_q.single_mut()
             && ppos.0.distance(pos) < boom.radius + PLAYER_RADIUS
-            && health.invuln.is_finished()
             && !hit_opt.as_ref().is_some_and(|hit| hit.contains(&player_e))
         {
             let mut dmg = boom.damage;
             if player.boiling_veins {
-                let floor = player.veins_threshold;
-                dmg = if health.hp - dmg < floor {
-                    (health.hp - floor).max(0)
-                } else {
-                    dmg
-                };
+                dmg = boiling_veins_damage(health.hp, dmg, player.veins_threshold);
             }
             health.hp -= dmg;
             if let Some(mut vel) = vel_opt {

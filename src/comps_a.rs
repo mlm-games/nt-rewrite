@@ -40,6 +40,23 @@ pub fn apply_gml_friction(vel: &mut Vec2, friction_f: f32, dt: f32) {
     }
 }
 
+#[inline]
+pub fn boiling_veins_damage(hp: i32, amount: i32, threshold: i32) -> i32 {
+    amount.min((hp - threshold).max(0))
+}
+
+#[cfg(test)]
+mod boiling_veins_damage_tests {
+    use super::boiling_veins_damage;
+
+    #[test]
+    fn clamps_only_the_damage_that_crosses_the_threshold() {
+        assert_eq!(boiling_veins_damage(5, 2, 4), 1);
+        assert_eq!(boiling_veins_damage(4, 2, 4), 0);
+        assert_eq!(boiling_veins_damage(8, 2, 4), 2);
+    }
+}
+
 // Scale impulse by 30, not dt.
 #[inline]
 pub fn gml_motion_add_clamp(vel: &mut Vec2, dir: Vec2, impulse_f: f32, cap_f: f32, dt: f32) {
@@ -432,6 +449,7 @@ pub struct Player {
     pub recycle_gland: bool,
     pub shotgun_shoulders: bool,
     pub throne_butt: bool,
+    pub heavy_heart_wanted: bool,
 
     pub euphoria: bool,
 
@@ -509,6 +527,7 @@ impl Default for Player {
             recycle_gland: false,
             shotgun_shoulders: false,
             throne_butt: false,
+            heavy_heart_wanted: false,
             euphoria: false,
             patience_bonus: false,
             patience_used: false,
@@ -760,6 +779,9 @@ impl DamageSource {
 
 #[derive(Component, Clone, Copy, Debug)]
 pub struct ProjectileFriction(pub f32);
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RecycleGlandYield(pub u8);
 
 #[derive(Component, Debug)]
 pub struct GrenadeFuse {

@@ -63,8 +63,7 @@ use crate::time::{GTimer, TimerMode};
 // Mutation data (byte-exact tables from bevy `content.rs`).
 // ---------------------------------------------------------------------------
 
-/// All 29 mutations in bevy `ALL_MUTATIONS` order.
-pub const ALL_MUTATIONS: [MutationId; 29] = [
+pub const ALL_MUTATIONS: [MutationId; 28] = [
     MutationId::RhinoSkin,
     MutationId::PlutoniumHunger,
     MutationId::TriggerFingers,
@@ -83,7 +82,6 @@ pub const ALL_MUTATIONS: [MutationId; 29] = [
     MutationId::Stress,
     MutationId::EagleEyes,
     MutationId::OpenMind,
-    MutationId::HeavyHeart,
     MutationId::StrongSpirit,
     MutationId::SharpTeeth,
     MutationId::LastWish,
@@ -571,7 +569,49 @@ pub fn roll_mutations_with_for(
         out.push(pool.remove(idx));
     }
 
+    let weapon_mutations = [
+        MutationId::LongArms,
+        MutationId::RecycleGland,
+        MutationId::ShotgunShoulders,
+        MutationId::BoilingVeins,
+        MutationId::BoltMarrow,
+        MutationId::LaserBrain,
+    ];
+    if !out.is_empty()
+        && !player.heavy_heart_wanted
+        && !player.mutations.contains(&MutationId::HeavyHeart)
+        && weapon_mutations
+            .iter()
+            .filter(|mutation| player.mutations.contains(mutation))
+            .count()
+            >= 3
+    {
+        out[0] = MutationId::HeavyHeart;
+        player.heavy_heart_wanted = true;
+    }
+
     out
+}
+
+#[cfg(test)]
+mod mutation_roll_tests {
+    use super::{MutationId, roll_mutations_with};
+    use crate::comps_a::Player;
+    use rand::{SeedableRng, rngs::StdRng};
+
+    #[test]
+    fn heavy_heart_replaces_first_choice_after_three_weapon_mutations() {
+        let mut player = Player::default();
+        player.mutations.extend([
+            MutationId::LongArms,
+            MutationId::RecycleGland,
+            MutationId::BoltMarrow,
+        ]);
+        let mut rng = StdRng::seed_from_u64(7);
+        let choices = roll_mutations_with(&mut player, &mut rng);
+        assert_eq!(choices.first(), Some(&MutationId::HeavyHeart));
+        assert!(player.heavy_heart_wanted);
+    }
 }
 
 /// Mutation-pick UI state: flag resources written by `apply_mutation`.
@@ -802,11 +842,8 @@ pub fn apply_mutation(
         }
         MutationId::BoilingVeins => {
             player.boiling_veins = true;
-            player.veins_threshold = 4;
         }
-        MutationId::ImpactWrists => {
-            player.knockback_mult *= 1.6;
-        }
+        MutationId::ImpactWrists => {}
         MutationId::ExtraFeet => {
             player.speed_mult *= 1.5;
         }
@@ -2232,6 +2269,7 @@ pub fn tick_floor_transition(
     mut player_q: Query<(&mut Pos, &mut Health, &mut Player, &RaceState), With<Player>>,
     mut carried: ResMut<PortalCarriedWeapons>,
     open_mind: Res<OpenMind>,
+    scarier: Res<ScarierFace>,
 ) {
     if !ft.active {
         return;
@@ -2295,7 +2333,14 @@ pub fn tick_floor_transition(
             if perm.horror {
                 run.horror = true;
             }
-            crate::setup::spawn_level(&mut commands, &catalog, &run, &plan, &mut mask);
+            crate::setup::spawn_level(
+                &mut commands,
+                &catalog,
+                &run,
+                scarier.0,
+                &plan,
+                &mut mask,
+            );
 
             floor_started.push(FloorStarted {
                 floor: run.floor,

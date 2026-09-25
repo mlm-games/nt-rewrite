@@ -52,9 +52,9 @@ use crate::comps_b::{
     Beam, BigDogMissileState, BossBrain, BossPhase, ChestKind, Corpse, Enemy, EnemyBrain, FxAngle,
     GmlImage, GroundDecalTint, HazardCloud, HurtAnim, MaggotSpawnCharge, Mote, MoteScale,
     NativeAngle, NativeDepth, NativeFlip, NativeScale, OpenedChest, Pickup, PickupKind,
-    PickupLifetime, Portal, PortalClear, PortalShock, PortalStrike, Prop, PropSprites, StaticFx,
-    SwingFx, Telekinesis, ThroneCarpet, ThroneSit, TitleCampChar, TitleCampfire, TitleLogMenu,
-    TitleTv, ToxicGasState, WeaponVisual, YvCouch,
+    PickupLifetime, Portal, PortalClear, PortalShock, PortalStrike, Prop, PropSprites, Shield,
+    StaticFx, SwingFx, Telekinesis, ThroneCarpet, ThroneSit, TitleCampChar, TitleCampfire,
+    TitleLogMenu, TitleTv, ToxicGasState, WeaponVisual, YvCouch,
 };
 use crate::data::{
     AreaId, CrownKind, EnemyKind, HazardKind, MutationId, RaceId, UltraMutationId, WeaponId,
@@ -631,10 +631,15 @@ fn area_sprites_for_run(
             "images/sprWall103Bot.png",
             "images/sprWall103Top.png",
         )),
-        AreaId::CursedCaves | AreaId::Vault | AreaId::CrownVault => Some((
+        AreaId::CursedCaves => Some((
             "images/sprFloor104.png",
             "images/sprWall104Bot.png",
             "images/sprWall104Top.png",
+        )),
+        AreaId::Vault | AreaId::CrownVault => Some((
+            "images/sprFloor100.png",
+            "images/sprWall100Bot.png",
+            "images/sprWall100Top.png",
         )),
         AreaId::Jungle => Some((
             "images/sprFloor105.png",
@@ -692,7 +697,8 @@ fn area_sprites_full_for_run(
         AreaId::Oasis => 101,
         AreaId::PizzaSewers => 102,
         AreaId::City => 103,
-        AreaId::CursedCaves | AreaId::Vault | AreaId::CrownVault => 104,
+        AreaId::CursedCaves => 104,
+        AreaId::Vault | AreaId::CrownVault => 100,
         AreaId::Jungle => 105,
         AreaId::HQ => 106,
         _ => 0,
@@ -701,6 +707,7 @@ fn area_sprites_full_for_run(
         return route;
     }
     let (o, tr): (&'static str, &'static str) = match num {
+        100 => ("images/sprWall100Out.png", "images/sprWall100Trans.png"),
         101 => ("images/sprWall101Out.png", "images/sprWall101Trans.png"),
         102 => ("images/sprWall102Out.png", "images/sprWall102Trans.png"),
         103 => ("images/sprWall103Out.png", "images/sprWall103Trans.png"),
@@ -1310,8 +1317,11 @@ pub const GRID_OVERLAP: f32 = 1.0;
 /// `Draw_75` as a hardware cursor (`CursorIcon::Custom`, composited by
 /// the OS above every sprite and UI layer), so no sprite rung exists
 /// for it; sideart rungs above the room chrome but below HUD/menus.
-pub const Z_SHADOW: f32 = -10.0;
+pub const Z_FLOOR: f32 = -3.0;
+pub const Z_GROUND_DETAIL: f32 = -2.5;
+pub const Z_SHADOW: f32 = -2.0;
 pub const Z_WORLD: f32 = 0.0;
+pub const Z_WALL_SUBTOP: f32 = 1.5;
 pub const Z_FX: f32 = 1.0;
 pub const Z_BLOOM: f32 = 2.0;
 pub const Z_FOG: f32 = 3.0;
@@ -1857,12 +1867,168 @@ fn native_image_instance(
     Some(sprite)
 }
 
+fn laser_sight(
+    assets: &RenderAssets,
+    path: &str,
+    origin: Vec2,
+    angle: f32,
+    walls: &[Vec2],
+) -> Option<SpriteInstance> {
+    let step = Vec2::new(angle.cos(), angle.sin()) * 2.0;
+    let mut tip = origin;
+    for _ in 0..=1000 {
+        tip += step;
+        if walls
+            .iter()
+            .any(|wall| (wall.x - tip.x).abs() <= 8.0 && (wall.y - tip.y).abs() <= 8.0)
+        {
+            break;
+        }
+    }
+    let native = assets.native_size(path)?;
+    let size = Vec2::new(
+        native.x * (origin.distance(tip) / 2.0 + 2.0),
+        native.y,
+    );
+    let mut sight = assets.sprite_sized(path, 0, origin, size, false, [1.0; 4])?;
+    sight.rotation = angle;
+    sight.anchor = Vec2::ZERO;
+    Some(sight)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct StaticWorldKey {
+    floor: u32,
+    area: AreaId,
+    seed: u64,
+    assets_gen: u64,
+    floor_cells: usize,
+    floor_hash: u64,
+    wall_cells: usize,
+    wall_hash: u64,
+    active_wall_hash: u64,
+}
+
+#[derive(Clone, Default)]
+pub struct StaticWorldCache {
+    key: Option<StaticWorldKey>,
+    prefix: Arc<[SpriteInstance]>,
+    wall_out: Arc<[SpriteInstance]>,
+    wall_trans: Arc<[SpriteInstance]>,
+    wall_top: Arc<[SpriteInstance]>,
+    wall_centers: Arc<[Vec2]>,
+}
+
+impl StaticWorldCache {
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
+fn cell_fingerprint(x: i32, y: i32) -> u64 {
+    let mut value = (x as u32 as u64) | ((y as u32 as u64) << 32);
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value ^= value >> 27;
+    value = value.wrapping_mul(0x94D0_49BB_1331_11EB);
+    value ^ (value >> 31)
+}
+
+fn add_fingerprint(value: u64, sum: &mut u64, xor: &mut u64) {
+    *sum = sum.wrapping_add(value);
+    *xor ^= value.rotate_left(17);
+}
+
+fn static_world_key(world: &World, assets: &RenderAssets) -> Option<StaticWorldKey> {
+    let run = world.get_resource::<Run>()?;
+    let mask = world.get_resource::<FloorMask>()?;
+    let mut floor_sum = 0;
+    let mut floor_xor = 0;
+    for &(x, y) in &mask.cells {
+        add_fingerprint(cell_fingerprint(x, y), &mut floor_sum, &mut floor_xor);
+    }
+    let mut wall_sum = 0;
+    let mut wall_xor = 0;
+    let mut wall_count = 0;
+    for (cell, pos) in world.query::<(&WallCell, &Pos)>().iter(world) {
+        let value = cell_fingerprint(cell.0, cell.1)
+            ^ pos.0.x.to_bits().rotate_left(7)
+            ^ pos.0.y.to_bits().rotate_left(29);
+        add_fingerprint(value, &mut wall_sum, &mut wall_xor);
+        wall_count += 1;
+    }
+    let mut active_sum = 0;
+    let mut active_xor = 0;
+    for cell in world
+        .query_filtered::<&WallCell, With<WallTile>>()
+        .iter(world)
+    {
+        add_fingerprint(
+            cell_fingerprint(cell.0, cell.1),
+            &mut active_sum,
+            &mut active_xor,
+        );
+    }
+    Some(StaticWorldKey {
+        floor: run.floor,
+        area: run.area,
+        seed: run.gen_seed,
+        assets_gen: assets.uploads_gen,
+        floor_cells: mask.cells.len(),
+        floor_hash: floor_sum ^ floor_xor,
+        wall_cells: wall_count,
+        wall_hash: wall_sum ^ wall_xor,
+        active_wall_hash: active_sum ^ active_xor,
+    })
+}
+
 /// Snapshot the sim world into GPU sprites (draw order = push order,
 /// bevy z-ladder: floor, walls, decals, props, corpses/portals,
 /// hazards, pickups, opened chests, enemies, player, projectiles,
 /// hit-FX, held guns, melee swings).
 pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInstance> {
-    let mut out = Vec::new();
+    let mut cache = StaticWorldCache::default();
+    world_instances_cached(world, assets, &mut cache)
+}
+
+pub fn world_instances_cached(
+    world: &mut World,
+    assets: &RenderAssets,
+    cache: &mut StaticWorldCache,
+) -> Vec<SpriteInstance> {
+    let key = static_world_key(world, assets);
+    let reuse = key.is_some() && cache.key == key;
+    let cached_prefix = reuse.then(|| cache.prefix.clone());
+    let cached_wall_out = reuse.then(|| cache.wall_out.clone());
+    let cached_wall_trans = reuse.then(|| cache.wall_trans.clone());
+    let cached_wall_top = reuse.then(|| cache.wall_top.clone());
+    let cached_wall_centers = reuse.then(|| cache.wall_centers.clone());
+    let mut out = cached_prefix
+        .as_deref()
+        .map(|sprites| sprites.to_vec())
+        .unwrap_or_default();
+    let mut wall_out = cached_wall_out
+        .as_deref()
+        .map(|sprites| sprites.to_vec())
+        .unwrap_or_default();
+    let mut wall_trans = cached_wall_trans
+        .as_deref()
+        .map(|sprites| sprites.to_vec())
+        .unwrap_or_default();
+    let mut wall_top = cached_wall_top
+        .as_deref()
+        .map(|sprites| sprites.to_vec())
+        .unwrap_or_default();
+    let mut wall_centers = cached_wall_centers
+        .as_deref()
+        .map(|centers| centers.to_vec())
+        .unwrap_or_default();
+    if !reuse {
+        wall_centers = world
+            .query::<(&Pos, &WallCell)>()
+            .iter(world)
+            .map(|(pos, _)| pos.0)
+            .collect();
 
     // Floor: GML draws the room background colour first
     // (`background_set_colour`), then ONLY the live floor cells —
@@ -1932,9 +2098,10 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                     // 0-7; a short pack strip must not drop the cell).
                     let frames = strip_frames(assets, floor_png).max(1) as i32;
                     let frame = raw % frames;
-                    if let Some(s) =
+                    if let Some(mut s) =
                         place_top_left(assets, floor_png, frame, top_left, [1.0; 4], GRID_OVERLAP)
                     {
+                        s.z = Z_FLOOR;
                         out.push(s);
                     }
                 }
@@ -1970,7 +2137,7 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             let raw = wall_body_raw(seed, wx, wy);
             if has(wall_out_png) {
                 let frame = (wall_out_raw(seed, wx, wy) % out_frames.max(1) as usize) as i32;
-                if let Some(s) = wall_out_part(
+                if let Some(mut s) = wall_out_part(
                     assets,
                     wall_out_png,
                     frame,
@@ -1979,7 +2146,8 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                     wall_out_crop(&wall_set, wx, wy),
                     [1.0; 4],
                 ) {
-                    out.push(s);
+                    s.z = Z_WALL_SUBTOP;
+                    wall_out.push(s);
                 }
             }
             if floor_south && has(wall_bot_png) {
@@ -1997,7 +2165,7 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             }
             if has(wall_top_png) {
                 let frame = (raw % top_frames.max(1) as usize) as i32;
-                if let Some(s) = place_top_left(
+                if let Some(mut s) = place_top_left(
                     assets,
                     wall_top_png,
                     frame,
@@ -2005,7 +2173,8 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                     [1.0; 4],
                     GRID_OVERLAP,
                 ) {
-                    out.push(s);
+                    s.z = Z_WALL_SUBTOP;
+                    wall_top.push(s);
                 }
             }
         }
@@ -2025,7 +2194,7 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
         };
         let trans_set: HashSet<(i32, i32)> = trans_cells.iter().map(|(c, _)| *c).collect();
         for ((wx, wy), frame) in &trans_cells {
-            if let Some(s) = place_top_left(
+            if let Some(mut s) = place_top_left(
                 assets,
                 wall_trans_png,
                 *frame,
@@ -2033,7 +2202,8 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                 [1.0; 4],
                 0.0,
             ) {
-                out.push(s);
+                s.z = Z_WALL_SUBTOP;
+                wall_trans.push(s);
             }
         }
         // Wall drop shadows (GML `scrShadows` wall half: the Out crop
@@ -2069,6 +2239,7 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                         [0.0, 0.0, 0.0, 0.4],
                     ) {
                         s.flip_y = true;
+                        s.z = Z_SHADOW;
                         s.center = Vec2::new(
                             wx as f32 * 16.0 - 4.0 + l + size.x * 0.5,
                             wy as f32 * 16.0 + 18.0 - size.y * 0.5,
@@ -2078,6 +2249,15 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                 }
             }
         }
+        }
+        if let Some(key) = key {
+            cache.key = Some(key);
+            cache.prefix = Arc::from(out.clone());
+            cache.wall_out = Arc::from(wall_out.clone());
+            cache.wall_trans = Arc::from(wall_trans.clone());
+            cache.wall_top = Arc::from(wall_top.clone());
+            cache.wall_centers = Arc::from(wall_centers.clone());
+        }
     }
 
     // Throne carpet (bevy z -48: 72x480 srgba(0.75,0.12,0.14,0.85)
@@ -2086,7 +2266,9 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
         let mut q = world.query::<(&Pos, &ThroneCarpet)>();
         for (pos, carpet) in q.iter(world) {
             let size = carpet.half_extents * 2.0;
-            out.push(white_quad(pos.0, 0.0, size, [0.75, 0.12, 0.14, 0.85]));
+            let mut s = white_quad(pos.0, 0.0, size, [0.75, 0.12, 0.14, 0.85]);
+            s.z = Z_GROUND_DETAIL;
+            out.push(s);
         }
     }
 
@@ -2103,13 +2285,18 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             tint[3] = pulse.alpha_at(now);
             match vis.path {
                 Some(path) => {
-                    if let Some(s) =
+                    if let Some(mut s) =
                         assets.sprite_sized(path, 0, pos.0, Vec2::splat(vis.size), vis.flip_x, tint)
                     {
+                        s.z = Z_GROUND_DETAIL;
                         out.push(s);
                     }
                 }
-                None => out.push(white_quad(pos.0, 0.0, Vec2::splat(vis.size), tint)),
+                None => {
+                    let mut s = white_quad(pos.0, 0.0, Vec2::splat(vis.size), tint);
+                    s.z = Z_GROUND_DETAIL;
+                    out.push(s);
+                }
             }
         }
     }
@@ -2141,7 +2328,10 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             if let Some(pulse) = pulse {
                 tint[3] *= pulse.alpha_at(now);
             }
-            if let Some(s) = assets.sprite_for(path, frame, pos.0, sprites.flip_x, 0.0, tint) {
+            if let Some(mut s) = assets.sprite_for(path, frame, pos.0, sprites.flip_x, 0.0, tint) {
+                if decal.is_some() {
+                    s.z = Z_GROUND_DETAIL;
+                }
                 out.push(s);
             }
         }
@@ -2515,11 +2705,6 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                 }
             }
         }
-        let walls: Vec<Vec2> = world
-            .query::<(&Pos, &WallCell)>()
-            .iter(world)
-            .map(|(p, _)| p.0)
-            .collect();
         let mut q = world.query::<(
             &Pos,
             &Enemy,
@@ -2541,35 +2726,14 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             if !brain.sniper_aiming {
                 continue;
             }
-            let angle = brain.gunangle;
-            let step = Vec2::new(angle.cos(), angle.sin()) * 2.0;
-            let mut tip = pos.0;
-            for _ in 0..1000 {
-                let next = tip + step;
-                let hit = walls.iter().any(|w| w.distance(next) < 8.0);
-                tip = next;
-                if hit {
-                    break;
-                }
-            }
-            let distance = pos.0.distance(tip);
-            if let Some(native) = assets.native_size("images/sprLaserSight.png") {
-                let size = Vec2::new(native.x * (distance / 2.0 + 2.0), native.y);
-                let mid = pos.0 + Vec2::new(angle.cos(), angle.sin()) * (size.x * 0.5);
-                let mut s = match assets.sprite_sized(
-                    "images/sprLaserSight.png",
-                    0,
-                    mid,
-                    size,
-                    false,
-                    [1.0; 4],
-                ) {
-                    Some(s) => s,
-                    None => continue,
-                };
-                s.rotation = angle;
-                s.anchor = Vec2::new(0.5, 0.5);
-                out.push(s);
+            if let Some(sight) = laser_sight(
+                assets,
+                "images/sprLaserSight.png",
+                pos.0,
+                brain.gunangle,
+                &wall_centers,
+            ) {
+                out.push(sight);
             }
         }
         // Guns behind.
@@ -2906,6 +3070,44 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
                         ) {
                             out.push(s);
                         }
+                    }
+                }
+            }
+
+            if world
+                .get::<Shield>(entity)
+                .is_none_or(|shield| shield.timer.is_finished())
+                && let Some(inv) = inv_opt
+            {
+                let max_slot = inv.weapon_slots.max(1) - 1;
+                let current = inv.weapons[inv.current.min(max_slot)];
+                let current_meta = weapon_meta(current);
+                if current_meta.wep_type == AmmoType::Bolts
+                    && current_meta.wep_name != "DISC GUN"
+                    && let Some(sight) = laser_sight(
+                        assets,
+                        "images/sprLaserSightPlayer.png",
+                        pos.0,
+                        gunangle,
+                        &wall_centers,
+                    )
+                {
+                    out.push(sight);
+                }
+                if is_steroids && inv.weapon_slots > 1 {
+                    let secondary = inv.weapons[(inv.current + 1) % inv.weapon_slots];
+                    let secondary_meta = weapon_meta(secondary);
+                    if secondary_meta.wep_type == AmmoType::Bolts
+                        && secondary_meta.wep_name != "DISC GUN"
+                        && let Some(sight) = laser_sight(
+                            assets,
+                            "images/sprLaserSightPlayer.png",
+                            Vec2::new(pos.0.x, pos.0.y - 4.0),
+                            gunangle,
+                            &wall_centers,
+                        )
+                    {
+                        out.push(sight);
                     }
                 }
             }
@@ -3303,12 +3505,6 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
     // Position = player + lengthdir(-wkick, gunangle + wepangle*(1 - wkick/20))
     // NO +12 forward hold. Sprite origin is the grip.
     {
-        // Wall centers for the bolt-weapon laser-sight march.
-        let walls: Vec<Vec2> = world
-            .query::<(&Pos, &WallCell)>()
-            .iter(world)
-            .map(|(p, _)| p.0)
-            .collect();
         let mut q = world.query::<&WeaponVisual>();
         for gun in q.iter(world) {
             let Some(pos) = world.get::<Pos>(gun.owner) else {
@@ -3376,46 +3572,6 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
             {
                 out.push(s);
             }
-            // GML bolt-weapon laser sight (not the disc gun): 2 px
-            // march to the first wall (1000-step cap). Origin is the
-            // player (Steroids second: y - 4), NOT the muzzle/hold.
-            if meta.wep_type == AmmoType::Bolts && meta.wep_name != "DISC GUN" {
-                let origin = if is_steroids_slot1 {
-                    Vec2::new(pos.0.x, pos.0.y - 4.0)
-                } else {
-                    pos.0
-                };
-                let step = Vec2::new(angle.cos(), angle.sin()) * 2.0;
-                let mut tip = origin;
-                for _ in 0..1000 {
-                    let next = tip + step;
-                    let hit = walls.iter().any(|w| w.distance(next) < 8.0);
-                    tip = next;
-                    if hit {
-                        break;
-                    }
-                }
-                let dist = origin.distance(tip);
-                if let Some(native) = assets.native_size("images/sprLaserSightPlayer.png") {
-                    let size = Vec2::new(native.x * (dist / 2.0 + 2.0), native.y);
-                    // Origin of laser strip is at player; with center-anchor mid-point:
-                    let mid = origin + Vec2::new(angle.cos(), angle.sin()) * (size.x * 0.5);
-                    let mut s = match assets.sprite_sized(
-                        "images/sprLaserSightPlayer.png",
-                        0,
-                        mid,
-                        size,
-                        false,
-                        [1.0; 4],
-                    ) {
-                        Some(s) => s,
-                        None => continue,
-                    };
-                    s.rotation = angle;
-                    s.anchor = Vec2::new(0.5, 0.5);
-                    out.push(s);
-                }
-            }
         }
     }
 
@@ -3434,6 +3590,9 @@ pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIn
         }
     }
 
+    out.extend(wall_out);
+    out.extend(wall_trans);
+    out.extend(wall_top);
     out
 }
 

@@ -357,6 +357,9 @@ pub fn build_sim_schedule() -> Schedule {
                 enemies::tick_corpses
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
+                combat::corpse_hits
+                    .in_set(NtSimSet::Combat)
+                    .run_if(gameplay_active),
                 walls::update_carpet_occupancy
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),

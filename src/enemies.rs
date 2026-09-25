@@ -39,15 +39,16 @@ use crate::combat::{
 use crate::comps_a::{
     ARENA_H, ARENA_W, BossIntro, BouncesLeft, CurrentFrame, DamageSource, Euphoria, FloorMask,
     GameCleanup, GrenadeFuse, Health, Hitbox, Homing, LevelCleanup, NextHurt, Player, Projectile,
-    ProjectileFade, ProjectileFriction, ProjectileTyp, Run, ShellWallBounce, SplitOnDeath, Team,
-    Toast, Velocity, apply_gml_friction, gml_motion_add_clamp,
+    ProjectileFade, ProjectileFriction, ProjectileTyp, Run, ScarierFace, ShellWallBounce,
+    SplitOnDeath, Team, Toast, Velocity, WallCell, WallTile, apply_gml_friction,
+    gml_motion_add_clamp,
 };
 use crate::comps_b::{
-    BossBrain, Corpse, EliteBlocker, Enemy, EnemyBrain, FxAngle, GmlImage, HitWarning, HurtAnim,
-    IdpdShieldUnit, IdpdVanBrain, LilHunterDie, MaggotSpawnCharge, MaggotSpawnInternalDrain,
-    MomShot, NativeAngle, NativeDepth, PendingDelayedBoss, Pickup, PickupLifetime, PopoNadeM,
-    PortalClear, Prop, ProtoGuardian, SCRAP_BOSS_MISSILE_RADIUS, ScrapBossMissileState,
-    ShieldFollower, StaticFx, ThroneBall, ToxicGasState,
+    BossBrain, Corpse, CorpseCollision, EliteBlocker, Enemy, EnemyBrain, FxAngle, GmlImage,
+    HitWarning, HurtAnim, IdpdShieldUnit, IdpdVanBrain, LilHunterDie, MaggotSpawnCharge,
+    MaggotSpawnInternalDrain, MomShot, NativeAngle, NativeDepth, PendingDelayedBoss, Pickup,
+    PickupLifetime, PopoNadeM, PortalClear, Prop, ProtoGuardian, SCRAP_BOSS_MISSILE_RADIUS,
+    ScrapBossMissileState, ShieldFollower, StaticFx, ThroneBall, ToxicGasState,
 };
 use crate::data::{AreaId, EnemyKind, SplitDef};
 use crate::effects::{HitStop, spawn_burst};
@@ -58,6 +59,24 @@ use crate::spatial::{
     solid_contact,
 };
 use crate::time::{GTimer, TimerMode};
+
+fn scarier_spawn_hp(kind: EnemyKind, base_hp: i32, loops: u32) -> i32 {
+    let l = loops as f32;
+    let hp = match kind {
+        EnemyKind::BigBandit | EnemyKind::BigBanditLoop => 100.0 * (1.0 + l / 3.0),
+        EnemyKind::BigDog | EnemyKind::BigDogLoop => 300.0 * (1.0 + l / 1.2),
+        EnemyKind::Throne => 1500.0 * (1.0 + l / 3.0),
+        EnemyKind::ThroneII => 600.0 * (1.0 + l / 3.0),
+        EnemyKind::Hyper => 550.0 * (1.0 + l / 3.0),
+        EnemyKind::Technomancer => 350.0 * (1.0 + l / 3.0),
+        EnemyKind::LilHunter | EnemyKind::LilHunterLoop => 140.0 * (1.0 + l / 3.0),
+        EnemyKind::FrogQueen => 490.0 * (1.0 + l / 3.0),
+        EnemyKind::Captain => 1100.0 * (1.0 + l / 3.0),
+        EnemyKind::ProtoStatue => 120.0,
+        _ => base_hp as f32 * (1.0 + l / 20.0),
+    };
+    (hp * 0.8).floor() as i32
+}
 
 /// Floor-scaled HP multiplier (bevy `world::difficulty_multiplier`
 /// parity: +5% per loop, +1.5% per route floor). Kept for the speed law
@@ -102,6 +121,7 @@ pub fn spawn_hp(kind: EnemyKind, base_hp: i32, loops: u32) -> i32 {
 pub struct EnemySpawnContext {
     pub subarea: u32,
     pub blood_crown: bool,
+    pub scarier_face: bool,
 }
 
 /// Full enemy spawn: base bundle from [`crate::setup::spawn_enemy`]
@@ -169,7 +189,7 @@ fn spawn_enemy_impl(
     pos: glam::Vec2,
     difficulty: f32,
     scarier_face: bool,
-    heavy_heart: bool,
+    _heavy_heart: bool,
     loops: u32,
     context: EnemySpawnContext,
     give_kill: bool,
@@ -180,11 +200,11 @@ fn spawn_enemy_impl(
     let e = crate::setup::spawn_enemy(commands, kind, pos, true);
 
     // GML HP law (loop scaling); scarier-face 0.8 floor kept.
-    let hp = spawn_hp(kind, def.hp, loops);
+    let scarier_face = scarier_face || context.scarier_face;
     let hp = if scarier_face {
-        (hp as f32 * 0.8).floor() as i32
+        scarier_spawn_hp(kind, def.hp, loops)
     } else {
-        hp
+        spawn_hp(kind, def.hp, loops)
     };
     let speed = if matches!(
         kind,
@@ -206,11 +226,7 @@ fn spawn_enemy_impl(
     } else {
         def.speed * (0.9 + 0.02 * difficulty)
     };
-    let weapon_chance = if heavy_heart {
-        def.weapon_chance + 9
-    } else {
-        def.weapon_chance
-    };
+    let weapon_chance = def.weapon_chance;
 
     let mut ec = commands.entity(e);
     ec.insert(Enemy {
@@ -400,7 +416,7 @@ fn spawn_enemy_impl(
                 pos,
                 difficulty,
                 scarier_face,
-                heavy_heart,
+                _heavy_heart,
                 loops,
                 context,
                 true,
@@ -439,17 +455,17 @@ pub fn spawn_enemy_at(
     )
 }
 
-/// Drain deferred spawns (bevy parity: face/heart modifiers are NOT
-/// re-applied here — the bevy flush passes `false, false`).
 pub fn flush_pending_enemy_spawns(
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
     run: Res<Run>,
+    scarier: Res<ScarierFace>,
     pending: Query<(Entity, &PendingEnemySpawn)>,
 ) {
     let context = EnemySpawnContext {
         subarea: run.floor_in_area,
         blood_crown: run.blood_crown,
+        scarier_face: scarier.0,
     };
     let mut rng = rand::rng();
     for (entity, spawn) in pending.iter() {
@@ -3825,6 +3841,7 @@ pub fn tick_delayed_boss_spawns(
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
     run: Res<Run>,
+    scarier: Res<ScarierFace>,
     mask: Res<FloorMask>,
     mut trauma: ResMut<Trauma>,
     mut hitstop: ResMut<HitStop>,
@@ -3923,6 +3940,7 @@ pub fn tick_delayed_boss_spawns(
         EnemySpawnContext {
             subarea: run.floor_in_area,
             blood_crown: run.blood_crown,
+            scarier_face: scarier.0,
         },
     );
 
@@ -5214,15 +5232,27 @@ fn separate(positions: &[glam::Vec2], epos: glam::Vec2, pos: &mut Pos, radius: f
 /// whole 0.9 s life and land ~144 px away.
 pub fn tick_corpses(
     time: Res<SimTime>,
+    mask: Res<FloorMask>,
     mut commands: Commands,
-    mut q: Query<(Entity, &mut Corpse, Option<&mut Velocity>, Option<&mut Pos>)>,
+    walls: Query<&Pos, (With<WallCell>, With<WallTile>)>,
+    mut q: Query<(
+        Entity,
+        &mut Corpse,
+        Option<&mut Velocity>,
+        Option<&mut Pos>,
+        Option<&mut CorpseCollision>,
+    )>,
     mut gibs: Query<
         (&mut Pos, &mut crate::comps_b::GroundPhysics),
         (Without<Corpse>, Without<Pickup>),
     >,
 ) {
     let dt = time.delta_secs;
-    for (e, mut c, vel, pos) in &mut q {
+    let solids: Vec<_> = walls
+        .iter()
+        .map(|pos| (pos.0, glam::Vec2::splat(8.0)))
+        .collect();
+    for (e, mut c, vel, pos, collision) in &mut q {
         c.life.tick(dt);
         if c.life.just_finished() {
             commands.entity(e).despawn();
@@ -5230,7 +5260,21 @@ pub fn tick_corpses(
         }
         if let (Some(mut v), Some(mut p)) = (vel, pos) {
             apply_gml_friction(&mut v.0, 0.4, dt);
-            p.0 += v.0 * dt;
+            if let Some(mut collision) = collision {
+                v.0 = v.0.clamp_length_max(16.0 * 30.0);
+                move_bounce_solid(
+                    &mut p.0,
+                    &mut v.0,
+                    collision.radius,
+                    dt,
+                    &solids,
+                    Some(&mask),
+                    false,
+                );
+                collision.settled = v.0 == glam::Vec2::ZERO;
+            } else {
+                p.0 += v.0 * dt;
+            }
         }
     }
     for (mut p, mut g) in &mut gibs {
@@ -5276,5 +5320,6 @@ mod spawn_hp_tests {
             spawn_hp(EnemyKind::BigDog, 300, 6),
             (300.0_f32 * (1.0 + 6.0 / 1.2)).ceil() as i32
         );
+        assert_eq!(scarier_spawn_hp(EnemyKind::Assassin, 7, 1), 5);
     }
 }

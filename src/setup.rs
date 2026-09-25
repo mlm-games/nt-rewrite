@@ -715,7 +715,7 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
     world.resource_scope(|world, mut mask: Mut<FloorMask>| {
         world.resource_scope(|world, catalog: Mut<AnimCatalog>| {
             let mut commands = world.commands();
-            spawn_level(&mut commands, &catalog, &run, &plan, &mut mask);
+            spawn_level(&mut commands, &catalog, &run, false, &plan, &mut mask);
         })
     });
     world.flush();
@@ -1379,6 +1379,7 @@ pub fn spawn_secret_entrances(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
     run: &Run,
+    scarier_face: bool,
 ) {
     let slot: Option<(SecretTarget, glam::Vec2, f32)> = match (run.area, run.floor_in_area) {
         (AreaId::Sewers, _) => Some((
@@ -1458,6 +1459,7 @@ pub fn spawn_secret_entrances(
                     EnemySpawnContext {
                         subarea: run.floor_in_area,
                         blood_crown: run.blood_crown,
+                        scarier_face,
                     },
                 );
             }
@@ -1510,11 +1512,11 @@ fn spawn_wall_tiles(
 /// props, secret entrances, chests, enemies, boss extras, throne carpet,
 /// crown-vault pedestal). Floor/wall/decal/bone/detail `Sprite`s,
 /// transition quads and anchors are renderer-owned and skipped.
-/// Face/heart modifiers pass `false` (bevy flush parity).
 pub fn spawn_level(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
     run: &Run,
+    scarier_face: bool,
     plan: &LevelPlan,
     mask: &mut FloorMask,
 ) {
@@ -1528,7 +1530,7 @@ pub fn spawn_level(
     }
     spawn_wall_tiles(&mut *commands, wall_set.into_iter().collect(), &floor_set);
 
-    spawn_secret_entrances(commands, catalog, run);
+    spawn_secret_entrances(commands, catalog, run, scarier_face);
 
     let mut events = plan.population_events.clone();
     if events.is_empty() {
@@ -1592,6 +1594,7 @@ pub fn spawn_level(
     let spawn_context = EnemySpawnContext {
         subarea: run.floor_in_area,
         blood_crown: run.blood_crown,
+        scarier_face,
     };
     let mut enemy_count = 0usize;
     for event in &events {

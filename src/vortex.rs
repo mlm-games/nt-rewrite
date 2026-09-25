@@ -1,7 +1,7 @@
 //! Vortex spiral sim state. Headless port of the sim half of the bevy
 //! reference `game/vortex.rs`: the [`SpiralKind`] enum, the [`SpiralCtl`]
-//! angle-advance law ([`spiral_angle_inc`] + the per-tick emission), and
-//! the snapshot the background pass consumes.
+//! angle-advance law and deterministic per-seed random stream, and the
+//! snapshot the background pass consumes.
 //!
 //! Everything bevy-render stays out: no `Handle<Image>`, no materials, no
 //! `sync_spiral_cpu_layer` GPU writes, no plugin. Star/vard dots and the
@@ -17,7 +17,10 @@
 //! [`SpiralKind::for_gml_area`]; `AreaId::Loop` maps to GML area 1, i.e.
 //! `Normal` — there is no loop-count branch in the reference.
 
-use crate::vortex_pass::{VORTEX_DEBRIS, VORTEX_WISPS, VortexSnapshot};
+use crate::vortex_pass::{
+    VARD_CELL_SIZES, VARD_FRAME_COUNTS, VORTEX_DEBRIS, VORTEX_VARDS, VORTEX_WISPS,
+    VortexSnapshot, vard_slot,
+};
 use bevy_ecs::prelude::*;
 use repame_sim::SimTime;
 
@@ -30,6 +33,8 @@ pub const MAX_WISPS: usize = VORTEX_WISPS;
 const STREAM_HEAD_SALT: u64 = 0x9E37_79B9_7F4A_7C15;
 const STREAM_ANGLE_SALT: u64 = 0xBF58_476D_1CE4_E5B9;
 const STREAM_RATE_SALT: u64 = 0x94D0_49BB_1331_11EB;
+const STREAM_PROTO_SALT: u64 = 0xD6E8_FEB8_6659_FD93;
+const STREAM_RANDOM_SALT: u64 = 0xA076_1D64_78BD_642F;
 /// Debris ring slots (matches `VORTEX_DEBRIS`).
 pub const MAX_DEBRIS: usize = VORTEX_DEBRIS;
 /// Warmup ticks so a freshly spawned spiral is already full.
@@ -155,6 +160,8 @@ pub struct Star {
     pub grow: f32,
     pub xscale: f32,
     pub frame: f32,
+    pub draw_x: f32,
+    pub draw_y: f32,
 }
 
 /// Area-flavoured debris mote (data-only; the bevy entity handle was render).
@@ -170,8 +177,22 @@ pub struct Vard {
     pub grow: f32,
     pub xscale: f32,
     pub image_angle: f32,
+    pub draw_x: f32,
+    pub draw_y: f32,
+    pub draw_angle: f32,
+    pub sound_played: bool,
     pub path: &'static str,
     pub frame: usize,
+}
+
+impl Vard {
+    pub fn flyby_due(&mut self) -> bool {
+        if !self.sound_played && self.xscale > 1.3 {
+            self.sound_played = true;
+            return true;
+        }
+        false
+    }
 }
 
 /// Per-wisp lightning-stream state (GML `Spiral/Create_0` + `Step_0` +
@@ -324,8 +345,10 @@ pub struct SpiralCtl {
     /// Deterministic-stream seed (run seed; snapshots with equal seeds
     /// are bit-identical).
     pub seed: u64,
+    rng_counter: u32,
     /// Per-ring-slot lightning streams, indexed exactly like `ring`.
     pub streams: Vec<WispStream>,
+    wisp_initial: Vec<f32>,
     /// GML `SpiralCont.bossfight` verbatim (`instance_exists(Nothing2) ||
     /// instance_exists(Nothing2Appear) || instance_exists(NothingSpiral)`):
     /// while set, no `SpiralDebris` births. GML `Nothing2/Create_0`
@@ -352,9 +375,8 @@ impl SpiralCtl {
         Self::warmed_up_for_gml_area(gml_area_for_area(area))
     }
 
-    /// Seeded warmup: the lightning streams roll from `seed` (run
-    /// seed), so equal seeds snapshot identically. Spiral angle and
-    /// debris stay `rand`-driven as before — only streams are seeded.
+    /// Seeded warmup: the spiral and debris streams roll from `seed` (run
+    /// seed), so equal seeds snapshot identically.
     pub fn warmed_up_for_area_seeded(area: AreaId, seed: u64) -> Self {
         Self::warmed_up_for_gml_area_seeded(gml_area_for_area(area), seed)
     }
@@ -369,7 +391,7 @@ impl SpiralCtl {
 
     pub fn warmed_up_for_gml_area_seeded_in_view(gml_area: u8, seed: u64, view_w: f32) -> Self {
         let mut ctl = Self {
-            angle: rand::random::<f32>() * 360.0,
+            angle: 0.0,
             ticks: 0.0,
             acc: 0.0,
             ring: vec![[-1.0; 4]; MAX_WISPS],
@@ -400,10 +422,13 @@ impl SpiralCtl {
             kind: SpiralKind::for_gml_area(gml_area),
             gml_area,
             seed,
+            rng_counter: 0,
             bossfight_suppressed: false,
             view_w,
             streams: vec![WispStream::dead(); MAX_WISPS],
+            wisp_initial: vec![0.0; MAX_WISPS],
         };
+        ctl.angle = ctl.random01() * 360.0;
         for _ in 0..WARMUP_TICKS {
             ctl.tick_once();
         }
@@ -421,7 +446,7 @@ impl SpiralCtl {
     }
 
     /// Mark the spiral dead (bevy `mark_vortex_dead` / `teardown_vortex`):
-    /// births freeze, `drain_bias` fast-forwards the scale age instead.
+    /// births freeze and the per-wisp death time drives the drain law.
     pub fn kill(&mut self) {
         if self.alive {
             self.alive = false;
@@ -471,9 +496,8 @@ impl SpiralCtl {
     /// while the cont lives, the drain recurrence (`grow *= 1.5` every
     /// tick) after `death_tick`. Unborn (`birth < 0`) reads 0; a wisp
     /// born after the kill (impossible in GML — births freeze with the
-    /// cont) drains from birth. Matches the shader's `drain_bias`
-    /// fast-forward, so `is_done` unmounts the layer when the visuals
-    /// actually empty, ~19 ticks after the kill like GML.
+    /// cont) drains from birth. The snapshot uploads the same value
+    /// used by `is_done`, so the pass and headless lifetime agree.
     fn wisp_scale_at(&self, birth: f32) -> f32 {
         if birth < 0.0 {
             return 0.0;
@@ -482,19 +506,18 @@ impl SpiralCtl {
         if age <= 0.0 {
             return 0.0;
         }
-        let male = self.kind == SpiralKind::Proto;
-        // Ticks the wisp lived under a live cont: births before the
-        // kill lived until `death_tick`; anything else drains from birth.
+        let proto = self.kind == SpiralKind::Proto;
         let live_ticks = match self.death_tick {
             Some(d) => (d - birth).clamp(0.0, age),
             None => age,
         };
         let mut grow = 0.0f32;
-        let mut xs = if male { 0.0055 } else { 0.0 };
+        let slot = (birth.floor() as usize).wrapping_sub(1) % MAX_WISPS;
+        let mut xs = self.wisp_initial[slot];
         let mut t = 0.0f32;
         while t < age {
             let step = (age - t).min(1.0);
-            grow += (0.0002 + if male { 0.0003 } else { 0.0 }) * step;
+            grow += (0.0002 + if proto { 0.0003 } else { 0.0 }) * step;
             xs += grow * step;
             grow = (grow + 1.0) * (1.0 + 0.0005 * xs) - 1.0;
             if t >= live_ticks {
@@ -505,8 +528,8 @@ impl SpiralCtl {
         xs
     }
 
-    /// GML `Spiral/Step_0` growth law verbatim (shared by the shader's
-    /// `SCALE_TABLE`): `grow += 0.0002` (+0.0003 on the proto strip),
+    /// GML `Spiral/Step_0` growth law: `grow += 0.0002` (+0.0003 on the
+    /// proto strip),
     /// `xscale += grow`, `grow = (grow+1)*(1+0.0005*xscale)-1`, drain
     /// `grow *= 1.5`. Headless mirror of one wisp tick for tests.
     pub fn step_wisp_grow(grow: f32, xscale: f32, proto: bool, drain: bool) -> (f32, f32) {
@@ -517,6 +540,15 @@ impl SpiralCtl {
             grow *= 1.5;
         }
         (grow, xscale)
+    }
+
+    fn random01(&mut self) -> f32 {
+        self.rng_counter = self.rng_counter.wrapping_add(1);
+        stream_hash01(self.seed, self.rng_counter, 0, STREAM_RANDOM_SALT)
+    }
+
+    fn random_range(&mut self, min: f32, max: f32) -> f32 {
+        min + (max - min) * self.random01()
     }
 
     fn tick_once(&mut self) {
@@ -535,7 +567,13 @@ impl SpiralCtl {
         if self.alive {
             let kind = self.kind;
 
-            self.angle += spiral_angle_inc(self.angle, kind);
+            let angle_inc = spiral_angle_inc(self.angle, kind);
+            let jitter = if kind == SpiralKind::Proto {
+                self.random_range(-1.0, 1.0)
+            } else {
+                0.0
+            };
+            self.angle += angle_inc + jitter;
             // GML `SpiralCont/Step_0` verbatim: IDPD/Venuz lock to the
             // VIEW center (`view_width div 2`, `view_height div 2`);
             // Normal/Proto drift around it on the sine orbit (also
@@ -571,6 +609,12 @@ impl SpiralCtl {
                 // GML `Spiral/Create_0`: `lanim = -random(300)`,
                 // `langle = random_angle` (deterministic stream).
                 let birth = self.ticks as u32;
+                let proto = kind == SpiralKind::Proto;
+                self.wisp_initial[slot] = if proto {
+                    stream_hash01(self.seed, birth, 0, STREAM_PROTO_SALT) * 0.01
+                } else {
+                    0.0
+                };
                 self.streams[slot] = WispStream {
                     lanim: -stream_hash01(self.seed, birth, 0, STREAM_HEAD_SALT) * 300.0,
                     langle: stream_hash01(self.seed, birth, 0, STREAM_ANGLE_SALT)
@@ -578,16 +622,15 @@ impl SpiralCtl {
                     sound_played: false,
                 };
 
-                let proto = kind == SpiralKind::Proto;
                 // GML `!bossfight` gate verbatim: no debris births while
                 // the Throne-II fight runs (`Nothing2`/`Nothing2Appear`/
                 // `NothingSpiral` alive); the port reads it off
                 // `bossfight_suppressed`.
                 let debris_ok = !self.bossfight_suppressed
-                    && rand::random::<f32>() * 16.0 < 1.0
-                    && (proto || rand::random::<f32>() * 3.0 < 1.0);
+                    && self.random01() * 16.0 < 1.0
+                    && (proto || self.random01() * 3.0 < 1.0);
                 if debris_ok {
-                    if rand::random::<f32>() * 50.0 < 1.0
+                    if self.random01() * 50.0 < 1.0
                         && let Some((path, frame)) = variant_debris_for_gml_area(self.gml_area)
                     {
                         self.push_vard(x, y, path, frame);
@@ -602,17 +645,19 @@ impl SpiralCtl {
                         // below); integrate once here so the birth frame
                         // already carries the first growth step.
                         let slot = self.dhead;
+                        let frame = (self.random01() * 4.0).floor().min(3.0);
+                        let image_angle = self.random_range(0.0, 360.0);
                         self.debris[slot] = Debris {
                             alive: true,
                             xstart: x,
                             ystart: y,
-                            dist: rand::random::<f32>() * 135.0 + 10.0,
-                            angle: rand::random::<f32>() * 360.0,
-                            turnspeed: rand::random::<f32>() * 8.0 - 4.0,
-                            rotspeed: rand::random::<f32>() * 16.0 - 8.0,
+                            dist: self.random_range(10.0, 145.0),
+                            angle: self.random_range(0.0, 360.0),
+                            turnspeed: self.random_range(-4.0, 4.0),
+                            rotspeed: self.random_range(-8.0, 8.0),
                             xscale: 0.0,
                             grow: 0.0,
-                            image_angle: 0.0,
+                            image_angle,
                             // GML `sprDebrisN` default arm: `image_index =
                             // random(image_number)` is float, but the
                             // ring packs `frame + xscale/32` and the
@@ -622,7 +667,7 @@ impl SpiralCtl {
                             // frame fraction leaks into `fract` and
                             // newborns decode at xscale up to 32
                             // (the "debris spawns massive" bug).
-                            frame: (rand::random::<f32>() * 4.0).floor().min(3.0),
+                            frame,
                             sound_played: false,
                         };
                         self.step_debris_slot(slot, false);
@@ -635,7 +680,7 @@ impl SpiralCtl {
             // destroy at 3.0 not 2.5) but `lanim` keeps realtime cadence.
             // Do NOT rewind births here — the shader indexes slots by
             // `(birth-1) % N`, so rewinding would orphan live wisps.
-            // Scale fast-forward is carried by drain_bias instead.
+            // The CPU snapshot applies the same drain law per birth.
             self.drain_bias += 5.5;
         }
 
@@ -657,6 +702,9 @@ impl SpiralCtl {
             if !s.alive {
                 continue;
             }
+            let (rad, dir) = (s.dist * s.xscale, s.angle.to_radians());
+            s.draw_x = s.xstart + rad * dir.cos();
+            s.draw_y = s.ystart - rad * dir.sin();
             s.dist += s.grow;
             s.grow += 0.0005;
             s.xscale += s.grow / 1.5;
@@ -670,30 +718,9 @@ impl SpiralCtl {
             }
         }
 
-        for v in self.vards.iter_mut() {
-            if !v.alive {
-                continue;
-            }
-            let (rad, dir) = (v.dist * v.xscale, v.angle.to_radians());
-            let dx = rad * dir.cos();
-            let dy = -rad * dir.sin();
-            v.angle += v.turnspeed;
-            v.dist += v.grow;
-            v.grow += 0.0005;
-            v.xscale += v.grow / 1.5;
-            v.grow = (v.grow + 1.0) * (1.0 + 0.001 * v.xscale) - 1.0;
-            if drain {
-                v.grow *= 1.5;
-            }
-            v.grow *= v.xscale * 0.05 + 1.0;
-            v.image_angle += v.rotspeed;
-            // Live-width cull like debris above (GML `view_width`).
-            if dx + v.xstart < -16.0
-                || dx + v.xstart > self.view_w + 16.0
-                || dy + v.ystart < -16.0
-                || dy + v.ystart > GUI_H + 16.0
-            {
-                v.alive = false;
+        for i in 0..self.vards.len() {
+            if self.vards[i].alive {
+                self.step_vard_slot(i, drain);
             }
         }
     }
@@ -703,15 +730,17 @@ impl SpiralCtl {
             alive: true,
             xstart: x,
             ystart: y,
-            dist: rand::random::<f32>() * 135.0 + 10.0,
-            angle: rand::random::<f32>() * 360.0,
+            dist: self.random_range(10.0, 145.0),
+            angle: self.random_range(0.0, 360.0),
             grow: 0.0,
             xscale: 0.0,
-            frame: if rand::random::<f32>() * 4.0 < 1.0 {
+            frame: if self.random01() * 4.0 < 1.0 {
                 1.0
             } else {
                 0.0
             },
+            draw_x: x,
+            draw_y: y,
         };
         if let Some(slot) = self.stars.iter_mut().find(|s| !s.alive) {
             *slot = star;
@@ -721,26 +750,34 @@ impl SpiralCtl {
     }
 
     fn push_vard(&mut self, x: f32, y: f32, path: &'static str, frame: usize) {
-        let vard = Vard {
+        let mut vard = Vard {
             alive: true,
             xstart: x,
             ystart: y,
-            dist: rand::random::<f32>() * 135.0 + 10.0,
-            angle: rand::random::<f32>() * 360.0,
-            turnspeed: rand::random::<f32>() * 8.0 - 4.0,
-            rotspeed: rand::random_range(20.0..30.0)
-                * if rand::random_bool(0.5) { 1.0 } else { -1.0 },
+            dist: self.random_range(10.0, 145.0),
+            angle: self.random_range(0.0, 360.0),
+            turnspeed: self.random_range(-4.0, 4.0),
+            rotspeed: self.random_range(20.0, 30.0)
+                * if self.random01() < 0.5 { 1.0 } else { -1.0 },
             grow: 0.0,
             xscale: 0.0,
-            image_angle: 0.0,
+            image_angle: self.random_range(0.0, 360.0),
+            draw_x: x,
+            draw_y: y,
+            draw_angle: 0.0,
+            sound_played: false,
             path,
             frame,
         };
-        if let Some(slot) = self.vards.iter_mut().find(|v| !v.alive) {
-            *slot = vard;
+        vard.draw_angle = vard.image_angle;
+        let index = if let Some(index) = self.vards.iter().position(|v| !v.alive) {
+            self.vards[index] = vard;
+            index
         } else {
             self.vards.push(vard);
-        }
+            self.vards.len() - 1
+        };
+        self.step_vard_slot(index, false);
     }
 
     /// One GML `SpiralDebris/Step_0` integration over mote `i`
@@ -799,6 +836,33 @@ impl SpiralCtl {
         };
     }
 
+    fn step_vard_slot(&mut self, i: usize, drain: bool) {
+        let v = &mut self.vards[i];
+        let (rad, dir) = (v.dist * v.xscale, v.angle.to_radians());
+        let dx = rad * dir.cos();
+        let dy = -rad * dir.sin();
+        v.draw_x = v.xstart + dx;
+        v.draw_y = v.ystart + dy;
+        v.draw_angle = v.image_angle;
+        v.angle += v.turnspeed;
+        v.dist += v.grow;
+        v.grow += 0.0005;
+        v.xscale += v.grow / 1.5;
+        v.grow = (v.grow + 1.0) * (1.0 + 0.001 * v.xscale) - 1.0;
+        if drain {
+            v.grow *= 1.5;
+        }
+        v.grow *= v.xscale * 0.05 + 1.0;
+        v.image_angle += v.rotspeed;
+        if dx + v.xstart < -16.0
+            || dx + v.xstart > self.view_w + 16.0
+            || dy + v.ystart < -16.0
+            || dy + v.ystart > GUI_H + 16.0
+        {
+            v.alive = false;
+        }
+    }
+
     /// Advance the accumulator by `dt_ticks` 30 Hz ticks (bevy `step`,
     /// verbatim).
     pub fn step(&mut self, dt_ticks: f32) {
@@ -851,6 +915,15 @@ impl SpiralCtl {
         bg_alpha: f32,
         draw_bolts: bool,
     ) -> VortexSnapshot {
+        self.snapshot_with_lightning_and_origin(bg_alpha, draw_bolts, [0.0, 0.0])
+    }
+
+    pub fn snapshot_with_lightning_and_origin(
+        &self,
+        bg_alpha: f32,
+        draw_bolts: bool,
+        origin: [f32; 2],
+    ) -> VortexSnapshot {
         let mut wisps = [[-1.0; 4]; VORTEX_WISPS];
         for (dst, src) in wisps.iter_mut().zip(self.ring.iter()) {
             *dst = *src;
@@ -859,33 +932,49 @@ impl SpiralCtl {
         for (dst, src) in debris.iter_mut().zip(self.debris_ring.iter()) {
             *dst = *src;
         }
-        let mut streams = [[-1.0, 0.0]; VORTEX_WISPS];
-        for (dst, src) in streams.iter_mut().zip(self.streams.iter()) {
-            *dst = [src.lanim, src.langle];
+        let mut streams = [[-1.0, 0.0, 0.0]; VORTEX_WISPS];
+        for (slot, (dst, src)) in streams.iter_mut().zip(self.streams.iter()).enumerate() {
+            let scale = self.ring[slot][2]
+                .ge(&0.0)
+                .then(|| self.wisp_scale_at(self.ring[slot][2]))
+                .unwrap_or(0.0);
+            *dst = [src.lanim, src.langle, scale];
         }
-        // GML `SpiralStar/Step_0` integrates draw pos on the mote
-        // (`x = xstart + lengthdir_x(dist * xscale, angle)` with the
-        // xscale-only radius on BOTH axes); the snapshot bakes the same
-        // pos here so the shader stays a pure sampler.
         let mut stars = [[-1000.0, 0.0, 0.0, 0.0]; VORTEX_WISPS];
         for (dst, src) in stars.iter_mut().zip(self.stars.iter()) {
             if !src.alive {
                 continue;
             }
-            let rad = src.dist * src.xscale;
-            let dir = src.angle.to_radians();
-            *dst = [
-                src.xstart + rad * dir.cos(),
-                src.ystart - rad * dir.sin(),
+            *dst = [src.draw_x, src.draw_y, src.xscale, src.frame];
+        }
+        let mut vards = [[-1000.0, 0.0, 0.0, 0.0]; VORTEX_VARDS];
+        let mut vard_meta = [[0.0; 4]; VORTEX_VARDS];
+        let mut vard_index = 0usize;
+        for src in self.vards.iter().filter(|v| v.alive) {
+            let Some(slot) = vard_slot(src.path) else {
+                continue;
+            };
+            if vard_index >= VORTEX_VARDS {
+                break;
+            }
+            let (cell_w, cell_h) = VARD_CELL_SIZES[slot];
+            vards[vard_index] = [
+                src.draw_x,
+                src.draw_y,
+                src.draw_angle.to_radians(),
                 src.xscale,
-                src.frame,
             ];
+            let frame = src.frame.min(VARD_FRAME_COUNTS[slot].saturating_sub(1));
+            vard_meta[vard_index] = [frame as f32, cell_w, cell_h, slot as f32];
+            vard_index += 1;
         }
         VortexSnapshot {
             wisps,
             debris,
             streams,
             stars,
+            vards,
+            vard_meta,
             ticks: self.ticks,
             drain_bias: self.drain_bias,
             bg_rgb: [0.0, 0.0, 0.0],
@@ -893,21 +982,22 @@ impl SpiralCtl {
             thresh: self.thresh(),
             kindpacked: self.kindpacked(),
             draw_bolts: if draw_bolts { 1.0 } else { 0.0 },
-            // Live GUI view rect: `display_set_gui_size(view)` makes GUI
-            // px == view px 1:1, so the fullscreen quad maps uv 1:1 onto
-            // `(view_w, 240)` centered at `(view_w/2, 120)` — GML draws
-            // wisps at `view + local`, i.e. screen px == GUI px.
-            view: [self.view_w / 2.0, GUI_H / 2.0, self.view_w, GUI_H],
+            view: [
+                origin[0] + self.view_w / 2.0,
+                origin[1] + GUI_H / 2.0,
+                self.view_w,
+                GUI_H,
+            ],
         }
     }
 }
 
-/// Per-tick angle advance (bevy `spiral_angle_inc`, verbatim): Proto runs
-/// ~10 deg/tick with a slow wobble plus uniform ±1 jitter, everything
-/// else runs a deterministic ~8 deg/tick wobble.
+/// Per-tick angle advance without the Proto RNG lane. The caller adds
+/// the per-seed jitter used by Proto; all other kinds use the exact
+/// deterministic wobble.
 pub fn spiral_angle_inc(angle: f32, kind: SpiralKind) -> f32 {
     if kind == SpiralKind::Proto {
-        10.0 + deg_sin(angle / 300.0) * 2.0 + (rand::random::<f32>() * 2.0 - 1.0)
+        10.0 + deg_sin(angle / 300.0) * 2.0
     } else {
         8.0 + deg_sin(angle / 300.0)
     }
@@ -956,18 +1046,17 @@ mod vortex_ui_parity {
     use super::*;
 
     /// GML `Spiral/Step_0` growth recurrence verbatim: iterating
-    /// `step_wisp_grow` 119 times from 0 must reproduce the shader's
-    /// `SCALE_TABLE[119]` (2.539587) — the table the fullscreen pass
-    /// sizes every wisp from.
+    /// `step_wisp_grow` 119 times from 0 reaches the reference tail
+    /// scale (2.539587).
     #[test]
-    fn wisp_growth_matches_shader_table_tail() {
+    fn wisp_growth_matches_reference_tail() {
         let (mut grow, mut xs) = (0.0f32, 0.0f32);
         for _ in 0..119 {
             (grow, xs) = SpiralCtl::step_wisp_grow(grow, xs, false, false);
         }
         assert!(
             (xs - 2.539_587).abs() < 1e-3,
-            "wisp xscale at age 119 diverged from SCALE_TABLE[119]: {xs}"
+            "wisp xscale at age 119 diverged from the reference tail: {xs}"
         );
     }
 

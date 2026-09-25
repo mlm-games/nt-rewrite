@@ -55,9 +55,10 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
-use crate::vortex_pass::{VortexPass, VortexTexture};
+use crate::vortex_pass::{VARD_VARIANTS, VortexPass, VortexTexture};
 use bevy_ecs::prelude::*;
 use glam::Vec2;
 use rand::RngExt;
@@ -65,7 +66,7 @@ use repame_anim::{AnimCatalog, AtlasDesc};
 use repame_sim::{Sim, SimTime};
 use repame_sprite::{
     BatchDesc, Camera2d, FrameInput, GeomHandle, PickEvent, SpriteBatch, SpriteInstance,
-    Viewport2d, Viewport2dGpu, Viewport2dGpuWithId,
+    Viewport2dGpuWithHudShared, Viewport2dGpuWithIdShared, Viewport2dShared,
 };
 use repose_canvas::Embedded;
 use repose_core::PaddingValues;
@@ -85,7 +86,8 @@ use crate::data::AreaId;
 use crate::input::{GamepadState, KeyCode, MouseState, NtInput, sample_gamepads_mapped};
 use crate::keymap::{InputMapState, KeyBindings};
 use crate::render::{
-    ATLAS_PAGES, ATLAS_SIZE, CamPoi, CamStepInput, GmlCamera, RenderAssets, Z_BLOOM, Z_CROSSHAIR,
+    ATLAS_PAGES, ATLAS_SIZE, CamPoi, CamStepInput, GmlCamera, RenderAssets, StaticWorldCache,
+    Z_BLOOM, Z_CROSSHAIR,
     Z_FAINTED, Z_FOG, Z_FX, Z_HUD, Z_MENU, Z_PORTAL_INDICATOR, Z_SHADOW, Z_SIDEART,
     Z_SPIRAL_FIGURES, Z_SPLASH, Z_TOUCH, background_color, bloom_sprites, cam_viewdist_for,
     crosshair_sprites, decode_png, fainted_bar_sprites, fog_sprites, fx_instances, fx_texts,
@@ -94,7 +96,7 @@ use crate::render::{
     portal_indicator_sprites, shadow_sprites,
     letterbox_sprites, settings_slider_hit, settings_slider_value, SettingSliderTarget,
     sideart_sprites, spiral_figures, splash_sprites, stamp_z, title_cam_focus, title_camera_step,
-    touch_sprites, view_rect_world, world_camera, world_instances,
+    touch_sprites, view_rect_world, world_camera, world_instances_cached,
 };
 use crate::schedule::build_sim_schedule;
 use crate::setup::setup_run_with_seed;
@@ -218,6 +220,7 @@ pub struct App {
     /// (`GenCont`/`LevCont` build a fresh `SpiralCont`); falling edge
     /// kills it (`GenCont/Destroy` destroys it at generation end).
     adv_cover: bool,
+    adv_throne_ii: bool,
     /// Run seed the spiral was last warmed/killed for. `setup_run`
     /// writes `AppState::InGame` directly mid-schedule (not via an
     /// edge the lifecycle can see), so the InGame-entry kill keys off
@@ -231,6 +234,7 @@ pub struct App {
     adv_area: u8,
     spiral: SpiralCtl,
     assets: Option<RenderAssets>,
+    static_world_cache: StaticWorldCache,
     /// Art dir the catalog loaded from (vortex background textures
     /// decode from here on area switches).
     assets_dir: Option<PathBuf>,
@@ -240,11 +244,12 @@ pub struct App {
     /// art changes (frame/tint/pixels/scale); cleared when assets unload.
     cursor_img: Option<std::sync::Arc<repose_core::CustomCursorImage>>,
     cursor_img_key: Option<(i32, [u32; 3], u64, u32)>,
-    last_live_frame: Option<FrameInput>,
+    last_live_frame: Option<Arc<FrameInput>>,
     /// Decoded vortex background textures for `vortex_tex_area`
-    /// (slots: spiral, bolt, debris, proto, idpd, idpd2).
+    /// (slots: spiral, bolt, debris, proto, idpd, idpd2, star, variants).
     vortex_tex: Vec<VortexTexture>,
     vortex_tex_area: Option<u8>,
+    vortex_tex_gen: u64,
     // -- staged shell input (drained into `NtInput`/`MenuEdge` per frame) --
     // Shared staging owns every level: event-staged physical holds land
     // in `staging.held` (layout-independent positions, GML
@@ -366,16 +371,19 @@ impl App {
             letterbox_frame: 0.0,
             adv_state: AppState::default(),
             adv_cover: false,
+            adv_throne_ii: false,
             adv_seed: 0,
             adv_area: 0,
             spiral,
             assets: None,
+            static_world_cache: StaticWorldCache::default(),
             assets_dir: None,
             cursor_img: None,
             cursor_img_key: None,
             last_live_frame: None,
             vortex_tex: Vec::new(),
             vortex_tex_area: None,
+            vortex_tex_gen: 0,
             window_focused: true,
             staging: repame_shell::Staging::shared(),
             shortcut_edges: repame_shell::shared_edges(),
@@ -435,26 +443,29 @@ impl App {
         self.sim.world.insert_resource(catalog);
         crate::anim::backfill_spawn_anims(&mut self.sim.world);
         self.assets = Some(assets);
+        self.static_world_cache.clear();
         self.assets_dir = Some(dir.to_path_buf());
         self.cursor_img = None;
         self.cursor_img_key = None;
         self.last_live_frame = None;
         self.vortex_tex.clear();
         self.vortex_tex_area = None;
+        self.vortex_tex_gen = self.vortex_tex_gen.wrapping_add(1).max(1);
         Ok(())
     }
 
     /// Vortex background textures for a GML area (headless-observable;
     /// same decode the live frame uses on area switches).
     pub fn debug_vortex_textures(dir: &Path, gml_area: u8) -> Vec<VortexTexture> {
-        Self::load_vortex_textures(dir, gml_area)
+        Self::load_vortex_textures(dir, gml_area, 1)
     }
 
     /// Vortex background textures for a GML area (decoded once per
     /// area; slots match the shader bindings: spiral, bolt, debris,
-    /// proto, idpd, idpd2, star). Missing files fall back to area 0 debris
-    /// so the pass always has seven bound slots.
-    fn load_vortex_textures(dir: &Path, gml_area: u8) -> Vec<VortexTexture> {
+    /// proto, idpd, idpd2, star, and seven variant debris strips).
+    /// Missing files fall back to area 0 debris so the pass always has
+    /// fourteen bound slots.
+    fn load_vortex_textures(dir: &Path, gml_area: u8, generation: u64) -> Vec<VortexTexture> {
         fn decode(dir: &Path, name: &str) -> Option<(u32, u32, Vec<u8>)> {
             decode_png(&dir.join("images").join(format!("{name}.png"))).ok()
         }
@@ -466,7 +477,7 @@ impl App {
             .or_else(|| decode(dir, "sprDebris0"))
             .unwrap_or((1u32, 1u32, vec![255, 255, 255, 255]));
         let mut out = Vec::new();
-        for (slot, stem) in [
+        let stems = [
             "sprSpiral",
             "sprPortalLightning",
             "",
@@ -474,10 +485,8 @@ impl App {
             "sprSpiralIDPD",
             "sprSpiralIDPD2",
             "sprSpiralStar",
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        ];
+        for (slot, stem) in stems.into_iter().enumerate() {
             let (w, h, rgba) = if stem.is_empty() {
                 debris.clone()
             } else {
@@ -488,6 +497,18 @@ impl App {
                 w,
                 h,
                 rgba: rgba.into(),
+                generation,
+            });
+        }
+        for (index, stem) in VARD_VARIANTS.into_iter().enumerate() {
+            let (w, h, rgba) = decode(dir, stem.strip_prefix("images/").unwrap_or(stem))
+                .unwrap_or((1u32, 1u32, vec![0, 0, 0, 0]));
+            out.push(VortexTexture {
+                slot: (7 + index) as u32,
+                w,
+                h,
+                rgba: rgba.into(),
+                generation,
             });
         }
         out
@@ -641,7 +662,7 @@ impl App {
             // GML `Nothing2/Create_0` sets `bossfight` on its fresh
             // `SpiralCont`: no debris births while Throne II runs (any
             // phase — pending spawn, live fight, death pageant).
-            self.spiral.bossfight_suppressed = self
+            let throne_ii_active = self
                 .sim
                 .world
                 .query::<&crate::comps_b::Enemy>()
@@ -653,6 +674,7 @@ impl App {
                     .query::<&crate::comps_b::CampfireState>()
                     .iter(&self.sim.world)
                     .any(|c| matches!(c.phase, crate::comps_b::CampfirePhase::SpawnThroneII));
+            self.spiral.bossfight_suppressed = throne_ii_active;
             // Ordinary pause freezes the spiral: GML
             // `UberCont/Step_1` deactivates the room. Generation covers
             // are the exception: `GenCont`/`LevCont` keep drawing their
@@ -749,6 +771,18 @@ impl App {
         // the same tick the kill just drained (the load-end double
         // start, ticks 185→150 over live play).
         let mut killed_this_tick = false;
+        let throne_ii_active = self
+            .sim
+            .world
+            .query::<&crate::comps_b::Enemy>()
+            .iter(&self.sim.world)
+            .any(|e| e.kind == crate::data::EnemyKind::ThroneII)
+            || self
+                .sim
+                .world
+                .query::<&crate::comps_b::CampfireState>()
+                .iter(&self.sim.world)
+                .any(|c| matches!(c.phase, crate::comps_b::CampfirePhase::SpawnThroneII));
         let splash_mode = self
             .sim
             .world
@@ -783,6 +817,18 @@ impl App {
             self.adv_seed = seed;
             self.adv_area = gml_area_for_area(area);
             killed_this_tick = true;
+        }
+        if state == AppState::InGame && throne_ii_active && !self.adv_throne_ii {
+            let view_w = self.spiral.view_w;
+            self.spiral = SpiralCtl::warmed_up_for_gml_area_seeded_in_view(
+                gml_area_for_area(area),
+                seed,
+                view_w,
+            );
+            self.spiral.bossfight_suppressed = true;
+            self.adv_seed = seed;
+            self.adv_area = gml_area_for_area(area);
+            killed_this_tick = false;
         }
         // GML `Vlambeer/Create_0` `want_quit_to_menu` branch verbatim:
         // quitting to the logo menu builds a FRESH live `SpiralCont`
@@ -865,6 +911,7 @@ impl App {
         }
         self.adv_state = state;
         self.adv_cover = cover;
+        self.adv_throne_ii = state == AppState::InGame && throne_ii_active;
     }
 
     /// One fixed-step GML camera step (`objects/BackCont/Step_0.gml`).
@@ -1134,6 +1181,27 @@ impl App {
                         _ => "sndPortalFlyby4",
                     },
                     // GML `snd_play_pitchvol(_snd, 0.1, opt_ambvol)`.
+                    volume: vol,
+                    variance: 0.1,
+                });
+            }
+        }
+        for (i, vard) in self.spiral.vards.iter_mut().enumerate() {
+            if vard.flyby_due() {
+                let n = 1 + (crate::vortex::stream_pick(seed, 20_000 + i as u32, 11) % 4);
+                let vol = self
+                    .sim
+                    .world
+                    .get_resource::<crate::savedata_part::SaveData>()
+                    .map(|s| s.settings.ambience_volume)
+                    .unwrap_or(1.0);
+                cues.push(AudioCue {
+                    name: match n {
+                        1 => "sndPortalFlyby1",
+                        2 => "sndPortalFlyby2",
+                        3 => "sndPortalFlyby3",
+                        _ => "sndPortalFlyby4",
+                    },
                     volume: vol,
                     variance: 0.1,
                 });
@@ -3200,7 +3268,7 @@ impl App {
             };
             stamp_z(&mut s, Z_SHADOW);
             let mut w = if playing {
-                world_instances(&mut self.sim.world, assets)
+                world_instances_cached(&mut self.sim.world, assets, &mut self.static_world_cache)
             } else {
                 Vec::new()
             };
@@ -3586,14 +3654,21 @@ impl App {
                 }
             }
         };
-        let snap = self.spiral.snapshot_with_lightning(bg_alpha, true);
+        let draw_bolts = !matches!(state, AppState::Title);
+        let snap = self.spiral.snapshot_with_lightning_and_origin(
+            bg_alpha,
+            draw_bolts,
+            [self.gml_cam.x, self.gml_cam.y],
+        );
         self.last_bg_alpha = snap.bg_alpha;
         // Vortex art follows the GML area (debris strip is per-area);
         // decode once per area, not per frame.
         let gml_area = gml_area_for_area(area);
         if self.assets_dir.is_some() && self.vortex_tex_area != Some(gml_area) {
             if let Some(dir) = self.assets_dir.clone() {
-                self.vortex_tex = Self::load_vortex_textures(&dir, gml_area);
+                self.vortex_tex_gen = self.vortex_tex_gen.wrapping_add(1).max(1);
+                let generation = self.vortex_tex_gen;
+                self.vortex_tex = Self::load_vortex_textures(&dir, gml_area, generation);
                 self.vortex_tex_area = Some(gml_area);
             }
         }
@@ -3620,7 +3695,7 @@ impl App {
             None
         };
         let vortex_above = vortex_layer.is_some()
-            && matches!(state, AppState::Title | AppState::InGame)
+            && state == AppState::Title
             && self.last_bg_alpha < 0.5;
         if !vortex_above {
             sprites.extend(std::mem::take(&mut spiral_figure_sprites));
@@ -3712,20 +3787,16 @@ impl App {
             self.last_live_frame = None;
         }
 
-        // Viewport input snapshot (owned from here on; handlers below only
-        // touch staged input through the raw pointer).
-        let frame = FrameInput {
+        let frame = Arc::new(FrameInput {
             cam: self.cam,
             world_size,
-            // Cold-start dp fallback for the GPU prepare path (once the
-            // first paint lands, `FrameGeom` carries the real viewport).
             viewport_dp,
             sprites,
             texts,
             background,
             overlay_color,
             chroma: 0.0,
-        };
+        });
         let live_offer = menu_kind == Some(MenuOverlay::Mutation)
             || self
                 .sim
@@ -3744,7 +3815,7 @@ impl App {
             if !paused {
                 self.last_live_frame = Some(frame.clone());
             }
-            frame
+            frame.clone()
         };
 
         let staging = self.staging.clone();
@@ -3760,7 +3831,7 @@ impl App {
                 .as_ref()
                 .map(|a| a.batch_desc())
                 .unwrap_or_default();
-            Viewport2dGpu(display_frame, geom, uploads, desc, move |ev| {
+            Viewport2dGpuWithHudShared(display_frame, geom, uploads, desc, move |ev| {
                 let mut staging = staging.borrow_mut();
                 match ev {
                     PickEvent::Press {
@@ -3794,7 +3865,7 @@ impl App {
         } else {
             let geom = GeomHandle::new();
             let staging = self.staging.clone();
-            Viewport2d(display_frame, geom, move |ev| {
+            Viewport2dShared(display_frame, geom, move |ev| {
                 let mut staging = staging.borrow_mut();
                 match ev {
                     PickEvent::Press {
@@ -3846,8 +3917,8 @@ impl App {
                     .as_ref()
                     .map(|a| a.batch_desc())
                     .unwrap_or_default();
-                let mut view = Viewport2dGpuWithId(
-                    chrome_frame,
+                let mut view = Viewport2dGpuWithIdShared(
+                    Arc::new(chrome_frame),
                     GeomHandle::new(),
                     self.assets
                         .as_ref()
@@ -3860,7 +3931,7 @@ impl App {
                 view.modifier = view.modifier.hit_passthrough();
                 Some(view)
             } else {
-                let mut view = Viewport2d(chrome_frame, GeomHandle::new(), |_| {});
+                let mut view = Viewport2dShared(Arc::new(chrome_frame), GeomHandle::new(), |_| {});
                 view.modifier = view.modifier.hit_passthrough();
                 Some(view)
             }
@@ -4066,8 +4137,8 @@ impl App {
                         overlay_color: None,
                         chroma: 0.0,
                     };
-                    let mut view = Viewport2dGpuWithId(
-                        frame,
+                    let mut view = Viewport2dGpuWithIdShared(
+                        Arc::new(frame),
                         GeomHandle::new(),
                         assets.take_uploads(),
                         assets.batch_desc(),
