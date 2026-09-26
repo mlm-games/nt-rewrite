@@ -3721,8 +3721,19 @@ impl App {
         let mut vortex_layer = snap.map(|snap| {
             let mut pass = VortexPass::new(snap);
             pass.extend_textures(self.vortex_tex.clone());
+            // The engine hands this node's rect to the pass as the
+            // viewport, so anchoring to the GML box both clips the
+            // quad to the pillarbox and keeps its `view` uv->GUI
+            // mapping 1:1 with the batch. `fill_max_size` spread the
+            // spiral over the bars: the batch frames in-shader, a
+            // fullscreen pass only ever sees the raw canvas.
+            let box_dp = self.gml_frame().box_dp;
             Embedded(
-                Modifier::new().fill_max_size().hit_passthrough(),
+                Modifier::new()
+                    .absolute()
+                    .size(Dp(box_dp[2]), Dp(box_dp[3]))
+                    .offset(Some(Dp(box_dp[0])), Some(Dp(box_dp[1])), None, None)
+                    .hit_passthrough(),
                 Callback::new(pass),
             )
         });
