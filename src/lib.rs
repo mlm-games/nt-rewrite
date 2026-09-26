@@ -2315,6 +2315,39 @@ impl App {
                     }
                 }
             }
+            // In-run pause button (GML `UberCont/Draw_64:51-60`): the
+            // only pause route a touch device has (no Esc key), and the
+            // only one a mouse gets either. GML loops
+            // `device_mouse_check_button_released` over touches 0..4 —
+            // released contacts, so a press that lands in the circle and
+            // lifts pauses, exactly as the port's `staging_clicks` and
+            // `released_touch_clicks` are both release events.
+            {
+                let viewport_dp = self.view_viewport_dp;
+                let gml_view = gml_view_size(viewport_dp);
+                let vw = gml_view[0];
+                // `route_menu_click`'s dp->GUI law: divide the dp axis by
+                // the GUI scale; touch contacts come in dp and convert by
+                // the view/viewport ratio (the same two conversions the
+                // touch sampler uses).
+                let k = (viewport_dp[1].max(1.0) / 240.0).max(1e-6);
+                let (sx, sy) = (
+                    gml_view[0] / viewport_dp[0].max(1e-6),
+                    gml_view[1] / viewport_dp[1].max(1e-6),
+                );
+                let clicked = k.is_finite()
+                    && staging_clicks.last().is_some_and(|c| {
+                        crate::input::pause_button_hit(c.dp[0] / k, c.dp[1] / k, vw)
+                    });
+                let tapped = k.is_finite()
+                    && released_touch_clicks
+                        .iter()
+                        .any(|(_, p)| crate::input::pause_button_hit(p.x * sx, p.y * sy, vw));
+                if clicked || tapped {
+                    self.sim.world.resource_mut::<MenuEdge>().pause_pressed = true;
+                    released_touch_clicks.clear();
+                }
+            }
         } else if menu_open && !offer_open {
             // Open menu over a live run: right-click steps back (GML
             // `BackButton` `mb_right` parity — Settings pops one level
@@ -3441,11 +3474,12 @@ impl App {
                     .iter(&self.sim.world)
                     .next()
                     .is_none()
-                && self
-                    .sim
-                    .world
-                    .get_resource::<crate::savedata_part::SaveData>()
-                    .is_none_or(|s| !s.settings.gamepad_enabled && !s.settings.keyboard_enabled);
+                && {
+                    let (keyboard, gamepad) = crate::input::gml_input_device(
+                        self.sim.world.get_resource::<crate::savedata_part::SaveData>(),
+                    );
+                    !keyboard && !gamepad
+                };
             let gamepad_live = playing
                 && self
                     .sim
@@ -3466,6 +3500,19 @@ impl App {
                 s.extend(t);
             } else {
                 self.last_touch_count = 0;
+            }
+            // In-run pause button (GML `UberCont/Draw_64:46-61`). Live
+            // play only, and above every other chrome rung: `UberCont`
+            // (-1000) is lower than `TopCont` (-15) and `Menu` (-1001).
+            // GML's `!want_pause` is the port's "not paused, no overlay".
+            if state == AppState::InGame && !paused && !game_over && menu_kind.is_none() {
+                s.extend(crate::render::pause_button_sprite(
+                    &mut self.sim.world,
+                    assets,
+                    viewport_dp,
+                    world_size,
+                    &self.cam,
+                ));
             }
             // Boot reel (`Vlambeer/Draw_0` + `Logo/Draw_0`).
             if menu_kind == Some(MenuOverlay::Splash) {

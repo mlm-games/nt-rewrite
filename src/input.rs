@@ -97,6 +97,42 @@ fn approach(v: f32, target: f32, delta: f32) -> f32 {
 /// GML `ButtonAct`/`ButtonSwap` radius (`rad = 25`).
 pub const TOUCH_BUTTON_RADIUS: f32 = 25.0;
 
+/// GML in-run pause button center, `UberCont/Draw_64:47`
+/// (`_pause_x = view_width - 24, _pause_y = 16`) in GUI/view px.
+pub const PAUSE_BUTTON_GUI: [f32; 2] = [-24.0, 16.0];
+/// GML `UberCont/Draw_64:56` hit circle — a raw 24, deliberately NOT
+/// `get_touch_radius` (that scaling applies to the `MobileUI` claims,
+/// and this test is a plain `point_in_circle`).
+pub const PAUSE_BUTTON_RADIUS: f32 = 24.0;
+
+/// GML `UberCont/Draw_64:56` `point_in_circle` around
+/// [`PAUSE_BUTTON_GUI`]. `vw` is the GML view width in GUI px. The
+/// button's own circle clears `ButtonActive`'s 25-radius claim at
+/// `(vw - 64, 72)` by 7 px, so a pause tap never doubles as an ability
+/// press.
+pub fn pause_button_hit(gx: f32, gy: f32, vw: f32) -> bool {
+    (gx - (vw + PAUSE_BUTTON_GUI[0])).powi(2) + (gy - PAUSE_BUTTON_GUI[1]).powi(2)
+        <= PAUSE_BUTTON_RADIUS.powi(2)
+}
+
+/// GML `opt_keyboard` / `opt_gamepad` for the live device, verbatim
+/// `InputHandling:225` (`keyboard = opt_keyboard && !opt_gamepad`,
+/// `gamepad = opt_gamepad`, `touch = !(gamepad || keyboard)`).
+///
+/// `opt_keyboard` names an input DEVICE, not a preference: the Android
+/// OS-change forces it false (`scrOptionsUpdate`), so the persisted
+/// setting only ever decides the desktop preview. Reading it straight
+/// off the save is what hid the touch chrome on a phone whose save had
+/// been written before that force existed — while the touch INPUT kept
+/// working, because the sampler gates on fingers-down, not on the flag.
+pub fn gml_input_device(save: Option<&crate::savedata_part::SaveData>) -> (bool, bool) {
+    let gamepad = save.is_some_and(|s| s.settings.gamepad_enabled);
+    let keyboard = !cfg!(target_os = "android")
+        && save.is_some_and(|s| s.settings.keyboard_enabled)
+        && !gamepad;
+    (keyboard, gamepad)
+}
+
 impl Default for NtInput {
     fn default() -> Self {
         Self {
@@ -1061,11 +1097,19 @@ pub fn sample_touch_full(
     let lifted: Vec<i64> = std::mem::take(&mut output.touch_lifted);
     let gone = |id: i64| lifted.contains(&id);
 
-    // Ability corner (outer top-right): press edge only.
-    if contacts
-        .iter()
-        .any(|c| c.just_pressed && c.start.y < 96.0 && c.start.x >= width - 96.0)
-    {
+    // Ability corner (outer top-right): press edge only. The in-run pause
+    // button owns its own circle at `(vw - 24, 16)` and is checked by
+    // the shell, so exclude it here — in GML the two never overlap
+    // (`ButtonActive` claims within 25 of `(vw - 64, 72)`, 7 px clear of
+    // the pause disc) and a pause tap must not double as an ability.
+    let on_pause_button =
+        |c: &TouchContact| pause_button_hit(c.start.x, c.start.y, width);
+    if contacts.iter().any(|c| {
+        c.just_pressed
+            && c.start.y < 96.0
+            && c.start.x >= width - 96.0
+            && !on_pause_button(c)
+    }) {
         output.ability_pressed = true;
     }
     // Cycle corner (inner top-right) folds into the swap-button
@@ -1086,9 +1130,12 @@ pub fn sample_touch_full(
     // `get_nearest_touch(rad)` claim in GML — the corner tap below and
     // the button claim are one gesture).
     let swap_idx = nearest_free(swap_home, btn_capture, &held).or_else(|| {
-        contacts
-            .iter()
-            .position(|c| c.just_pressed && c.start.y < 96.0 && c.start.x >= width - 192.0)
+        contacts.iter().position(|c| {
+            c.just_pressed
+                && c.start.y < 96.0
+                && c.start.x >= width - 192.0
+                && !on_pause_button(c)
+        })
     });
     if let Some(i) = swap_idx {
         held.push(contacts[i].id as i64);

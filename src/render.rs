@@ -1191,17 +1191,21 @@ fn wall_out_part(
 /// (`Top/Create_0:11-14`), drawn from the Trans strip at `y - 8`
 /// (`SubTopCont/Draw_0:22-24`).
 ///
-/// `TopSmall/Create_0:1-4` kills anything whose position meets a `Wall`, and
-/// `position_meeting` uses the bounding box, not the mask. `Wall/Create_0:11-14`
-/// writes the legacy GML bbox vars `l = 0, r = 0, w = 24, h = 24`, so every wall
-/// carries a 24x24 box anchored at its top-left sprite corner — `[x, x+23] x
-/// [y, y+23]`, while the wall art is only 16x16. (`mcr_wall_update_lrwh`, run
-/// later in `GenCont/Alarm_1`, only ever shrinks that box, and the first
-/// `mcr_floor_create_tops` pass already ran with the full 24x24 one.)
-/// The box therefore overshoots the wall cell by one cell east and south, so a
-/// survivor needs no wall at `(wx, wy)`, `(wx-1, wy)`, `(wx, wy-1)` nor
-/// `(wx-1, wy-1)`. That trim is why GML skirting is thinner on the south and
-/// east edges of a wall mass than on the north and west.
+/// `TopSmall/Create_0:1-4` kills anything whose position meets a `Wall` or a
+/// `Floor`, so a survivor sits on a cell with neither. Only the wall's own
+/// cell is tested: `mskWall` is 16x16 and `Wall` inherits its box from the
+/// sprite, so `position_meeting` sees the same 16px cell the art occupies.
+///
+/// Do NOT widen that test to the north-west 2x2 neighbourhood. `Wall/Create_0`
+/// does assign `l = 0, r = 0, w = 24, h = 24` (legacy GM bbox vars), which
+/// would make the box 24x24 and trim the ring one cell east and south — but
+/// that reading is unverifiable (the shipped manual documents `bbox_left` as
+/// read-only and has no `l`/`r`/`w`/`h`), and it is visibly wrong: it halves
+/// the surviving ring (244 -> 123 cells on one level) and leaves 58 walls
+/// with no `TopSmall` to the south, so `scrShadows` fires an extra detached
+/// drop shadow for each — the "second wall" hanging in the open beside the
+/// real one. Measured both ways on the same level: 277 shadow emitters under
+/// the 24x24 reading vs 219 under 16x16.
 ///
 /// GML draws every `TopSmall` with sub-image `-1`, i.e. the strip's last frame
 /// (`SubTopCont/Draw_0:22`); the `image_index = irandom(image_number)` roll in
@@ -1234,16 +1238,7 @@ fn trans_cells(
             for (sx, sy) in [(0.0, 0.0), (16.0, 0.0), (0.0, 16.0), (16.0, 16.0)] {
                 let wx = ((tx + sx) / 16.0).floor() as i32;
                 let wy = ((ty + sy) / 16.0).floor() as i32;
-                let mut wall_bbox_hit = false;
-                'bbox: for dx in [0i32, -1] {
-                    for dy in [0i32, -1] {
-                        if wall_set.contains(&(wx + dx, wy + dy)) {
-                            wall_bbox_hit = true;
-                            break 'bbox;
-                        }
-                    }
-                }
-                if wall_bbox_hit {
+                if wall_set.contains(&(wx, wy)) {
                     continue;
                 }
                 if cells.contains(&(wx.div_euclid(2), wy.div_euclid(2))) {
@@ -1370,6 +1365,11 @@ pub const Z_HUD: f32 = 10.0;
 pub const Z_TOUCH: f32 = 12.0;
 pub const Z_SPLASH: f32 = 15.0;
 pub const Z_MENU: f32 = 20.0;
+/// GML in-run pause button (`UberCont/Draw_64:49`, depth -1000): lower
+/// than `TopCont` (-15) and `Menu` (-1001), so it draws over the mobile
+/// controls and every menu, and only `Logo`/`MainMenuButton` (-10000)
+/// sit in front of it.
+pub const Z_PAUSE_BUTTON: f32 = 25.0;
 
 /// Stamp a layer rung over a finished push batch (keeps the producer's
 /// internal push order: the engine sort is stable on `(blend, z, page)`
@@ -2280,7 +2280,7 @@ pub fn world_instances_cached(
             }
         }
         out.splice(floor_end..floor_end, wall_shadows.drain(..));
-        }
+    }
         if let Some(key) = key {
             cache.key = Some(key);
             cache.prefix = Arc::from(out.clone());
@@ -7636,17 +7636,15 @@ pub fn crosshair_sprites(
     // `if !UberCont.opt_keyboard || index != global.index ||
     // is_gamepad(index)` — the lerped world crosshair is skipped ONLY
     // for a keyboard-driven local player (the raw `Draw_75` cursor
-    // covers their aim). Device facts: `keyboard[index] = opt_keyboard
-    // && !opt_gamepad`, `gamepad[index] = opt_gamepad`. `opt_keyboard`
-    // defaults to `desktop` and the Android OS-change forces it false
-    // (`scrOptionsUpdate`), so a touch local is never keyboard-driven:
-    // it always draws the lerped crosshair — that IS the GML Android
-    // cursor — while `Draw_75` never fires there.
-    let keyboard_local = !cfg!(target_os = "android")
-        && world
-            .get_resource::<crate::savedata_part::SaveData>()
-            .map(|s| !s.settings.gamepad_enabled)
-            .unwrap_or(true);
+    // covers their aim). Device facts come from the one shared law
+    // (`input::gml_input_device`): `keyboard[index] = opt_keyboard &&
+    // !opt_gamepad`, `gamepad[index] = opt_gamepad`. A touch-only
+    // device is never keyboard-driven, so a touch local always draws
+    // the lerped crosshair — that IS the GML Android cursor — while
+    // `Draw_75` never fires there.
+    let (keyboard_local, _) = crate::input::gml_input_device(
+        world.get_resource::<crate::savedata_part::SaveData>(),
+    );
     if keyboard_local {
         return out;
     }
@@ -9393,16 +9391,18 @@ pub fn touch_sprites(
     let Some(input) = world.get_resource::<crate::input::NtInput>().cloned() else {
         return out;
     };
-    // GML `TopCont/Draw_64` gate verbatim: the controls draw from the
-    // live `MobileUI` instances, which exist only on touch devices
-    // (never under `opt_keyboard`/`opt_gamepad`). The port's device
-    // read is the gamepad flag (a live pad means no touch chrome);
-    // Android always draws (GML defaults `opt_keyboard` to `desktop`,
-    // false on Android). Binds the whole chrome (sticks at home +
-    // act/swap/ability/splitfire art), not just live claims — GML
-    // draws the homes at all times in a run.
-    let gamepad = save.as_ref().is_some_and(|s| s.settings.gamepad_enabled);
-    if gamepad {
+    // GML `TopCont/Draw_64:23` gate verbatim: `drawcontrols && player &&
+    // !(MenuOptions && editing_mode) && !opt_keyboard && !opt_gamepad`.
+    // The two option reads go through the one shared device law
+    // (`input::gml_input_device`) so the chrome and the touch INPUT can
+    // never disagree about which device this is — the input sampler
+    // runs on fingers-down, and reading the persisted flags here alone
+    // is what let the chrome vanish on a phone while the sticks still
+    // answered. Binds the whole chrome (sticks at home + act/swap/
+    // ability/splitfire art), not just live claims — GML draws the
+    // homes at all times in a run.
+    let (keyboard, gamepad) = crate::input::gml_input_device(save.as_ref());
+    if keyboard || gamepad {
         return out;
     }
     let view = view_rect_world(canvas_dp, world_size, cam);
@@ -9536,11 +9536,16 @@ pub fn touch_sprites(
     }
     // Fixed buttons (`ButtonAct`/`ButtonSwap`/`ButtonActive` homes from
     // `sample_touch`):
-    // - `ButtonActive`: `sprMobileControlAbility` at 0.75x, dimmed
-    //   while claimed (`merge_color(c_gray)` → gray tint);
-    // - `ButtonAct`: `sprMobileControlCorners` at the act home (drawn
-    //   while its 3s fade lasts; the sampler has no fade state, so the
-    //   button draws while a session is live);
+    // - `ButtonActive`: `sprMobileControlAbility` at 0.75x in `c_white`
+    //   at `_alpha = min(1, rogue_hide / 60)` — GML starts `rogue_hide`
+    //   at 180, so the resting state is full-bright white. `c_lime`
+    //   (`activeforever`) / `c_gray` (claimed) / the volume-control
+    //   colors need the claim + hold state, which the sampler keeps
+    //   local; this draws the resting state.
+    // - `ButtonAct`: `sprMobileControlCorners` at the act home over the
+    //   `37/255` black disc. GML skips the block entirely while its
+    //   `alpha` (3, decaying) has expired; the sampler has no fade
+    //   state, so the button draws while a session is live.
     // - splitfire `ButtonAttack`: corners sprite + double crosshair at
     //   the button home.
     // Button homes mirror the sampler (`ButtonAct` w/2,48;
@@ -9553,7 +9558,6 @@ pub fn touch_sprites(
         let swap_home = Vec2::new(64.0, gui_h * 0.5 - 48.0);
         let attack_btn = Vec2::new(gui_w - 48.0, gui_h * 0.5);
         let active = Vec2::new(gui_w - 64.0, gui_h * 0.5 - 48.0);
-        let held_alpha = 0.7;
         if let Some(s) = hud_gui_place(
             assets,
             "images/sprMobileControlAbility.png",
@@ -9561,7 +9565,7 @@ pub fn touch_sprites(
             active.x,
             active.y,
             scale * 0.75,
-            [0.5, 0.5, 0.5, held_alpha],
+            [1.0, 1.0, 1.0, 1.0],
             gm,
             view,
         ) {
@@ -9675,6 +9679,51 @@ pub fn touch_sprites(
     let _ = (vw, scale);
     out
 }
+
+/// GML in-run pause button (`UberCont/Draw_64:46-61` verbatim):
+/// `draw_sprite_ext(sprMobilePauseButton, 0, view_width - 24, 16, 0.75,
+/// 0.75, 0, c_white, 0.5)` — drawn on EVERY device (`opt_pausebutton`
+/// gates it, never the input mode), so it lives outside the touch chrome
+/// while still sharing its GUI space. `UberCont` depth -1000 is lower
+/// than `TopCont`'s -15 and `Menu`'s -1001, so it paints OVER the
+/// mobile controls and the menus (see [`Z_PAUSE_BUTTON`]).
+/// Gated on `opt_pausebutton` + a live Player. Geometry and the hit
+/// test live in [`crate::input`] next to the rest of the GML input law.
+pub fn pause_button_sprite(
+    world: &mut World,
+    assets: &RenderAssets,
+    canvas_dp: [f32; 2],
+    world_size: [f32; 2],
+    cam: &Camera2d,
+) -> Option<SpriteInstance> {
+    let shown = world
+        .get_resource::<crate::savedata_part::SaveData>()
+        .is_some_and(|s| s.settings.pause_button)
+        && world
+            .query::<&Player>()
+            .iter(world)
+            .next()
+            .is_some();
+    if !shown {
+        return None;
+    }
+    let view = view_rect_world(canvas_dp, world_size, cam);
+    let gx = view[2] + crate::input::PAUSE_BUTTON_GUI[0];
+    let mut s = hud_gui_place(
+        assets,
+        "images/sprMobilePauseButton.png",
+        0,
+        gx,
+        crate::input::PAUSE_BUTTON_GUI[1],
+        0.75,
+        [1.0, 1.0, 1.0, 0.5],
+        hud_gui_map(view),
+        view,
+    )?;
+    s.z = Z_PAUSE_BUTTON;
+    Some(s)
+}
+
 pub fn menu_sprites(
     kind: crate::MenuOverlay,
     world: &mut World,

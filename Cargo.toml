@@ -45,6 +45,7 @@ ndk = "0.9"
 rlobkit-app-events = { version = "0.5", features = ["jni-bridge"] }
 
 [patch.crates-io]
+rlobkit-app-events = { path = "../Repos/rlobkit/rlobkit-app-events" }
 repose-core = { path = "../Repos/repose/crates/repose-core" }
 repose-ui = { path = "../Repos/repose/crates/repose-ui" }
 repose-canvas = { path = "../Repos/repose/crates/repose-canvas" }
