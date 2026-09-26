@@ -1637,10 +1637,10 @@ pub fn title_camera_step(cam: &mut GmlCamera, vw: f32, vh: f32, focus: Vec2, dt:
     cam.snap = false;
 }
 
-/// GPU camera for a look point: `units_per_pixel` carries the GML
-/// view scale (see [`gml_view_scale`] — GML has no zoom). Pair with the
-/// dp viewport extent ([`camera_fit_extent`](crate::camera_fit_extent))
-/// so the engine fit shows `viewport * scale` world units.
+/// GPU camera for a look point. The live frames pass `scale = 1.0`: the
+/// viewport's `world_size` is already the GML view rect, so the engine
+/// contain-fit does the whole job (including the pillarbox) and there is
+/// no separate per-axis scale to keep in sync — see [`gml_frame`].
 pub fn world_camera(center: Vec2, scale: f32) -> Camera2d {
     Camera2d {
         center,
@@ -1653,28 +1653,22 @@ pub fn world_camera(center: Vec2, scale: f32) -> Camera2d {
     }
 }
 
-/// GML `scrSetViewSize` view law verbatim (`scripts/macros_general` +
-/// `UberCont/Create_0`: base `game_screen_width/height` 320x240, widened
-/// to `view_width_max = 240 * aspect` when `opt_resolution`, which
-/// defaults on; odd widths bumped +1). Returns the live GUI/view size
-/// in world px for a dp viewport (portrait floors the width at 320).
+/// GML `scrSetViewSize` view law (`scripts/macros_general` +
+/// `UberCont/Create_0`): the framed view is 240 world px tall, widened to
+/// `view_width_max = 240 * aspect` when `opt_resolution` (default on),
+/// with a 320 floor. Returns the GML view rect in world units for a dp
+/// viewport — the single source of truth the whole GUI is measured in
+/// (see [`gml_frame`]).
+///
+/// The GML odd-width `+1` bump is deliberately NOT reproduced: it exists
+/// because GML's `view_width` is a *window* size that must be even for
+/// its own surface resize. Here 240 is the constant and the width
+/// follows the canvas, so keeping the exact value avoids a sub-pixel
+/// disagreement between where a sprite is drawn and where its hit test
+/// lands.
 pub fn gml_view_size(viewport_dp: [f32; 2]) -> [f32; 2] {
     let (w, h) = (viewport_dp[0].max(1.0), viewport_dp[1].max(1.0));
-    let mut vw = (240.0 * w / h).max(320.0).floor();
-    // GML `scrSetViewSize` verbatim: odd widths bump +1 (the camera and
-    // GUI both run on the even width).
-    if vw % 2.0 != 0.0 {
-        vw += 1.0;
-    }
-    [vw, 240.0]
-}
-
-/// `units_per_pixel` for [`world_camera`] so the framed view matches
-/// [`gml_view_size`] exactly: `max(240/h, 320/w)` over the dp viewport
-/// (1280x720 → 1/3, i.e. [`crate::comps_a::NT_CAM_SCALE`]).
-pub fn gml_view_scale(viewport_dp: [f32; 2]) -> f32 {
-    let (w, h) = (viewport_dp[0].max(1.0), viewport_dp[1].max(1.0));
-    (240.0 / h).max(320.0 / w).max(1e-6)
+    [(240.0 * w / h).max(320.0), 240.0]
 }
 
 /// Full-viewport fill under the sprite batch, per area. Fallback where
@@ -1726,17 +1720,88 @@ pub const FOG_TILE_H: f32 = 360.0;
 /// GML sideart tile size (`sprSideArt` 64 px, `i * -64` tiling).
 pub const SIDEART_TILE: f32 = 64.0;
 
-/// World-space view rect `[x, y, w, h]` under the live camera fit
-/// (top-left + extent in world units; degenerate fits yield a zero
-/// rect so atmosphere draws park at the look point).
-pub fn view_rect_world(canvas_dp: [f32; 2], world_size: [f32; 2], cam: &Camera2d) -> [f32; 4] {
+/// The GML view frame for one window: the world-space view rect, the dp
+/// rect it renders into, and the dp-per-world scale.
+///
+/// GML makes GUI and view the same thing (`scrSetViewSize` ends with
+/// `display_set_gui_size(_width, _height)`; `device_mouse_x_to_gui` is
+/// the inverse of the view transform), so there is exactly ONE rect.
+/// The engine's contain-fit then scales it into the canvas and centres
+/// the remainder, which IS the letterbox/pillarbox: a window whose
+/// aspect differs from the GML view gets bars, and the GUI never leaves
+/// the box. The port used to hand the viewport the whole canvas with a
+/// scaled camera instead, which always filled the window and forced the
+/// GUI to be re-derived per axis — that is why a portrait window showed
+/// 320x668 of world under a 320x240 GUI (GUI crammed into the top 36%).
+#[derive(Clone, Copy, Debug)]
+pub struct GmlFrame {
+    /// World-space view rect `[x, y, w, h]`.
+    pub view: [f32; 4],
+    /// The same rect in dp `[x, y, w, h]` — the pillarboxed area inside
+    /// the canvas. `gui` consumers convert dp through this.
+    pub box_dp: [f32; 4],
+    /// dp per world unit.
+    pub dp_per_world: f32,
+}
+
+impl GmlFrame {
+    /// dp point → GUI (view) px. Points outside the box land outside the
+    /// view, which is what every hit test wants.
+    pub fn dp_to_gui(&self, dp: [f32; 2]) -> [f32; 2] {
+        [
+            (dp[0] - self.box_dp[0]) / self.dp_per_world,
+            (dp[1] - self.box_dp[1]) / self.dp_per_world,
+        ]
+    }
+
+    /// True when a dp point is inside the pillarboxed area.
+    pub fn contains_dp(&self, dp: [f32; 2]) -> bool {
+        dp[0] >= self.box_dp[0]
+            && dp[1] >= self.box_dp[1]
+            && dp[0] <= self.box_dp[0] + self.box_dp[2]
+            && dp[1] <= self.box_dp[1] + self.box_dp[3]
+    }
+
+    /// GUI width in px (the GML `view_width` every right-anchored row
+    /// and touch home is measured against).
+    pub fn gui_width(&self) -> f32 {
+        self.view[2]
+    }
+
+    /// GUI height in px (the GML `view_height`).
+    pub fn gui_height(&self) -> f32 {
+        self.view[3]
+    }
+}
+
+/// Resolve the frame for a canvas + GML view rect + camera.
+pub fn gml_frame(canvas_dp: [f32; 2], world_size: [f32; 2], cam: &Camera2d) -> GmlFrame {
     let center = cam.effective_center();
     let fit = effective_fit(canvas_dp, world_size, cam);
     if !fit.0.is_finite() || fit.0 <= 1e-6 {
-        return [center[0], center[1], 0.0, 0.0];
+        return GmlFrame {
+            view: [center[0], center[1], 0.0, 0.0],
+            box_dp: [0.0, 0.0, 0.0, 0.0],
+            dp_per_world: 1.0,
+        };
     }
-    let tl = dp_to_world([0.0, 0.0], world_size, center, fit);
-    [tl[0], tl[1], canvas_dp[0] / fit.0, canvas_dp[1] / fit.0]
+    let (s, ox, oy) = fit;
+    // `world_to_dp` maps the world's top-left to (ox, oy), so the visible
+    // world is exactly `world_size` and the box is `world_size * s`
+    // offset by the contain-fit slack.
+    let tl = dp_to_world([ox, oy], world_size, center, fit);
+    GmlFrame {
+        view: [tl[0], tl[1], world_size[0], world_size[1]],
+        box_dp: [ox, oy, world_size[0] * s, world_size[1] * s],
+        dp_per_world: s,
+    }
+}
+
+/// World-space view rect under the live camera fit (top-left + extent in
+/// world units). Thin wrapper over [`gml_frame`] for the many callers
+/// that only need the world rect.
+pub fn view_rect_world(canvas_dp: [f32; 2], world_size: [f32; 2], cam: &Camera2d) -> [f32; 4] {
+    gml_frame(canvas_dp, world_size, cam).view
 }
 
 /// Fog strip for an area (GML `TopCont/Draw_0` verbatim: pizza sewers
@@ -11048,15 +11113,16 @@ mod ui_parity_regression {
         assert!((btl.y - 4.0).abs() < 1e-4, "y {btl:?}");
     }
 
-    /// GML `scrSetViewSize` verbatim: odd view widths bump +1.
+    /// GML `scrSetViewSize`: 240 world px tall, widened to `240 * aspect`
+    /// with a 320 floor. The GML odd-width `+1` bump is deliberately not
+    /// reproduced (it exists for GML's own surface resize; here 240 is
+    /// the constant and the width follows the canvas).
     #[test]
-    fn gml_view_size_bumps_odd_widths() {
-        // 426.666… floors to 426 (even, unchanged).
-        assert_eq!(gml_view_size([1280.0, 720.0]), [426.0, 240.0]);
-        // A width flooring to an odd value bumps +1 (e.g. 321 -> 322).
-        // 240 * 321/240 = 321 exactly.
-        assert_eq!(gml_view_size([321.0, 240.0]), [322.0, 240.0]);
-        // Portrait still floors at 320.
+    fn gml_view_size_is_240_tall_with_a_320_floor() {
+        let v = gml_view_size([1280.0, 720.0]);
+        assert!((v[0] - 426.66666).abs() < 1e-3 && v[1] == 240.0, "{v:?}");
+        assert_eq!(gml_view_size([321.0, 240.0]), [321.0, 240.0]);
+        // Portrait still floors at 320 wide, 240 tall.
         assert_eq!(gml_view_size([200.0, 400.0]), [320.0, 240.0]);
     }
 
@@ -11117,13 +11183,13 @@ mod ui_parity_regression {
                 },
             ],
         );
-        // TOTAL box centers on gx=110 (fitted: ox + 330 dp at k=3;
-        // the 426-wide GUI letterboxes 1px on a 1280 canvas).
+        // TOTAL box centers on its own gx=110.
         let (total_left, total_w) = (dp[0].1[0], dp[0].4);
-        assert!((total_left + total_w * 0.5 - 331.0).abs() < 1.0, "{dp:?}");
-        // PLAY box centers on the fitted view center (ox + 639 dp).
+        let k = 3.0f32;
+        assert!((total_left + total_w * 0.5 - 110.0 * k).abs() < 1.0, "{dp:?}");
+        // PLAY centers on the view center (426.667/2 = 213.33 GUI px).
         let (play_left, play_w) = (dp[1].1[0], dp[1].4);
-        assert!((play_left + play_w * 0.5 - 640.0).abs() < 1.0, "{dp:?}");
+        assert!((play_left + play_w * 0.5 - 213.3333 * k).abs() < 1.0, "{dp:?}");
     }
 
     /// GML `draw_stat` law: the name right-aligns on `statx - 1`, so
@@ -11145,10 +11211,12 @@ mod ui_parity_regression {
                 bold: false,
             }],
         );
-        assert!(
-            (dp[0].1[0] + dp[0].4 - (1.0 + 109.0 * 3.0)).abs() < 1.0,
-            "{dp:?}"
-        );
+        // Right edge lands on `ox + gx * k`; the GML law's own trailing
+        // 1px is folded into the box, so the row's right edge IS the
+        // column anchor (no extra offset here).
+        let k = 3.0f32;
+        let ox = (1280.0 - gml_view_size([1280.0, 720.0])[0] * k) * 0.5;
+        assert!((dp[0].1[0] + dp[0].4 - (ox + 109.0 * k)).abs() < 0.01, "{dp:?}");
     }
 
     /// Narrow-window contain-fit: on a 600x800 portrait canvas the

@@ -91,7 +91,7 @@ use crate::render::{
     Z_FAINTED, Z_FOG, Z_FX, Z_HUD, Z_MENU, Z_PORTAL_INDICATOR, Z_SHADOW, Z_SIDEART,
     Z_SPIRAL_FIGURES, Z_SPLASH, Z_TOUCH, background_color, bloom_sprites, cam_viewdist_for,
     crosshair_sprites, decode_png, fainted_bar_sprites, fog_sprites, fx_instances, fx_texts,
-    gml_camera_step, gml_view_scale, gml_view_size, hud_gui_texts_dp, hud_sprites, menu_gui_texts,
+    gml_camera_step, gml_view_size, hud_gui_texts_dp, hud_sprites, menu_gui_texts,
     menu_gui_texts_dp, menu_gui_texts_vw, menu_sprites, pause_button_sprites,
     portal_indicator_sprites, shadow_sprites, srgb_to_linear,
     letterbox_sprites, settings_slider_hit, settings_slider_value, SettingSliderTarget,
@@ -1601,10 +1601,11 @@ impl App {
             self.cursor_img_key = None;
             return;
         };
-        let mag = (self.view_density.max(1e-6)
-            / crate::render::gml_view_scale(self.view_viewport_dp).max(1e-6))
-        .round()
-        .clamp(1.0, 8.0) as u32;
+        // Physical px per world unit: density (px per dp) times the
+        // frame's dp-per-world contain scale.
+        let mag = (self.view_density.max(1e-6) * self.gml_frame().dp_per_world)
+            .round()
+            .clamp(1.0, 8.0) as u32;
         let Some(built) = repame_sprite::cursor_frame(
             &rgba,
             sw,
@@ -2052,6 +2053,9 @@ impl App {
                 .get_resource::<MenuState>()
                 .and_then(|menu| menu.pause_confirm)
                 .is_some();
+            // Resolved before the `NtInput` borrow below (it reads `cam`
+            // and the cached viewport, not the world).
+            let frame = self.gml_frame();
             let mut input = self.sim.world.resource_mut::<NtInput>();
             // Menu screens own Space/arrows: strip their edges before the
             // gameplay sampler so one press can't both confirm a menu
@@ -2172,32 +2176,26 @@ impl App {
                     || input.attack_stick.is_some_and(|s| s.touch >= 0);
                 if need_touch {
                     // GML `device_mouse_*_to_gui` reads GUI px (view px,
-                    // e.g. 534x240 on this phone), not css-dp: convert the
+                    // e.g. 320x240 on this phone), not css-dp: convert the
                     // dp-space contacts into GUI space through the live
-                    // GML view size before the sampler compares them to
-                    // the stick/button homes.
-                    let gml_view = crate::render::gml_view_size(self.view_viewport_dp);
-                    let vw = self.view_viewport_dp;
-                    let sx = if vw[0] > 1e-6 {
-                        gml_view[0] / vw[0]
-                    } else {
-                        1.0
-                    };
-                    let sy = if vw[1] > 1e-6 {
-                        gml_view[1] / vw[1]
-                    } else {
-                        1.0
-                    };
+                    // frame before the sampler compares them to the
+                    // stick/button homes. The frame subtracts the
+                    // pillarbox offset too, so a finger in the bars maps
+                    // outside the view exactly like GML's.
                     let gui_contacts: Vec<crate::input::TouchContact> = contacts
                         .iter()
-                        .map(|c| crate::input::TouchContact {
-                            id: c.id,
-                            start: Vec2::new(c.start.x * sx, c.start.y * sy),
-                            pos: Vec2::new(c.pos.x * sx, c.pos.y * sy),
-                            just_pressed: c.just_pressed,
+                        .map(|c| {
+                            let start = frame.dp_to_gui([c.start.x, c.start.y]);
+                            let pos = frame.dp_to_gui([c.pos.x, c.pos.y]);
+                            crate::input::TouchContact {
+                                id: c.id,
+                                start: Vec2::new(start[0], start[1]),
+                                pos: Vec2::new(pos[0], pos[1]),
+                                just_pressed: c.just_pressed,
+                            }
                         })
                         .collect();
-                    let gui_width = gml_view[0];
+                    let gui_width = frame.gui_width();
                     crate::input::sample_touch_full(
                         &gui_contacts,
                         gui_width,
@@ -2323,26 +2321,16 @@ impl App {
             // lifts pauses, exactly as the port's `staging_clicks` and
             // `released_touch_clicks` are both release events.
             {
-                let viewport_dp = self.view_viewport_dp;
-                let gml_view = gml_view_size(viewport_dp);
-                let vw = gml_view[0];
-                // `route_menu_click`'s dp->GUI law: divide the dp axis by
-                // the GUI scale; touch contacts come in dp and convert by
-                // the view/viewport ratio (the same two conversions the
-                // touch sampler uses).
-                let k = (viewport_dp[1].max(1.0) / 240.0).max(1e-6);
-                let (sx, sy) = (
-                    gml_view[0] / viewport_dp[0].max(1e-6),
-                    gml_view[1] / viewport_dp[1].max(1e-6),
-                );
-                let clicked = k.is_finite()
-                    && staging_clicks.last().is_some_and(|c| {
-                        crate::input::pause_button_hit(c.dp[0] / k, c.dp[1] / k, vw)
-                    });
-                let tapped = k.is_finite()
-                    && released_touch_clicks
-                        .iter()
-                        .any(|(_, p)| crate::input::pause_button_hit(p.x * sx, p.y * sy, vw));
+                let frame = self.gml_frame();
+                let vw = frame.gui_width();
+                let clicked = staging_clicks.last().is_some_and(|c| {
+                    let g = frame.dp_to_gui(c.dp);
+                    crate::input::pause_button_hit(g[0], g[1], vw)
+                });
+                let tapped = released_touch_clicks.iter().any(|(_, p)| {
+                    let g = frame.dp_to_gui([p.x, p.y]);
+                    crate::input::pause_button_hit(g[0], g[1], vw)
+                });
                 if clicked || tapped {
                     self.sim.world.resource_mut::<MenuEdge>().pause_pressed = true;
                     released_touch_clicks.clear();
@@ -2361,7 +2349,7 @@ impl App {
             } else if !slider_click_consumed
                 && let Some(click) = staging_clicks.last().copied()
             {
-                let viewport_dp = self.view_viewport_dp;
+                let frame = self.gml_frame();
                 let kind = menu_overlay_kind(
                     state,
                     overlay,
@@ -2369,51 +2357,39 @@ impl App {
                     game_over,
                 );
                 if let Some(kind) = kind {
-                    if let Some(action) =
-                        route_menu_click(&mut self.sim.world, kind, click.dp, viewport_dp)
-                    {
+                    if let Some(action) = route_menu_click(
+                        &mut self.sim.world,
+                        kind,
+                        frame.dp_to_gui(click.dp),
+                        frame.gui_width(),
+                    ) {
                         apply_menu_action(&mut self.sim.world, action);
                     }
                 }
             }
             if !released_touch_clicks.is_empty() {
-                let viewport_dp = self.view_viewport_dp;
+                let frame = self.gml_frame();
                 let kind = menu_overlay_kind(
                     state,
                     overlay,
                     &self.sim.world.resource::<MenuState>(),
                     game_over,
                 );
-                let gml_view = gml_view_size(viewport_dp);
-                let sx = if viewport_dp[0] > 1e-6 {
-                    gml_view[0] / viewport_dp[0]
-                } else {
-                    1.0
-                };
-                let sy = if viewport_dp[1] > 1e-6 {
-                    gml_view[1] / viewport_dp[1]
-                } else {
-                    1.0
-                };
                 for (id, point) in released_touch_clicks.drain(..) {
                     if slider_touch_ids.contains(&id) {
                         continue;
                     }
+                    let gui = frame.dp_to_gui([point.x, point.y]);
                     let action = if kind == Some(MenuOverlay::Mutation) {
                         crate::render::mutation_icon_hit_action(
                             &mut self.sim.world,
-                            point.x * sx,
-                            point.y * sy,
-                            gml_view[0],
+                            gui[0],
+                            gui[1],
+                            frame.gui_width(),
                         )
                     } else {
                         kind.and_then(|kind| {
-                            route_menu_click(
-                                &mut self.sim.world,
-                                kind,
-                                [point.x, point.y],
-                                viewport_dp,
-                            )
+                            route_menu_click(&mut self.sim.world, kind, gui, frame.gui_width())
                         })
                     };
                     if let Some(action) = action {
@@ -2424,12 +2400,12 @@ impl App {
             }
         } else if game_over {
             if let Some(click) = staging_clicks.last().copied() {
-                let viewport_dp = self.view_viewport_dp;
+                let frame = self.gml_frame();
                 if let Some(action) = route_menu_click(
                     &mut self.sim.world,
                     MenuOverlay::GameOver,
-                    click.dp,
-                    viewport_dp,
+                    frame.dp_to_gui(click.dp),
+                    frame.gui_width(),
                 ) {
                     apply_menu_action(&mut self.sim.world, action);
                 }
@@ -2446,7 +2422,7 @@ impl App {
             } else if !slider_click_consumed
                 && let Some(click) = staging_clicks.last().copied()
             {
-                let viewport_dp = self.view_viewport_dp;
+                let frame = self.gml_frame();
                 let kind = menu_overlay_kind(
                     state,
                     overlay,
@@ -2454,9 +2430,12 @@ impl App {
                     game_over,
                 )
                 .unwrap_or(MenuOverlay::MainMenu);
-                if let Some(action) =
-                    route_menu_click(&mut self.sim.world, kind, click.dp, viewport_dp)
-                {
+                if let Some(action) = route_menu_click(
+                    &mut self.sim.world,
+                    kind,
+                    frame.dp_to_gui(click.dp),
+                    frame.gui_width(),
+                ) {
                     apply_menu_action(&mut self.sim.world, action);
                 }
             }
@@ -2471,7 +2450,7 @@ impl App {
             } else if !slider_click_consumed
                 && let Some(click) = staging_clicks.last().copied()
             {
-                let viewport_dp = self.view_viewport_dp;
+                let frame = self.gml_frame();
                 if overlay == OverlayMenu::Settings || overlay == OverlayMenu::Credits {
                     let kind = menu_overlay_kind(
                         state,
@@ -2480,12 +2459,18 @@ impl App {
                         game_over,
                     );
                     if let Some(kind) = kind
-                        && let Some(action) =
-                            route_menu_click(&mut self.sim.world, kind, click.dp, viewport_dp)
+                        && let Some(action) = route_menu_click(
+                            &mut self.sim.world,
+                            kind,
+                            frame.dp_to_gui(click.dp),
+                            frame.gui_width(),
+                        )
                     {
                         apply_menu_action(&mut self.sim.world, action);
                     }
-                } else if let Some(action) = self.route_title_click(click.dp, viewport_dp) {
+                } else if let Some(action) =
+                    self.route_title_click(frame.dp_to_gui(click.dp), frame.gui_width())
+                {
                     apply_menu_action(&mut self.sim.world, action);
                 }
             }
@@ -2511,20 +2496,18 @@ impl App {
             // contact and a pointer click, so the two sources are the
             // same gesture: route the touches, and only fall through to
             // the click when there were none.
-            let viewport_dp = self.view_viewport_dp;
-            let gml_view = gml_view_size(viewport_dp);
-            let sx = gml_view[0] / viewport_dp[0].max(1e-6);
-            let sy = gml_view[1] / viewport_dp[1].max(1e-6);
+            let frame = self.gml_frame();
             let mut routed = false;
             for (id, point) in released_touch_clicks.drain(..) {
                 if slider_touch_ids.contains(&id) {
                     continue;
                 }
+                let gui = frame.dp_to_gui([point.x, point.y]);
                 if let Some(action) = crate::render::mutation_icon_hit_action(
                     &mut self.sim.world,
-                    point.x * sx,
-                    point.y * sy,
-                    gml_view[0],
+                    gui[0],
+                    gui[1],
+                    frame.gui_width(),
                 ) {
                     apply_menu_action(&mut self.sim.world, action);
                     routed = true;
@@ -2534,41 +2517,28 @@ impl App {
             if !routed
                 && let Some(click) = staging_clicks.last().copied()
             {
-                let vw = gml_view[0];
-                let k = (viewport_dp[1].max(1.0) / 240.0).max(1e-6);
-                if k.is_finite()
-                    && let Some(action) = crate::render::mutation_icon_hit_action(
-                        &mut self.sim.world,
-                        click.dp[0] / k,
-                        click.dp[1] / k,
-                        vw,
-                    )
-                {
+                let gui = frame.dp_to_gui(click.dp);
+                if let Some(action) = crate::render::mutation_icon_hit_action(
+                    &mut self.sim.world,
+                    gui[0],
+                    gui[1],
+                    frame.gui_width(),
+                ) {
                     apply_menu_action(&mut self.sim.world, action);
                 }
             }
         } else if let Some(_click) = staging_clicks.last().copied() {
-            let viewport_dp = self.view_viewport_dp;
-            let gml_view = crate::render::gml_view_size(viewport_dp);
-            let sx = if viewport_dp[0] > 1e-6 {
-                gml_view[0] / viewport_dp[0]
-            } else {
-                1.0
-            };
-            let sy = if viewport_dp[1] > 1e-6 {
-                gml_view[1] / viewport_dp[1]
-            } else {
-                1.0
-            };
+            let frame = self.gml_frame();
             for (id, point) in released_touch_clicks {
                 if slider_touch_ids.contains(&id) {
                     continue;
                 }
+                let gui = frame.dp_to_gui([point.x, point.y]);
                 if let Some(action) = crate::render::mutation_icon_hit_action(
                     &mut self.sim.world,
-                    point.x * sx,
-                    point.y * sy,
-                    gml_view[0],
+                    gui[0],
+                    gui[1],
+                    frame.gui_width(),
                 ) {
                     apply_menu_action(&mut self.sim.world, action);
                     break;
@@ -2584,13 +2554,9 @@ impl App {
     }
 
     /// Title click router with asset-aware geometry (same native sizes
-    /// the sprite layer draws with, else the 20px fallback).
-    fn route_title_click(&mut self, dp: [f32; 2], viewport_dp: [f32; 2]) -> Option<UiAction> {
-        let vw = gml_view_size(viewport_dp)[0];
-        let k = (viewport_dp[1].max(1.0) / 240.0).max(1e-6);
-        if !k.is_finite() {
-            return None;
-        }
+    /// the sprite layer draws with, else the 20px fallback). `gui` and
+    /// `vw` are GML view px.
+    fn route_title_click(&mut self, gui: [f32; 2], vw: f32) -> Option<UiAction> {
         let (slot_h, crownsize, skinsize) = match &self.assets {
             Some(a) => (
                 a.native_size("images/sprCharSelect.png")
@@ -2607,8 +2573,8 @@ impl App {
         };
         crate::render::title_click_action(
             &mut self.sim.world,
-            dp[0] / k,
-            dp[1] / k,
+            gui[0],
+            gui[1],
             vw,
             slot_h,
             crownsize,
@@ -2616,12 +2582,18 @@ impl App {
         )
     }
 
+    /// The live GML frame (see [`GmlFrame`](crate::render::GmlFrame)):
+    /// the one place the world rect, the pillarbox box, and the dp→GUI
+    /// scale come from.
+    pub fn gml_frame(&self) -> crate::render::GmlFrame {
+        crate::render::gml_frame(self.view_viewport_dp, self.view_world_size, &self.cam)
+    }
+
     /// GUI-space cursor for the menu hover sync: the polled
-    /// window-physical px mapped through the live GUI law (`k = h/240`,
-    /// full live width). `None` until the first mouse move, or while
-    /// touch/gamepad owns the device (GML `mouse_active` /
-    /// `!is_gamepad()` guards — a gamepad-driven frame must not clear
-    /// mouse hover, and touch has no cursor).
+    /// window-physical px mapped into the GML view. `None` until the
+    /// first mouse move, or while touch/gamepad owns the device (GML
+    /// `mouse_active` / `!is_gamepad()` guards — a gamepad-driven frame
+    /// must not clear mouse hover, and touch has no cursor).
     fn menu_gui_point(&self) -> Option<[f32; 2]> {
         let gamepad = self
             .sim
@@ -2634,19 +2606,14 @@ impl App {
         }
         let px = self.polled_pointer_px?;
         let d = self.view_density.max(1e-6);
-        let k = (self.view_viewport_dp[1].max(1.0) / 240.0).max(1e-6);
-        if !k.is_finite() {
+        if !d.is_finite() || d <= 0.0 {
             return None;
         }
-        Some([px.x / d / k, px.y / d / k])
+        Some(self.gml_frame().dp_to_gui([px.x / d, px.y / d]))
     }
 
     fn settings_gui_point_dp(&self, dp: [f32; 2]) -> Option<[f32; 2]> {
-        let k = (self.view_viewport_dp[1].max(1.0) / 240.0).max(1e-6);
-        if !k.is_finite() {
-            return None;
-        }
-        Some([dp[0] / k, dp[1] / k])
+        Some(self.gml_frame().dp_to_gui(dp))
     }
 
     fn settings_slider_current(&self, target: SettingSliderTarget) -> Option<f32> {
@@ -3162,12 +3129,16 @@ impl App {
             viewport_px[0] / density.max(1e-6),
             viewport_px[1] / density.max(1e-6),
         ];
-        let world_size = camera_fit_extent(viewport_px, density);
-        // GML `scrSetViewSize` verbatim: the framed view is always 240
-        // world px tall (`gml_view_size`), so the camera scale is derived
-        // per window, not fixed (`gml_view_scale`: 1280x720 → 1/3).
-        let gml_scale = gml_view_scale(viewport_dp);
+        // GML `scrSetViewSize` + `display_set_gui_size`: the GUI IS the
+        // view, so there is ONE rect. The viewport gets the GML view in
+        // world units and a 1:1 camera, and the engine's contain-fit
+        // scales it into the canvas and centres the remainder — that is
+        // the letterbox/pillarbox. The old shape (whole canvas + a scaled
+        // camera) always filled the window, which is why portrait showed
+        // 320x668 of world under a 320x240 GUI.
         let gml_view = gml_view_size(viewport_dp);
+        let world_size = gml_view;
+        let gml_scale = 1.0;
         self.view_world_size = gml_view;
         self.view_viewport_dp = viewport_dp;
         self.view_density = density.max(1e-6);
@@ -4106,6 +4077,24 @@ impl App {
         // spiral over the campfire map while the room chrome stays
         // above it.
         let mut layers = Vec::new();
+        // Pillarbox: black outside the GML box, so a non-16:9 window
+        // shows bars instead of stretching the view (see `gml_frame`).
+        let gml = self.gml_frame();
+        let bars = gml.box_dp;
+        let canvas_dp = viewport_dp;
+        let inset = bars[0] > 0.5
+            || bars[1] > 0.5
+            || bars[0] + bars[2] < canvas_dp[0] - 0.5
+            || bars[1] + bars[3] < canvas_dp[1] - 0.5;
+        if inset {
+            let black = UiBox(
+                Modifier::new()
+                    .fill_max_size()
+                    .background(Color::from_rgba(0, 0, 0, 255))
+                    .hit_passthrough(),
+            );
+            layers.push(black);
+        }
         if !vortex_above {
             if let Some(vortex) = vortex_layer.take() {
                 layers.push(vortex);
@@ -4203,8 +4192,11 @@ impl App {
         let mut letterbox_view: Option<View> = None;
         if letterbox_visible {
             // GML `LETTERBOX_SIZE 36` view px tall (`scrLetterbox`):
-            // 36 GUI px → dp at the live GUI scale (720p → 108 dp).
-            let bar_dp = (36.0 * (viewport_dp[1].max(1.0) / 240.0)).ceil();
+            // 36 GUI px → dp through the frame's dp-per-world scale, and
+            // anchored to the pillarbox box (not the canvas edges) so the
+            // bars hug the view in a letterboxed window too.
+            let gml = self.gml_frame();
+            let bar_dp = (36.0 * gml.dp_per_world).ceil();
             let mut has_art = false;
             if let Some(assets) = self.assets.as_ref() {
                 let art = letterbox_sprites(
@@ -4236,12 +4228,14 @@ impl App {
                     view.modifier = view.modifier.hit_passthrough();
                     let mut children = Vec::new();
                     let bar = Dp(bar_dp);
-                    let width = Dp(viewport_dp[0]);
+                    let width = Dp(gml.box_dp[2]);
+                    let left = Dp(gml.box_dp[0]);
+                    let top = Dp(gml.box_dp[1]);
                     children.push(UiBox(
                         Modifier::new()
                             .absolute()
                             .size(width, bar)
-                            .offset(Some(Dp(0.0)), Some(Dp(0.0)), None, None)
+                            .offset(Some(left), Some(top), None, None)
                             .background(Color::from_rgba(0, 0, 0, 255))
                             .hit_passthrough(),
                     ));
@@ -4249,7 +4243,12 @@ impl App {
                         Modifier::new()
                             .absolute()
                             .size(width, bar)
-                            .offset(Some(Dp(0.0)), Some(Dp(viewport_dp[1] - bar_dp)), None, None)
+                            .offset(
+                                Some(left),
+                                Some(Dp(gml.box_dp[1] + gml.box_dp[3] - bar_dp)),
+                                None,
+                                None,
+                            )
                             .background(Color::from_rgba(0, 0, 0, 255))
                             .hit_passthrough(),
                     ));
@@ -4261,6 +4260,10 @@ impl App {
                 }
             }
             if !has_art {
+                // No art: the same bars, but inset by the pillarbox
+                // offsets so they land on the view edges.
+                let pad_top = Dp(gml.box_dp[1]);
+                let pad_bottom = Dp(viewport_dp[1] - gml.box_dp[1] - gml.box_dp[3]);
                 let bar = || {
                     UiBox(
                         Modifier::new()
@@ -4276,9 +4279,27 @@ impl App {
                         .fill_max_height()
                         .hit_passthrough(),
                 );
-                letterbox_view = Some(Column(
-                    Modifier::new().fill_max_size().hit_passthrough(),
-                ).child(vec![bar(), spacer, bar()]));
+                letterbox_view = Some(
+                    Column(Modifier::new().fill_max_size().hit_passthrough()).child(vec![
+                        UiBox(
+                            Modifier::new()
+                                .fill_max_width()
+                                .height(pad_top)
+                                .background(Color::from_rgba(0, 0, 0, 255))
+                                .hit_passthrough(),
+                        ),
+                        bar(),
+                        spacer,
+                        bar(),
+                        UiBox(
+                            Modifier::new()
+                                .fill_max_width()
+                                .height(pad_bottom)
+                                .background(Color::from_rgba(0, 0, 0, 255))
+                                .hit_passthrough(),
+                        ),
+                    ]),
+                );
             }
         }
         let letterbox_before_content = menu_kind.is_some_and(|kind| {
@@ -4489,11 +4510,11 @@ pub fn resolve_assets_dir() -> Option<PathBuf> {
     None
 }
 
-/// Fit extent for the follow camera: the viewport size in dp. GML has
-/// no zoom: the per-frame [`gml_view_scale`](crate::render::gml_view_scale)
-/// carries `units_per_pixel`, so the engine fit shows the live GML view
-/// (1280x720 -> 426x240). Pre-scaling here would apply the scale twice
-/// (once in the extent, once in the fit).
+/// Fit extent helper: the viewport size in dp, used only where a
+/// dp-space size is needed before the GML frame resolves. The live frame
+/// passes [`render::gml_view_size`] as the viewport's `world_size`
+/// instead (see [`render::gml_frame`]), so the engine contain-fit owns
+/// the scale and the pillarbox.
 ///
 /// Takes PHYSICAL px (`Scheduler.size`).
 pub fn camera_fit_extent(viewport_px: [f32; 2], density: f32) -> [f32; 2] {
@@ -4880,16 +4901,10 @@ fn menu_owned_key(code: KeyCode) -> bool {
 fn route_menu_click(
     world: &mut World,
     kind: MenuOverlay,
-    dp: [f32; 2],
-    viewport_dp: [f32; 2],
+    gui: [f32; 2],
+    vw: f32,
 ) -> Option<UiAction> {
-    let vw = gml_view_size(viewport_dp)[0];
-    let k = (viewport_dp[1].max(1.0) / 240.0).max(1e-6);
-    if !k.is_finite() {
-        return None;
-    }
-    let gx = dp[0] / k;
-    let gy = dp[1] / k;
+    let (gx, gy) = (gui[0], gui[1]);
     // Settings rows route through the hot table (per-row toggle /
     // stepper semantics live there, next to the layout).
     if kind == MenuOverlay::Settings {
@@ -5479,12 +5494,14 @@ mod cursor_staging_tests {
         app.sim.world.resource_mut::<MenuState>().settings_page = 13;
         let rows = crate::render::settings_hot_rows(13, 320.0);
         let row = rows[0];
-        // `route_menu_click` takes canvas dp + viewport dp: GUI px
-        // scale with k = h/240 (720p → 3.0).
-        let k = 3.0f32;
-        let viewport_dp = [1280.0f32, 720.0];
-        let dp = [row.cx * k, row.gy * k];
-        let action = route_menu_click(&mut app.sim.world, MenuOverlay::Settings, dp, viewport_dp);
+        // `route_menu_click` takes GML view px + the GUI width, so the
+        // row's own GUI position is the click position.
+        let action = route_menu_click(
+            &mut app.sim.world,
+            MenuOverlay::Settings,
+            [row.cx, row.gy],
+            320.0,
+        );
         assert!(
             matches!(action, Some(crate::audio::UiAction::RemapControl(_))),
             "click on row 0 must arm a remap, got {action:?}"

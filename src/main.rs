@@ -54,7 +54,14 @@ fn main() -> anyhow::Result<()> {
     let mut bank = PadBank::default();
     let mut audio = repame_audio::Audio::noop();
     let mut last = Instant::now();
-    repame_shell::run_desktop("NT (repame)", (1280, 720), move |sched, ctx| {
+    let size = std::env::var("NT_WINDOW")
+        .ok()
+        .and_then(|v| {
+            let (a, b) = v.split_once('x')?;
+            Some((a.parse().ok()?, b.parse().ok()?))
+        })
+        .unwrap_or((1280, 720));
+    repame_shell::run_desktop("NT (repame)", size, move |sched, ctx| {
         bank.feed(poller.poll());
         for pad in bank.drain() {
             app.stage_gamepad(pad);
