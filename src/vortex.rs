@@ -349,6 +349,8 @@ pub struct SpiralCtl {
     /// Per-ring-slot lightning streams, indexed exactly like `ring`.
     pub streams: Vec<WispStream>,
     wisp_initial: Vec<f32>,
+    wisp_xscale: Vec<f32>,
+    wisp_grow: Vec<f32>,
     wisp_frozen: Vec<bool>,
     /// GML `SpiralCont.bossfight` verbatim (`instance_exists(Nothing2) ||
     /// instance_exists(Nothing2Appear) || instance_exists(NothingSpiral)`):
@@ -428,6 +430,8 @@ impl SpiralCtl {
             view_w,
             streams: vec![WispStream::dead(); MAX_WISPS],
             wisp_initial: vec![0.0; MAX_WISPS],
+            wisp_xscale: vec![0.0; MAX_WISPS],
+            wisp_grow: vec![0.0; MAX_WISPS],
             wisp_frozen: vec![false; MAX_WISPS],
         };
         ctl.angle = ctl.random01() * 360.0;
@@ -455,7 +459,7 @@ impl SpiralCtl {
             self.death_tick = Some(self.ticks);
             for slot in 0..MAX_WISPS {
                 let birth = self.ring[slot][2];
-                if birth >= 0.0 && self.wisp_scale_at(birth) < 0.01 {
+                if birth >= 0.0 && self.wisp_xscale[slot] < 0.01 {
                     self.wisp_frozen[slot] = true;
                 }
             }
@@ -475,14 +479,14 @@ impl SpiralCtl {
         if self.alive {
             return false;
         }
-        let wisps_live = self.ring.iter().any(|w| {
+        let wisps_live = self.ring.iter().enumerate().any(|(slot, w)| {
             if w[2] < 0.0 {
                 return false;
             }
             if self.ticks - w[2] < 0.0 {
                 return true;
             }
-            self.wisp_scale_at(w[2]) <= self.thresh()
+            self.wisp_xscale[slot] <= self.thresh()
         });
         if wisps_live {
             return false;
@@ -499,13 +503,9 @@ impl SpiralCtl {
         true
     }
 
-    /// Current xscale of a wisp born at `birth` under the GML
-    /// `Spiral/Step_0` two-phase law: the live recurrence (no 1.5x)
-    /// while the cont lives, the drain recurrence (`grow *= 1.5` every
-    /// tick) after `death_tick`. Unborn (`birth < 0`) reads 0; a wisp
-    /// born after the kill (impossible in GML — births freeze with the
-    /// cont) drains from birth. The snapshot uploads the same value
-    /// used by `is_done`, so the pass and headless lifetime agree.
+    /// Reference recurrence used by the headless tests. Runtime keeps the
+    /// equivalent state incrementally in `wisp_xscale` and `wisp_grow`.
+    #[cfg(test)]
     fn wisp_scale_at(&self, birth: f32) -> f32 {
         if birth < 0.0 {
             return 0.0;
@@ -565,6 +565,7 @@ impl SpiralCtl {
 
     fn tick_once(&mut self) {
         self.ticks += 1.0;
+        let drain = !self.alive;
         // GML `Spiral/Step_0` bolt clock first: live wisps advance
         // before this tick's birth runs, so a newborn's `Create_0`
         // head-start takes its first `Step_0` increment next tick.
@@ -572,6 +573,14 @@ impl SpiralCtl {
             if self.ring[slot][2] < 0.0 {
                 continue;
             }
+            let (grow, xscale) = Self::step_wisp_grow(
+                self.wisp_grow[slot],
+                self.wisp_xscale[slot],
+                self.kind == SpiralKind::Proto,
+                drain,
+            );
+            self.wisp_grow[slot] = grow;
+            self.wisp_xscale[slot] = xscale;
             let birth = self.ring[slot][2] as u32;
             self.streams[slot].lanim +=
                 0.2 + stream_hash01(self.seed, birth, self.ticks as u32, STREAM_RATE_SALT) * 0.3;
@@ -627,6 +636,8 @@ impl SpiralCtl {
                 } else {
                     0.0
                 };
+                self.wisp_xscale[slot] = self.wisp_initial[slot];
+                self.wisp_grow[slot] = 0.0;
                 self.wisp_frozen[slot] = false;
                 self.streams[slot] = WispStream {
                     lanim: -stream_hash01(self.seed, birth, 0, STREAM_HEAD_SALT) * 300.0,
@@ -697,7 +708,6 @@ impl SpiralCtl {
             self.drain_bias += 5.5;
         }
 
-        let drain = !self.alive;
         for i in 0..MAX_DEBRIS {
             if !self.debris[i].alive {
                 continue;
@@ -951,7 +961,7 @@ impl SpiralCtl {
         for (slot, (dst, src)) in streams.iter_mut().zip(self.streams.iter()).enumerate() {
             let scale = self.ring[slot][2]
                 .ge(&0.0)
-                .then(|| self.wisp_scale_at(self.ring[slot][2]))
+                .then_some(self.wisp_xscale[slot])
                 .unwrap_or(0.0);
             *dst = [
                 src.lanim,

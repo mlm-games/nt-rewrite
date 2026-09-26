@@ -93,7 +93,7 @@ use crate::render::{
     crosshair_sprites, decode_png, fainted_bar_sprites, fog_sprites, fx_instances, fx_texts,
     gml_camera_step, gml_view_scale, gml_view_size, hud_gui_texts_dp, hud_sprites, menu_gui_texts,
     menu_gui_texts_dp, menu_gui_texts_vw, menu_sprites, pause_button_sprites,
-    portal_indicator_sprites, shadow_sprites,
+    portal_indicator_sprites, shadow_sprites, srgb_to_linear,
     letterbox_sprites, settings_slider_hit, settings_slider_value, SettingSliderTarget,
     sideart_sprites, spiral_figures, splash_sprites, stamp_z, title_cam_focus, title_camera_step,
     touch_sprites, view_rect_world, world_camera, world_instances_cached,
@@ -3640,8 +3640,7 @@ impl App {
             AppState::InGame if full_spiral => (1.0, true, true),
             AppState::InGame => (0.0, false, false),
         };
-        let snap = self.spiral.snapshot_with_render_mode(bg_alpha, draw_bolts, draw_details);
-        self.last_bg_alpha = snap.bg_alpha;
+        self.last_bg_alpha = bg_alpha;
         // Vortex art follows the GML area (debris strip is per-area);
         // decode once per area, not per frame.
         let gml_area = gml_area_for_area(area);
@@ -3659,22 +3658,22 @@ impl App {
         // and the main-menu handoff. Paused/GameOver draw their captured
         // room or dead-run panel instead of a live spiral.
         let splash = menu_kind == Some(MenuOverlay::Splash);
-        let mut vortex_layer = if self.assets.is_some()
+        let vortex_requested = self.assets.is_some()
             && !self.vortex_tex.is_empty()
             && (!splash || splash_logo)
             && (!paused || spiral_cover)
             && !game_over
-            && (self.spiral.alive || !self.spiral.is_done() || spiral_cover)
-        {
+            && (self.spiral.alive || !self.spiral.is_done() || spiral_cover);
+        let snap = vortex_requested
+            .then(|| self.spiral.snapshot_with_render_mode(bg_alpha, draw_bolts, draw_details));
+        let mut vortex_layer = snap.map(|snap| {
             let mut pass = VortexPass::new(snap);
             pass.extend_textures(self.vortex_tex.clone());
-            Some(Embedded(
+            Embedded(
                 Modifier::new().fill_max_size().hit_passthrough(),
                 Callback::new(pass),
-            ))
-        } else {
-            None
-        };
+            )
+        });
         // GML depth law: LOWER depth draws IN FRONT (manual: "-1000 is
         // drawn on top of -100, which is drawn on top of 0"), and
         // `scrDrawSpiral` opens with `draw_clear(c_black)` at
@@ -3705,6 +3704,13 @@ impl App {
         // sets a colour; `Vlambeer/Draw_0` clears black). Live gameplay
         // past the spiral drain and GameOver (whose spiral died at
         // generation end) also fall back to the flat room colour.
+        //
+        // That fill is a GPU write into the sRGB target, which re-encodes on
+        // write, so it has to be linear like every sprite tint
+        // (`tint_to_linear`). `background_color` is authored in sRGB, and
+        // handing it over raw double-encoded: Desert's #af8f6a reached the
+        // screen as #d8c5ad, so the wall-coloured far field read as a pale
+        // void that stopped at the wall art.
         let background = if vortex_layer.is_some() && bg_alpha > 0.0 {
             None
         } else if matches!(
@@ -3713,7 +3719,7 @@ impl App {
         ) {
             Some([0.0, 0.0, 0.0, 1.0])
         } else {
-            Some(background_color(area))
+            Some(background_color(area).map(srgb_to_linear))
         };
         // Fullscreen overlays: hit flashes (white). Menu dimming is
         // the scrim `UiBox` above (bevy parity: one 230-black layer
