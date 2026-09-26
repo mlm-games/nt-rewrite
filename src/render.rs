@@ -9542,10 +9542,9 @@ pub fn touch_sprites(
     //   (`activeforever`) / `c_gray` (claimed) / the volume-control
     //   colors need the claim + hold state, which the sampler keeps
     //   local; this draws the resting state.
-    // - `ButtonAct`: `sprMobileControlCorners` at the act home over the
-    //   `37/255` black disc. GML skips the block entirely while its
-    //   `alpha` (3, decaying) has expired; the sampler has no fade
-    //   state, so the button draws while a session is live.
+    // - `ButtonAct`: `sprMobileControlCorners` at the act home, only
+    //   while the pickup prompt is lit (GML `alpha > 0`, see
+    //   [`crate::state::ActButton`]) and over its `37/255` black disc.
     // - splitfire `ButtonAttack`: corners sprite + double crosshair at
     //   the button home.
     // Button homes mirror the sampler (`ButtonAct` w/2,48;
@@ -9571,17 +9570,28 @@ pub fn touch_sprites(
         ) {
             out.push(s);
         }
-        if let Some(s) = hud_gui_place(
-            assets,
-            "images/sprMobileControlCorners.png",
-            0,
-            act.x,
-            act.y,
-            scale,
-            [1.0, 1.0, 1.0, 1.0],
-            gm,
-            view,
-        ) {
+        // `ButtonAct` (the pickup prompt). GML `scrDrawMobileControls`:
+        // `if (!instance_exists(_player)) alpha = 1; else if (alpha <= 0)
+        // continue` — and `alpha` only ever holds up while the player
+        // stands on a pickup (`scrDrawPlayerHUD` raises `active`, see
+        // [`crate::state::ActButton`]). Drawing it unconditionally is the
+        // "pickup indicator always showing" bug.
+        let act_lit = world
+            .get_resource::<crate::state::ActButton>()
+            .is_some_and(|a| a.alpha > 0.0);
+        if act_lit
+            && let Some(s) = hud_gui_place(
+                assets,
+                "images/sprMobileControlCorners.png",
+                0,
+                act.x,
+                act.y,
+                scale,
+                [1.0, 1.0, 1.0, 1.0],
+                gm,
+                view,
+            )
+        {
             out.push(s);
         }
         // Swap button (`ButtonSwap` region in `scrDrawMobileControls`):

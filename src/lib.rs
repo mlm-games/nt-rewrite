@@ -2499,9 +2499,42 @@ impl App {
         {
             // Mutation/ultra offer: right-button is silent (never confirms
             // or eats the left click).
-            if let Some(click) = staging_clicks.last().copied() {
-                let viewport_dp = self.view_viewport_dp;
-                let vw = crate::render::gml_view_size(viewport_dp)[0];
+            //
+            // GML `SkillIcon/Mouse_4` is ONE left-press event per icon:
+            // select when unselected, commit (`event_user(0)`) when
+            // already selected. The port models that as
+            // `SelectMutation`/`PickMutation`, and the two-stage law
+            // reads live `mutation_selected` — so routing ONE gesture
+            // through the hit-test twice selects and then instantly
+            // claims in the same frame (the "mutation collects on the
+            // first tap" bug). A touch finger arrives as both a released
+            // contact and a pointer click, so the two sources are the
+            // same gesture: route the touches, and only fall through to
+            // the click when there were none.
+            let viewport_dp = self.view_viewport_dp;
+            let gml_view = gml_view_size(viewport_dp);
+            let sx = gml_view[0] / viewport_dp[0].max(1e-6);
+            let sy = gml_view[1] / viewport_dp[1].max(1e-6);
+            let mut routed = false;
+            for (id, point) in released_touch_clicks.drain(..) {
+                if slider_touch_ids.contains(&id) {
+                    continue;
+                }
+                if let Some(action) = crate::render::mutation_icon_hit_action(
+                    &mut self.sim.world,
+                    point.x * sx,
+                    point.y * sy,
+                    gml_view[0],
+                ) {
+                    apply_menu_action(&mut self.sim.world, action);
+                    routed = true;
+                    break;
+                }
+            }
+            if !routed
+                && let Some(click) = staging_clicks.last().copied()
+            {
+                let vw = gml_view[0];
                 let k = (viewport_dp[1].max(1.0) / 240.0).max(1e-6);
                 if k.is_finite()
                     && let Some(action) = crate::render::mutation_icon_hit_action(
@@ -2514,6 +2547,7 @@ impl App {
                     apply_menu_action(&mut self.sim.world, action);
                 }
             }
+        } else if let Some(_click) = staging_clicks.last().copied() {
             let viewport_dp = self.view_viewport_dp;
             let gml_view = crate::render::gml_view_size(viewport_dp);
             let sx = if viewport_dp[0] > 1e-6 {
@@ -4380,6 +4414,7 @@ fn init_schedule_resources(world: &mut World) {
     world.insert_resource(FloorTransition::default());
     world.init_resource::<NtInput>();
     world.init_resource::<crate::state::Paused>();
+    world.init_resource::<crate::state::ActButton>();
     world.init_resource::<AppState>();
     // GML `MakeGame` boot law (disclaimer/save-continue/recontinue cap):
     // headless defaults boot straight to the menu; disk shells set the

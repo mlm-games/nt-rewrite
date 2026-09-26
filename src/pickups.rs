@@ -127,6 +127,69 @@ fn pickup_sprite(kind: PickupKind) -> (&'static str, f32) {
     }
 }
 
+/// GML pickup reach for the COLLECT arm, verbatim from
+/// [`collect_pickups`]: 28 px for the nearest ground weapon, 14 px for
+/// ammo/medkits, 20 px for everything else.
+pub fn collect_reach(kind: &PickupKind, is_nearest_weapon: bool) -> f32 {
+    match kind {
+        PickupKind::Weapon(_) if is_nearest_weapon => 28.0,
+        PickupKind::Weapon(_) => 0.0,
+        PickupKind::Ammo(..) | PickupKind::Medkit(_) => 14.0,
+        _ => 20.0,
+    }
+}
+
+/// GML pickup reach for the INTERACT PROMPT
+/// (`scrDrawInteractionHUD`), which is a different and much narrower set
+/// than the collect arm:
+///
+/// ```gml
+/// array_foreach([ WepPickup, CarVenusFixed, IceFlower, Van ], ...)
+/// ```
+///
+/// A ground weapon, plus three destructible `Car` objects (the port
+/// models those as world entities, not `Pickup`s). Rads, ammo, medkits,
+/// chests and curse motes are NOT in that list — they magnet/collect on
+/// contact and must never light the act button ("the pickup indicator
+/// showing over a rad"). `WepPickup.autopick` guns (Cuz's
+/// `scrCuzThrowAllAbility`) are skipped too; the port has no autopick
+/// pickup yet, so that arm is a no-op here.
+pub fn act_prompt_reach(kind: &PickupKind, is_nearest_weapon: bool) -> f32 {
+    match kind {
+        PickupKind::Weapon(_) if is_nearest_weapon => 28.0,
+        _ => 0.0,
+    }
+}
+
+/// GML `ButtonAct` fade: `ButtonAct/Other_10` runs the 30 Hz step, and
+/// `scrDrawPlayerHUD` raises `active` while the player stands on a
+/// promptable pickup. The prompt needs no interact press — it shows
+/// whether or not the press landed. Own system so the pickup scan stays
+/// query-free of UI state.
+pub fn tick_act_button(
+    mut act: ResMut<crate::state::ActButton>,
+    player_q: Query<&Pos, (With<Player>, Without<Pickup>)>,
+    pickups: Query<(&Pos, &Pickup), Without<Player>>,
+) {
+    act.step();
+    let Ok(player_pos) = player_q.single() else {
+        return;
+    };
+    let mut nearest_weapon = f32::MAX;
+    for (pos, pickup) in pickups.iter() {
+        if matches!(pickup.kind, PickupKind::Weapon(_)) {
+            nearest_weapon = nearest_weapon.min(player_pos.0.distance(pos.0));
+        }
+    }
+    for (pos, pickup) in pickups.iter() {
+        let d = player_pos.0.distance(pos.0);
+        if d <= act_prompt_reach(&pickup.kind, d == nearest_weapon) {
+            act.active = true;
+            return;
+        }
+    }
+}
+
 pub fn spawn_pickup(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
@@ -805,13 +868,15 @@ pub fn collect_pickups(
             pickup_pos.0 += dir * pull * dt;
         }
 
+        // GML reach, shared with the collect arm.
+        let reach = collect_reach(
+            &pickup.kind,
+            nearest_weapon.is_some_and(|(e, _)| e == pickup_e),
+        );
+        if reach <= 0.0 || dist > reach {
+            continue;
+        }
         if is_weapon {
-            if dist > 28.0 {
-                continue;
-            }
-            if nearest_weapon.is_none_or(|(e, _)| e != pickup_e) {
-                continue;
-            }
             // GML `Player/Collision_WepPickup:6` verbatim: press_pick OR
             // the thrown-gun autopick (`autopick` is set only on Cuz
             // scatter / Chicken Determination returns,
@@ -822,12 +887,6 @@ pub fn collect_pickups(
             if !input.peek_interact_pressed() {
                 continue;
             }
-        } else if is_ammo || is_medkit {
-            if dist > 14.0 {
-                continue;
-            }
-        } else if dist > 20.0 {
-            continue;
         }
 
         if let PickupKind::Chest(chest) = pickup.kind {

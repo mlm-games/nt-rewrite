@@ -249,6 +249,43 @@ pub const SPLASH_LOGO_HOLD_SECS: f32 = 1.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Resource)]
 pub struct SplashAutoAdvance(pub bool);
 
+/// GML `ButtonAct` fade, verbatim (`Create_0` `alpha = 3`, `active = 0`;
+/// `Other_10` per step: `active` → `alpha = 1.1, active = 0`, else
+/// `alpha -= 0.1`; `scrDrawPlayerHUD` raises `active` while the player
+/// stands on a pickup). `alpha > 0` is the WHOLE visibility law for the
+/// act button and the pickup art riding it
+/// (`scrDrawMobileControls`: `if (!instance_exists(_player)) alpha = 1;
+/// else if (alpha <= 0) continue`) — so the button is lit only near a
+/// pickup, plus a ~3 s grace when the run starts.
+#[derive(Debug, Clone, Copy, Resource)]
+pub struct ActButton {
+    pub alpha: f32,
+    pub active: bool,
+}
+
+impl Default for ActButton {
+    fn default() -> Self {
+        Self {
+            alpha: 3.0,
+            active: false,
+        }
+    }
+}
+
+impl ActButton {
+    /// `Other_10` step, then the draw's raise. GML runs the step before
+    /// `scrDrawPlayerHUD` sets `active`, so the fade lags the scan by one
+    /// frame; the order here reproduces that.
+    pub fn step(&mut self) {
+        if self.active {
+            self.alpha = 1.1;
+            self.active = false;
+        } else if self.alpha > 0.0 {
+            self.alpha = (self.alpha - 0.1).max(0.0);
+        }
+    }
+}
+
 /// Loading-screen state (bevy `LoadingTimer` half of
 /// `screens/mod.rs`; asset handles deferred, progress headless-1.0).
 #[derive(Debug, Clone, Resource)]

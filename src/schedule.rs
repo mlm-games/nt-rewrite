@@ -513,6 +513,9 @@ pub fn build_sim_schedule() -> Schedule {
                 pickups::collect_pickups
                     .in_set(NtSimSet::Progression)
                     .run_if(gameplay_active),
+                pickups::tick_act_button
+                    .in_set(NtSimSet::Progression)
+                    .run_if(gameplay_active),
                 pickups::sync_weapon_label
                     .in_set(NtSimSet::Progression)
                     .run_if(gameplay_active),

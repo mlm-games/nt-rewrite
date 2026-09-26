@@ -495,6 +495,7 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
     world.init_resource::<crate::input::NtInput>();
     world.init_resource::<crate::state::Paused>();
     world.init_resource::<Toast>();
+    world.init_resource::<crate::state::ActButton>();
     world.init_resource::<SelectedCharacter>();
     world.init_resource::<SaveData>();
     world.init_resource::<Queue<FloorStarted>>();
