@@ -581,6 +581,71 @@ fn enemy_cue(cues: &mut Queue<AudioCue>, stem: &'static str) {
     });
 }
 
+/// True when a kind owns a dedicated verbatim `tick_*` in this module. The
+/// generic block in [`enemy_ai`] must skip these, or they fire twice per
+/// cycle: once through their own GML `Alarm_1` port and once through the
+/// table-driven fallback.
+fn has_dedicated_tick(kind: EnemyKind) -> bool {
+    matches!(
+        kind,
+        EnemyKind::Bandit
+            | EnemyKind::SnowBandit
+            | EnemyKind::Scorpion
+            | EnemyKind::GoldScorpion
+            | EnemyKind::JungleBandit
+            | EnemyKind::JungleFly
+            | EnemyKind::Sniper
+    )
+}
+
+/// GML `collision_line(x, y, target.x, target.y, Wall, 0, 0) < 0` plus each
+/// object's own `Alarm_1` fire condition, in GML short-circuit order so the
+/// roll sequence matches.
+fn gml_wants_fire(
+    kind: EnemyKind,
+    los: bool,
+    dist: f32,
+    rng: &mut rand::rngs::ThreadRng,
+) -> bool {
+    if !los {
+        return false;
+    }
+    let mut roll = |n: f32| rng.random_range(0.0..n);
+    match kind {
+        // GML `Turret/Alarm_1:4`.
+        EnemyKind::Turret => dist < 160.0 && roll(4.0) < 3.0,
+        // GML `PopoFreak/Alarm_1:7`.
+        EnemyKind::PopoFreak => (64.0..160.0).contains(&dist) && roll(3.0) < 2.0,
+        // GML `Raven/Alarm_1:5-6`.
+        EnemyKind::Raven => dist > 64.0 && roll(6.0) < 1.0,
+        // GML `Salamander/Alarm_1:5`, `Crab/Alarm_1:4`.
+        EnemyKind::Salamander | EnemyKind::Crab => roll(2.0) < 1.0,
+        // GML `Molefish/Alarm_1:6-7`.
+        EnemyKind::Molefish => dist > 96.0 && roll(4.0) < 1.0,
+        // GML `Molesarge/Alarm_1:6-7`.
+        EnemyKind::Molesarge => dist < 120.0 && roll(3.0) < 1.0,
+        // GML `FireBaller/Alarm_1:10`, `SuperFireBaller/Alarm_1:10`.
+        EnemyKind::FireBaller | EnemyKind::SuperFireBaller => roll(3.0) < 1.0,
+        // GML `Guardian/Alarm_1:13`, under `justfired == 0`.
+        EnemyKind::OldGuardian | EnemyKind::PalaceGuardian | EnemyKind::CrownGuardian => {
+            (dist > 96.0 && roll(3.0) < 2.0) || roll(3.0) < 1.0
+        }
+        // GML `HostileHorror/Alarm_1:5-6`.
+        EnemyKind::HostileHorror => dist > 48.0 && roll(2.0 + dist / 100.0) < 1.0,
+        // GML `Grunt/Alarm_1:19`, `EliteGrunt/Alarm_1:17`,
+        // `Inspector/Alarm_1:15` — all `random(2) < 1`. Their `freeze > 40`
+        // term needs the `Other_10` freeze accumulator, which only the
+        // dedicated IDPD ticks carry.
+        EnemyKind::IdpdGrunt | EnemyKind::IdpdElite | EnemyKind::IdpdInspector => {
+            roll(2.0) < 1.0
+        }
+        // GML `Shielder/Alarm_1:12`.
+        EnemyKind::IdpdShield => dist <= 250.0 && roll(2.0) < 1.0,
+        // GML `SuperFrog/Alarm_1:4` states no fire condition of its own.
+        _ => true,
+    }
+}
+
 /// Wall-aware sight check (bevy parity: 8 px samples, 16 px tile-center
 /// recheck, arena-exterior samples ignored).
 fn has_line_of_sight(from: glam::Vec2, to: glam::Vec2, mask: &FloorMask) -> bool {
@@ -2083,54 +2148,73 @@ pub fn enemy_ai(
                 | EnemyKind::Jock
         );
         if def.bullets_per_shot > 0
-            && dist < brain.shoot_range
             && !dashing
             && !uses_charge
+            && !has_dedicated_tick(enemy.kind)
             && !matches!(enemy.kind, EnemyKind::Gator | EnemyKind::BuffGator)
         {
-            if def.burst {
-                if brain.burst_left > 0 {
-                    brain.burst_timer.tick(dt);
-                    if brain.burst_timer.just_finished() {
-                        fire_enemy_bullet(
-                            &mut commands,
-                            &mut rng,
-                            entity,
-                            &*enemy,
-                            def,
-                            epos,
-                            dir,
-                            euphoria,
-                        );
-                        show_enemy_fire(
-                            &mut commands,
-                            &catalog,
-                            entity,
-                            def.sprite,
-                            anim.as_deref_mut(),
-                            hurt.is_some(),
-                        );
-                        brain.burst_left -= 1;
-                        if brain.burst_left == 0 {
-                            brain.fire_alarm =
-                                GTimer::from_seconds(def.attack_cooldown, TimerMode::Once);
+            // GML gates every shooter on sight plus a per-object distance and
+            // roll, in `Alarm_1` short-circuit order. `shoot_range` was
+            // standing in for that and let anything shoot through walls.
+            let los = has_line_of_sight(epos, player_pos, &mask);
+            if gml_wants_fire(enemy.kind, los, dist, &mut rng) {
+                if def.burst {
+                    if brain.burst_left > 0 {
+                        brain.burst_timer.tick(dt);
+                        if brain.burst_timer.just_finished() {
+                            fire_enemy_bullet(
+                                &mut commands,
+                                &mut rng,
+                                entity,
+                                &*enemy,
+                                def,
+                                epos,
+                                dir,
+                                euphoria,
+                            );
+                            show_enemy_fire(
+                                &mut commands,
+                                &catalog,
+                                entity,
+                                def.sprite,
+                                anim.as_deref_mut(),
+                                hurt.is_some(),
+                            );
+                            brain.burst_left -= 1;
+                            if brain.burst_left == 0 {
+                                brain.fire_alarm =
+                                    GTimer::from_seconds(def.attack_cooldown, TimerMode::Once);
+                            }
+                        }
+                    } else {
+                        if brain.fire_alarm.just_finished() {
+                            brain.burst_left = def.bullets_per_shot;
+                            brain.burst_timer =
+                                GTimer::from_seconds(def.burst_interval, TimerMode::Once);
+                            fire_enemy_bullet(
+                                &mut commands,
+                                &mut rng,
+                                entity,
+                                &*enemy,
+                                def,
+                                epos,
+                                dir,
+                                euphoria,
+                            );
+                            show_enemy_fire(
+                                &mut commands,
+                                &catalog,
+                                entity,
+                                def.sprite,
+                                anim.as_deref_mut(),
+                                hurt.is_some(),
+                            );
+                            brain.burst_left -= 1;
                         }
                     }
                 } else {
                     if brain.fire_alarm.just_finished() {
-                        brain.burst_left = def.bullets_per_shot;
-                        brain.burst_timer =
-                            GTimer::from_seconds(def.burst_interval, TimerMode::Once);
-                        fire_enemy_bullet(
-                            &mut commands,
-                            &mut rng,
-                            entity,
-                            &*enemy,
-                            def,
-                            epos,
-                            dir,
-                            euphoria,
-                        );
+                        fire_enemy_shot(&mut commands, &mut rng, entity, &*enemy, def, epos, dir);
                         show_enemy_fire(
                             &mut commands,
                             &catalog,
@@ -2139,22 +2223,9 @@ pub fn enemy_ai(
                             anim.as_deref_mut(),
                             hurt.is_some(),
                         );
-                        brain.burst_left -= 1;
+                        brain.fire_alarm =
+                            GTimer::from_seconds(def.attack_cooldown, TimerMode::Once);
                     }
-                }
-            } else {
-                if brain.fire_alarm.just_finished() {
-                    fire_enemy_shot(&mut commands, &mut rng, entity, &*enemy, def, epos, dir);
-                    show_enemy_fire(
-                        &mut commands,
-                        &catalog,
-                        entity,
-                        def.sprite,
-                        anim.as_deref_mut(),
-                        hurt.is_some(),
-                    );
-                    brain.fire_alarm =
-                        GTimer::from_seconds(def.attack_cooldown, TimerMode::Once);
                 }
             }
         }
