@@ -37,7 +37,7 @@ use crate::comps_a::{
     SelectedCharacter, Team, Toast, Velocity, WallCell, WallTile,
 };
 use crate::comps_b::{
-    BigGenerator, BloodFlower, ChestKind, CrownPedestal, Enemy, FloorTransition, GoldCar,
+    BigGenerator, ChestKind, CrownPedestal, Enemy, FloorTransition, GoldCar,
     GroundDetail, LoopTransition, ManholeCover, PendingDelayedBoss, PortalClear, Prop,
     PropHpTracker, PropNestMarkers, PropSprites, PropTier, ProtoStatue, RadChestContainer,
     SecretEntrance, ThroneCarpet, ThroneStatueProp, UnbreakableProp,
@@ -731,6 +731,9 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
                 None,
                 &plan,
                 &mut mask,
+                0,
+                false,
+                false,
             );
         })
     });
@@ -1572,9 +1575,11 @@ pub fn spawn_secret_entrances(
         SecretTarget::YvMansion => {
             ec.insert(GoldCar);
         }
-        SecretTarget::Jungle => {
-            ec.insert(BloodFlower);
-        }
+        // GML has no `BloodFlower` object. The only route into
+        // `area_jungle` is the `IceFlower` enemy, spawned on FrozenCity
+        // subarea 1 while LAST WISH is held
+        // (`GenCont/Destroy_0.gml:112-123`), so no entrance marker goes
+        // here.
         _ => {}
     }
 }
@@ -1696,8 +1701,46 @@ pub fn spawn_level(
     ultra: Option<UltraMutationId>,
     plan: &LevelPlan,
     mask: &mut FloorMask,
+    // GML `GameCont.crownvisits` and `instance_exists(CrownObject)`, which
+    // decide how many vault statues guard the pedestal.
+    crownvisits: u8,
+    crown_object: bool,
+    // GML `GenCont/Destroy_0.gml:112`: FrozenCity subarea 1 with LAST WISH
+    // turns a prop (or an enemy) into the Jungle's only entrance.
+    ice_flower: bool,
 ) {
     *mask = build_floor_mask(plan);
+
+    if ice_flower && run.area == AreaId::FrozenCity && run.floor_in_area == 1 {
+        // `instance_change(IceFlower, 1)` on the furthest prop, else a
+        // fresh flower in place of a random enemy.
+        let mut spawn = |at: glam::Vec2| {
+            crate::combat::queue_enemy_spawn(
+                commands,
+                crate::data::EnemyKind::IceFlower,
+                at,
+                1.0,
+                run.loop_count,
+            );
+        };
+        let furthest = plan
+            .props
+            .iter()
+            .map(|(_, at)| *at)
+            .max_by(|a, b| {
+                a.length_squared()
+                    .partial_cmp(&b.length_squared())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        match furthest {
+            Some(at) => spawn(at),
+            None => {
+                if let Some((_, at)) = plan.enemies.first().copied() {
+                    spawn(at);
+                }
+            }
+        }
+    }
 
     let floor_set: std::collections::HashSet<(i32, i32)> =
         plan.floor_cells.iter().copied().collect();
@@ -1976,12 +2019,24 @@ pub fn spawn_level(
             CrownKind::Hatred,
         ];
         let kind = pool[rand::rng().random_range(0..pool.len())];
+        let pedestal = glam::Vec2::new(0.0, 40.0);
         commands.spawn((
             GameCleanup,
             LevelCleanup,
             CrownPedestal { kind },
-            Pos(glam::Vec2::new(0.0, 40.0)),
+            Pos(pedestal),
         ));
+        // GML `CrownPickup/Create_0.gml:37-50`: the pedestal's guard
+        // statues, 128 px out on the chosen angles.
+        let mut statue_rng = StdRng::seed_from_u64(run.gen_seed ^ 0x5734_7475);
+        crate::crown::spawn_crown_vault_statues(
+            commands,
+            catalog,
+            pedestal,
+            crownvisits,
+            crown_object,
+            &mut statue_rng,
+        );
     }
 }
 

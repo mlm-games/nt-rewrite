@@ -185,6 +185,11 @@ pub struct CribTrip {
     pub gocrib: bool,
     pub fromcrib: bool,
     pub can_advance: bool,
+    /// GML `GameCont.lastarea` / `lastsubarea`, written when leaving for
+    /// the crib (`GameCont/Other_5.gml:33-34`) and read back on the way
+    /// out (`:58-61`).
+    pub last_area: Option<crate::data::AreaId>,
+    pub last_subarea: u32,
 }
 
 impl Default for CribTrip {
@@ -194,6 +199,8 @@ impl Default for CribTrip {
             gocrib: false,
             fromcrib: false,
             can_advance: true,
+            last_area: None,
+            last_subarea: 0,
         }
     }
 }

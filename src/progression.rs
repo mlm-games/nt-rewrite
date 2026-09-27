@@ -376,7 +376,32 @@ fn target_for_secret_area(area: AreaId) -> Option<SecretTarget> {
 fn apply_secret_transition(
     run: &mut Run,
     triggers: &mut crate::secrets::SecretTriggers,
+    crib: &mut crate::CribTrip,
 ) -> Option<SecretTarget> {
+    // GML `GameCont/Other_5.gml:24-44`: the crib hop runs before anything
+    // else, including the queued secret, and short-circuits the advance.
+    crib.fromcrib = false;
+    if crib.gocrib {
+        crib.gocrib = false;
+        if run.area != AreaId::Crib {
+            crib.last_area = Some(run.area);
+            crib.last_subarea = run.floor_in_area;
+        }
+        run.area = AreaId::Crib;
+        run.floor_in_area = 1;
+        run.world = 0;
+        run.portal_open = false;
+        let prev = run.gen_seed;
+        run.gen_seed = derive_floor_seed(prev, run.floor, 107, run.loop_count);
+        triggers.reset_floor_flags();
+        return None;
+    }
+    // GML `:49-52`: a stage that cannot advance yet holds the room.
+    if !crib.can_advance {
+        crib.can_advance = true;
+        return None;
+    }
+
     if let Some(target) = triggers.take_queued() {
         if matches!(target, SecretTarget::Vault | SecretTarget::CrownVault) {
             triggers.vaults_entered = triggers.vaults_entered.saturating_add(1);
@@ -394,6 +419,22 @@ fn apply_secret_transition(
     }
 
     let previous_secret = target_for_secret_area(run.area);
+
+    // GML `GameCont/Other_5.gml:58-62`: leaving the crib restores the area
+    // it was entered from, one subarea in.
+    if run.area == AreaId::Crib {
+        if let Some(area) = crib.last_area {
+            run.area = area;
+            run.floor_in_area = crib.last_subarea;
+        }
+        crib.fromcrib = true;
+        // The crib is a detour, so the global floor never moved and the
+        // roadmap coordinate is the room we came from.
+        run.world = route_coordinates(run.floor).0;
+        run.portal_open = false;
+        triggers.reset_floor_flags();
+        return None;
+    }
 
     if let Some(previous_secret) = previous_secret {
         let floor = secret_return_floor(previous_secret, run.floor);
@@ -669,9 +710,20 @@ pub struct MutationFlagSet<'w> {
     pub euphoria: ResMut<'w, Euphoria>,
     pub open_mind: ResMut<'w, OpenMind>,
     pub heavy_heart: ResMut<'w, HeavyHeart>,
+    /// `Option` so the mutation systems do not force the crib resource to
+    /// exist in every test world that builds a flag set.
+    pub crib: Option<ResMut<'w, crate::CribTrip>>,
 }
 
 /// Screen-feel sinks shared by level-up paths.
+/// Route bookkeeping consumed by the room-end hop. Bundled because
+/// `tick_portal_suck` is already at Bevy's 16-parameter cap.
+#[derive(bevy_ecs::system::SystemParam)]
+pub struct RouteBookkeeping<'w> {
+    pub triggers: ResMut<'w, crate::secrets::SecretTriggers>,
+    pub crib: ResMut<'w, crate::CribTrip>,
+}
+
 #[derive(bevy_ecs::system::SystemParam)]
 pub struct LevelFx<'w> {
     pub trauma: ResMut<'w, Trauma>,
@@ -1081,6 +1133,15 @@ pub fn apply_ultra_mutation(
     let _ = flags;
 
     player.ultra = Some(id);
+
+    // GML `UltraIcon/Other_10.gml:10-16`: a Venuz or Cuz ultra sends you to
+    // the crib instead of advancing the stage.
+    if let Some(crib) = flags.crib.as_mut() {
+        if matches!(race_state.race, RaceId::Venuz | RaceId::Cuz) {
+            crib.gocrib = true;
+            crib.can_advance = false;
+        }
+    }
 
     match id {
         UltraMutationId::FishGunWarrant => {
@@ -2244,7 +2305,7 @@ pub fn tick_portal_suck(
     mut loop_transition: ResMut<LoopTransition>,
     mut trauma: ResMut<Trauma>,
     mut toast: ResMut<Toast>,
-    mut triggers: ResMut<crate::secrets::SecretTriggers>,
+    mut route: RouteBookkeeping,
     mut paused: ResMut<crate::state::Paused>,
     mut deferred: ResMut<DeferredFloorGen>,
     mut save: ResMut<SaveData>,
@@ -2418,7 +2479,7 @@ pub fn tick_portal_suck(
     let entered_secret = if looped {
         None
     } else {
-        apply_secret_transition(&mut run, &mut triggers)
+        apply_secret_transition(&mut run, &mut route.triggers, &mut route.crib)
     };
 
     // GML `IceFlower/Step_0:14-19`: the jungle secret eats the Last Wish
@@ -2647,6 +2708,23 @@ pub fn tick_throne_sit(
 /// enemies, bosses), `FloorStarted` event, +1 HP, strong-spirit
 /// recharge, headless reset, player placement, carried-weapon drops,
 /// juice. Bevy `progression.rs` stage-2 law verbatim.
+/// Everything `spawn_level` needs about the run it is entering. Bundled
+/// because `tick_floor_transition` sits at Bevy's 16-parameter cap.
+#[derive(bevy_ecs::system::SystemParam)]
+pub struct RoomEntry<'w, 's> {
+    pub open_mind: Res<'w, OpenMind>,
+    pub scarier: Res<'w, ScarierFace>,
+    pub heavy_heart: Res<'w, HeavyHeart>,
+    /// GML `GameCont.crownvisits`, which sets how many vault statues guard
+    /// the pedestal (`CrownPickup/Create_0.gml:37-50`).
+    pub triggers: Res<'w, crate::secrets::SecretTriggers>,
+    /// GML `GenCont/Destroy_0.gml:112`: FrozenCity subarea 1 with LAST WISH
+    /// turns a prop into the Jungle's only entrance.
+    pub ice_flower: Option<Res<'w, IceFlowerSeed>>,
+    /// GML `instance_exists(CrownObject)`, the second vault-statue gate.
+    pub crowns: Query<'w, 's, Entity, With<crate::comps_b::CrownObject>>,
+}
+
 pub fn tick_floor_transition(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -2661,10 +2739,11 @@ pub fn tick_floor_transition(
     mut floor_started: ResMut<Queue<FloorStarted>>,
     mut player_q: Query<(&mut Pos, &mut Health, &mut Player, &RaceState), With<Player>>,
     mut carried: ResMut<PortalCarriedWeapons>,
-    open_mind: Res<OpenMind>,
-    scarier: Res<ScarierFace>,
-    heavy_heart: Res<HeavyHeart>,
+    room: RoomEntry,
 ) {
+    let open_mind = room.open_mind;
+    let scarier = room.scarier;
+    let heavy_heart = room.heavy_heart;
     if !ft.active {
         return;
     }
@@ -2740,6 +2819,9 @@ pub fn tick_floor_transition(
                 player_ultra,
                 &plan,
                 &mut mask,
+                room.triggers.vaults_entered,
+                !room.crowns.is_empty(),
+                room.ice_flower.is_some_and(|s| s.0),
             );
             commands.remove_resource::<IceFlowerSeed>();
 
