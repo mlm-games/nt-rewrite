@@ -1163,11 +1163,7 @@ pub fn resolve_enemy_deaths(
             },
             weapon_chance: enemy.weapon_chance,
             extra_drop_chance: 0,
-            extra_weapon_chance: if enemy.kind == EnemyKind::MaggotSpawn {
-                35
-            } else {
-                0
-            },
+            extra_weapon_chance: 0,
         });
     }
 }
@@ -1518,25 +1514,16 @@ pub fn resolve_death_drops(
                 pos,
                 (enemy.rad_drop as u32 + melting_bonus).saturating_sub(blood_tax),
             );
-            maybe_spawn_drop(
-                &mut commands,
-                &catalog,
-                pos,
-                enemy.drop_chance,
-                enemy.weapon_chance,
-                &player,
-                &pinv,
-                &phealth,
-                run.loop_count,
-                Some(&decide),
-            );
-            if event.extra_drop_chance != 0 || event.extra_weapon_chance != 0 {
+            // GML `Destroy_0` calls `scrDrop` once per roll; several objects
+            // write `repeat (2) scrDrop(...)` (or a bare double call), which is
+            // two independent `random(100)` draws, not one doubled chance.
+            for _ in 0..crate::enemy_data::enemy_def(enemy.kind).drop_rolls {
                 maybe_spawn_drop(
                     &mut commands,
                     &catalog,
                     pos,
-                    event.extra_drop_chance,
-                    event.extra_weapon_chance,
+                    enemy.drop_chance,
+                    enemy.weapon_chance,
                     &player,
                     &pinv,
                     &phealth,
@@ -1544,15 +1531,13 @@ pub fn resolve_death_drops(
                     Some(&decide),
                 );
             }
-            // GML `DogGuardian/Destroy_0`: double `scrDrop(60, 0)` —
-            // the second table roll just above covers it.
-            if matches!(enemy.kind, EnemyKind::DogGuardian) {
+            if event.extra_drop_chance != 0 || event.extra_weapon_chance != 0 {
                 maybe_spawn_drop(
                     &mut commands,
                     &catalog,
                     pos,
-                    enemy.drop_chance,
-                    enemy.weapon_chance,
+                    event.extra_drop_chance,
+                    event.extra_weapon_chance,
                     &player,
                     &pinv,
                     &phealth,
