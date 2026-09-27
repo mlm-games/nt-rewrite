@@ -22,6 +22,11 @@
 //! Wall *breaking* during charges still
 //! queues [`PendingWallBreak`]s against the wall entities.
 //!
+//! `Collision_Wall` adaptation: the GML event fires on mask overlap after
+//! motion, so `boss_wall_law` is a response-only pass
+//! (`move_bounce_solid_displacement` with a zero displacement) run by the
+//! dispatcher after the handler, plus the per-kind destroy/bounce split.
+//!
 //! The `boss_ai` dispatcher carries 12 params (under the bevy_ecs 16-param
 //! cap), so no record-split is needed. Handlers are plain functions over
 //! snapshots (`&[(Vec2, Vec2)]` props, `&[(Vec2, (i32, i32))]` walls) so
@@ -33,22 +38,27 @@ use repame_fx::Trauma;
 use repame_sim::SimTime;
 
 use crate::anim::SpriteAnim;
-use crate::audio::AudioCue;
+use crate::audio::{AudioCue, GameAudio};
 use crate::combat::{Explosion, queue_enemy_spawn, queue_enemy_spawn_no_kill};
 use crate::comps_a::{
-    BossIntro, DamageSource, FloorMask, GameCleanup, Health, Hitbox, LevelCleanup, NextHurt,
-    PendingWallBreak, Player, Projectile, RaceState, Run, Team, Toast, Velocity, WallCell,
-    WallTile, gml_motion_add_clamp,
+    BossIntro, BouncesLeft, DamageSource, FloorMask, GameCleanup, Health, Hitbox, LevelCleanup,
+    NextHurt, PendingWallBreak, Player, Projectile, ProjectileFade, ProjectileFriction,
+    ProjectileTyp, RaceState, Run, ShellWallBounce, Team, Toast, Velocity, WallCell, WallTile,
+    gml_motion_add_clamp,
 };
 use crate::comps_b::{
-    Beam, BossBrain, BossPhase, Enemy, EnemyBrain, HurtAnim, HyperOrbitCrystal, InvisiWall,
-    MomShot, Portal, PortalClear, Prop, ThroneBall, ThroneStatueProp,
+    Beam, BigGenerator, BossBrain, BossPhase, CustomExplosion, Enemy, EnemyBrain, HitWarning,
+    HurtAnim, HyperOrbitCrystal, InvisiWall, MomShot, Portal, PortalClear, Prop, PropNestMarkers,
+    PropSprites, RadChestContainer, SecretEntrance, ThroneBall, ThroneStatueProp,
 };
 use crate::data::{AreaId, EnemyKind};
 use crate::enemies::show_enemy_fire;
 use crate::enemy_data::{EnemyDef, enemy_def};
 use crate::msg::Queue;
-use crate::spatial::{Pos, clamp_to_arena, move_bounce_solid, resolve_prop_collision};
+use crate::spatial::{
+    Pos, clamp_to_arena, move_bounce_solid, move_bounce_solid_displacement, resolve_prop_collision,
+    solid_contact,
+};
 use crate::time::{GTimer, TimerMode};
 
 // ---------------------------------------------------------------------------
@@ -148,6 +158,119 @@ fn ready_timer() -> GTimer {
     t.tick(0.01);
     t.tick(0.0);
     t
+}
+
+/// GML `alarm[n] = k` (k in 30 Hz steps).
+fn gml_alarm(frames: f32) -> GTimer {
+    GTimer::from_seconds(frames / 30.0, TimerMode::Once)
+}
+
+/// GML `alarm[n] = -1` (negative alarms never fire).
+fn gml_alarm_off() -> GTimer {
+    GTimer::from_seconds(1.0e6, TimerMode::Once)
+}
+
+/// GML `move_bounce_solid(true)` as a response-only pass: the handler has
+/// already integrated the step, so the displacement is zero and this only
+/// pushes out of solid overlap and reflects the velocity.
+fn boss_bounce_solid(
+    pos: &mut glam::Vec2,
+    vel: &mut glam::Vec2,
+    radius: f32,
+    props: &[(glam::Vec2, glam::Vec2)],
+    mask: &FloorMask,
+) -> bool {
+    move_bounce_solid_displacement(pos, vel, glam::Vec2::ZERO, radius, props, Some(mask), true)
+        .is_some()
+}
+
+/// GML `enemy/Collision_Wall.gml:13-39` `busycollisions` slide: step the
+/// blocked axis by `friction` px/step until the next step is free.
+fn boss_friction_slide(
+    pos: glam::Vec2,
+    vel: &mut glam::Vec2,
+    radius: f32,
+    props: &[(glam::Vec2, glam::Vec2)],
+    mask: &FloorMask,
+    friction: f32,
+) {
+    if friction <= 0.0 {
+        return;
+    }
+    for horizontal in [true, false] {
+        let value = if horizontal { vel.x } else { vel.y };
+        if value.abs() <= 1e-6 {
+            continue;
+        }
+        let free = |v: f32| -> bool {
+            let step = if horizontal {
+                glam::Vec2::new(v, 0.0)
+            } else {
+                glam::Vec2::new(0.0, v)
+            } / 30.0;
+            solid_contact(pos + step, radius, props, Some(mask)).is_none()
+        };
+        if free(value) {
+            continue;
+        }
+        let sign = if value > 0.0 { 1.0 } else { -1.0 };
+        let mut current = value;
+        for _ in 0..4096 {
+            current -= sign * friction * 30.0;
+            if current.abs() <= 1e-6 || free(current) {
+                break;
+            }
+        }
+        if horizontal { vel.x = current } else { vel.y = current }
+    }
+}
+
+/// GML `Collision_Wall` for the bosses that do not resolve their own. The
+/// handler already integrated the step, so the pass is response-only.
+#[allow(clippy::too_many_arguments)]
+fn boss_wall_law(
+    commands: &mut Commands,
+    walls: &[(glam::Vec2, (i32, i32))],
+    pos: &mut glam::Vec2,
+    vel: &mut glam::Vec2,
+    kind: EnemyKind,
+    radius: f32,
+    props: &[(glam::Vec2, glam::Vec2)],
+    mask: &FloorMask,
+    loops: u32,
+) {
+    // `busycollisions` is `GameCont.loops <= 3` (`enemy/Create_0.gml:29`).
+    let busy = loops <= 3;
+    match kind {
+        // Handled inside the handler (its own `Collision_Wall.gml`).
+        EnemyKind::BigBandit
+        | EnemyKind::BigBanditLoop
+        | EnemyKind::BigDog
+        | EnemyKind::BigDogLoop
+        | EnemyKind::Captain => (),
+        // `Nothing/Collision_Wall.gml:4-5` and `TechnoMancer/Collision_Wall.gml:1`.
+        EnemyKind::Throne | EnemyKind::Technomancer => {
+            crate::walls::queue_wall_breaks_in_radius(commands, walls, *pos, radius + 8.0);
+            if kind == EnemyKind::Throne {
+                boss_bounce_solid(pos, vel, radius, props, mask);
+            }
+        }
+        // Inherits `enemy/Collision_Wall.gml`: bounce plus the friction slide.
+        EnemyKind::ThroneII
+        | EnemyKind::LilHunter
+        | EnemyKind::LilHunterLoop
+        | EnemyKind::Mom
+        | EnemyKind::YvBoss => {
+            if boss_bounce_solid(pos, vel, radius, props, mask) && busy {
+                boss_friction_slide(*pos, vel, radius, props, mask, 0.4);
+            }
+        }
+        // `ScrapBoss`, `HyperCrystal`, `FrogQueen`, `CrownGuardian`: bare
+        // `move_bounce_solid(true)`, so no slide.
+        _ => {
+            boss_bounce_solid(pos, vel, radius, props, mask);
+        }
+    }
 }
 
 /// Queue wall breaks along a charge segment (bevy
@@ -420,7 +543,7 @@ pub fn boss_ai(
     mut bosses: Query<
         (
             Entity,
-            &Enemy,
+            &mut Enemy,
             &mut BossBrain,
             &mut EnemyBrain,
             &mut Velocity,
@@ -429,7 +552,7 @@ pub fn boss_ai(
             Option<&mut SpriteAnim>,
             Option<&HurtAnim>,
         ),
-        (With<Enemy>, Without<Prop>),
+        (With<Enemy>, With<BossBrain>, Without<Prop>),
     >,
     props: Query<(Entity, &Prop, &Pos, Option<&ThroneStatueProp>), With<Prop>>,
     walls: Query<(&WallCell, &Pos), (With<WallTile>, Without<Enemy>)>,
@@ -475,10 +598,11 @@ pub fn boss_ai(
         .map(|(_, e, _)| if e.kind == EnemyKind::SuperFrog { 2 } else { 1 })
         .sum();
 
-    for (entity, enemy, mut boss, mut brain, mut vel, mut pos, health, mut anim, hurt) in
+    for (entity, mut enemy, mut boss, mut brain, mut vel, mut pos, health, mut anim, hurt) in
         &mut bosses
     {
-        let def = enemy_def(enemy.kind);
+        let kind = enemy.kind;
+        let def = enemy_def(kind);
         if !def.boss {
             continue;
         }
@@ -494,13 +618,16 @@ pub fn boss_ai(
         boss.special_timer.tick(dt);
         brain.melee.tick(dt);
 
-        let fired = match enemy.kind {
+        let fired = match kind {
             EnemyKind::BigBandit | EnemyKind::BigBanditLoop => big_bandit_ai(
                 &mut commands,
                 &mut trauma,
                 entity,
+                kind,
                 &mut boss,
                 &mut brain,
+                &mut enemy,
+                &health,
                 &mut vel,
                 &mut pos,
                 def,
@@ -510,11 +637,14 @@ pub fn boss_ai(
                 dt,
                 &prop_shapes,
                 &wall_shapes,
+                &mask,
+                run.loop_count,
             ),
             EnemyKind::BigDog | EnemyKind::BigDogLoop => big_dog_ai(
                 &mut commands,
                 &mut trauma,
                 entity,
+                kind,
                 &mut boss,
                 &mut brain,
                 &mut vel,
@@ -534,6 +664,7 @@ pub fn boss_ai(
                 &mut trauma,
                 &mut toast,
                 entity,
+                kind,
                 &mut boss,
                 &mut brain,
                 &mut vel,
@@ -650,8 +781,13 @@ pub fn boss_ai(
             EnemyKind::Captain => captain_ai(
                 &mut commands,
                 &mut trauma,
+                &mut toast,
                 entity,
+                kind,
                 &mut boss,
+                &mut brain,
+                &mut enemy,
+                &health,
                 &mut vel,
                 &mut pos,
                 def,
@@ -661,6 +797,7 @@ pub fn boss_ai(
                 dt,
                 &prop_shapes,
                 &wall_shapes,
+                &mask,
             ),
             EnemyKind::OldGuardian => old_guardian_ai(
                 &mut commands,
@@ -705,6 +842,17 @@ pub fn boss_ai(
             );
         }
 
+        boss_wall_law(
+            &mut commands,
+            &wall_shapes,
+            &mut pos.0,
+            &mut vel.0,
+            kind,
+            def.radius,
+            &prop_shapes,
+            &mask,
+            run.loop_count,
+        );
         clamp_to_arena(&mut pos.0, def.radius);
     }
 }
@@ -713,16 +861,26 @@ pub fn boss_ai(
 // Big Bandit.
 // ---------------------------------------------------------------------------
 
-/// Charge telegraphs + shotgun bursts while kiting (bevy `big_bandit_ai`
-/// parity; flip/scale/fire-strip writes omitted as visual-only).
-/// Returns true when a shot was fired (muzzle marker).
+/// Verbatim `objects/BanditBoss` law: decide (`Alarm_1`), shotgun burst
+/// (`Alarm_2`), telegraph / dash / recovery (`Alarm_3`..`Alarm_5`),
+/// walk + dash locomotion (`Other_10`), and the destroy-or-bounce wall law
+/// (`Collision_Wall`).
+///
+/// Register map: `attack_timer` = `alarm[1]`, `special_timer` = `alarm[2]`,
+/// `phase_timer` = `alarm[4]`, `phase` = `charge` (Telegraph 0, Charging 1,
+/// Cooldown -1), `boss.aux` = `intro`, `pattern_index` = `chargewait`,
+/// `brain.fire` = `shot`, `brain.ammo` = `ammo`, `brain.walk` = `walk`,
+/// `brain.gunangle` = `gunangle` (radians), `boss.target` = `direction`.
 #[allow(clippy::too_many_arguments)]
 fn big_bandit_ai(
     commands: &mut Commands,
     trauma: &mut Trauma,
     owner: Entity,
+    kind: EnemyKind,
     boss: &mut BossBrain,
     brain: &mut EnemyBrain,
+    enemy: &mut Enemy,
+    health: &Health,
     vel: &mut Velocity,
     pos: &mut Pos,
     def: EnemyDef,
@@ -732,170 +890,192 @@ fn big_bandit_ai(
     dt: f32,
     props: &[(glam::Vec2, glam::Vec2)],
     walls: &[(glam::Vec2, (i32, i32))],
+    mask: &FloorMask,
+    loops: u32,
 ) -> bool {
-    let looped = def.name.contains("Loop");
-    let kind = if looped {
-        EnemyKind::BigBanditLoop
-    } else {
-        EnemyKind::BigBandit
-    };
+    let mut rng = rand::rng();
+    let frames = dt * crate::SIM_HZ as f32;
     let mut fired = false;
 
-    match boss.phase {
-        BossPhase::Idle | BossPhase::Cooldown => {
-            if brain.walk > 0.0 {
-                let face = (boss.target - epos).normalize_or_zero();
-                let move_dir = if vel.0.length_squared() > 0.0 {
-                    vel.0.normalize_or_zero()
-                } else {
-                    -dir
-                };
-                gml_motion_add_clamp(&mut vel.0, move_dir, 1.0, 3.0, dt);
-                if face.length_squared() > 0.0001 {
-                    gml_motion_add_clamp(&mut vel.0, face, 0.5, 3.0, dt);
-                }
-                brain.walk -= dt * 30.0;
-                if brain.walk < 0.0 {
-                    brain.walk = 0.0;
-                }
-            }
-            pos.0 += vel.0 * dt;
-            resolve_prop_collision(&mut pos.0, def.radius, props.iter().copied());
+    // GML `Create_0`: `alarm[1] = 1`, `chargewait = 2`, `charge = 0`,
+    // `ammo = 10`, `shot = 0`, `walk = 0`, `meleedamage = 0`, `intro = 0`.
+    if brain.burst_left == 0 {
+        brain.burst_left = 1;
+        boss.phase = BossPhase::Idle;
+        boss.attack_timer = gml_alarm(1.0);
+        boss.special_timer = gml_alarm_off();
+        boss.pattern_index = 2;
+        brain.ammo = 10;
+        brain.gunangle = rng.random_range(0.0..std::f32::consts::TAU);
+        boss.target = -dir;
+        enemy.touch_damage = 0;
+    }
 
-            if boss.attack_timer.just_finished() {
-                let dist = epos.distance(player_pos);
-                // Bevy gates the burst on wall-ENTITY line of sight
-                // (`segment_hits_wall_query`), not the mask trace.
-                let wall_centers: Vec<glam::Vec2> = walls.iter().map(|(c, _)| *c).collect();
-                let los = !crate::walls::segment_hits_wall_legacy(epos, player_pos, &wall_centers);
-                let period = if looped {
-                    (20.0 + rand::rng().random_range(0.0..50.0)) / 30.0
-                } else {
-                    (30.0 + rand::rng().random_range(0.0..60.0)) / 30.0
-                };
-                boss.attack_timer = GTimer::from_seconds(period, TimerMode::Once);
+    // GML `Other_10:3-18`: `if charge` is true for both `charge = 1` and the
+    // `charge = -1` recovery, so the dash impulses run through both; the walk
+    // adds 2 along `direction` and 1 along `gunangle` capped at 3.
+    if boss.phase == BossPhase::Charging || boss.phase == BossPhase::Cooldown {
+        gml_motion_add_clamp(&mut vel.0, boss.target, 2.0, 5.0, dt);
+        gml_motion_add_clamp(
+            &mut vel.0,
+            glam::Vec2::from_angle(brain.gunangle),
+            2.0,
+            5.0,
+            dt,
+        );
+    } else {
+        if brain.walk > 0.0 {
+            gml_motion_add_clamp(&mut vel.0, boss.target, 2.0, 3.0, dt);
+            gml_motion_add_clamp(
+                &mut vel.0,
+                glam::Vec2::from_angle(brain.gunangle),
+                1.0,
+                3.0,
+                dt,
+            );
+            brain.walk = (brain.walk - frames).max(0.0);
+        }
+        limit_velocity(vel, 3.0 * 30.0);
+    }
 
-                let intro_done = boss.pattern_index > 0 || boss.phase == BossPhase::Cooldown;
-                let should_burst = los
-                    && dist > 48.0
-                    && dist < 240.0
-                    && intro_done
-                    && rand::rng().random::<f32>() < 2.0 / 3.0;
-                if should_burst {
-                    brain.ammo = if looped { 15 } else { 10 };
-                    brain.burst_left = brain.ammo as usize;
-                    brain.burst_timer = GTimer::from_seconds(1.0 / 30.0, TimerMode::Once);
-                    brain.gunangle = dir.y.atan2(dir.x);
-                    boss.set_phase(BossPhase::Radial, 2.5);
-                    boss.attack_timer = GTimer::from_seconds(70.0 / 30.0, TimerMode::Once);
-                } else {
-                    let mut chargewait = boss.pattern_index.saturating_add(1);
-                    if dist < 96.0 {
-                        chargewait = chargewait.saturating_add(1);
-                    }
-                    boss.pattern_index = chargewait;
+    // GML `Alarm_1` (decide).
+    if boss.attack_timer.just_finished() {
+        let mut period = 30.0 + rng.random_range(0.0..60.0);
+        if loops > 0 {
+            period = 20.0 + rng.random_range(0.0..50.0);
+        }
+        boss.attack_timer = gml_alarm(period);
+        enemy.touch_damage = 0;
 
-                    let intro_charge = epos.distance(boss.home) < 1.0;
-                    if chargewait >= 2 || intro_charge {
-                        boss.pattern_index = 0;
-                        boss.target = player_pos;
+        let dist = epos.distance(player_pos);
+        let los = !crate::walls::segment_hits_wall(epos, player_pos, mask);
+        let intro = boss.aux >= 1.0;
+        if dist < 240.0 || !intro {
+            if los && dist > 48.0 && intro {
+                if rng.random_range(0.0..3.0) < 2.0 {
+                    brain.ammo = if loops > 0 { 15 } else { 10 };
+                    // GML scopes the whole burst arm on `GameCont.loops`, so
+                    // on loop 0 only `ammo` is raised and `alarm[2]` is never
+                    // armed.
+                    if loops > 0 {
+                        boss.special_timer = gml_alarm(1.0);
                         brain.gunangle = dir.y.atan2(dir.x);
-                        boss.set_phase(BossPhase::Telegraph, 15.0 / 30.0);
-                        vel.0 *= 0.2;
-                        trauma.add(0.08);
+                        boss.attack_timer = gml_alarm(70.0 + rng.random_range(0.0..5.0));
                     }
                 }
-
-                let away = -dir;
-                let ang =
-                    away.y.atan2(away.x) + rand::rng().random_range(-90f32..90.0).to_radians();
-                vel.0 = glam::Vec2::new(ang.cos(), ang.sin()) * (0.4 * 30.0);
-                brain.walk = if dist > 64.0 {
-                    40.0
-                } else {
-                    10.0 + rand::rng().random_range(0.0..10.0)
-                };
-            }
-        }
-
-        BossPhase::Radial => {
-            brain.burst_timer.tick(dt);
-            brain.walk = 0.0;
-            if brain.ammo > 0 && brain.burst_timer.just_finished() {
-                let spread = rand::rng().random_range(-15f32..15.0).to_radians();
-                let ang = brain.gunangle + spread;
-                let sdir = glam::Vec2::new(ang.cos(), ang.sin());
-
-                fire_projectile(
-                    commands,
-                    owner,
-                    epos + sdir * 20.0,
-                    sdir,
-                    Team::Enemy,
-                    240.0,
-                    3,
-                    3.2,
-                    4.5,
-                    120.0,
-                    kind,
-                );
-                fired = true;
-
-                gml_motion_add_clamp(&mut vel.0, -sdir, 1.0, 5.0, dt);
-
-                brain.ammo -= 1;
-                brain.burst_left = brain.burst_left.saturating_sub(1);
-                if looped && brain.ammo == 7 {
-                    brain.gunangle = dir.y.atan2(dir.x);
+            } else if brain.fire > 0 || health.hp < health.max || !intro {
+                boss.pattern_index += 1;
+                if dist < 96.0 {
+                    boss.pattern_index += 1;
                 }
-                brain.burst_timer = GTimer::from_seconds(4.0 / 30.0, TimerMode::Once);
-            }
-            if brain.ammo == 0 {
-                boss.set_phase(
-                    BossPhase::Cooldown,
-                    (60.0 + rand::rng().random_range(0.0..10.0)) / 30.0,
-                );
-                boss.attack_timer = GTimer::from_seconds(
-                    (60.0 + rand::rng().random_range(0.0..10.0)) / 30.0,
-                    TimerMode::Once,
-                );
-            }
-            pos.0 += vel.0 * dt;
-            resolve_prop_collision(&mut pos.0, def.radius, props.iter().copied());
-        }
-
-        BossPhase::Telegraph => {
-            vel.0 *= 0.5_f32.powf(dt * 30.0);
-            pos.0 += vel.0 * dt;
-            if boss.phase_timer.just_finished() {
-                let charge_dir = (boss.target - epos).normalize_or_zero();
-                brain.gunangle = charge_dir.y.atan2(charge_dir.x);
-                vel.0 = charge_dir * (2.0 * 30.0);
-                boss.set_phase(BossPhase::Charging, 0.55);
-                trauma.add(0.18);
+                if boss.pattern_index >= 2 || !intro {
+                    boss.pattern_index = 0;
+                    // `alarm[3] = 1` then `alarm[1] = -1`; `Alarm_3` runs in
+                    // the same step and zeroes `walk` (`Alarm_3:3`).
+                    boss.phase = BossPhase::Telegraph;
+                    boss.phase_timer = gml_alarm(15.0);
+                    boss.attack_timer = gml_alarm_off();
+                    brain.walk = 0.0;
+                    trauma.add(0.08);
+                }
             }
         }
 
-        BossPhase::Charging => {
-            let move_dir = vel.0.normalize_or_zero();
-            let gun = glam::Vec2::new(brain.gunangle.cos(), brain.gunangle.sin());
-            gml_motion_add_clamp(&mut vel.0, move_dir, 2.0, 5.0, dt);
-            gml_motion_add_clamp(&mut vel.0, gun, 2.0, 5.0, dt);
-            let before = pos.0;
-            pos.0 += vel.0 * dt;
-            queue_wall_breaks_along_segment(commands, walls, before, pos.0, def.radius * 0.9);
-            resolve_prop_collision(&mut pos.0, def.radius, props.iter().copied());
-            if boss.phase_timer.just_finished() {
-                boss.set_phase(BossPhase::Cooldown, 0.55);
-                vel.0 *= 0.15;
-                boss.pattern_index = 0;
-            }
+        // GML `Alarm_1:29-35`: three draws when far, two when close.
+        let away_dir = -dir;
+        let base = away_dir.y.atan2(away_dir.x);
+        let mut heading = base + rng.random_range(-90.0f32..90.0).to_radians();
+        let mut walk = 10.0 + rng.random_range(0.0..10.0);
+        if dist > 64.0 {
+            walk = 40.0;
+            heading = base + rng.random_range(-45.0f32..45.0).to_radians();
         }
+        brain.walk = walk;
+        boss.target = glam::Vec2::from_angle(heading);
+        // GML `Alarm_1:30` `speed = 0.4` overwrites the walk impulses.
+        vel.0 = boss.target * (0.4 * 30.0);
+    }
 
-        _ => {
-            boss.set_phase(BossPhase::Idle, 0.1);
+    // GML `Alarm_2` (shotgun burst, one `EnemyBullet1` every 4 steps).
+    if boss.special_timer.just_finished() {
+        if brain.ammo > 0 {
+            brain.fire = 1;
+            brain.ammo -= 1;
+            if brain.ammo == 7 && loops > 0 {
+                brain.gunangle = dir.y.atan2(dir.x);
+            }
+            boss.special_timer = gml_alarm(4.0);
+            brain.walk = 0.0;
+            gml_motion_add_clamp(
+                &mut vel.0,
+                glam::Vec2::from_angle(brain.gunangle + std::f32::consts::PI),
+                1.0,
+                3.0,
+                dt,
+            );
+            let sdir = glam::Vec2::from_angle(
+                brain.gunangle + rng.random_range(-15.0f32..=15.0).to_radians(),
+            );
+            commands.spawn((
+                GameCleanup,
+                LevelCleanup,
+                Team::Enemy,
+                Projectile {
+                    damage: 3,
+                    life: GTimer::from_seconds(3.2, TimerMode::Once),
+                    radius: 4.5,
+                    knockback: 120.0,
+                    explosive: false,
+                    source: Some(DamageSource::enemy(owner, kind)),
+                },
+                ProjectileTyp(1),
+                ProjectileFade("images/sprEnemyBulletHit.png"),
+                Velocity(sdir * 240.0),
+                Pos(epos + sdir * 20.0),
+            ));
+            fired = true;
+        } else {
+            // GML `Alarm_2:22`.
+            boss.attack_timer = gml_alarm(60.0 + rng.random_range(0.0..10.0));
         }
     }
+
+    // GML `Alarm_4` / `Alarm_5` (dash timing and `meleedamage`).
+    match boss.phase {
+        BossPhase::Telegraph if boss.phase_timer.just_finished() => {
+            enemy.touch_damage = 10;
+            boss.phase = BossPhase::Charging;
+            boss.phase_timer = gml_alarm(if boss.aux >= 1.0 { 20.0 } else { 5.0 });
+            brain.gunangle = dir.y.atan2(dir.x);
+            // GML `Alarm_4:12` `motion_add(gunangle, 10)`; `Other_10` runs
+            // before the alarms, so the 10 px/step survives this step.
+            vel.0 += glam::Vec2::from_angle(brain.gunangle) * (10.0 * 30.0) * frames;
+            trauma.add(0.18);
+        }
+        BossPhase::Charging if boss.phase_timer.just_finished() => {
+            boss.phase = BossPhase::Cooldown;
+            boss.phase_timer = gml_alarm(10.0);
+        }
+        BossPhase::Cooldown if boss.phase_timer.just_finished() => {
+            boss.phase = BossPhase::Idle;
+            boss.aux = 1.0;
+            boss.attack_timer = gml_alarm(45.0 + rng.random_range(0.0..30.0));
+        }
+        _ => (),
+    }
+    if boss.phase != BossPhase::Charging {
+        enemy.touch_damage = 0;
+    }
+
+    let before = pos.0;
+    pos.0 += vel.0 * dt;
+    // GML `Collision_Wall.gml:4-8`: `charge > 0 || !intro` destroys the tile.
+    if boss.phase == BossPhase::Charging || boss.aux == 0.0 {
+        queue_wall_breaks_along_segment(commands, walls, before, pos.0, def.radius * 0.9);
+    } else {
+        move_bounce_solid(&mut pos.0, &mut vel.0, def.radius, dt, props, Some(mask), true);
+    }
+    resolve_prop_collision(&mut pos.0, def.radius, props.iter().copied());
     fired
 }
 
@@ -914,6 +1094,7 @@ fn big_dog_ai(
     commands: &mut Commands,
     trauma: &mut Trauma,
     owner: Entity,
+    kind: EnemyKind,
     boss: &mut BossBrain,
     brain: &mut EnemyBrain,
     vel: &mut Velocity,
@@ -928,11 +1109,6 @@ fn big_dog_ai(
     loop_count: u32,
     missiles: usize,
 ) -> bool {
-    let kind = if def.name.contains("Loop") {
-        EnemyKind::BigDogLoop
-    } else {
-        EnemyKind::BigDog
-    };
     let mut rng = rand::rng();
     let mut fired = false;
 
@@ -1069,6 +1245,7 @@ fn lil_hunter_ai(
     trauma: &mut Trauma,
     toast: &mut Toast,
     owner: Entity,
+    kind: EnemyKind,
     boss: &mut BossBrain,
     brain: &mut EnemyBrain,
     vel: &mut Velocity,
@@ -1087,12 +1264,6 @@ fn lil_hunter_ai(
     rogue_present: bool,
     run: &mut Run,
 ) -> bool {
-    let looped = def.name.contains("Loop");
-    let kind = if looped {
-        EnemyKind::LilHunterLoop
-    } else {
-        EnemyKind::LilHunter
-    };
     let mut rng = rand::rng();
     let mut fired = false;
 
@@ -1429,6 +1600,108 @@ pub fn tick_boss_taunts(
 /// `BossPhase::Telegraph`. (Statue art, flame sprites, and hurt-voice
 /// tiers are out as visual/audio.)
 #[allow(clippy::too_many_arguments)]
+/// GML `objects/Nothing/Collision_prop.gml:4-5` verbatim:
+/// `if other.object_index != BigGenerator { other.hp = 0 }`. The Throne
+/// body annihilates every prop it overlaps, which is what makes a barrel
+/// chain-explode when it walks through one. Statues take the
+/// `ThroneStatue/Step_1.gml:11` route instead — a direct
+/// `instance_destroy` on `place_meeting(x, y, Nothing)`, because they are
+/// `canbreak = 0` and so immune to damage — and their `Destroy_0` spawns
+/// the guardians. The generators are exempt under the `object_index`
+/// test, which also covers `BigGeneratorInactive` (it converts to a
+/// `BigGenerator` in place via `Nothing/Create_0.gml:5-11`).
+pub fn throne_annihilate_props(
+    mut commands: Commands,
+    catalog: Res<repame_anim::AnimCatalog>,
+    save: Res<crate::savedata_part::SaveData>,
+    run: Res<Run>,
+    mut secrets: ResMut<crate::secrets::SecretTriggers>,
+    audio: Res<GameAudio>,
+    mut cues: ResMut<Queue<AudioCue>>,
+    throne_q: Query<(&Pos, &Enemy), (With<Enemy>, Without<Prop>)>,
+    statue_q: Query<(Entity, &Pos), (With<ThroneStatueProp>, Without<Player>)>,
+    generators: Query<(), (With<BigGenerator>, Without<Player>)>,
+    mut props: Query<
+        (
+            Entity,
+            &mut Prop,
+            &Pos,
+            Option<&crate::environment::PropDeathEffect>,
+            Option<&PropSprites>,
+            Option<&mut NextHurt>,
+        ),
+        With<Prop>,
+    >,
+    entrances: Query<&SecretEntrance>,
+    nests: Query<&PropNestMarkers, With<Prop>>,
+    rad_chests: Query<&RadChestContainer>,
+) {
+    let Some((throne_pos, _)) = throne_q
+        .iter()
+        .find(|(_, e)| e.kind == EnemyKind::Throne)
+    else {
+        return;
+    };
+    let tpos = throne_pos.0;
+    let reach = enemy_def(EnemyKind::Throne).radius;
+
+    for (e, spos) in statue_q.iter() {
+        let Ok((_, p, _, _, _, _)) = props.get(e) else {
+            continue;
+        };
+        let half = p.size / 2.0;
+        if (spos.0 - tpos).abs().max_element() > reach + half.max_element() {
+            continue;
+        }
+        commands.entity(e).despawn();
+        for _ in 0..1 + run.loop_count {
+            queue_enemy_spawn(
+                &mut commands,
+                EnemyKind::Guardian,
+                spos.0,
+                1.0,
+                run.loop_count,
+            );
+        }
+    }
+
+    let mut crushed: Vec<(Entity, glam::Vec2, i32)> = Vec::new();
+    for (prop_e, prop, ppos, _, _, _) in props.iter() {
+        if !prop.destructible || generators.contains(prop_e) {
+            continue;
+        }
+        let half = prop.size / 2.0;
+        let closest = glam::Vec2::new(
+            tpos.x.clamp(ppos.0.x - half.x, ppos.0.x + half.x),
+            tpos.y.clamp(ppos.0.y - half.y, ppos.0.y + half.y),
+        );
+        if tpos.distance(closest) > reach {
+            continue;
+        }
+        crushed.push((prop_e, ppos.0, prop.hp.max(1)));
+    }
+    for (prop_e, center, hp) in crushed {
+        crate::spawns::damage_destructible_prop(
+            &mut commands,
+            &catalog,
+            &mut props,
+            &entrances,
+            &nests,
+            &rad_chests,
+            &mut secrets,
+            &audio,
+            &mut cues,
+            save.settings.particles,
+            prop_e,
+            center,
+            hp,
+            None,
+            None,
+            run.loop_count,
+        );
+    }
+}
+
 fn throne_ai(
     commands: &mut Commands,
     trauma: &mut Trauma,
@@ -1561,10 +1834,13 @@ fn throne_ai(
                     .copied()
                 {
                     commands.entity(statue).despawn();
+                    // GML `ThroneStatue/Destroy_0.gml:5-7`:
+                    // `repeat (1 + GameCont.loops) { instance_create(x, y, Guardian) }`
+                    // — the plain `Guardian`, at the statue's exact position.
                     for _ in 0..1 + loop_count {
                         queue_enemy_spawn(
                             &mut *commands,
-                            EnemyKind::PalaceGuardian,
+                            EnemyKind::Guardian,
                             spos,
                             1.0,
                             loop_count,
@@ -2321,14 +2597,31 @@ fn technomancer_ai(
 // Captain.
 // ---------------------------------------------------------------------------
 
-/// Kiting fan shooter with charge/teleport telegraphs (bevy `captain_ai`
-/// parity; scale pulse omitted as visual-only).
+/// Verbatim `objects/Last` law: decide (`Alarm_1`), the two 30-round spin
+/// patterns (`Alarm_2`), the 17-step warp-out (`Alarm_3`), the two-stage
+/// dash (`Alarm_4`), the shared reset + `LastBall` (`Alarm_5`), the intro
+/// chain (`Alarm_6`/`Alarm_7`), capped dash/walk locomotion (`Step_0`), and
+/// the destroy-or-bounce wall law (`Collision_Wall`).
+///
+/// Register map: `attack_timer` = `alarm[1]`, `special_timer` = `alarm[2]`,
+/// `phase_timer` = `alarm[5]`, `pattern_index` = `attacktype`,
+/// `brain.ammo` = `ammo`, `brain.walk` = `walk`, `brain.gunangle` =
+/// `gunangle` (radians), `boss.target` = `direction`, `boss.aux` = `intro`,
+/// `brain.fire` = `introcharge`, `brain.burst_timer` = `alarm[6]`/`alarm[7`,
+/// `phase` = `charge` + `drawspr` (Telegraph = `alarm[3]` warp-out,
+/// Charging = `charge == 1`, Cooldown = `charge == -1`, Radial =
+/// `sprLastSpin`, Landing = `sprLastWarpIn`).
 #[allow(clippy::too_many_arguments)]
 fn captain_ai(
     commands: &mut Commands,
     trauma: &mut Trauma,
+    toast: &mut Toast,
     owner: Entity,
+    kind: EnemyKind,
     boss: &mut BossBrain,
+    brain: &mut EnemyBrain,
+    enemy: &mut Enemy,
+    health: &Health,
     vel: &mut Velocity,
     pos: &mut Pos,
     def: EnemyDef,
@@ -2338,96 +2631,256 @@ fn captain_ai(
     dt: f32,
     props: &[(glam::Vec2, glam::Vec2)],
     walls: &[(glam::Vec2, (i32, i32))],
+    mask: &FloorMask,
 ) -> bool {
+    let mut rng = rand::rng();
+    let frames = dt * crate::SIM_HZ as f32;
     let mut fired = false;
+    let aim = dir.y.atan2(dir.x);
 
-    match boss.phase {
-        BossPhase::Idle | BossPhase::Cooldown => {
-            let desired = if epos.distance(player_pos) < 100.0 {
-                -dir
-            } else {
-                dir
-            };
-            vel.0 += desired * def.accel * 0.65 * dt;
-            limit_velocity(vel, def.speed);
-            pos.0 += vel.0 * dt;
-            resolve_prop_collision(&mut pos.0, def.radius, props.iter().copied());
+    // GML `Create_0`: `alarm[1] = 1`, `meleedamage = 10`, `charge = 0`,
+    // `introcharge = 0`, `attacktype = 0`, `ammo = 0`, `walk = 0`.
+    if brain.burst_left == 0 {
+        brain.burst_left = 1;
+        boss.phase = BossPhase::Idle;
+        boss.attack_timer = gml_alarm(1.0);
+        boss.special_timer = gml_alarm_off();
+        brain.gunangle = rng.random_range(0.0..std::f32::consts::TAU);
+        enemy.touch_damage = 10;
+    }
 
-            if boss.attack_timer.just_finished() {
-                fire_fan_with_kind(
-                    commands,
-                    owner,
-                    epos,
-                    dir,
-                    Team::Enemy,
-                    def.bullets_per_shot.max(5),
-                    def.fan_spread,
-                    def.projectile_speed,
-                    def.projectile_damage,
-                    def.projectile_lifetime,
-                    def.projectile_radius,
-                    EnemyKind::Captain,
-                );
-                fired = true;
-            }
-
-            if boss.special_timer.just_finished() && epos.distance(player_pos) < 560.0 {
-                boss.target = player_pos;
-                boss.set_phase(BossPhase::Telegraph, 0.22);
-                vel.0 *= 0.25;
-            }
+    // GML `Step_0:5-16`: the dash sets `speed = 14` along `gunangle`, the
+    // walk adds 2 along `direction` and 1 along `gunangle` capped at 3.
+    if boss.phase == BossPhase::Charging {
+        vel.0 = glam::Vec2::from_angle(brain.gunangle) * (14.0 * 30.0);
+    } else {
+        if brain.walk > 0.0 {
+            brain.walk = (brain.walk - frames).max(0.0);
+            gml_motion_add_clamp(&mut vel.0, boss.target, 2.0, 3.0, dt);
+            gml_motion_add_clamp(
+                &mut vel.0,
+                glam::Vec2::from_angle(brain.gunangle),
+                1.0,
+                3.0,
+                dt,
+            );
         }
+        limit_velocity(vel, 3.0 * 30.0);
+    }
 
-        BossPhase::Telegraph => {
-            vel.0 *= 0.8_f32.powf(dt * crate::SIM_HZ as f32);
-            if boss.phase_timer.just_finished() {
-                if boss.pattern_index % 2 == 0 {
-                    boss.set_phase(BossPhase::Charging, 0.35);
-                    vel.0 = (boss.target - epos).normalize_or_zero() * 720.0;
-                    trauma.add(0.14);
-                } else {
-                    // Bevy sets Teleport then immediately Cooldown (the
-                    // teleport lands, then the cooldown runs).
-                    boss.set_phase(BossPhase::Teleport, 0.05);
-                    pos.0 = player_pos + dir * 90.0;
-                    trauma.add(0.2);
-                    boss.set_phase(BossPhase::Cooldown, 0.4);
-                }
-                boss.pattern_index += 1;
+    // GML `Alarm_1` (decide).
+    if boss.attack_timer.just_finished() {
+        let dist = epos.distance(player_pos);
+        let blocked = crate::walls::segment_hits_wall(epos, player_pos, mask);
+        // GML `Alarm_1:5` — `CrystalShield` has no GML object in this
+        // rewrite, so that disjunct is dropped.
+        let dash = brain.fire == 0
+            || (rng.random_range(0.0..3.0) < 1.0
+                && (blocked || (dist > 90.0 && rng.random_range(0.0..2.0) < 1.0)));
+        if dash {
+            brain.fire = 1;
+            boss.phase = BossPhase::Telegraph;
+            boss.phase_timer = gml_alarm(10.0);
+            if boss.aux == 0.0 {
+                // `alarm[6] = 16` then `alarm[7] = 2` -> the boss intro.
+                brain.burst_timer = gml_alarm(18.0);
             }
-        }
-
-        BossPhase::Charging => {
-            let before = pos.0;
-            pos.0 += vel.0 * dt;
-            let after = pos.0;
-            queue_wall_breaks_along_segment(commands, walls, before, after, def.radius * 0.9);
-
-            if boss.phase_timer.just_finished() {
-                vel.0 *= 0.15;
-                boss.set_phase(BossPhase::Cooldown, 0.45);
-                fire_ring_with_kind(
-                    commands,
-                    owner,
-                    pos.0,
-                    Team::Enemy,
-                    12,
-                    boss.pattern_index as f32 * 0.17,
-                    140.0,
-                    3,
-                    2.0,
-                    4.0,
-                    EnemyKind::Captain,
-                );
-                fired = true;
-            }
-        }
-
-        _ => {
-            boss.set_phase(BossPhase::Idle, 0.1);
+            trauma.add(0.06);
+        } else if (dist > 120.0 && rng.random_range(0.0..2.0) < 1.0)
+            || rng.random_range(0.0..4.0) < 1.0
+        {
+            boss.phase = BossPhase::Jumping;
+            boss.phase_timer = gml_alarm(17.0);
+            trauma.add(0.1);
+        } else {
+            boss.pattern_index = usize::from(rng.random_bool(0.5));
+            let side = if rng.random_bool(0.5) { 1.0 } else { -1.0 };
+            brain.gunangle = aim + side * (10.0 + rng.random_range(0.0f32..15.0)).to_radians();
+            brain.ammo = 30;
+            boss.special_timer = gml_alarm(8.0);
+            boss.phase = BossPhase::Radial;
+            boss.phase_timer = gml_alarm(47.0);
+            trauma.add(0.12);
         }
     }
+
+    // GML `Alarm_2` (spin fire).
+    if boss.phase == BossPhase::Radial && boss.special_timer.just_finished() {
+        if boss.pattern_index == 0 {
+            if brain.ammo > 0 {
+                brain.ammo = brain.ammo.saturating_sub(4);
+                boss.special_timer = gml_alarm(4.0);
+                brain.gunangle += 9.0_f32.to_radians();
+                for _ in 0..4 {
+                    captain_idpd_bullet(commands, owner, kind, epos, brain.gunangle, 4.0);
+                    captain_idpd_bullet(commands, owner, kind, epos, -brain.gunangle, 4.0);
+                    brain.gunangle += 90.0_f32.to_radians();
+                }
+                fired = true;
+            }
+        } else if brain.ammo > 0 {
+            brain.ammo -= 1;
+            boss.special_timer = gml_alarm(2.0);
+            // GML `alarm[5] += 1` extends the remaining spin by one step.
+            let remain = (boss.phase_timer.remaining_secs() * 30.0).floor() + 1.0;
+            boss.phase_timer = gml_alarm(remain);
+            gml_motion_add_clamp(
+                &mut vel.0,
+                glam::Vec2::from_angle(brain.gunangle + std::f32::consts::PI),
+                0.5,
+                3.0,
+                dt,
+            );
+            let spread = (brain.ammo as f32 * 5.0 + 16.0).to_radians();
+            for half in [1.0_f32, 0.5] {
+                for sign in [-1.0_f32, 1.0] {
+                    captain_idpd_bullet(
+                        commands,
+                        owner,
+                        kind,
+                        epos,
+                        brain.gunangle + sign * spread * half,
+                        12.0,
+                    );
+                }
+            }
+            fired = true;
+        }
+    }
+
+    // GML `Alarm_3` (warp next to the player).
+    if boss.phase == BossPhase::Jumping && boss.phase_timer.just_finished() {
+        let mut target_pos = pos.0;
+        for _ in 0..64 {
+            let cand = glam::Vec2::new(
+                player_pos.x + rng.random_range(0.0..320.0) - 160.0,
+                player_pos.y + rng.random_range(0.0..320.0) - 160.0,
+            );
+            target_pos = cand;
+            if cand.distance(player_pos) > 80.0
+                && cand.distance(pos.0) > 60.0
+                && mask.is_walkable(cand)
+            {
+                break;
+            }
+        }
+        commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            PortalClear {
+                timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
+                scale: 1.0,
+            },
+            Pos(pos.0),
+        ));
+        pos.0 = mask.cell_center(mask.world_to_cell(target_pos));
+        vel.0 = glam::Vec2::ZERO;
+        boss.phase = BossPhase::Landing;
+        boss.phase_timer = gml_alarm(20.0);
+        trauma.add(0.2);
+    }
+
+    // GML `Alarm_4` (dash start, then dash end).
+    match boss.phase {
+        BossPhase::Telegraph if boss.phase_timer.just_finished() => {
+            boss.phase = BossPhase::Charging;
+            boss.phase_timer = gml_alarm(10.0);
+            brain.gunangle = aim + rng.random_range(-15.0f32..=15.0).to_radians();
+            vel.0 += glam::Vec2::from_angle(brain.gunangle) * (10.0 * 30.0) * frames;
+            trauma.add(0.14);
+        }
+        BossPhase::Charging if boss.phase_timer.just_finished() => {
+            boss.phase = BossPhase::Cooldown;
+            boss.phase_timer = gml_alarm(12.0);
+        }
+        _ => (),
+    }
+
+    // GML `Alarm_5` (spin / dash / warp reset, plus the `LastBall`).
+    if matches!(
+        boss.phase,
+        BossPhase::Radial | BossPhase::Cooldown | BossPhase::Landing
+    ) && boss.phase_timer.just_finished()
+    {
+        if boss.phase == BossPhase::Landing {
+            let sdir = (player_pos - pos.0).normalize_or_zero();
+            commands.spawn((
+                GameCleanup,
+                LevelCleanup,
+                Team::Enemy,
+                Projectile {
+                    damage: 12,
+                    life: GTimer::from_seconds(3.0, TimerMode::Once),
+                    radius: 14.0,
+                    knockback: 120.0,
+                    explosive: false,
+                    source: Some(DamageSource::enemy(owner, kind)),
+                },
+                ProjectileTyp(1),
+                ProjectileFade("images/sprEnemyBulletHit.png"),
+                Velocity(sdir * (6.0 * 30.0)),
+                Pos(pos.0),
+            ));
+            trauma.add(0.14);
+        }
+        boss.phase = BossPhase::Idle;
+        let frac = (health.hp as f32 / health.max.max(1) as f32).clamp(0.0, 1.0);
+        boss.attack_timer = gml_alarm(10.0 + frac * 15.0);
+    }
+
+    // GML `Alarm_6` -> `Alarm_7` -> `scrBossIntro(8)`.
+    brain.burst_timer.tick(dt);
+    if brain.burst_timer.just_finished() {
+        boss.aux = 1.0;
+        toast.show("CAPTAIN");
+        commands.spawn((
+            GameCleanup,
+            BossIntro {
+                timer: GTimer::from_seconds(1.1, TimerMode::Once),
+            },
+        ));
+    }
+
+    let before = pos.0;
+    pos.0 += vel.0 * dt;
+    // GML `Collision_Wall.gml:4-9`: `charge > 0` destroys the tile.
+    if boss.phase == BossPhase::Charging {
+        queue_wall_breaks_along_segment(commands, walls, before, pos.0, def.radius * 0.9);
+    } else {
+        move_bounce_solid(&mut pos.0, &mut vel.0, def.radius, dt, props, Some(mask), true);
+    }
+    resolve_prop_collision(&mut pos.0, def.radius, props.iter().copied());
     fired
+}
+
+/// GML `Last/Alarm_2` `IDPDBullet`: an `EnemyBullet1` (`damage = 3`,
+/// `typ = 1`, `knockback_speed = 4`) with the IDPD hit sprite.
+fn captain_idpd_bullet(
+    commands: &mut Commands,
+    owner: Entity,
+    kind: EnemyKind,
+    at: glam::Vec2,
+    angle: f32,
+    speed: f32,
+) {
+    let sdir = glam::Vec2::from_angle(angle);
+    commands.spawn((
+        GameCleanup,
+        LevelCleanup,
+        Team::Enemy,
+        Projectile {
+            damage: 3,
+            life: GTimer::from_seconds(3.0, TimerMode::Once),
+            radius: 4.5,
+            knockback: 120.0,
+            explosive: false,
+            source: Some(DamageSource::enemy(owner, kind)),
+        },
+        ProjectileTyp(1),
+        ProjectileFade("images/sprIDPDBulletHit.png"),
+        Velocity(sdir * (speed * 30.0)),
+        Pos(at),
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -2565,8 +3018,9 @@ fn yv_boss_ai(
             let rand_dir = glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU));
             gml_motion_add_clamp(&mut vel.0, rand_dir, 1.0, 4.0, dt);
             gml_motion_add_clamp(&mut vel.0, to_player.normalize_or_zero(), 4.0, 4.0, dt);
-            // `scrWalk(direction, 1, 10, 30)`.
+            // GML `Alarm_2:7` `scrWalk(direction, 1, 10, 30)`.
             boss.target = vel.0.normalize_or_zero();
+            gml_motion_add_clamp(&mut vel.0, boss.target, 1.0, 4.0, dt);
             brain.walk = rng.random_range(10.0..=30.0);
         } else {
             brain.ammo -= 1;
@@ -2631,19 +3085,33 @@ fn yv_boss_ai(
                     for _ in 0..18 {
                         let jitter = rng.random_range(-30.0..=30.0_f32).to_radians();
                         let sdir = glam::Vec2::from_angle(brain.gunangle + jitter);
-                        fire_projectile(
-                            commands,
-                            owner,
-                            epos + sdir * 20.0,
-                            sdir,
+                        // GML `EnemyBullet3`: `wallbounce = 0`, `friction = 0.6`,
+                        // bounce `min(18, speed * 0.8)`, fade under 6 px/step.
+                        commands.spawn((
+                            GameCleanup,
+                            LevelCleanup,
                             Team::Enemy,
-                            rng.random_range(360.0..=540.0),
-                            1,
-                            2.0,
-                            4.0,
-                            120.0,
-                            EnemyKind::YvBoss,
-                        );
+                            Projectile {
+                                damage: 1,
+                                life: GTimer::from_seconds(4.0, TimerMode::Once),
+                                radius: 4.0,
+                                knockback: 120.0,
+                                explosive: false,
+                                source: Some(DamageSource::enemy(owner, EnemyKind::YvBoss)),
+                            },
+                            ProjectileTyp(1),
+                            ProjectileFriction(0.6),
+                            BouncesLeft(255),
+                            ShellWallBounce {
+                                add: 0.0,
+                                cap: 18.0 * 30.0,
+                                decay: 0.9,
+                                rearm: None,
+                            },
+                            ProjectileFade("images/sprEBullet3Disappear.png"),
+                            Velocity(sdir * rng.random_range(12.0..=18.0) * 30.0),
+                            Pos(epos + sdir * 20.0),
+                        ));
                     }
                     fired = true;
                     trauma.add(0.4);
@@ -2656,19 +3124,26 @@ fn yv_boss_ai(
                         let jitter = rng.random_range(-3.0..=3.0_f32).to_radians();
                         let ang = brain.gunangle + i as f32 * 3.0_f32.to_radians() + jitter;
                         let sdir = glam::Vec2::from_angle(ang);
-                        fire_projectile(
-                            commands,
-                            owner,
-                            epos + sdir * 20.0,
-                            sdir,
+                        // GML `Rocket`: `active` only after `alarm[1] = 5`, then
+                        // `motion_add_m(direction, accel = 2, maxspeed = 12)`,
+                        // destroyed by wall or hitme -> `Explosion`.
+                        commands.spawn((
+                            GameCleanup,
+                            LevelCleanup,
                             Team::Enemy,
-                            90.0,
-                            20,
-                            4.0,
-                            6.0,
-                            300.0,
-                            EnemyKind::YvBoss,
-                        );
+                            Projectile {
+                                damage: 20,
+                                life: GTimer::from_seconds(4.0, TimerMode::Once),
+                                radius: 6.0,
+                                knockback: 300.0,
+                                explosive: true,
+                                source: Some(DamageSource::enemy(owner, EnemyKind::YvBoss)),
+                            },
+                            ProjectileTyp(2),
+                            CustomExplosion::default(),
+                            Velocity(sdir * 90.0),
+                            Pos(epos + sdir * 20.0),
+                        ));
                     }
                     fired = true;
                     trauma.add(0.4);
@@ -2704,24 +3179,28 @@ fn yv_boss_ai(
             // Fire pending or pre-intro: retry next tick (`alarm[1] = 1`).
             boss.attack_timer = GTimer::from_seconds(1.0 / 30.0, TimerMode::Once);
         } else if !can_shoot {
-            // Cooldown walk: face the target when visible, else move dir.
-            let face = if los {
-                (player_pos - epos).normalize_or_zero()
-            } else {
-                vel.0.normalize_or_zero()
-            };
-            if face.length_squared() > 0.0001 {
-                brain.gunangle = face.y.atan2(face.x);
-            }
-            boss.target = glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU));
+            // GML `Alarm_1:11-20`: `scrWalk(random_angle, 1, 10, 30)`, then
+            // `scrTargetIsVisible(target, 90)` gates the gun (90 px, not
+            // "any range").
+            let head = glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU));
+            gml_motion_add_clamp(&mut vel.0, head, 1.0, 4.0, dt);
+            boss.target = head;
             brain.walk = rng.random_range(10.0..=30.0);
+            let heading = if vel.0.length_squared() > 1e-8 {
+                vel.0.normalize_or_zero()
+            } else {
+                boss.target
+            };
+            brain.gunangle = if los && dist <= 90.0 {
+                aim
+            } else {
+                heading.y.atan2(heading.x)
+            };
             // `alarm[1] = walk + irandom(10) + 10`, halved on cooldown.
             let wait = (brain.walk + rng.random_range(0.0..=10.0) + 10.0) * 0.5;
-            boss.attack_timer = GTimer::from_seconds(wait / 30.0, TimerMode::Once);
+            boss.attack_timer = gml_alarm(wait);
         } else {
             brain.gunangle = aim;
-            // Set when the brain picks an attack below (`alarm[4] != -1`).
-            let mut picked = false;
             if los {
                 let player_slow = player_velocity.length() < 30.0;
                 if dist <= 64.0
@@ -2730,61 +3209,62 @@ fn yv_boss_ai(
                 {
                     boss.pattern_index = SHOTGUN;
                     brain.ammo = 1;
-                    picked = true;
-                    boss.phase_timer =
-                        GTimer::from_seconds(rng.random_range(30.0..=40.0) / 30.0, TimerMode::Once);
-                    boss.special_timer = GTimer::from_seconds(10.0 / 30.0, TimerMode::Once);
+                    // GML `Alarm_1:33` `instance_create(x, y, HitWarning)`.
+                    commands.spawn((
+                        GameCleanup,
+                        LevelCleanup,
+                        HitWarning {
+                            timer: GTimer::from_seconds(0.5, TimerMode::Once),
+                        },
+                        Pos(epos),
+                    ));
+                    boss.phase_timer = gml_alarm(rng.random_range(30.0..=40.0));
+                    boss.special_timer = gml_alarm(10.0);
                 } else if (dist <= 110.0 || rng.random::<f32>() < 1.0 / 3.0)
                     && boss.pattern_index != REVOLVER
                 {
                     boss.pattern_index = REVOLVER;
                     brain.ammo = 5;
-                    picked = true;
-                    boss.phase_timer = GTimer::from_seconds(
-                        (25.0 + rng.random_range(0.0..=15.0)) / 30.0,
-                        TimerMode::Once,
-                    );
-                    boss.special_timer = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
+                    boss.phase_timer = gml_alarm(25.0 + rng.random_range(0.0..=15.0));
+                    boss.special_timer = gml_alarm(5.0);
                 } else {
                     boss.pattern_index = MINIGUN;
                     boss.aux = if rng.random_bool(0.5) { 1.0 } else { -1.0 };
                     brain.ammo = 90;
-                    picked = true;
                     brain.gunangle -=
                         (45.0 * boss.aux + rng.random_range(-10.0..=10.0)).to_radians();
-                    boss.phase_timer = GTimer::from_seconds(
-                        (180.0 + rng.random_range(0.0..=40.0)) / 30.0,
-                        TimerMode::Once,
-                    );
-                    boss.special_timer = GTimer::from_seconds(4.0 / 30.0, TimerMode::Once);
+                    boss.phase_timer = gml_alarm(180.0 + rng.random_range(0.0..=40.0));
+                    boss.special_timer = gml_alarm(4.0);
                 }
             } else {
-                // No line of sight: step in when wall-adjacent, else bazooka.
+                // GML `Alarm_1:56-63`: the wall on the line to the target
+                // within 64 px -> `mp_potential_step_object` 4 px/step toward
+                // the player plus `scrWalk(direction, 4, 10, 20)`; GML
+                // `Alarm_1:62` `alarm[1] = walk` is overwritten below.
                 let blocked_close = wall_centers.iter().any(|w| {
                     let t = ((w.x - epos.x) * to_player.x + (w.y - epos.y) * to_player.y)
                         / to_player.length_squared().max(1.0);
-                    t > 0.0 && t < 1.0 && (*w - (epos + to_player * t)).length() < 64.0
+                    t > 0.0 && t < 1.0 && (*w - epos).length() < 64.0
                 });
                 if blocked_close {
-                    let step = to_player.normalize_or_zero();
-                    gml_motion_add_clamp(&mut vel.0, step, 4.0, 4.0, dt);
-                    boss.target = step;
+                    pos.0 += to_player.normalize_or_zero() * (4.0 * 30.0) * (dt * 30.0);
+                    let heading = vel.0.normalize_or_zero();
+                    gml_motion_add_clamp(&mut vel.0, heading, 4.0, 4.0, dt);
                     brain.walk = rng.random_range(10.0..=20.0);
-                    brain.gunangle = step.y.atan2(step.x);
-                    boss.attack_timer = GTimer::from_seconds(brain.walk / 30.0, TimerMode::Once);
+                    brain.gunangle = heading.y.atan2(heading.x);
                 } else {
                     boss.pattern_index = BAZOOKA;
                     brain.ammo = 1;
-                    picked = true;
                 }
-                boss.phase_timer = GTimer::from_seconds(60.0 / 30.0, TimerMode::Once);
-                boss.special_timer = GTimer::from_seconds(7.0 / 30.0, TimerMode::Once);
+                // GML `Alarm_1:70-71` (no line of sight only).
+                boss.phase_timer = gml_alarm(60.0);
+                boss.special_timer = gml_alarm(7.0);
             }
-            if picked {
-                boss.attack_timer =
-                    GTimer::from_seconds(rng.random_range(5.0..=15.0) / 30.0, TimerMode::Once);
-                brain.walk = 0.0;
-            }
+            // GML `Alarm_1:74-77`: `alarm[4]` is never -1 here, so the brain
+            // always re-arms at 5-15 and `walk` is zeroed — YV stands still
+            // through the wall-adjacent branch too.
+            boss.attack_timer = gml_alarm(rng.random_range(5.0..=15.0));
+            brain.walk = 0.0;
         }
     }
 

@@ -296,12 +296,19 @@ pub fn resolve_player_gameover(
         }
     }
     if race_state.race == RaceId::Horror && player.rads > 0 {
-        spawn_pickup(
+        // GML `Player/Destroy_0.gml:112-115` verbatim:
+        // `scrRadDrop(x, y, GameCont.rad); GameCont.rad = 0` — a scatter
+        // of individual `Rad` pickups, not one lump. A standing Player is
+        // not a `prop`, so `scrRadDrop` takes its `direction`/`speed`
+        // (both 0) and only the random kick moves each rad.
+        crate::pickups::scr_rad_drop(
             &mut commands,
             &catalog,
-            PickupKind::Rad(player.rads),
             pos,
-            0,
+            player.rads,
+            run.loop_count,
+            player.crown == crate::data::CrownKind::Haste,
+            false,
             false,
         );
     }

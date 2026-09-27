@@ -38,9 +38,10 @@ use crate::comps_a::{
     SaveDirty, ScarierFace, Team, Toast, Velocity,
 };
 use crate::comps_b::{
-    ChestKind, Enemy, FloorTransition, GroundPhysics, LoopTransition, OpenedChest, Pickup,
-    PickupCurse, PickupKind, Portal, PortalCarriedWeapons, PortalClear, PortalClosing, PortalPhase,
-    PortalShock, PortalState, PortalSucking, Prop, PropSprites, SecretEntrance, SitZone, ThroneSit,
+    ChestKind, CrownPedestal, Enemy, FloorTransition, GroundPhysics, LoopTransition, OpenedChest,
+    Pickup, PickupCurse, PickupKind, Portal, PortalCarriedWeapons, PortalClear, PortalClosing,
+    PortalPhase, PortalShock, PortalState, PortalSucking, Prop, PropSprites, RadChestContainer,
+    SecretEntrance, SitZone, ThroneSit,
 };
 use crate::data::{
     AmmoKind, AreaId, CrownKind, MutationId, RaceId, SecretTarget, UltraMutationId, ammo_max,
@@ -209,6 +210,17 @@ pub fn ultra_choices_for(race: RaceId) -> Vec<UltraMutationId> {
     }
 }
 
+/// GML `LevCont/Create_0:143-149`: the Destiny crown trims the ultra
+/// offer to `1 + scrPlayerCountRace(Race.Horror)` (2 normally, 3 for
+/// Horror).
+pub fn ultra_choices_for_crown(race: RaceId, destiny: bool) -> Vec<UltraMutationId> {
+    let mut choices = ultra_choices_for(race);
+    if destiny {
+        choices.truncate(if race == RaceId::Horror { 2 } else { 1 });
+    }
+    choices
+}
+
 /// GML ultra display name + description verbatim
 /// (`scripts/scrUltras/scrUltras.gml`: `ultr_name[race,tier]` /
 /// `ultr_text[race,tier]`, unlocalized defaults, `@` tags included).
@@ -288,6 +300,15 @@ pub fn ultra_mutation_name(id: UltraMutationId) -> (&'static str, &'static str) 
 #[derive(Resource, Default)]
 pub struct DeferredFloorGen(pub bool);
 
+/// GML `GenCont/Destroy_0:112-124`: entering `area_city` (`FrozenCity`)
+/// subarea 1 with `mut_last_wish` seeds that room's generation with an
+/// `IceFlower` — the furthest `prop` is `instance_change`d into one, or
+/// (no props) a random `enemy` is replaced by one. `IceFlower/Create_0`:
+/// `max_hp = 450`, `size = 3`, `name = "FEED"`, `feed = 0`.
+/// `setup::spawn_level` reads the flag; the floor transition clears it.
+#[derive(Resource, Default, Clone, Copy, Debug)]
+pub struct IceFlowerSeed(pub bool);
+
 /// Floor-seed hash (bevy `derive_floor_seed` verbatim).
 fn derive_floor_seed(prev: u64, floor: u32, area: u8, loop_count: u32) -> u64 {
     let mut x = prev
@@ -308,14 +329,20 @@ fn secret_name(target: SecretTarget) -> &'static str {
     target.name()
 }
 
-/// Floor to return to after leaving a secret area (bevy
-/// `SecretTarget::return_floor` parity).
+/// Floor to return to after leaving a secret area. GML
+/// `GameCont/Other_5:64-82` verbatim: the room-end secret exits, and
+/// the stale `_is_secret` taken before the reassignment skips the normal
+/// advance, so the player lands exactly on that area's last subarea.
+/// - pizza sewers -> `area_scrapyards; subarea = 0` (+1 -> 1-1)
+/// - oasis / mansion -> `area_scrapyards; subarea = 3`
+/// - cursed caves -> `area_city; subarea = 0` (+1 -> 1-1)
+/// - jungle -> `area_city; subarea = 3`
 fn secret_return_floor(target: SecretTarget, current_floor: u32) -> u32 {
     match target {
-        SecretTarget::Oasis | SecretTarget::PizzaSewers => 5,
-        SecretTarget::YvMansion => 7,
+        SecretTarget::PizzaSewers => 5,
+        SecretTarget::Oasis | SecretTarget::YvMansion => 7,
         SecretTarget::CursedCaves => 9,
-        SecretTarget::Jungle => 12,
+        SecretTarget::Jungle => 11,
         SecretTarget::Vault | SecretTarget::CrownVault | SecretTarget::Hq => {
             current_floor.saturating_add(1)
         }
@@ -548,6 +575,16 @@ pub fn roll_mutations_with_for(
                 return false;
             }
 
+            // GML `scrSkills.gml:196-198` (`scr_skill_can_appear`): the
+            // Destiny crown hands out only one mutation, so Last Wish
+            // (its jungle route) never appears for a non-Horror run.
+            if *m == MutationId::LastWish
+                && player.crown == CrownKind::Destiny
+                && race != RaceId::Horror
+            {
+                return false;
+            }
+
             !player.mutations.contains(m)
         })
         .collect();
@@ -767,7 +804,8 @@ pub fn handle_mutation_choice(
         player.mutation_picks_owed = player.mutation_picks_owed.saturating_sub(1);
 
         if player.ultra_pick_owed && player.ultra.is_none() && player.level >= 10 {
-            let choices = ultra_choices_for(race_state.race);
+            let choices =
+                ultra_choices_for_crown(race_state.race, player.crown == CrownKind::Destiny);
             commands.insert_resource(PendingUltra { choices });
             flow.paused.0 = true;
             return;
@@ -1240,49 +1278,21 @@ pub fn apply_ultra_mutation(
 // Portals and floor transitions.
 // ---------------------------------------------------------------------------
 
-/// Open the exit portal once the area is clear: clear stray enemy fire,
-/// spawn portal + shock + clear markers, juice, sting.
-pub fn portal_check(
-    mut commands: Commands,
-    mut run: ResMut<Run>,
-    loop_transition: Res<LoopTransition>,
-    mut trauma: ResMut<Trauma>,
-    mut chroma: ResMut<ChromaticAberration>,
-    mask: Res<FloorMask>,
-    enemies: Query<Entity, With<Enemy>>,
-    enemy_shots: Query<(Entity, &Team), With<Projectile>>,
-    audio: Res<GameAudio>,
-    mut cues: ResMut<Queue<AudioCue>>,
-    catalog: Res<repame_anim::AnimCatalog>,
+/// GML `Portal/Create_0.gml:1-22` (+ the `PortalL` ring): a `Portal` of
+/// `type` (1 normal, 2 popo/HQ, 3 proto/vault), the enemy-shot clear, the
+/// `PortalClear` + `PortalShock` children, and 4 `PortalL` bursts.
+pub fn spawn_portal(
+    commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
+    enemy_shots: &mut Query<(Entity, &Team), With<Projectile>>,
+    pos: glam::Vec2,
+    kind: u8,
 ) {
-    if run.game_over || run.portal_open {
-        return;
-    }
-
-    if loop_transition.blocks_portal() {
-        return;
-    }
-    if !enemies.is_empty() {
-        return;
-    }
-
-    for (e, team) in &enemy_shots {
+    for (e, team) in &*enemy_shots {
         if *team != Team::Player {
             commands.entity(e).despawn();
         }
     }
-
-    run.portal_open = true;
-    commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::PortalOpen)));
-
-    let mut rng = rand::rng();
-    let pos = mask.random_floor_pos(&mut rng, 80.0);
-
-    let kind: u8 = match run.area {
-        AreaId::HQ => 2,
-        AreaId::Vault | AreaId::CrownVault => 3,
-        _ => 1,
-    };
 
     // Bevy rides the `sprPortalSpawn` oneshot strip for the Spawn
     // gate (and swaps it to the idle strip on finish); the renderer
@@ -1328,14 +1338,69 @@ pub fn portal_check(
         Pos(pos),
     ));
 
+    let mut rng = rand::rng();
     spawn_burst(
-        &mut commands,
+        commands,
         &mut rng,
         pos,
         4,
         [0.5, 0.8, 1.0, 1.0],
         (60.0, 160.0),
     );
+}
+
+/// Open the exit portal once the area is clear: clear stray enemy fire,
+/// spawn portal + shock + clear markers, juice, sting.
+pub fn portal_check(
+    mut commands: Commands,
+    mut run: ResMut<Run>,
+    loop_transition: Res<LoopTransition>,
+    mut trauma: ResMut<Trauma>,
+    mut chroma: ResMut<ChromaticAberration>,
+    mask: Res<FloorMask>,
+    enemies: Query<Entity, With<Enemy>>,
+    mut enemy_shots: Query<(Entity, &Team), With<Projectile>>,
+    audio: Res<GameAudio>,
+    mut cues: ResMut<Queue<AudioCue>>,
+    catalog: Res<repame_anim::AnimCatalog>,
+    portals: Query<Entity, With<Portal>>,
+    // GML `Corpse/Alarm_0:3`: the clear portal never spawns while a
+    // `CrownPickup` / `VaultStatue` / `CrownGuardian` lives.
+    vault: Query<Entity, With<CrownPedestal>>,
+) {
+    if run.game_over || run.portal_open {
+        return;
+    }
+
+    if loop_transition.blocks_portal() {
+        return;
+    }
+    if !enemies.is_empty() {
+        return;
+    }
+    if !vault.is_empty() {
+        return;
+    }
+    if !portals.is_empty() {
+        // GML `Corpse/Alarm_0:2`: the corpse-clear portal only spawns
+        // when no `Portal` lives — a statue or pedestal portal already
+        // opens the floor.
+        run.portal_open = true;
+        return;
+    }
+
+    run.portal_open = true;
+    commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::PortalOpen)));
+
+    let mut rng = rand::rng();
+    let pos = mask.random_floor_pos(&mut rng, 80.0);
+
+    // GML `Corpse/Alarm_0:23-28`: `type = 1`, `type = 2` for `area_hq`.
+    // Type 3 exists only on the two statue/pedestal portals
+    // (`ProtoStatue/Destroy_0:13-15`, `CrownPickup/Collision_Player:19`).
+    let kind: u8 = if run.area == AreaId::HQ { 2 } else { 1 };
+
+    spawn_portal(&mut commands, &catalog, &mut enemy_shots, pos, kind);
 
     trauma.add(0.25);
     chromatic_pulse(&mut chroma, 0.25);
@@ -1426,13 +1491,239 @@ pub fn portal_attract(
     }
 }
 
+/// Read-only world snapshot the per-kind chest payout needs. GML reads all
+/// of it off `self` / `GameCont` / the nearest `Player` at open time.
+pub(crate) struct ChestLootCtx {
+    pub race: RaceId,
+    /// `pickups::decide_ctx_for` — `GameCont.hard` plus the target player.
+    pub decide: crate::decide_wep::DecideCtx,
+    /// `chestprop/curse`, frozen in the chest's `Create_0`.
+    pub curse: bool,
+    /// `chestprop/dropseed`, frozen in the chest's `Create_0`.
+    pub drop_seed: u32,
+    pub underwater: bool,
+    /// Steroids Ambidextrous (`UltraSkill.Ambidextrous`).
+    pub ambidextrous: bool,
+}
+
+/// GML `prop/Destroy_0.gml:12` `if (raddrop > 0) scrRadDrop(x, y,
+/// raddrop)`, reached from a portal shock through
+/// `PortalShock/Collision_prop.gml`'s `other.hp = 0` (every `RadChest`
+/// descendant).
+fn shock_rad_drop(
+    commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
+    pos: glam::Vec2,
+    amount: u32,
+    run: &Run,
+    hasted: bool,
+) {
+    crate::pickups::scr_rad_drop(
+        commands,
+        catalog,
+        pos,
+        amount,
+        run.loop_count,
+        hasted,
+        true,
+        true,
+    );
+}
+
+/// GML `event_perform(ev_collision, Player)` on `WeaponChest`,
+/// `BigWeaponChest`, `CursedBigChest`, `GoldChest` and `IDPDChest` — every
+/// one of those `Collision_PortalShock.gml:4` files is that one line — so a
+/// portal shock must hand out EXACTLY the touch-open payout. The kinds that
+/// hand-roll their own shock loot (`AmmoChest`, `AmmoChestMystery`,
+/// `HealthChest`, `RogueChest`) and the `prop`-based rad chests
+/// (`PortalShock/Collision_prop.gml` is `other.hp = 0`) stay at their own
+/// call sites. `ProtoChest` has no `Collision_PortalShock` event at all.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn chest_loot(
+    commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
+    audio: &GameAudio,
+    cues: &mut Queue<AudioCue>,
+    toast: &mut Toast,
+    run: &mut Run,
+    ctx: &ChestLootCtx,
+    kind: ChestKind,
+    pos: glam::Vec2,
+    player_pos: glam::Vec2,
+) {
+    let mut rng = rand::rng();
+    match kind {
+        // GML `WeaponChest/Collision_Player.gml:11-24`: ONE
+        // `scrDecideWep(1 + curse * 2, curse)` fills every drop, and
+        // `_count` is 2 under Ambidextrous.
+        ChestKind::Weapon => {
+            let count = if ctx.ambidextrous { 2 } else { 1 };
+            let extra = 1 + if ctx.curse { 2 } else { 0 };
+            let mut chain = crate::pickups::DropSeedChain::new(ctx.drop_seed);
+            let weapon = chain.roll(|r| {
+                crate::decide_wep::decide_wep_at(commands, r, &ctx.decide, pos, extra, ctx.curse)
+            });
+            for _ in 0..count {
+                let e = crate::pickups::spawn_pickup(
+                    commands,
+                    catalog,
+                    PickupKind::Weapon(weapon),
+                    pos
+                        + glam::Vec2::new(
+                            rng.random_range(-2.0..2.0),
+                            rng.random_range(-2.0..2.0),
+                        ),
+                    0,
+                    false,
+                );
+                // GML `scrWeaponPickupCreate(..., true)`.
+                commands.entity(e).insert(crate::comps_b::WepPickupAmmo(true));
+                if ctx.curse {
+                    commands.entity(e).insert(PickupCurse);
+                }
+            }
+            toast.show(crate::weapon_runtime::weapon_id_name(weapon));
+            audio.play_weapon_chest_open(cues, ctx.underwater, ctx.curse);
+        }
+        // GML `GoldChest/Collision_Player.gml`: one `scrDecideWepGold`
+        // pickup, no `PortalClear`, no `nochest` reset.
+        ChestKind::Gold => {
+            let weapon = crate::decide_wep::decide_wep_gold(
+                &mut rng,
+                run.loop_count,
+                &ctx.decide.owned,
+                ctx.race == RaceId::Steroids,
+            );
+            let e = crate::pickups::spawn_pickup(
+                commands,
+                catalog,
+                PickupKind::Weapon(weapon),
+                pos,
+                0,
+                false,
+            );
+            commands.entity(e).insert(crate::comps_b::WepPickupAmmo(true));
+            audio.play_gold_chest(cues);
+        }
+        // GML `BigWeaponChest/Collision_Player.gml:14-30`:
+        // `random_set_seed(dropseed)` ONCE, then `scrDecideWep(1, false)`
+        // per drop, a `PortalClear`, and `GameCont.nochest = 0`.
+        ChestKind::BigWeapon => {
+            let count = if ctx.ambidextrous { 4 } else { 3 };
+            let mut chain = crate::pickups::DropSeedChain::new(ctx.drop_seed);
+            for _ in 0..count {
+                let at = pos
+                    + glam::Vec2::new(
+                        rng.random_range(-2.0..2.0),
+                        rng.random_range(-2.0..2.0),
+                    );
+                let weapon = chain.roll(|r| {
+                    crate::decide_wep::decide_wep_at(commands, r, &ctx.decide, at, 1, false)
+                });
+                let e = crate::pickups::spawn_pickup(
+                    commands,
+                    catalog,
+                    PickupKind::Weapon(weapon),
+                    at,
+                    0,
+                    false,
+                );
+                commands.entity(e).insert(crate::comps_b::WepPickupAmmo(true));
+                toast.show(crate::weapon_runtime::weapon_id_name(weapon));
+            }
+            spawn_shock_portal_clear(commands, pos);
+            run.nochest = 0;
+            audio.play_big_chest_open(cues, false, crate::pickups::chst_stem(ctx.race));
+        }
+        // GML `CursedBigChest/Collision_Player.gml:20`: `scrDecideWep(1 +
+        // curse * 2, false)` with `curse = true` from `Create_0:3`, so
+        // `extra = 3` and the curse rides the pickups. `:33` resets
+        // `nochest`; `:17` and `Destroy_0:6` each spawn a `PortalClear`.
+        ChestKind::CursedBig => {
+            let count = if ctx.ambidextrous { 4 } else { 3 };
+            let mut chain = crate::pickups::DropSeedChain::new(ctx.drop_seed);
+            for _ in 0..count {
+                let at = pos
+                    + glam::Vec2::new(
+                        rng.random_range(-2.0..2.0),
+                        rng.random_range(-2.0..2.0),
+                    );
+                let weapon = chain.roll(|r| {
+                    crate::decide_wep::decide_wep_at(commands, r, &ctx.decide, at, 3, false)
+                });
+                let e = crate::pickups::spawn_pickup(
+                    commands,
+                    catalog,
+                    PickupKind::Weapon(weapon),
+                    at,
+                    0,
+                    false,
+                );
+                commands.entity(e).insert(crate::comps_b::WepPickupAmmo(true));
+                commands.entity(e).insert(PickupCurse);
+                toast.show(crate::weapon_runtime::weapon_id_name(weapon));
+            }
+            spawn_shock_portal_clear(commands, pos);
+            spawn_shock_portal_clear(commands, pos);
+            run.nochest = 0;
+            audio.play_big_chest_open(cues, true, crate::pickups::chst_stem(ctx.race));
+        }
+        // GML `IDPDChest/Collision_Player.gml:11-15`: eight `AmmoPickup`s
+        // ON the player, then `instance_destroy()` -> `Destroy_0`'s six
+        // `IDPDSpawn` portals.
+        ChestKind::Idpd => {
+            for _ in 0..8 {
+                crate::pickups::spawn_pickup(
+                    commands,
+                    catalog,
+                    PickupKind::Ammo(AmmoKind::None, 0),
+                    player_pos,
+                    run.loop_count,
+                    false,
+                );
+            }
+            crate::idpd::spawn_idpd_chest_raid(commands, run, cues, 0, pos, false);
+            audio.play_ammo_chest_open(cues, ctx.underwater);
+        }
+        // No GML `Collision_PortalShock` reaches these; they keep the
+        // hand-rolled payouts at their call sites.
+        ChestKind::Ammo
+        | ChestKind::Mystery
+        | ChestKind::Health
+        | ChestKind::Rogue
+        | ChestKind::Rad
+        | ChestKind::RadBig
+        | ChestKind::RadMaggot
+        | ChestKind::Proto => {}
+    }
+}
+
+/// GML `BigWeaponChest/Collision_Player.gml:16` and
+/// `CursedBigChest:17` + `Destroy_0:6` (which spawns a second one).
+fn spawn_shock_portal_clear(commands: &mut Commands, pos: glam::Vec2) {
+    commands.spawn((
+        GameCleanup,
+        LevelCleanup,
+        PortalClear {
+            timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
+            scale: 1.0,
+        },
+        Pos(pos),
+    ));
+}
+
 /// Portal spawn shock: destroys destructible props in radius (corpses +
-/// death effects + secret queues), pops chests into their contents, and
-/// clears enemy projectiles. Expires on its timer.
+/// death effects + secret queues + the `raddrop` from
+/// `prop/Destroy_0.gml:12`), pops chests into their contents, and clears
+/// enemy projectiles. Expires on its timer.
+#[allow(clippy::too_many_arguments)]
 pub fn tick_portal_shock(
     time: Res<SimTime>,
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
+    audio: Res<GameAudio>,
+    mut cues: ResMut<Queue<AudioCue>>,
+    mut toast: ResMut<Toast>,
     save: Res<crate::savedata_part::SaveData>,
     mut shocks: Query<(Entity, &Pos, &mut PortalShock)>,
     mut props: Query<
@@ -1445,26 +1736,43 @@ pub fn tick_portal_shock(
         ),
         With<Prop>,
     >,
-    mut chests: Query<(Entity, &Pos, &Pickup), (Without<OpenedChest>, Without<Player>)>,
-    proto_q: Query<&ProtoChestState>,
+    rad_containers: Query<(), With<RadChestContainer>>,
+    mut chests: Query<
+        (
+            Entity,
+            &Pos,
+            &Pickup,
+            Option<&crate::pickups::ChestCurse>,
+            Option<&crate::comps_b::DropSeed>,
+        ),
+        (Without<OpenedChest>, Without<Player>),
+    >,
     mut enemy_shots: Query<(Entity, &Pos, &Team), With<Projectile>>,
     entrances: Query<&SecretEntrance>,
     mut secrets: ResMut<crate::secrets::SecretTriggers>,
-    run: Res<Run>,
-    player_q: Query<(&Player, &Inventory, &RaceState)>,
+    mut run: ResMut<Run>,
+    mut player_q: Query<(Entity, &Pos, &mut Player, &Inventory, &RaceState), Without<Pickup>>,
 ) {
-    let hasted = player_q
-        .single()
-        .is_ok_and(|(p, _, _)| p.crown == CrownKind::Haste);
-    let decide = player_q.single().ok().map(|(p, inv, race)| {
-        crate::pickups::decide_ctx_for(
-            &run,
-            p,
-            race.race,
-            inv,
-            u32::from(race.race == crate::data::RaceId::Robot),
-        )
-    });
+    let Ok((_player_e, player_pos, mut player, inv, race_state)) = player_q.single_mut() else {
+        return;
+    };
+    let player_pos = player_pos.0;
+    let race = race_state.race;
+    let hasted = player.crown == CrownKind::Haste;
+    let underwater = run.area == AreaId::Oasis;
+    let ambidextrous = matches!(
+        player.ultra,
+        Some(crate::data::UltraMutationId::SteroidsAmbidextrous)
+    );
+    let hp_num = crate::pickups::hppickup_num(&player);
+    let second_stomach = player.mutations.contains(&MutationId::SecondStomach);
+    let decide = crate::pickups::decide_ctx_for(
+        &run,
+        &player,
+        race,
+        inv,
+        u32::from(race == RaceId::Robot),
+    );
     let dt = time.delta_secs;
     for (shock_e, shock_pos, mut shock) in &mut shocks {
         shock.timer.tick(dt);
@@ -1476,6 +1784,7 @@ pub fn tick_portal_shock(
             bool,
             Option<PropDeathEffect>,
             Option<PropSprites>,
+            bool,
         )> = Vec::new();
         for (prop_e, mut prop, prop_pos, death, ps) in &mut props {
             if !prop.destructible || prop.hp <= 0 {
@@ -1491,9 +1800,18 @@ pub fn tick_portal_shock(
                 continue;
             }
             prop.hp = 0;
-            killed.push((prop_e, ppos, prop.explosive, death.copied(), ps.copied()));
+            killed.push((
+                prop_e,
+                ppos,
+                prop.explosive,
+                death.copied(),
+                ps.copied(),
+                // GML `prop/Destroy_0.gml:12` pays `raddrop` on the way
+                // out; a `RadChest` prop is the 25-rad case.
+                rad_containers.get(prop_e).is_ok(),
+            ));
         }
-        for (prop_e, ppos, explosive, death, ps) in killed {
+        for (prop_e, ppos, explosive, death, ps, rad_drop) in killed {
             if let Some(sprites) = ps {
                 spawn_prop_corpse(&mut commands, &catalog, ppos, &sprites);
             }
@@ -1506,13 +1824,16 @@ pub fn tick_portal_shock(
                 explosive,
                 None,
             );
+            if rad_drop {
+                shock_rad_drop(&mut commands, &catalog, ppos, 25, &run, hasted);
+            }
             if let Ok(entrance) = entrances.get(prop_e) {
                 secrets.queue(entrance.target);
             }
             commands.entity(prop_e).despawn();
         }
 
-        for (chest_e, chest_pos, pickup) in &mut chests {
+        for (chest_e, chest_pos, pickup, chest_curse, drop_seed) in &mut chests {
             let PickupKind::Chest(kind) = pickup.kind else {
                 continue;
             };
@@ -1522,37 +1843,37 @@ pub fn tick_portal_shock(
             }
 
             commands.entity(chest_e).insert(OpenedChest(kind));
+            // GML `Destroy_0` spawns `FXChestOpen` for every chest kind
+            // except `RogueChest` (the only chest with no FX).
+            if kind != ChestKind::Rogue {
+                crate::pickups::spawn_fx_chest_open(&mut commands, &catalog, cpos, underwater);
+            }
+            let ctx = ChestLootCtx {
+                race,
+                decide: decide.clone(),
+                curse: chest_curse.is_some_and(|c| c.0),
+                drop_seed: drop_seed.map_or(0, |s| s.0),
+                underwater,
+                ambidextrous,
+            };
+            chest_loot(
+                &mut commands,
+                &catalog,
+                &audio,
+                &mut cues,
+                &mut toast,
+                &mut run,
+                &ctx,
+                kind,
+                cpos,
+                player_pos,
+            );
+            // GML hand-rolls the shock payout for the kinds with no
+            // `event_perform(ev_collision, Player)`; `chest_loot` leaves
+            // those to here.
             match kind {
-                ChestKind::Weapon => {
-                    let weapon = match decide.as_ref() {
-                        Some(ctx) => {
-                            let mut rng = rand::rng();
-                            crate::decide_wep::decide_wep(&mut rng, ctx, 0, false)
-                        }
-                        None => crate::pickups::random_weapon(&mut rand::rng()),
-                    };
-                    crate::pickups::spawn_pickup(
-                        &mut commands,
-                        &catalog,
-                        PickupKind::Weapon(weapon),
-                        cpos,
-                        0,
-                        false,
-                    );
-                }
-                ChestKind::Proto => {
-                    let (weapon, cursed) = match proto_q.get(chest_e) {
-                        Ok(&ProtoChestState::Armed { weapon, cursed }) => (weapon, cursed),
-                        _ => (run.protowep, run.protocurse),
-                    };
-                    crate::pickups::spawn_proto_weapon(
-                        &mut commands,
-                        &catalog,
-                        weapon,
-                        cursed,
-                        cpos,
-                    );
-                }
+                // `AmmoChest/Collision_PortalShock.gml:4-7`: `repeat 2
+                // instance_create(x, y, AmmoPickup)` + `sndChest`.
                 ChestKind::Ammo => {
                     for _ in 0..2 {
                         crate::pickups::spawn_pickup(
@@ -1564,172 +1885,94 @@ pub fn tick_portal_shock(
                             hasted,
                         );
                     }
+                    audio.play_chest(&mut cues);
                 }
-                ChestKind::Health => {
-                    crate::pickups::spawn_pickup(
-                        &mut commands,
-                        &catalog,
-                        PickupKind::Medkit(4),
-                        cpos,
-                        0,
-                        false,
-                    );
-                }
-                ChestKind::CursedBig => {
-                    let mut rng = rand::rng();
-                    for _ in 0..3 {
-                        let weapon = match decide.as_ref() {
-                            // GML `CursedBigChest`: extra 1, curse flag
-                            // false (chest itself is cursed instead).
-                            Some(ctx) => crate::decide_wep::decide_wep(&mut rng, ctx, 1, false),
-                            None => crate::pickups::random_weapon(&mut rng),
-                        };
-                        let e = crate::pickups::spawn_pickup(
-                            &mut commands,
-                            &catalog,
-                            PickupKind::Weapon(weapon),
-                            cpos + glam::Vec2::new(
-                                rng.random_range(-2.0..2.0),
-                                rng.random_range(-2.0..2.0),
-                            ),
-                            0,
-                            false,
-                        );
-                        commands.entity(e).insert(crate::comps_b::PickupCurse);
-                    }
-                    commands.spawn((
-                        GameCleanup,
-                        LevelCleanup,
-                        crate::comps_b::PortalClear {
-                            timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
-                            scale: 1.0,
-                        },
-                        Pos(cpos),
-                    ));
-                }
-                ChestKind::BigWeapon => {
-                    let mut rng = rand::rng();
-                    for _ in 0..3 {
-                        let weapon = match decide.as_ref() {
-                            // GML `BigWeaponChest`: extra 1, no curse.
-                            Some(ctx) => crate::decide_wep::decide_wep(&mut rng, ctx, 1, false),
-                            None => crate::pickups::random_weapon(&mut rng),
-                        };
-                        crate::pickups::spawn_pickup(
-                            &mut commands,
-                            &catalog,
-                            PickupKind::Weapon(weapon),
-                            cpos + glam::Vec2::new(
-                                rng.random_range(-2.0..2.0),
-                                rng.random_range(-2.0..2.0),
-                            ),
-                            0,
-                            false,
-                        );
-                    }
-                    commands.spawn((
-                        GameCleanup,
-                        LevelCleanup,
-                        crate::comps_b::PortalClear {
-                            timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
-                            scale: 1.0,
-                        },
-                        Pos(cpos),
-                    ));
-                }
-                ChestKind::Rogue => {
-                    for _ in 0..25 {
-                        let ang = rand::rng().random_range(0.0..std::f32::consts::TAU);
-                        let d = rand::rng().random_range(6.0..26.0);
-                        crate::pickups::spawn_pickup(
-                            &mut commands,
-                            &catalog,
-                            PickupKind::Rad(1),
-                            cpos + glam::Vec2::new(ang.cos() * d, ang.sin() * d),
-                            0,
-                            false,
-                        );
-                    }
-                }
-                ChestKind::RadBig => {
-                    for _ in 0..45 {
-                        let ang = rand::rng().random_range(0.0..std::f32::consts::TAU);
-                        let d = rand::rng().random_range(6.0..26.0);
-                        crate::pickups::spawn_pickup(
-                            &mut commands,
-                            &catalog,
-                            PickupKind::Rad(1),
-                            cpos + glam::Vec2::new(ang.cos() * d, ang.sin() * d),
-                            0,
-                            false,
-                        );
-                    }
-                }
-                ChestKind::RadMaggot => {
-                    // GML `RadMaggotChest/Destroy_0` (same chain as the
-                    // touch-open path in `pickups.rs`): explosion plus
-                    // the delayed 20-`RadMaggot` wave.
-                    commands.spawn((
-                        GameCleanup,
-                        LevelCleanup,
-                        crate::combat::Explosion {
-                            timer: GTimer::from_seconds(0.05, TimerMode::Once),
-                            radius: 70.0,
-                            damage: 6,
-                            team: crate::comps_a::Team::Enemy,
-                            hits_player: true,
-                            source: None,
-                        },
-                        Pos(cpos),
-                    ));
-                    {
-                        let mut rng = rand::rng();
-                        for _ in 0..20 {
-                            let a = rng.random_range(0.0..std::f32::consts::TAU);
-                            let d = glam::Vec2::new(a.cos(), a.sin());
-                            let s = rng.random_range(0.0..5.0) * 30.0;
-                            let jitter = glam::Vec2::new(
-                                rng.random_range(-4.0..4.0),
-                                rng.random_range(-4.0..4.0),
-                            );
-                            queue_enemy_spawn(
-                                &mut commands,
-                                crate::data::EnemyKind::RadMaggot,
-                                cpos + jitter + d * s * 0.05,
-                                1.0,
-                                run.loop_count,
-                            );
-                        }
-                    }
-                }
-                ChestKind::Idpd => {
-                    for _ in 0..8 {
+                // `AmmoChestMystery/Collision_PortalShock.gml:4-8`: the
+                // same two pickups, but `sndAmmoChest`.
+                ChestKind::Mystery => {
+                    for _ in 0..2 {
                         crate::pickups::spawn_pickup(
                             &mut commands,
                             &catalog,
                             PickupKind::Ammo(AmmoKind::None, 0),
                             cpos,
                             run.loop_count,
-                            false,
+                            hasted,
                         );
                     }
+                    audio.play_ammo_chest_open(&mut cues, underwater);
                 }
-                ChestKind::Rad => {
-                    for _ in 0..25 {
-                        // Bevy inline law (not `random_offset`): ring
-                        // 6..26 px.
-                        let ang = rand::rng().random_range(0.0..std::f32::consts::TAU);
-                        let d = rand::rng().random_range(6.0..26.0);
+                // `HealthChest/Collision_PortalShock.gml:4-6`: `repeat (2)
+                // instance_create(x, y, HPPickup)` + `sndHealthChest`.
+                ChestKind::Health => {
+                    for _ in 0..2 {
                         crate::pickups::spawn_pickup(
                             &mut commands,
                             &catalog,
-                            PickupKind::Rad(1),
-                            cpos + glam::Vec2::new(ang.cos() * d, ang.sin() * d),
+                            PickupKind::Medkit(hp_num),
+                            cpos,
                             0,
                             false,
                         );
                     }
+                    audio.play_health_chest(&mut cues, second_stomach);
                 }
+                // `RogueChest/Collision_PortalShock.gml:1-6`: a Rogue gets a
+                // `RogueAmmo` (which then collides with the player, so the
+                // canister refills), everyone else 25 rads.
+                ChestKind::Rogue => {
+                    if race == RaceId::Rogue {
+                        player.rogue_ammo = player.rogue_ammo_max;
+                    } else {
+                        crate::pickups::scr_rad_drop(
+                            &mut commands,
+                            &catalog,
+                            cpos,
+                            25,
+                            run.loop_count,
+                            hasted,
+                            false,
+                            false,
+                        );
+                    }
+                }
+                // The rad chests are `prop` descendants in GML, so the
+                // shock only sets `hp = 0` and `Destroy_0` pays the
+                // `raddrop` (`RadChest` 25, `RadChestBig` 45, the maggot
+                // chest inherits RadChest's 25).
+                ChestKind::Rad => shock_rad_drop(&mut commands, &catalog, cpos, 25, &run, hasted),
+                ChestKind::RadBig => {
+                    shock_rad_drop(&mut commands, &catalog, cpos, 45, &run, hasted)
+                }
+                ChestKind::RadMaggot => {
+                    // `RadMaggotChest/Destroy_0.gml:1-3`: a
+                    // `RadMaggotExplosion`, whose Alarm_0 raises 20
+                    // `RadMaggot` 8 ticks later.
+                    shock_rad_drop(&mut commands, &catalog, cpos, 25, &run, hasted);
+                    for _ in 0..20 {
+                        let mut rng = rand::rng();
+                        let a = rng.random_range(0.0..std::f32::consts::TAU);
+                        let d = glam::Vec2::new(a.cos(), a.sin());
+                        let s = rng.random_range(0.0..5.0) * 30.0;
+                        let jitter = glam::Vec2::new(
+                            rng.random_range(-4.0..4.0),
+                            rng.random_range(-4.0..4.0),
+                        );
+                        queue_enemy_spawn(
+                            &mut commands,
+                            crate::data::EnemyKind::RadMaggot,
+                            cpos + jitter + d * s * 0.05,
+                            1.0,
+                            run.loop_count,
+                        );
+                    }
+                }
+                ChestKind::Weapon
+                | ChestKind::Gold
+                | ChestKind::CursedBig
+                | ChestKind::BigWeapon
+                | ChestKind::Idpd
+                | ChestKind::Proto => {}
             }
         }
 
@@ -1879,6 +2122,8 @@ pub fn portal_enter(
                 &mut inv,
                 w,
                 true,
+                run.area,
+                run.gen_seed,
             );
             let mut rng = rand::rng();
             spawn_burst(
@@ -1929,8 +2174,8 @@ pub fn tick_portal_suck(
     mut run: ResMut<Run>,
     level_q: Query<Entity, With<LevelCleanup>>,
     weapon_q: Query<&Pickup>,
+    rad_props: Query<(), With<RadChestContainer>>,
     mut proto_chests: Query<(Entity, &mut ProtoChestState, Option<&OpenedChest>), Without<Player>>,
-    _carried: Res<PortalCarriedWeapons>,
     mut player_q: Query<
         (
             Entity,
@@ -2003,18 +2248,24 @@ pub fn tick_portal_suck(
         run.blackswords += swords;
     }
 
-    // GML `GameCont/Other_5` chest counters: unopened weapon/rad
+    // GML `GameCont/Other_5:143-152` chest counters: unopened weapon/rad
     // caches feed `nochest`/`noradch` (desert 1-1 exempts `nochest`),
-    // and every level ages `same_weapons_for`.
+    // and every level ages `same_weapons_for`. `instance_exists` is
+    // hierarchy-inclusive, so `CursedBigChest` and `GoldChest` (both
+    // `WeaponChest` descendants) count toward `nochest` too, and a plain
+    // `RadChest` is a `Prop` in the port rather than a `Pickup`.
     {
         let mut weapon_left = false;
-        let mut rad_left = false;
+        let mut rad_left = !rad_props.is_empty();
         for pickup in &weapon_q {
             match pickup.kind {
-                PickupKind::Chest(ChestKind::Weapon | ChestKind::BigWeapon) => weapon_left = true,
-                PickupKind::Chest(ChestKind::Rad | ChestKind::RadBig | ChestKind::RadMaggot) => {
-                    rad_left = true
-                }
+                PickupKind::Chest(
+                    ChestKind::Weapon
+                    | ChestKind::BigWeapon
+                    | ChestKind::CursedBig
+                    | ChestKind::Gold,
+                ) => weapon_left = true,
+                PickupKind::Chest(ChestKind::RadBig | ChestKind::RadMaggot) => rad_left = true,
                 _ => {}
             }
         }
@@ -2029,18 +2280,40 @@ pub fn tick_portal_suck(
         }
     }
 
+    // GML `ProtoChest/Other_5.gml` (Room End = save) verbatim:
+    //   if (wep == wep_frog_pistol) { wep = wep_golden_frog_pistol }
+    //   if (sprite_index == sprProtoChestOpen) { protowep = wep_rusty_revolver;
+    //                                          protocurse = false }
+    //   else { protowep = wep; protocurse = curse }
+    // The carried state rides the entity between floors; the persisted
+    // half is `etc.protowep` (`scrSave.gml:44`), loaded at run start by
+    // `PlayButton/Other_10.gml:11`.
     let mut proto_carriers = Vec::new();
+    let mut stored = (run.protowep, run.protocurse);
     for (entity, mut state, opened) in &mut proto_chests {
-        let (weapon, cursed) = if opened.is_some() {
-            (crate::data::WEAPON_RUSTY_REVOLVER, false)
+        let mut weapon = if opened.is_some() {
+            crate::data::WEAPON_RUSTY_REVOLVER
         } else {
             match &*state {
-                ProtoChestState::Pending => (run.protowep, run.protocurse),
-                ProtoChestState::Armed { weapon, cursed }
-                | ProtoChestState::Carried { weapon, cursed } => (*weapon, *cursed),
+                ProtoChestState::Pending => run.protowep,
+                ProtoChestState::Armed { weapon, .. }
+                | ProtoChestState::Carried { weapon, .. } => *weapon,
             }
         };
+        let cursed = if opened.is_some() {
+            false
+        } else {
+            match &*state {
+                ProtoChestState::Pending => run.protocurse,
+                ProtoChestState::Armed { cursed, .. }
+                | ProtoChestState::Carried { cursed, .. } => *cursed,
+            }
+        };
+        if weapon == crate::decide_wep::FROG_PISTOL {
+            weapon = crate::decide_wep::GOLDEN_FROG_PISTOL;
+        }
         *state = ProtoChestState::Carried { weapon, cursed };
+        stored = (weapon, cursed);
         proto_carriers.push(entity);
         commands
             .entity(entity)
@@ -2048,6 +2321,12 @@ pub fn tick_portal_suck(
             .remove::<Pickup>()
             .remove::<OpenedChest>()
             .remove::<crate::anim::SpriteAnim>();
+    }
+    if stored.0 != run.protowep || stored.1 != run.protocurse {
+        run.protowep = stored.0;
+        run.protocurse = stored.1;
+        save.protowep = stored.0;
+        dirty.0 = true;
     }
 
     for e in &level_q {
@@ -2079,6 +2358,7 @@ pub fn tick_portal_suck(
         }
         // GML `ctot_loop[race]`: looping as a race counts toward Fish/B.
         save.race_looped.insert(race, true);
+        unlock_held_crown(race, player.crown, &mut save, &mut dirty, &mut toast);
         commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::LoopComplete)));
     }
 
@@ -2087,6 +2367,26 @@ pub fn tick_portal_suck(
     } else {
         apply_secret_transition(&mut run, &mut triggers)
     };
+
+    // GML `IceFlower/Step_0:14-19`: the jungle secret eats the Last Wish
+    // and hands the skill point back, so the next pick is free.
+    if entered_secret == Some(SecretTarget::Jungle)
+        && player.mutations.contains(&MutationId::LastWish)
+    {
+        player.mutations.retain(|m| *m != MutationId::LastWish);
+        player.last_wish_used = false;
+        player.mutation_picks_owed = player.mutation_picks_owed.saturating_add(1);
+    }
+
+    // GML `GenCont/Destroy_0:112`: the room being *entered* is
+    // `area_city` subarea 1 and the player still has `mut_last_wish` ->
+    // that room's generation seeds an `IceFlower` (450 HP, `feed = 0`).
+    if run.area == AreaId::FrozenCity
+        && run.floor_in_area == 1
+        && player.mutations.contains(&MutationId::LastWish)
+    {
+        commands.insert_resource(IceFlowerSeed(true));
+    }
 
     if let Some(secret) = entered_secret {
         commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::SecretFound)));
@@ -2134,6 +2434,35 @@ pub fn tick_portal_suck(
     player_pos.0 = glam::Vec2::new(10000.0, 10000.0);
 }
 
+/// GML `scrUnlocksWinOrLoop` (`scripts/scrUnlocks.gml:243-245`): holding
+/// a crown through a loop or a win unlocks it for the race, and a fresh
+/// unlock earns CROWN LIFE. Crowns are *not* unlocked when the pedestal
+/// is taken (`CrownPickup/Collision_Player` has no unlock); VAULT_RAIDER
+/// is menu-only (`scrLoadoutMenuInit.gml:27`).
+fn unlock_held_crown(
+    race: RaceId,
+    crown: CrownKind,
+    save: &mut SaveData,
+    dirty: &mut SaveDirty,
+    toast: &mut Toast,
+) {
+    if crown == CrownKind::None {
+        return;
+    }
+    let gml = crate::crown::crown_port_to_gml(crown as u8);
+    // GML `scrCrownUnlock:143-146` bails on an unavailable race or an
+    // already-unlocked crown, and only then does the caller earn
+    // CROWN LIFE.
+    if !save.race_unlocked(race) || save.crown_unlocked(race, gml) {
+        return;
+    }
+    save.unlock_crown(race, gml);
+    if crate::savedata_part::unlock_achievement(save, 22) {
+        toast.show("CROWN LIFE");
+    }
+    dirty.0 = true;
+}
+
 /// Between-floor skill picks. Private core of the deferred
 /// `begin_between_floor_skill_picks` (pause + pending-pick resources);
 /// the public system with mutation-pick UI state lands with the UI
@@ -2146,7 +2475,7 @@ fn begin_between_floor_skill_picks(
 ) {
     if player.ultra_pick_owed && player.ultra.is_none() && player.level >= 10 {
         paused.0 = true;
-        let choices = ultra_choices_for(race);
+        let choices = ultra_choices_for_crown(race, player.crown == CrownKind::Destiny);
         commands.insert_resource(PendingUltra { choices });
 
         return;
@@ -2184,11 +2513,11 @@ pub fn tick_throne_sit(
     mut save: ResMut<SaveData>,
     mut dirty: ResMut<SaveDirty>,
     mut toast: ResMut<Toast>,
-    mut player_q: Query<(Entity, &Pos, &mut Velocity, &RaceState), With<Player>>,
+    mut player_q: Query<(Entity, &Pos, &mut Velocity, &RaceState, &Player), With<Player>>,
     mut sit_q: Query<(Entity, &mut ThroneSit), Without<SitZone>>,
     zones: Query<&Pos, With<SitZone>>,
 ) {
-    let Ok((player_e, ppos, mut pvel, race_state)) = player_q.single_mut() else {
+    let Ok((player_e, ppos, mut pvel, race_state, player)) = player_q.single_mut() else {
         return;
     };
     if let Ok((_, mut sit)) = sit_q.single_mut() {
@@ -2248,6 +2577,14 @@ pub fn tick_throne_sit(
         });
         run.won = true;
         toast.show("YOU SIT ON THE THRONE");
+        // GML `SitDown/Other_7:22`: the win unlocks run as it starts.
+        unlock_held_crown(
+            race_state.race,
+            player.crown,
+            &mut save,
+            &mut dirty,
+            &mut toast,
+        );
     }
 }
 
@@ -2294,6 +2631,8 @@ pub fn tick_floor_transition(
             let Ok((mut pos, mut health, mut player, race)) = player_q.single_mut() else {
                 return;
             };
+            let crown_kind = player.crown;
+            let player_ultra = player.ultra;
             // The tutorial arena never recurs past the first floor, and the
             // Blood-crown enemy pass follows the live crown (GML
             // `scrCrownCheck` at populate time).
@@ -2330,6 +2669,7 @@ pub fn tick_floor_transition(
                     same_weapons_for: run.same_weapons_for,
                     horror_done: run.horror,
                     hardmode: run.hardmode,
+                    tutorial: run.tutorial,
                     player_pos: landing,
                     seed: run.gen_seed ^ 0xC0E5_75EED,
                 },
@@ -2343,9 +2683,12 @@ pub fn tick_floor_transition(
                 &run,
                 scarier.0,
                 heavy_heart.0,
+                crown_kind,
+                player_ultra,
                 &plan,
                 &mut mask,
             );
+            commands.remove_resource::<IceFlowerSeed>();
 
             floor_started.push(FloorStarted {
                 floor: run.floor,
@@ -2634,6 +2977,7 @@ pub fn cleanup_run(
     for e in &q {
         commands.entity(e).despawn();
     }
+    commands.remove_resource::<IceFlowerSeed>();
 
     if let Some(m) = mask.as_mut() {
         **m = FloorMask::default();

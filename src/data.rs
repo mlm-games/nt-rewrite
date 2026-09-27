@@ -321,6 +321,25 @@ pub fn ammo_pickup_amount(kind: AmmoKind) -> i32 {
     }
 }
 
+/// GML `scrAmmoUpdateTypeStats` (`scripts/scrAmmoInit/scrAmmoInit.gml:
+/// 104-149`) folded into `typ_ammo`, the value
+/// `scrAmmoGetPickupAmount` returns: the flat base table plus
+/// `8/2/2/2/3` per Fish player and `+1` to every type for the Haste
+/// crown. `fish_players` is `scrPlayerCountRace(Race.Fish)` (0 or 1
+/// single-player), `haste` is `scrCrownCheck(crwn_haste)` (0 or 1).
+pub fn ammo_pickup_amount_for(kind: AmmoKind, fish_players: u32, haste: u32) -> i32 {
+    if kind == AmmoKind::None {
+        return 0;
+    }
+    let per_fish = match kind {
+        AmmoKind::Bullets => 8,
+        AmmoKind::Shells | AmmoKind::Bolts | AmmoKind::Explosives => 2,
+        AmmoKind::Energy => 3,
+        AmmoKind::None => 0,
+    };
+    ammo_pickup_amount(kind) + per_fish * fish_players as i32 + haste as i32
+}
+
 /// Crown kinds. Discriminants are save identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]

@@ -13,19 +13,19 @@ use repame_anim::AnimCatalog;
 use crate::anim::SpriteAnim;
 use crate::audio::{AudioCue, GameAudio};
 use crate::comps_a::{
-    DamageSource, GameCleanup, LevelCleanup, NextHurt, PlasmaSize, Projectile, ProjectileFade,
-    ProjectileFriction, ProjectileTyp, ShellBonus, ShellWallBounce, SpawnHazardOnDeath,
-    SplitOnDeath, Team, Velocity,
+    BouncesLeft, DamageSource, GameCleanup, LevelCleanup, NextHurt, PlasmaSize, Projectile,
+    ProjectileFade, ProjectileFriction, ProjectileTyp, ShellBonus, ShellWallBounce,
+    SpawnHazardOnDeath, SplitOnDeath, Team, Velocity,
 };
 use crate::comps_b::{
-    CustomExplosion, DeploysSentry, ExplosionVisual, GoldBarrelDrop, NativeExplosionKind,
+    CustomExplosion, DeploysSentry, ExplosionVisual, NativeExplosionKind,
     PlasmaBurst, PortalClear, Prop, PropNestMarkers, PropSprites, RadChestContainer,
     SecretEntrance, SentryTurret, SpawnsWeaponPickup,
 };
 use crate::data::{EnemyKind, HazardDef, SplitDef};
 use crate::environment::PropDeathEffect;
 use crate::msg::Queue;
-use crate::pickups::{random_weapon, spawn_pickup, spawn_rad};
+use crate::pickups::{random_weapon, spawn_pickup, spawn_rad, spawn_rad_burst};
 use crate::projectile_math::split_directions;
 use crate::secrets::SecretTriggers;
 use crate::spatial::Pos;
@@ -106,6 +106,41 @@ pub fn spawn_hazard_cloud(commands: &mut Commands, pos: glam::Vec2, team: Team, 
     ));
 }
 
+/// Child object a death-split table spawns. GML picks the child per
+/// parent's `Destroy_0`; the port keys the family off the
+/// `(team, damage, pellets)` signature each table is written with in
+/// `weapon_runtime::set_split` / `enemies::fire_enemy_flak`, because
+/// `SplitDef` (in `data.rs`) has no child-object field.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SplitChild {
+    /// GML `ClusterNade/Destroy_0.gml:1-13` — `SmallGrenade` on
+    /// `random_angle` at `random_range(3, 5)` px/step, each inheriting
+    /// `motion_add(other.direction, 2)`; `friction = 0.4`;
+    /// `alarm[0] = irandom_range(10, 20)`; `Collision_Wall` destroys it.
+    SmallGrenade,
+    /// GML `FlakBullet/Destroy_0.gml:1-7` — `Bullet2` on `random_angle`
+    /// at `8 + random(8)` px/step; bounces with cap 16 / decay 0.95.
+    Bullet2,
+    /// GML `SuperFlakBullet/Destroy_0.gml:3-11` — a 5-bullet ring
+    /// (`_ang += 72`) of `FlakBullet` at `random_range(12, 16)` px/step;
+    /// `Collision_Wall` destroys it.
+    FlakBullet,
+    /// GML `EnemyFlak/Destroy_0.gml:1-3` — `EnemyBullet3` on
+    /// `random_angle` at `random_range(8, 12)` px/step; bounces with
+    /// `min(18, speed * 0.8 + wallbounce)` and `wallbounce *= 0.9`.
+    EnemyBullet3,
+}
+
+fn split_child(team: Team, split: SplitDef) -> SplitChild {
+    // Death-crown bumps the cluster's count 8 -> 9, hence the range.
+    match (team, split.damage) {
+        (Team::Enemy, 1) => SplitChild::EnemyBullet3,
+        (Team::Player, 5) if split.pellets >= 8 => SplitChild::SmallGrenade,
+        (Team::Player, 8) => SplitChild::FlakBullet,
+        _ => SplitChild::Bullet2,
+    }
+}
+
 /// Split burst (shotgun fans). Art keys off `ProjectileTyp(1)`
 /// renderer-side.
 pub fn spawn_split_projectiles(
@@ -116,44 +151,145 @@ pub fn spawn_split_projectiles(
     source: Option<DamageSource>,
     base_dir: glam::Vec2,
 ) {
+    let child = split_child(team, split);
     let mut rng = rand::rng();
     let samples: Vec<f32> = (0..split.pellets)
         .map(|_| rng.random_range(-1.0f32..1.0))
         .collect();
+    // GML `SuperFlakBullet/Destroy_0.gml:3-11` walks a fixed 72-degree
+    // ring from a random start angle instead of scattering.
+    let ring_base = rng.random_range(0.0..std::f32::consts::TAU);
+    let mut dirs = split_directions(base_dir, split.pellets, split.spread, &samples);
+    if child == SplitChild::FlakBullet {
+        let step = std::f32::consts::TAU / split.pellets.max(1) as f32;
+        for (i, dir) in dirs.iter_mut().enumerate() {
+            let ang = ring_base + i as f32 * step;
+            *dir = glam::Vec2::new(ang.cos(), ang.sin());
+        }
+    }
 
-    for dir in split_directions(base_dir, split.pellets, split.spread, &samples) {
-        commands.spawn((
-            GameCleanup,
-            LevelCleanup,
-            team,
-            Projectile {
-                damage: split.damage,
-                life: GTimer::from_seconds(split.lifetime, TimerMode::Once),
-                radius: split.radius,
-                knockback: split.knockback,
-                explosive: false,
-                source,
-            },
-            Velocity(dir * split.speed),
-            ProjectileFriction(0.6),
-            crate::comps_a::BouncesLeft(255),
-            ShellWallBounce {
-                add: 0.0,
-                cap: 480.0,
-                decay: 0.95,
-                rearm: None,
-            },
-            ShellBonus {
-                timer: GTimer::from_seconds(2.0 / 30.0, TimerMode::Once),
-                bonus: 1,
-            },
-            ProjectileTyp(1),
-            ProjectileFade(match team {
-                Team::Enemy => "images/sprEBullet3Disappear.png",
-                _ => "images/sprBullet2Disappear.png",
-            }),
-            Pos(pos),
-        ));
+    // GML `ClusterNade/Destroy_0.gml:10` adds `motion_add(other.direction, 2)`
+    // — 2 px/step along the parent rocket's heading — to every child.
+    let inherited = match child {
+        SplitChild::SmallGrenade => base_dir * 2.0 * 30.0,
+        _ => glam::Vec2::ZERO,
+    };
+
+    for dir in dirs {
+        match child {
+            SplitChild::SmallGrenade => {
+                let speed = rng.random_range(3.0..5.0) * 30.0;
+                let life = rng.random_range(10..=20) as f32 / 30.0;
+                let scatter = glam::Vec2::new(
+                    rng.random_range(-2.0..2.0),
+                    rng.random_range(-2.0..2.0),
+                );
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    team,
+                    Projectile {
+                        damage: split.damage,
+                        life: GTimer::from_seconds(life, TimerMode::Once),
+                        radius: split.radius,
+                        knockback: split.knockback,
+                        explosive: false,
+                        source,
+                    },
+                    Velocity(dir * speed + inherited),
+                    ProjectileFriction(0.4),
+                    ProjectileTyp(1),
+                    Pos(pos + scatter),
+                ));
+            }
+            SplitChild::FlakBullet => {
+                let speed = rng.random_range(12.0..16.0) * 30.0;
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    team,
+                    Projectile {
+                        damage: split.damage,
+                        life: GTimer::from_seconds(split.lifetime, TimerMode::Once),
+                        radius: split.radius,
+                        knockback: split.knockback,
+                        explosive: false,
+                        source,
+                    },
+                    Velocity(dir * speed),
+                    ProjectileFriction(0.4),
+                    ProjectileTyp(1),
+                    Pos(pos),
+                ));
+            }
+            SplitChild::EnemyBullet3 => {
+                let speed = rng.random_range(8.0..12.0) * 30.0;
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    team,
+                    Projectile {
+                        damage: split.damage,
+                        life: GTimer::from_seconds(split.lifetime, TimerMode::Once),
+                        radius: split.radius,
+                        knockback: split.knockback,
+                        explosive: false,
+                        source,
+                    },
+                    Velocity(dir * speed),
+                    ProjectileFriction(0.6),
+                    BouncesLeft(255),
+                    ShellWallBounce {
+                        add: 0.0,
+                        cap: 540.0,
+                        decay: 0.9,
+                        rearm: None,
+                    },
+                    ShellBonus {
+                        timer: GTimer::from_seconds(2.0 / 30.0, TimerMode::Once),
+                        bonus: 1,
+                    },
+                    ProjectileTyp(1),
+                    ProjectileFade("images/sprEBullet3Disappear.png"),
+                    Pos(pos),
+                ));
+            }
+            SplitChild::Bullet2 => {
+                let speed = rng.random_range(8.0..16.0) * 30.0;
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    team,
+                    Projectile {
+                        damage: split.damage,
+                        life: GTimer::from_seconds(split.lifetime, TimerMode::Once),
+                        radius: split.radius,
+                        knockback: split.knockback,
+                        explosive: false,
+                        source,
+                    },
+                    Velocity(dir * speed),
+                    ProjectileFriction(0.6),
+                    BouncesLeft(255),
+                    ShellWallBounce {
+                        add: 0.0,
+                        cap: 480.0,
+                        decay: 0.95,
+                        rearm: Some((0.0, 1)),
+                    },
+                    ShellBonus {
+                        timer: GTimer::from_seconds(2.0 / 30.0, TimerMode::Once),
+                        bonus: 1,
+                    },
+                    ProjectileTyp(1),
+                    ProjectileFade(match team {
+                        Team::Enemy => "images/sprEBullet3Disappear.png",
+                        _ => "images/sprBullet2Disappear.png",
+                    }),
+                    Pos(pos),
+                ));
+            }
+        }
     }
 }
 
@@ -211,6 +347,57 @@ pub fn spawn_sentry_turret(commands: &mut Commands, pos: glam::Vec2, spec: Deplo
             projectile_speed: spec.projectile_speed,
             projectile_damage: spec.projectile_damage,
         },
+        Pos(pos),
+    ));
+}
+
+/// GML `SentryGun/Create_0.gml` + `Alarm_0.gml` verbatim: `max_hp = 10`,
+/// `ammo = 24` spent one bullet per 5-frame alarm, `alarm[0] = 30` on the
+/// first pass, `friction = 0.2`, and `scrFire.gml:367` gives it
+/// `motion_add(_gunangle, 6)`. Bullet: `Bullet1` at
+/// `motion_add(gunangle + random(12) - 6, 16)` — 16 px/step = 480 px/s,
+/// damage 3.
+pub fn spawn_sentry_gun(
+    commands: &mut Commands,
+    pos: glam::Vec2,
+    dir: glam::Vec2,
+    team: Team,
+) {
+    commands.spawn((
+        GameCleanup,
+        LevelCleanup,
+        team,
+        SentryTurret {
+            // 24 rounds on the 5-frame cadence. GML's opening `alarm[0]
+            // = 30` cannot be expressed: `combat::tick_sentry_turrets`
+            // owns the fire timer and always starts it at one interval.
+            life: GTimer::from_seconds(24.0 * 5.0 / 30.0, TimerMode::Once),
+            fire: GTimer::from_seconds(5.0 / 30.0, TimerMode::Repeating),
+            // GML has no range gate: the alarm fires at any enemy with a
+            // clear `collision_line`.
+            range: f32::INFINITY,
+            projectile_speed: 16.0 * 30.0,
+            projectile_damage: 3,
+        },
+        crate::comps_a::Health {
+            hp: 10,
+            max: 10,
+            invuln: GTimer::disarmed(),
+        },
+        crate::comps_a::Hitbox { radius: 12.0 },
+        crate::comps_b::NativeMotion {
+            velocity: dir.normalize_or_zero() * 6.0 * 30.0,
+            friction: 0.2,
+            radius: 12.0,
+            wall: crate::comps_b::NativeWallMotion::Bounce,
+            tick: 0,
+        },
+        // GML `SentryGun/Create_0.gml:13,19`: `gunangle = random_angle`,
+        // `right = choose(1, -1)`. The renderer orients by `NativeAngle`.
+        crate::comps_b::GmlImage::new("images/sprSentryGun.png", 1, 0.0),
+        crate::comps_b::NativeAngle(0.0),
+        crate::comps_b::NativeFlip(rand::rng().random_bool(0.5)),
+        crate::comps_b::NativeDepth(-1.0),
         Pos(pos),
     ));
 }
@@ -316,12 +503,23 @@ pub fn on_projectile_removed(
 
     if explosive {
         let visual = custom_explosion.and_then(|c| c.visual);
+        // GML `Explosion/Create_0.gml:3` sets `damage = 5` and
+        // `SmallExplosion` inherits it, so a rocket's blast is 5 even
+        // though `Rocket/Create_0.gml:4` gives the projectile 20 — the
+        // projectile's `damage` only lands on a direct hit. `GreenExplosion`
+        // is 12 (`GreenExplosion/Create_0.gml:3`).
+        let blast_damage = match visual {
+            Some(NativeExplosionKind::Green) => 12,
+            Some(NativeExplosionKind::Meat) | Some(NativeExplosionKind::Popo) => damage,
+            _ if team == Team::Player => 5,
+            _ => damage,
+        };
         let (radius, count, spread) = custom_explosion
             .map(|c| (c.radius, c.count.max(1), c.spread))
             .unwrap_or((32.0, 1, 0.0));
         if count <= 1 {
             spawn_explosion_with_source_radius_kind(
-                commands, pos, damage, source, radius, team, true, visual,
+                commands, pos, blast_damage, source, radius, team, true, visual,
             );
         } else {
             let ang0 = rand::rng().random_range(0.0..std::f32::consts::TAU);
@@ -331,7 +529,7 @@ pub fn on_projectile_removed(
                 spawn_explosion_with_source_radius_kind(
                     commands,
                     pos + off,
-                    damage,
+                    blast_damage,
                     source,
                     radius,
                     team,
@@ -349,7 +547,7 @@ pub fn on_projectile_removed(
             spawn_explosion_with_source_radius(
                 commands,
                 pos - off,
-                damage,
+                blast_damage,
                 source,
                 radius,
                 team,
@@ -427,7 +625,6 @@ pub fn damage_destructible_prop(
     >,
     entrances: &Query<&SecretEntrance>,
     nests: &Query<&PropNestMarkers, With<Prop>>,
-    gold_barrels: &Query<&GoldBarrelDrop>,
     rad_chests: &Query<&RadChestContainer>,
     secrets: &mut SecretTriggers,
     audio: &GameAudio,
@@ -496,8 +693,19 @@ pub fn damage_destructible_prop(
     }
     if nest_flags.cocoon {
         let mut rng = rand::rng();
-        if rng.random_range(0.0..3.0) < 1.0 {
+        // GML `Cocoon/Destroy_0.gml` verbatim: `random(3) < 1` spawns a
+        // `Gator`, otherwise `scrDrop(30, 0)` — a 30% ammo drop.
+        if rng.random_range(0..3i32) < 1 {
             queue_enemy_spawn(&mut *commands, EnemyKind::Gator, center, 1.0, loops);
+        } else if rng.random_range(0.0..100.0) < 30.0 {
+            spawn_pickup(
+                commands,
+                catalog,
+                crate::comps_b::PickupKind::Ammo(crate::data::AmmoKind::None, 0),
+                center,
+                loops,
+                false,
+            );
         }
     }
     if nest_flags.mutant_tube {
@@ -541,24 +749,9 @@ pub fn damage_destructible_prop(
         );
     }
     if nest_flags.small_gen {
-        for _ in 0..5 {
-            spawn_rad(commands, catalog, center, 1);
-        }
-    }
-    if gold_barrels.get(prop_e).is_ok() {
-        // GML `GoldBarrel` drops no weapon (`scrDecideWepGold` callers
-        // are GoldChest + YV only); the port keeps the pre-loop gold
-        // pool here for the loot feel. Owned-reject needs a player
-        // query the helper lacks, so plain pool roll.
-        let weapon = crate::decide_wep::decide_wep_gold(&mut rand::rng(), 0, &[], true);
-        spawn_pickup(
-            commands,
-            catalog,
-            crate::comps_b::PickupKind::Weapon(weapon),
-            center + glam::Vec2::new(0.0, -14.0),
-            0,
-            false,
-        );
+        // GML `SmallGenerator/Create_0.gml:13` `raddrop = 5`, paid by
+        // `prop/Destroy_0.gml:12`.
+        spawn_rad_burst(commands, catalog, center, 5);
     }
     if rad_chests.get(prop_e).is_ok() {
         let mut rng = rand::rng();

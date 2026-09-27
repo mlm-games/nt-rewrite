@@ -25,11 +25,16 @@ use repame_fx::Trauma;
 use repame_sim::SimTime;
 
 use crate::audio::{AudioCue, GameAudio, QueuedReactiveCue, ReactiveCue};
-use crate::comps_a::{ARENA_H, ARENA_W, GameCleanup, HeavyHeart, Player, Run, ScarierFace, Toast};
-use crate::comps_b::{
-    Enemy, IdpdRaidState, IdpdShieldUnit, IdpdVanBrain, LoopTransition, RaidWave,
+use crate::comps_a::{
+    ARENA_H, ARENA_W, FloorMask, GameCleanup, Health, HeavyHeart, Inventory, LevelCleanup, Player,
+    Run, ScarierFace, Toast,
 };
+use crate::comps_b::{
+    Enemy, IdpdRaidState, IdpdShieldUnit, LoopTransition, PortalClear, RaidWave,
+};
+use crate::combat::{queue_enemy_spawn, queue_enemy_spawn_birth};
 use crate::data::{AreaId, EnemyKind};
+use crate::decide_wep::WeaponDropsRng;
 use crate::effects::spawn_burst;
 use crate::enemies::{EnemySpawnContext, spawn_enemy_at};
 use crate::msg::Queue;
@@ -109,21 +114,7 @@ pub fn roll_idpd_table(
         return vec![EnemyKind::PopoFreak];
     }
     let mut rng = rand::rng();
-    let dir = if loop_count == 0 && lil_hunter_alive {
-        1
-    } else {
-        loop {
-            let d = match rng.random::<f32>() {
-                x if x < 0.25 => 1,
-                x if x < 0.5 => 1,
-                x if x < 0.75 => 2,
-                _ => 3,
-            };
-            if !(d == 3 && popolevel < 3) && !(d == 2 && popolevel < 5) {
-                break d;
-            }
-        }
-    };
+    let dir = roll_idpd_dir(&mut || rng.random::<f32>(), popolevel, loop_count == 0 && lil_hunter_alive);
     let elite = idpd_elite_roll(loop_count, area);
     match dir {
         2 => vec![if elite {
@@ -144,6 +135,189 @@ pub fn roll_idpd_table(
             }
         }
     }
+}
+
+/// GML `IDPDSpawn/Alarm_1.gml:10-14`: `rng_choose(1, 1, 2, 3)` re-rolled
+/// until the `popolevel` gates pass (dir 3 needs 3+, dir 2 needs 5+), then
+/// a live `LilHunter` on loop 0 forces dir 1. The float source is a
+/// parameter so the global stream and the `RNGStates` LCG share this law.
+pub fn roll_idpd_dir(
+    next_float: &mut dyn FnMut() -> f32,
+    popolevel: u32,
+    force_grunts: bool,
+) -> u8 {
+    if force_grunts {
+        return 1;
+    }
+    loop {
+        let d = match next_float() {
+            x if x < 0.25 => 1,
+            x if x < 0.5 => 1,
+            x if x < 0.75 => 2,
+            _ => 3,
+        };
+        if !(d == 3 && popolevel < 3) && !(d == 2 && popolevel < 5) {
+            return d;
+        }
+    }
+}
+
+/// GML `objects/IDPDSpawn/Create_0.gml` — the popo portal, distinct from
+/// the `Portal` object. `alarm[0]` fires at `40 + instance_number * 3`
+/// frames, arms `alarm[1]` 12 frames later, and `alarm[1]` raises the
+/// wave; `Other_7` destroys the instance when the close strip ends.
+/// The elite flag is stamped once in `Create_0`, so it is fixed before
+/// the `dir` roll in `Alarm_1`.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct IdpdSpawnPortal {
+    /// `Create_0.gml:30-34`: 1-in-5 once the loops/area gate passes.
+    pub elite: bool,
+    /// `Create_0.gml:5-24` relocates on the first sim tick, not at
+    /// spawn: the raise sites (chest / portal / worldgen) have no
+    /// player query.
+    pub placed: bool,
+    /// `Create_0.gml:28`: `40 + instance_number(IDPDSpawn) * 3` frames.
+    pub alarm0: f32,
+    /// `Alarm_0.gml:1` sets `alarm[1] = 12` frames; 0 means unarmed.
+    pub alarm1: f32,
+    /// Frames left on `sprIDPDPortalClose` (14 frames at
+    /// `image_speed = 0.4`) before `Other_7.gml:3` despawns.
+    pub close: f32,
+}
+
+/// GML `IDPDSpawn/Create_0.gml:28` and `Alarm_0.gml:1`: the open window
+/// is `40 + instance_number(IDPDSpawn) * 3 + 12` frames, so N live
+/// portals raised together open at 55, 58, 61, 64, 67, 70.
+pub const IDPD_SPAWN_OPEN_BASE: f32 = 52.0;
+pub const IDPD_SPAWN_OPEN_PER_LIVE: f32 = 3.0;
+
+/// GML `objects/IDPDSpawn/Create_0.gml`. `instance_number(IDPDSpawn)`
+/// counts every live portal, so the caller passes the live count.
+/// Returns the portal and the `elite` flag `Create_0.gml:30-34` stamped
+/// (the caller plays the matching spawn sting).
+pub fn spawn_idpd_spawn(
+    commands: &mut Commands,
+    run: &mut Run,
+    live_portals: u32,
+    pos: glam::Vec2,
+) -> (Entity, bool) {
+    let elite = idpd_elite_roll(run.loop_count, run.area);
+    // `Create_0.gml:1`
+    run.popolevel += 1;
+    let alarm0 = IDPD_SPAWN_OPEN_BASE + (live_portals as f32 + 1.0) * IDPD_SPAWN_OPEN_PER_LIVE;
+    let entity = commands
+        .spawn((
+            GameCleanup,
+            LevelCleanup,
+            IdpdSpawnPortal {
+                elite,
+                placed: false,
+                alarm0: alarm0 - 12.0,
+                alarm1: 0.0,
+                close: 0.0,
+            },
+            Pos(pos),
+        ))
+        .id();
+    (entity, elite)
+}
+
+/// GML `objects/Van/Alarm_1.gml` deploy law: the one-shot that empties
+/// the van. `drive = 0` is the drive-side half (see `BLOCKED`); this
+/// marker is the firing bit, consumed once and never re-armed.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct IdpdVanDeployed;
+
+/// GML `objects/Van` deploy bookkeeping. `right` is stamped at spawn
+/// (`Create_0.gml:14-23`) because `Alarm_1` places its payload at
+/// `x - 55 * right` / `x - 50 * right`; `frames` counts the
+/// `alarm[0] = 40` (`Create_0.gml:28`) plus `Alarm_0`'s `alarm[1] = 10`
+/// down to the one-shot deploy, and `inert` re-arms once
+/// `Alarm_2` (15) + `Alarm_3` (20) have parked the van for good.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct IdpdVanDeploy {
+    pub right: f32,
+    pub frames: f32,
+    /// GML `Van/Create_0.gml:32`:
+    /// `(loops > 2) && ((area != 0) || (loops > 3))`.
+    pub freak: bool,
+    pub inert: f32,
+}
+
+/// GML `Van/Create_0.gml:28` + `Alarm_0.gml:3`: 40 + 10 frames.
+pub const VAN_DEPLOY_FRAMES: f32 = 50.0;
+/// GML `Van/Alarm_2.gml:2` + `Alarm_3.gml:2`: 15 + 20 frames.
+pub const VAN_INERT_FRAMES: f32 = 35.0;
+
+/// GML `objects/IDPDChest/Destroy_0.gml` verbatim:
+///
+/// ```gml
+/// if instance_exists(GenCont) exit
+/// with instance_create(x, y, ChestOpen) sprite_index = sprIDPDChestOpen
+/// instance_create(x, y, FXChestOpen)
+/// repeat 6 { with instance_create(x, y, IDPDSpawn) { ... } }
+/// ```
+///
+/// Each `IDPDSpawn` runs its own `Create_0`, so this raises six portals
+/// that each bump `GameCont.popolevel` (which is what gates the
+/// Shielders / Inspectors / Elites / PopoFreak table in `Alarm_1`),
+/// stamp their own elite flag, take their own
+/// `40 + instance_number * 3` slot in the open window, and play their
+/// own spawn sting. `live_portals` is the current `IdpdSpawnPortal`
+/// count, so a raid raised alongside existing portals lands in the same
+/// stagger GML's `instance_number` produces. Returns the elite count.
+///
+/// `during_worldgen` is the port's stand-in for GML's
+/// `if instance_exists(GenCont) exit`: the generator is pure, so the
+/// caller states the phase.
+pub fn spawn_idpd_chest_raid(
+    commands: &mut Commands,
+    run: &mut Run,
+    cues: &mut Queue<AudioCue>,
+    live_portals: u32,
+    pos: glam::Vec2,
+    during_worldgen: bool,
+) -> u32 {
+    if during_worldgen {
+        return 0;
+    }
+    // GML `IDPDChest/Destroy_0.gml:4-5`: the `ChestOpen` swap and the
+    // `FXChestOpen` pop. The `OpenedChest` marker is the port's swap; the
+    // burst is the FX half.
+    commands.spawn((
+        GameCleanup,
+        LevelCleanup,
+        crate::comps_b::OpenedChest(crate::comps_b::ChestKind::Idpd),
+        Pos(pos),
+    ));
+    let mut rng = rand::rng();
+    spawn_burst(
+        commands,
+        &mut rng,
+        pos,
+        10,
+        [0.7, 0.9, 1.0, 1.0],
+        (60.0, 200.0),
+    );
+    // GML `IDPDChest/Destroy_0.gml:11-20` + `IDPDSpawn/Create_0.gml:35`
+    // (`snd_play(elite ? sndEliteIDPDPortalSpawn : sndIDPDPortalSpawn)`).
+    let mut elites = 0;
+    for i in 0..6 {
+        let (_, elite) = spawn_idpd_spawn(commands, run, live_portals + i, pos);
+        if elite {
+            elites += 1;
+        }
+        cues.push(AudioCue {
+            name: if elite {
+                "sndEliteIDPDPortalSpawn"
+            } else {
+                "sndIDPDPortalSpawn"
+            },
+            volume: 0.7,
+            variance: 0.05,
+        });
+    }
+    elites
 }
 
 /// Wave picker from loop pressure + floor (bevy parity).
@@ -199,9 +373,216 @@ pub fn edge_spawn_points_away_from(player_pos: glam::Vec2) -> [glam::Vec2; 4] {
     pts
 }
 
-/// Raid director: cooldown tick, trigger gate, 1.25 s warning, then the
-/// wave drops and the cooldown re-arms at `(18 - loop * 1.5).max(8)` s
-/// (bevy `tick_idpd_raids` top to bottom).
+/// GML `IDPDSpawn/Create_0.gml:6-22` (the `do..until` relocation)
+/// verbatim: draw an angle and a `96 + rng(96)` radius off
+/// `RNGStates.Popo`, snap the result onto the nearest `Floor` tile, and
+/// retry until the site is both `place_free` and further than 64 px.
+/// The retry loop is unbounded in GML; 64 draws is the port's hang guard.
+pub fn idpd_spawn_site(
+    rng: &mut WeaponDropsRng,
+    player_pos: glam::Vec2,
+    mask: &FloorMask,
+) -> glam::Vec2 {
+    let mut p = player_pos;
+    for _ in 0..64 {
+        let ang = rng.float(360.0);
+        let dist = 96.0 + rng.float(96.0);
+        p = player_pos + glam::Vec2::from_angle(ang.to_radians()) * dist;
+        // GML `var dir = instance_nearest(x, y, Floor); if dir { x = dir.x
+        // + 16; y = dir.y + 16 }` — snap to the nearest floor tile centre.
+        if let Some(tile) = nearest_floor_tile(p, mask) {
+            p = tile;
+        }
+        if p.distance(player_pos) > 64.0 && mask.is_walkable(p) {
+            break;
+        }
+    }
+    p
+}
+
+/// GML `instance_nearest(x, y, Floor)` plus the `+ 16` centre offset.
+fn nearest_floor_tile(p: glam::Vec2, mask: &FloorMask) -> Option<glam::Vec2> {
+    mask.cells
+        .iter()
+        .map(|c| mask.cell_center(*c))
+        .min_by(|a, b| {
+            a.distance_squared(p)
+                .partial_cmp(&b.distance_squared(p))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+}
+
+/// GML `IDPDSpawn/Alarm_1.gml:18-46`. Every child is born at
+/// `x + random(4) - 2, y + random(4) - 2`; the non-elite ones only then
+/// get `motion_add(point_direction(x, y, player.x, player.y) + random(90) - 45, 4)`
+/// — a 4 px/frame charge at the player, +/-45 degrees of jitter. The
+/// elite branch (`:27`, `:37`, `:47`) spawns with no `motion_add` at all.
+fn spawn_idpd_child(
+    commands: &mut Commands,
+    kind: EnemyKind,
+    at: glam::Vec2,
+    player_pos: glam::Vec2,
+    loops: u32,
+    charge: bool,
+) {
+    let mut rng = rand::rng();
+    let at = at
+        + glam::Vec2::new(
+            rng.random_range(0.0..4.0) - 2.0,
+            rng.random_range(0.0..4.0) - 2.0,
+        );
+    let velocity = if charge {
+        let base = (player_pos - at).y.atan2((player_pos - at).x);
+        let ang = base + (rng.random_range(0.0f32..90.0) - 45.0).to_radians();
+        Some(glam::Vec2::from_angle(ang) * (4.0 * crate::SIM_HZ as f32))
+    } else {
+        None
+    };
+    queue_enemy_spawn_birth(commands, kind, at, 1.0, loops, true, velocity, false);
+}
+
+/// GML `IDPDSpawn` alarm chain. `alarm[0]` carries the
+/// `40 + instance_number(IDPDSpawn) * 3` delay, `Alarm_0` arms
+/// `alarm[1] = 12`, and `Alarm_1` raises a `PortalClear` plus the
+/// `popolevel`-gated wave. `Other_7` despawns the instance once the
+/// close strip has run, so a portal outlives its own wave.
+pub fn tick_idpd_spawns(
+    commands: &mut Commands,
+    dt: f32,
+    run: &Run,
+    mask: &FloorMask,
+    player_pos: glam::Vec2,
+    lil_hunter_alive: bool,
+    mut portals: Query<
+        (Entity, &mut Pos, &mut IdpdSpawnPortal),
+        (With<IdpdSpawnPortal>, Without<Player>, Without<Enemy>),
+    >,
+) {
+    let steps = (dt * crate::SIM_HZ as f32).round();
+    // GML `Create_0.gml:8,13` draw the relocation off `RNGStates.Popo`;
+    // `Alarm_1.gml:11` draws the dir off the same stream. The port keeps
+    // one local `Popo` stream per tick, seeded off the run.
+    let mut popo = WeaponDropsRng::new((run.gen_seed as i32) ^ 0x50_50);
+    let mut fired: Vec<(glam::Vec2, bool)> = Vec::new();
+    for (entity, mut pos, mut portal) in &mut portals {
+        if !portal.placed {
+            // `Create_0.gml:5-24`
+            pos.0 = idpd_spawn_site(&mut popo, player_pos, mask);
+            portal.placed = true;
+        }
+        // `Alarm_0.gml:1-3` and `Alarm_1` run back to back: the close
+        // strip is 14 frames at `image_speed = 0.4` (35 steps) while the
+        // wave lands 12 steps in, so both counters advance together.
+        if portal.close > 0.0 {
+            portal.close -= steps;
+            if portal.close <= 0.0 {
+                // GML `Other_7.gml:3`
+                commands.entity(entity).despawn();
+                continue;
+            }
+        }
+        if portal.alarm1 > 0.0 {
+            portal.alarm1 -= steps;
+            if portal.alarm1 <= 0.0 {
+                fired.push((pos.0, portal.elite));
+            }
+            continue;
+        }
+        portal.alarm0 -= steps;
+        if portal.alarm0 <= 0.0 {
+            portal.alarm1 = 12.0;
+            portal.close = 35.0;
+        }
+    }
+    if fired.is_empty() {
+        return;
+    }
+    let mut rng = rand::rng();
+    for (at, elite) in fired {
+        commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            PortalClear {
+                timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
+                scale: 1.0,
+            },
+            Pos(at),
+        ));
+        // GML `Alarm_1.gml:3-6`: deep loops skip the dir table entirely.
+        if run.loop_count.saturating_sub(u32::from(run.area == AreaId::Campfire)) >= 3 {
+            let jitter = glam::Vec2::new(
+                rng.random_range(0.0..2.0) - 1.0,
+                rng.random_range(0.0..2.0) - 1.0,
+            );
+            queue_enemy_spawn_birth(
+                commands,
+                EnemyKind::PopoFreak,
+                at + jitter,
+                1.0,
+                run.loop_count,
+                true,
+                None,
+                false,
+            );
+            continue;
+        }
+        let dir = roll_idpd_dir(
+            &mut || popo.next_float(),
+            run.popolevel,
+            run.loop_count == 0 && lil_hunter_alive,
+        );
+        match dir {
+            2 => spawn_idpd_child(
+                commands,
+                if elite {
+                    EnemyKind::EliteShielder
+                } else {
+                    EnemyKind::IdpdShield
+                },
+                at,
+                player_pos,
+                run.loop_count,
+                !elite,
+            ),
+            3 => spawn_idpd_child(
+                commands,
+                if elite {
+                    EnemyKind::EliteInspector
+                } else {
+                    EnemyKind::IdpdInspector
+                },
+                at,
+                player_pos,
+                run.loop_count,
+                !elite,
+            ),
+            _ => {
+                if elite {
+                    spawn_idpd_child(
+                        commands,
+                        EnemyKind::IdpdElite,
+                        at,
+                        player_pos,
+                        run.loop_count,
+                        false,
+                    );
+                } else {
+                    for _ in 0..2 {
+                        spawn_idpd_child(
+                            commands,
+                            EnemyKind::IdpdGrunt,
+                            at,
+                            player_pos,
+                            run.loop_count,
+                            true,
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn tick_idpd_raids(
     time: Res<SimTime>,
@@ -214,8 +595,13 @@ pub fn tick_idpd_raids(
     scarier: Res<ScarierFace>,
     heavy_heart: Res<HeavyHeart>,
     transition: Res<LoopTransition>,
+    mask: Res<FloorMask>,
     player_q: Query<&Pos, With<Player>>,
-    enemies_q: Query<(), With<Enemy>>,
+    enemies_q: Query<&Enemy, With<Enemy>>,
+    spawn_q: Query<
+        (Entity, &mut Pos, &mut IdpdSpawnPortal),
+        (With<IdpdSpawnPortal>, Without<Player>, Without<Enemy>),
+    >,
     mut toast: ResMut<Toast>,
     mut cues: ResMut<Queue<AudioCue>>,
 ) {
@@ -226,8 +612,21 @@ pub fn tick_idpd_raids(
         return;
     };
     let player_pos = player.0;
+    let lil_hunter_alive = enemies_q
+        .iter()
+        .any(|e| matches!(e.kind, EnemyKind::LilHunter | EnemyKind::LilHunterLoop));
     let enemies_alive = enemies_q.iter().count();
     let kills_since_checkpoint = run.total_kills.saturating_sub(raid.kills_checkpoint);
+
+    tick_idpd_spawns(
+        &mut commands,
+        dt,
+        &run,
+        &mask,
+        player_pos,
+        lil_hunter_alive,
+        spawn_q,
+    );
 
     if transition.throne_ii_alive || transition.loop_ready {
         raid.pending_wave = None;
@@ -395,6 +794,9 @@ pub fn spawn_raid_wave(
                 commands,
                 catalog,
                 points[0],
+                player_pos,
+                loop_count,
+                area,
                 difficulty + 0.25,
                 loop_count,
                 context,
@@ -418,10 +820,10 @@ fn spawn_at(
     difficulty: f32,
     loops: u32,
     context: EnemySpawnContext,
-) {
+) -> Entity {
     spawn_enemy_at(
         commands, catalog, kind, pos, difficulty, false, false, loops, context,
-    );
+    )
 }
 
 fn spawn_grunt(
@@ -484,11 +886,19 @@ fn spawn_van(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
     pos: glam::Vec2,
+    player_pos: glam::Vec2,
+    loop_count: u32,
+    area: AreaId,
     difficulty: f32,
     loops: u32,
     context: EnemySpawnContext,
-) {
-    spawn_at(
+) -> Entity {
+    // GML `Van/Create_0.gml:14-23`: `right = choose(1, -1)`, overridden to
+    // face the player when one exists. `Alarm_1` places its payload at
+    // `x - 55 * right`, so the facing has to be latched at spawn.
+    let right = if player_pos.x < pos.x { -1.0 } else { 1.0 };
+    let freak = loop_count > 2 && (area != AreaId::Campfire || loop_count > 3);
+    let e = spawn_at(
         commands,
         catalog,
         EnemyKind::IdpdVan,
@@ -497,12 +907,26 @@ fn spawn_van(
         loops,
         context,
     );
+    commands.entity(e).insert(IdpdVanDeploy {
+        right,
+        frames: VAN_DEPLOY_FRAMES,
+        freak,
+        inert: 0.0,
+    });
+    e
 }
 
-/// Van deploy tick: each finished 2.2 s timer spends a charge to drop
-/// two grunts (1.15) flanking below plus a shield (1.2) above on every
-/// other charge, then sheds the shield marker (bevy parity; the bevy
-/// tail `enemy_def(IdpdVan)` lookup is a no-op and stays out).
+/// GML `objects/Van/Alarm_1.gml` in full: `drive = 0`, the freak
+/// self-destruct, then `repeat 3 + GameCont.loops` grunts at
+/// `x - 55 * right, y + orandom(5)` and a 50/50 second wave —
+/// `1 + loops` of one `{Inspector, Shielder}` or `loops` of one
+/// `{EliteGrunt, EliteInspector, EliteShielder}`, all at
+/// `x - 50 * right, y + orandom(5)`. It fires ONCE, 50 frames after
+/// spawn (`Create_0.gml:28` `alarm[0] = 40` + `Alarm_0.gml:3`
+/// `alarm[1] = 10`), and the van goes inert 35 frames later
+/// (`Alarm_2` 15 + `Alarm_3` 20). The `drive` half of the law
+/// (`drivespeed` / `wallbreak` / `x += right * drivespeed`) lives in
+/// `enemies.rs`.
 pub fn tick_idpd_vans(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -510,54 +934,170 @@ pub fn tick_idpd_vans(
     run: Res<Run>,
     scarier: Res<ScarierFace>,
     heavy_heart: Res<HeavyHeart>,
-    mut vans: Query<(Entity, &Pos, &mut IdpdVanBrain), With<Enemy>>,
+    mut trauma: ResMut<Trauma>,
+    mut cues: ResMut<Queue<AudioCue>>,
+    player_q: Query<(&Pos, &Player, &Inventory, &Health), (With<Player>, Without<Enemy>)>,
+    mut vans: Query<(Entity, &Pos, &mut IdpdVanDeploy), (With<Enemy>, Without<IdpdVanDeployed>)>,
 ) {
-    let dt = time.delta_secs;
+    let steps = (time.delta_secs * crate::SIM_HZ as f32).round();
     let context = enemy_spawn_context(&run, scarier.0, heavy_heart.0);
     for (entity, pos, mut van) in vans.iter_mut() {
-        if van.charges_left == 0 {
+        if van.inert > 0.0 {
+            // GML `Alarm_2.gml:2` then `Alarm_3.gml:2`: `can_hq = 0`,
+            // parked on `sprVanDeactivated` for good.
+            van.inert -= steps;
+            if van.inert <= 0.0 {
+                commands.entity(entity).remove::<IdpdShieldUnit>();
+                commands.entity(entity).insert(IdpdVanDeployed);
+            }
             continue;
         }
-
-        van.deploy_timer.tick(dt);
-        if !van.deploy_timer.just_finished() {
-            continue;
+        if van.frames > 0.0 {
+            van.frames -= steps;
+            if van.frames > 0.0 {
+                continue;
+            }
         }
 
-        van.charges_left -= 1;
-        let center = pos.0;
-
-        spawn_grunt(
-            &mut commands,
-            &catalog,
-            center + glam::Vec2::new(-18.0, -22.0),
-            1.15,
-            run.loop_count,
-            context,
-        );
-        spawn_grunt(
-            &mut commands,
-            &catalog,
-            center + glam::Vec2::new(18.0, -22.0),
-            1.15,
-            run.loop_count,
-            context,
-        );
-
-        if van.charges_left % 2 == 0 {
-            spawn_shield(
+        // GML `Alarm_1.gml:1-5`
+        if van.freak {
+            commands.entity(entity).despawn();
+            van_destroy(
                 &mut commands,
                 &catalog,
-                center + glam::Vec2::new(0.0, 26.0),
-                1.2,
+                &mut trauma,
+                &mut cues,
+                &run,
+                pos.0,
+                &player_q,
+            );
+            continue;
+        }
+
+        // GML `Alarm_1.gml:14-15`
+        let mut rng = rand::rng();
+        let back = pos.0 + glam::Vec2::new(-55.0 * van.right, 0.0);
+        for _ in 0..3 + run.loop_count {
+            let y = rng.random_range(-5.0..5.0);
+            spawn_at(
+                &mut commands,
+                &catalog,
+                EnemyKind::IdpdGrunt,
+                back + glam::Vec2::new(0.0, y),
+                1.0,
                 run.loop_count,
-                run.area,
                 context,
             );
         }
-
-        commands.entity(entity).remove::<IdpdShieldUnit>();
+        // GML `Alarm_1.gml:17-32`
+        let back = pos.0 + glam::Vec2::new(-50.0 * van.right, 0.0);
+        if rng.random_bool(0.5) {
+            let spwn = if rng.random_bool(0.5) {
+                EnemyKind::IdpdInspector
+            } else {
+                EnemyKind::IdpdShield
+            };
+            for _ in 0..1 + run.loop_count {
+                let y = rng.random_range(-5.0..5.0);
+                spawn_at(
+                    &mut commands,
+                    &catalog,
+                    spwn,
+                    back + glam::Vec2::new(0.0, y),
+                    1.0,
+                    run.loop_count,
+                    context,
+                );
+            }
+        } else {
+            let spwn = match rng.random_range(0..3) {
+                0 => EnemyKind::IdpdElite,
+                1 => EnemyKind::EliteInspector,
+                _ => EnemyKind::EliteShielder,
+            };
+            for _ in 0..run.loop_count {
+                let y = rng.random_range(-5.0..5.0);
+                spawn_at(
+                    &mut commands,
+                    &catalog,
+                    spwn,
+                    back + glam::Vec2::new(0.0, y),
+                    1.0,
+                    run.loop_count,
+                    context,
+                );
+            }
+        }
+        van.inert = VAN_INERT_FRAMES;
     }
+}
+
+/// GML `objects/Van/Destroy_0.gml`, the freak-van self-destruct:
+/// `scrDrop(100, 0)` x3, three `PopoExplosion`s at
+/// `(x + random(40) - 20, y + random(20) - 10)` (8 damage each), seven
+/// `BlueFlame`s, and three `PopoFreak`s.
+fn van_destroy(
+    commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
+    trauma: &mut Trauma,
+    cues: &mut Queue<AudioCue>,
+    run: &Run,
+    pos: glam::Vec2,
+    player_q: &Query<(&Pos, &Player, &Inventory, &Health), (With<Player>, Without<Enemy>)>,
+) {
+    let Ok((_, player, inv, health)) = player_q.single() else {
+        return;
+    };
+    let mut rng = rand::rng();
+    for _ in 0..3 {
+        crate::pickups::maybe_spawn_drop_ctx(
+            commands,
+            catalog,
+            pos,
+            100,
+            0,
+            player,
+            inv,
+            health,
+            run.loop_count,
+            None,
+            &crate::pickups::ChestCtx::default(),
+        );
+    }
+    for _ in 0..3 {
+        let at = pos
+            + glam::Vec2::new(
+                rng.random_range(0.0..40.0) - 20.0,
+                rng.random_range(0.0..20.0) - 10.0,
+            );
+        commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            crate::combat::Explosion {
+                timer: GTimer::from_seconds(0.05, TimerMode::Once),
+                radius: 32.0,
+                damage: 8,
+                team: crate::comps_a::Team::Enemy,
+                hits_player: true,
+                source: None,
+            },
+            Pos(at),
+        ));
+    }
+    for _ in 0..3 {
+        let at = pos
+            + glam::Vec2::new(
+                rng.random_range(0.0..16.0) - 8.0,
+                rng.random_range(0.0..16.0) - 8.0,
+            );
+        queue_enemy_spawn(commands, EnemyKind::PopoFreak, at, 1.0, run.loop_count);
+    }
+    trauma.add(0.3);
+    cues.push(AudioCue {
+        name: "sndIDPDNadeExplo",
+        volume: 0.7,
+        variance: 0.05,
+    });
 }
 
 /// HQ pressure spawner: off-HQ areas return early; otherwise, while
@@ -629,6 +1169,9 @@ pub fn hq_pressure(
             &mut commands,
             &catalog,
             points[3],
+            player_pos,
+            run.loop_count,
+            run.area,
             1.45,
             run.loop_count,
             context,

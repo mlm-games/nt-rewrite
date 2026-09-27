@@ -36,6 +36,9 @@ pub struct EnemyDef {
     pub boss: bool,
 }
 
+/// GML `Create_0` `size`, per object; `hitme/Create_0:17` defaults it to 1.
+/// Gates `size <= 2` player push (`enemy/Collision_Player:14`) and
+/// `size <= other.size` flocking (`enemy/Collision_enemy:4`).
 pub fn gml_size(kind: EnemyKind) -> i32 {
     match kind {
         EnemyKind::Maggot
@@ -44,9 +47,54 @@ pub fn gml_size(kind: EnemyKind) -> i32 {
         | EnemyKind::Mimic
         | EnemyKind::SuperMimic
         | EnemyKind::WepMimic => 0,
+        EnemyKind::Bandit
+        | EnemyKind::Assassin
+        | EnemyKind::Freak
+        | EnemyKind::Rat
+        | EnemyKind::BigRat
+        | EnemyKind::Turret
+        | EnemyKind::SnowBandit
+        | EnemyKind::Wolf
+        | EnemyKind::LilHunter
+        | EnemyKind::LilHunterLoop
+        | EnemyKind::IdpdGrunt
+        | EnemyKind::IdpdShield
+        | EnemyKind::IdpdElite
+        | EnemyKind::IdpdInspector
+        | EnemyKind::EliteInspector
+        | EnemyKind::EliteShielder
+        | EnemyKind::Ballguy
+        | EnemyKind::FrogEgg
+        | EnemyKind::Necromancer
+        | EnemyKind::Spider
+        | EnemyKind::Crystal
+        | EnemyKind::Sniper
+        | EnemyKind::Gator
+        | EnemyKind::BuffGator
+        | EnemyKind::Raven
+        | EnemyKind::Salamander
+        | EnemyKind::MeleeBandit
+        | EnemyKind::BigMaggot
+        | EnemyKind::FastRat
+        | EnemyKind::ExploFreak
+        | EnemyKind::JungleBandit
+        | EnemyKind::BoneFish
+        | EnemyKind::Turtle
+        | EnemyKind::Molefish
+        | EnemyKind::Molesarge
+        | EnemyKind::FireBaller
+        | EnemyKind::SuperFireBaller
+        | EnemyKind::SuperFrog
+        | EnemyKind::JungleFly
+        | EnemyKind::InvSpider
+        | EnemyKind::MeleeFake
+        | EnemyKind::ScrapBossMissile
+        // `Mom` and `OldGuardian` are port-invented bosses: GML has no
+        // `Mom`/`OldGuardian` object, so there is no `size` to read.
+        | EnemyKind::Mom
+        | EnemyKind::OldGuardian => 1,
         EnemyKind::Scorpion
         | EnemyKind::GoldScorpion
-        | EnemyKind::BigRat
         | EnemyKind::Ratking
         | EnemyKind::RobotGuard
         | EnemyKind::LaserCrystal
@@ -68,13 +116,14 @@ pub fn gml_size(kind: EnemyKind) -> i32 {
         | EnemyKind::Technomancer
         | EnemyKind::Guardian
         | EnemyKind::CrownGuardian
-        | EnemyKind::IceFlower => 3,
+        | EnemyKind::IceFlower
+        | EnemyKind::PalaceGuardian => 3,
         EnemyKind::ProtoStatue | EnemyKind::Hyper => 4,
         EnemyKind::HostileHorror | EnemyKind::DogGuardian | EnemyKind::YvBoss => 5,
-        EnemyKind::ThroneII => 6,
+        // `Last` (the `Captain`) is the GML `size = 6` boss.
+        EnemyKind::Captain | EnemyKind::ThroneII => 6,
         EnemyKind::IdpdVan => 7,
         EnemyKind::Throne => 8,
-        _ => 1,
     }
 }
 
@@ -128,7 +177,9 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 1,
             preferred_range: 90.0,
             shoot_range: 480.0,
-            attack_cooldown: 1.65,
+            // `Bandit/Alarm_1:18` re-arms `alarm[1] = 20 + random(5)` when it
+            // fires; the uncommitted cycle at `:1` is `20 + random(10)`.
+            attack_cooldown: 0.75,
             bullets_per_shot: 1,
             burst: false,
             burst_interval: 0.0,
@@ -269,7 +320,9 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
         },
         EnemyKind::BigBanditLoop => EnemyDef {
             name: "Loop Big Bandit",
-            hp: 130,
+            // `BanditBoss` is one object scaled by loops
+            // (`enemies::spawn_hp`); the table keeps the loop-0 base.
+            hp: 100,
             speed: 95.0,
             accel: 1200.0,
             radius: 28.0,
@@ -278,7 +331,7 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             sprite: enemy_def(EnemyKind::BigBandit).sprite,
             score: 850,
             touch_damage: 7,
-            rad_drop: 35,
+            rad_drop: 30,
             drop_chance: 200,
             weapon_chance: 0,
             drop_rolls: 2,
@@ -310,8 +363,10 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             score: 5000,
             touch_damage: 10,
             rad_drop: 500,
-            drop_chance: 100,
-            weapon_chance: 25,
+            // `Nothing/Destroy_0` has no `scrDrop` (it calls `scrOnBossKill`
+            // instead of `event_inherited`), so the Throne never drops.
+            drop_chance: 0,
+            weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
             shoot_range: 999.0,
@@ -341,9 +396,10 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             score: 8000,
             touch_damage: 10,
             rad_drop: 70,
+            // `Nothing2/Destroy_0:11` `repeat (2) scrDrop(100, 0)`.
             drop_chance: 100,
-            weapon_chance: 25,
-            drop_rolls: 1,
+            weapon_chance: 0,
+            drop_rolls: 2,
             preferred_range: 0.0,
             shoot_range: 999.0,
             attack_cooldown: 0.85,
@@ -372,9 +428,13 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             score: 9000,
             touch_damage: 200,
             rad_drop: 150,
+            // `HyperCrystal/Destroy_0:1,7`: one `scrDrop(0, 5)` weapon roll
+            // plus `repeat (3) scrDrop(100, 0)`. The table can only carry one
+            // (ammo, weapon) pair, so the 3 ammo rolls are `drop_rolls` and
+            // the standalone 5% weapon roll is folded into `weapon_chance`.
             drop_chance: 100,
-            weapon_chance: 20,
-            drop_rolls: 1,
+            weapon_chance: 5,
+            drop_rolls: 3,
             preferred_range: 0.0,
             shoot_range: 0.0,
             attack_cooldown: 1.1,
@@ -423,17 +483,20 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             boss: false,
         },
         EnemyKind::BigRat => EnemyDef {
+            // GML has no `BigRat` object: `HitId.BigRat` is only a hit id
+            // (`scripts/scrDeathCauses:130` -> `sprRatkingIdle`, "BIG RAT"),
+            // so this stands in for `Rat`.
             name: "Big Rat",
-            hp: 35,
+            hp: 7,
             speed: 95.0,
             accel: 4800.0,
-            radius: 13.0,
-            size: 26.0,
+            radius: 8.0,
+            size: 14.0,
             color: [0.65, 0.5, 0.35, 1.0],
             sprite: "images/sprRatkingIdle.png",
             score: 15,
-            touch_damage: 0,
-            rad_drop: 20,
+            touch_damage: 2,
+            rad_drop: 4,
             drop_chance: 0,
             weapon_chance: 0,
             drop_rolls: 1,
@@ -533,12 +596,14 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 1,
             preferred_range: 110.0,
             shoot_range: 500.0,
-            attack_cooldown: 1.5,
+            // GML has no `SnowBandit` object: `Bandit/Create_0:29-39,43-46`
+            // swaps the sprite to the snow set, so this is `Bandit`.
+            attack_cooldown: 0.75,
             bullets_per_shot: 1,
             burst: false,
             burst_interval: 0.0,
             fan_spread: 0.0,
-            projectile_speed: 130.0,
+            projectile_speed: 120.0,
             projectile_spread: 0.175,
             projectile_damage: 3,
             projectile_radius: 4.0,
@@ -559,7 +624,8 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             score: 18,
             touch_damage: 3,
             rad_drop: 6,
-            drop_chance: 8,
+            // `Wolf/Destroy_0` is bare `event_inherited()`: no `scrDrop`.
+            drop_chance: 0,
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
@@ -590,16 +656,20 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             score: 1200,
             touch_damage: 0,
             rad_drop: 90,
-            drop_chance: 80,
-            weapon_chance: 15,
+            // `ScrapBoss/Destroy_0:3` `scrDrop(0, 100)`: a guaranteed
+            // weapon roll, never a pickup.
+            drop_chance: 0,
+            weapon_chance: 100,
             drop_rolls: 1,
             preferred_range: 240.0,
             shoot_range: 999.0,
-            attack_cooldown: 0.8,
-            bullets_per_shot: 5,
-            burst: false,
-            burst_interval: 0.0,
-            fan_spread: 0.12,
+            // `ScrapBoss/Alarm_1:36` re-arms the decide tick at 20 frames
+            // (30 at spawn). `boss_ai::big_dog_ai` hardcodes both.
+            attack_cooldown: 0.6667,
+            bullets_per_shot: 6,
+            burst: true,
+            burst_interval: 0.1667,
+            fan_spread: 1.047,
             projectile_speed: 190.0,
             projectile_spread: 0.03,
             projectile_damage: 3,
@@ -611,7 +681,7 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
         },
         EnemyKind::BigDogLoop => EnemyDef {
             name: "Loop Big Dog",
-            hp: 260,
+            hp: 300,
             speed: 55.0,
             accel: 850.0,
             radius: 38.0,
@@ -620,9 +690,9 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             sprite: enemy_def(EnemyKind::BigDog).sprite,
             score: 1800,
             touch_damage: 8,
-            rad_drop: 65,
-            drop_chance: 90,
-            weapon_chance: 20,
+            rad_drop: 90,
+            drop_chance: 0,
+            weapon_chance: 100,
             drop_rolls: 1,
             preferred_range: 260.0,
             shoot_range: 999.0,
@@ -657,7 +727,8 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 1,
             preferred_range: 190.0,
             shoot_range: 640.0,
-            attack_cooldown: 0.55,
+            // `LilHunter/Alarm_1:3` `alarm[1] = 20 + random(6)`.
+            attack_cooldown: 0.75,
             bullets_per_shot: 2,
             burst: true,
             burst_interval: 0.12,
@@ -673,7 +744,7 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
         },
         EnemyKind::LilHunterLoop => EnemyDef {
             name: "Loop Lil Hunter",
-            hp: 210,
+            hp: 140,
             speed: 155.0,
             accel: 1300.0,
             radius: 21.0,
@@ -682,7 +753,7 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             sprite: enemy_def(EnemyKind::LilHunter).sprite,
             score: 2200,
             touch_damage: 7,
-            rad_drop: 60,
+            rad_drop: 20,
             drop_chance: 200,
             weapon_chance: 0,
             drop_rolls: 1,
@@ -781,14 +852,18 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 1,
             preferred_range: 260.0,
             shoot_range: 700.0,
-            attack_cooldown: 0.6,
-            bullets_per_shot: 5,
+            // `EliteGrunt/Alarm_1:34` arms the burst and re-arms
+            // `alarm[1] = 14 + random(2)`; `Alarm_2:13` spaces the three
+            // `IDPDBullet`s 3 frames apart at 10 px/frame.
+            attack_cooldown: 0.5,
+            bullets_per_shot: 3,
             burst: true,
-            burst_interval: 0.05,
-            fan_spread: 0.11,
-            projectile_speed: 340.0,
-            projectile_spread: 0.03,
-            projectile_damage: 4,
+            burst_interval: 0.1,
+            fan_spread: 0.0,
+            projectile_speed: 300.0,
+            // `Alarm_2:8` `orandom(2)` = +/-1 degree.
+            projectile_spread: 0.0175,
+            projectile_damage: 3,
             projectile_radius: 4.0,
             projectile_lifetime: 2.6,
             projectile_color: [0.55, 0.75, 1.0, 1.0],
@@ -827,6 +902,10 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             boss: false,
         },
         EnemyKind::Mom => EnemyDef {
+            // GML has no `Mom` object. The Ballguy Mama that owns
+            // `sndBallMama*` and `HitId.BallguyMama` is `FrogQueen`
+            // (`scripts/scrDeathCauses:135`); this sewers boss is a
+            // port-invented second copy, so its numbers have no GML source.
             name: "Mom",
             hp: 280,
             speed: 40.0,
@@ -869,10 +948,11 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             score: 2000,
             touch_damage: 10,
             rad_drop: 30,
+            // `FrogQueen/Destroy_0:1` `repeat (2) scrDrop(200, 0)`.
             drop_chance: 200,
             weapon_chance: 0,
 
-            drop_rolls: 1,
+            drop_rolls: 2,
 
             preferred_range: 140.0,
             shoot_range: 999.0,
@@ -903,12 +983,14 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             score: 1500,
             touch_damage: 0,
             rad_drop: 50,
+            // `TechnoMancer/Destroy_0:17` `repeat (2) scrDrop(100, 0)`.
             drop_chance: 100,
             weapon_chance: 0,
-            drop_rolls: 1,
+            drop_rolls: 2,
             preferred_range: 0.0,
             shoot_range: 0.0,
-            attack_cooldown: 2.2,
+            // `TechnoMancer/Alarm_1:1` `alarm[1] = 90`; spawn is 300.
+            attack_cooldown: 3.0,
             bullets_per_shot: 0,
             burst: false,
             burst_interval: 0.0,
@@ -934,10 +1016,12 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             color: [0.35, 0.55, 0.95, 1.0],
             sprite: "images/sprPopoCaptainIdle.png",
             score: 4000,
-            touch_damage: 6,
-            rad_drop: 80,
-            drop_chance: 100,
-            weapon_chance: 20,
+            touch_damage: 10,
+            // `Last/Create_0:1` `raddrop = 0`; `Last/Destroy_0` never calls
+            // `scrDrop`, so the Captain drops neither rads nor pickups.
+            rad_drop: 0,
+            drop_chance: 0,
+            weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 140.0,
             shoot_range: 700.0,
@@ -948,7 +1032,8 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             fan_spread: 0.12,
             projectile_speed: 240.0,
             projectile_spread: 0.04,
-            projectile_damage: 4,
+            // `Last/Alarm_2` only ever spawns `IDPDBullet`.
+            projectile_damage: 3,
             projectile_radius: 4.5,
             projectile_lifetime: 2.8,
             projectile_color: [0.45, 0.75, 1.0, 1.0],
@@ -1129,13 +1214,18 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 1,
             preferred_range: 0.0,
             shoot_range: 160.0,
-            attack_cooldown: 3.17,
+            // `LaserCrystal/Alarm_1:11` `alarm[1] = 90 + random(10)` once
+            // the burst is armed; `:1` re-arms at `30 + random(10)` when the
+            // target is out of the 64..160 band.
+            attack_cooldown: 3.1667,
             bullets_per_shot: 4,
             burst: true,
-            burst_interval: 0.167,
+            // `Alarm_2:2` `alarm[2] = 5`; the first shot waits 30 frames.
+            burst_interval: 0.1667,
             fan_spread: 0.0,
             projectile_speed: 320.0,
-            projectile_spread: 0.0,
+            // `Alarm_2:8` `image_angle = gunangle + random(6) - 3`.
+            projectile_spread: 0.0524,
             projectile_damage: 1,
             projectile_radius: 3.5,
             projectile_lifetime: 1.2,
@@ -1209,6 +1299,10 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             boss: false,
         },
         EnemyKind::OldGuardian => EnemyDef {
+            // GML has no `OldGuardian` object (`sprOldGuardianStatue` and
+            // `mskOldGuardianDeflect` belong to `GuardianStatue`, which is a
+            // 1 hp prop): this vault boss is port-invented, so its numbers
+            // have no GML source.
             name: "Old Guardian",
             hp: 180,
             speed: 55.0,
@@ -1240,8 +1334,12 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             boss: true,
         },
         EnemyKind::PalaceGuardian => EnemyDef {
+            // GML has no `PalaceGuardian` object. The profile (3-bullet
+            // 40-degree volley, 60 px/frame, `sprGuardianIdle`) is
+            // `Guardian`, spawned by `ThroneStatue/Destroy_0`; GML's
+            // `VaultStatue` instead spawns a `CrownGuardian`.
             name: "Palace Guardian",
-            hp: 45,
+            hp: 35,
             speed: 95.0,
             accel: 2800.0,
             radius: 14.0,
@@ -1249,22 +1347,25 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             color: [0.85, 0.75, 0.45, 1.0],
             sprite: "images/sprGuardianIdle.png",
             score: 40,
-            touch_damage: 4,
-            rad_drop: 10,
-            drop_chance: 40,
-            weapon_chance: 6,
+            touch_damage: 2,
+            rad_drop: 11,
+            drop_chance: 50,
+            weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 80.0,
             shoot_range: 420.0,
-            attack_cooldown: 0.9,
+            // `Guardian/Alarm_1:3` `alarm[1] = 10 + random(40)`.
+            attack_cooldown: 1.0,
 
             bullets_per_shot: 3,
             burst: false,
             burst_interval: 0.0,
-            fan_spread: 0.7,
+            // `Guardian/Alarm_1:19,25,31` +/- 40 degrees.
+            fan_spread: 0.698,
             projectile_speed: 60.0,
             projectile_spread: 0.04,
-            projectile_damage: 3,
+            // `GuardianBullet/Create_0:4` `damage = 5`.
+            projectile_damage: 5,
             projectile_radius: 4.0,
             projectile_lifetime: 2.2,
             projectile_color: [1.0, 0.85, 0.4, 1.0],
@@ -1288,7 +1389,8 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 2,
             preferred_range: 0.0,
             shoot_range: 0.0,
-            attack_cooldown: 4.0,
+            // `Mimic/Alarm_1:1` `alarm[1] = 90 + random(150)`.
+            attack_cooldown: 5.5,
             bullets_per_shot: 0,
             burst: false,
             burst_interval: 0.0,
@@ -1319,7 +1421,8 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 2,
             preferred_range: 0.0,
             shoot_range: 0.0,
-            attack_cooldown: 6.0,
+            // `SuperMimic/Alarm_1:1` `alarm[1] = 150 + random(180)`.
+            attack_cooldown: 8.0,
             bullets_per_shot: 0,
             burst: false,
             burst_interval: 0.0,
@@ -1350,7 +1453,8 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 2,
             preferred_range: 0.0,
             shoot_range: 0.0,
-            attack_cooldown: 4.0,
+            // `WepMimic/Alarm_1:1` `alarm[1] = 90 + random(150)`.
+            attack_cooldown: 5.5,
             bullets_per_shot: 0,
             burst: false,
             burst_interval: 0.0,
@@ -1376,12 +1480,16 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             score: 500,
             touch_damage: 0,
             rad_drop: 0,
-            drop_chance: 100,
+            // `YVBoss/Destroy_0:1-3` drops three golden weapons outright;
+            // it never calls `scrDrop`.
+            drop_chance: 0,
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 200.0,
             shoot_range: 600.0,
-            attack_cooldown: 1.2,
+            // `YVBoss/Alarm_1:8` `alarm[1] = 10 + irandom(30)`; an armed
+            // attack re-arms at `irandom_range(5, 15)` (`:75`).
+            attack_cooldown: 0.8167,
             bullets_per_shot: 5,
             burst: true,
             burst_interval: 0.08,
@@ -1412,13 +1520,17 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 1,
             preferred_range: 180.0,
             shoot_range: 520.0,
-            attack_cooldown: 1.4,
-            bullets_per_shot: 3,
-            burst: true,
-            burst_interval: 0.09,
-            fan_spread: 0.12,
-            projectile_speed: 260.0,
-            projectile_spread: 0.04,
+            // `CrownGuardian/Alarm_1:3` `alarm[1] = 10 + random(40)`; the
+            // fire branch re-arms at 12 (`:15`).
+            attack_cooldown: 1.0,
+            // One `BigGuardianBullet` per tick (`Alarm_1:22`).
+            bullets_per_shot: 1,
+            burst: false,
+            burst_interval: 0.0,
+            fan_spread: 0.0,
+            // `Alarm_1:23` `motion_add(gunangle + random_range(-4, 4), 8)`.
+            projectile_speed: 240.0,
+            projectile_spread: 0.0698,
             projectile_damage: 12,
             projectile_radius: 4.0,
             projectile_lifetime: 2.8,
@@ -1438,21 +1550,25 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             score: 200,
             touch_damage: 0,
             rad_drop: 0,
-            drop_chance: 50,
-            weapon_chance: 8,
+            // `IceFlower` has no `Destroy_0` and no `scrDrop`: it is the
+            // "FEED" crystal, fed by weapon pickups (`Collision_WepPickup`).
+            drop_chance: 0,
+            weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
             shoot_range: 560.0,
-            attack_cooldown: 2.0,
-            bullets_per_shot: 8,
-            burst: true,
-            burst_interval: 0.1,
-            fan_spread: 0.3,
-            projectile_speed: 180.0,
-            projectile_spread: 0.05,
-            projectile_damage: 2,
-            projectile_radius: 4.0,
-            projectile_lifetime: 3.2,
+            // GML `IceFlower` has no `Alarm_*` and spawns no projectile: the
+            // `feed >= 4` portal is driven by `Collision_WepPickup`.
+            attack_cooldown: 9.9,
+            bullets_per_shot: 0,
+            burst: false,
+            burst_interval: 0.0,
+            fan_spread: 0.0,
+            projectile_speed: 0.0,
+            projectile_spread: 0.0,
+            projectile_damage: 0,
+            projectile_radius: 0.0,
+            projectile_lifetime: 0.0,
             projectile_color: [0.6, 0.9, 1.0, 1.0],
             projectile_size: 7.0,
             boss: false,
@@ -1561,19 +1677,26 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             sprite: "images/sprEnemyHorrorIdle.png",
             score: 150,
             touch_damage: 4,
+            // `HostileHorror/Destroy_0` has no `scrDrop`; it only adds 25 to
+            // the rad drop (`:3`).
             rad_drop: 90,
-            drop_chance: 60,
-            weapon_chance: 10,
+            drop_chance: 0,
+            weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 200.0,
             shoot_range: 520.0,
-            attack_cooldown: 1.6,
-            bullets_per_shot: 4,
+            // `HostileHorror/Alarm_1:1` `alarm[1] = 10 + random(10)`.
+            attack_cooldown: 0.5,
+            // `Alarm_1:11` `ammo = 30` and `Other_10:12-32` spends one
+            // `HorrorBullet` per frame, fanning out as `charge` grows.
+            bullets_per_shot: 30,
             burst: true,
-            burst_interval: 0.09,
-            fan_spread: 0.2,
-            projectile_speed: 200.0,
-            projectile_spread: 0.06,
+            burst_interval: 0.033,
+            fan_spread: 0.0,
+            // `Other_10:22` `motion_add(other.gunangle, 12)`.
+            projectile_speed: 360.0,
+            // `Alarm_1:13` `gunoffset = random(20) - 10`.
+            projectile_spread: 0.175,
             projectile_damage: 0,
             projectile_radius: 5.0,
             projectile_lifetime: 3.0,
@@ -2069,13 +2192,16 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 1,
             preferred_range: 999.0,
             shoot_range: 96.0,
-            attack_cooldown: 3.17,
+            // `LightningCrystal/Alarm_1:11` `alarm[1] = 90 + random(10)`.
+            attack_cooldown: 3.1667,
             bullets_per_shot: 4,
             burst: true,
-            burst_interval: 0.167,
+            // `Alarm_2:3` `alarm[2] = 5`; the first shot waits 20 frames.
+            burst_interval: 0.1667,
             fan_spread: 0.0,
             projectile_speed: 340.0,
-            projectile_spread: 0.02,
+            // `Alarm_2:7` `image_angle = gunangle + random(30) - 15`.
+            projectile_spread: 0.2618,
             projectile_damage: 2,
             projectile_radius: 3.5,
             projectile_lifetime: 1.1,
@@ -2164,7 +2290,8 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
 
             preferred_range: 230.0,
             shoot_range: 240.0,
-            attack_cooldown: 1.83,
+            // `SnowTank/Alarm_1:1` `alarm[1] = 40 + random(30)`.
+            attack_cooldown: 1.8333,
             bullets_per_shot: 16,
             burst: true,
             burst_interval: 0.066,
@@ -2195,11 +2322,13 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 2,
             preferred_range: 250.0,
             shoot_range: 160.0,
-            attack_cooldown: 0.58,
+            // `GoldSnowTank/Alarm_1:1` `alarm[1] = 15 + random(5)`.
+            attack_cooldown: 0.5833,
             bullets_per_shot: 16,
             burst: true,
             burst_interval: 0.066,
-            fan_spread: 0.0,
+            // `Alarm_2:17,24` fan the pair by `sin(wave) * 15` degrees.
+            fan_spread: 0.2618,
             projectile_speed: 360.0,
             projectile_spread: 0.008,
             projectile_damage: 3,
@@ -2228,11 +2357,14 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
 
             preferred_range: 180.0,
             shoot_range: 999.0,
-            attack_cooldown: 0.4,
+            // `Guardian/Alarm_1:3` `alarm[1] = 10 + random(40)`; the fire
+            // branch re-arms at 12 (`:15`).
+            attack_cooldown: 1.0,
             bullets_per_shot: 3,
             burst: false,
             burst_interval: 0.0,
-            fan_spread: 0.7,
+            // `Alarm_1:19,25,31` +/- 40 degrees around the target bearing.
+            fan_spread: 0.698,
             projectile_speed: 60.0,
             projectile_spread: 0.04,
             projectile_damage: 5,
@@ -2259,11 +2391,14 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 1,
             preferred_range: 150.0,
             shoot_range: 90.0,
-            attack_cooldown: 2.5,
+            // `ExploGuardian/Alarm_2:18` `alarm[1] = 8 / max(0.01, image_speed)`
+            // = 10..20 frames; the uncharged tick is `6 + random(5)` (`:2`).
+            attack_cooldown: 0.5,
             bullets_per_shot: 14,
             burst: false,
             burst_interval: 0.0,
-            fan_spread: 0.45,
+            // `Alarm_2:4-13` 14 bullets, `ang += 24`.
+            fan_spread: 0.4189,
             projectile_speed: 300.0,
             projectile_spread: 0.03,
             projectile_damage: 2,
@@ -2552,8 +2687,9 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             burst: true,
             burst_interval: 0.067,
             fan_spread: 0.0,
+            // `JungleFly/Alarm_2:5` `gunangle + random(2) - 1` at 5 px/frame.
             projectile_speed: 150.0,
-            projectile_spread: 0.07,
+            projectile_spread: 0.0175,
             projectile_damage: 3,
             projectile_radius: 4.0,
             projectile_lifetime: 1.6,
@@ -2609,13 +2745,16 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 1,
             preferred_range: 999.0,
             shoot_range: 160.0,
-            attack_cooldown: 3.17,
+            // `InvLaserCrystal/Alarm_1:11` `alarm[1] = 90 + random(10)`.
+            attack_cooldown: 3.1667,
             bullets_per_shot: 4,
             burst: true,
-            burst_interval: 0.167,
+            // `Alarm_2:3` `alarm[2] = 5`; the first shot waits 30 frames.
+            burst_interval: 0.1667,
             fan_spread: 0.0,
             projectile_speed: 330.0,
-            projectile_spread: 0.01,
+            // `Alarm_2:7` `image_angle = gunangle + random(6) - 3`.
+            projectile_spread: 0.0524,
             projectile_damage: 1,
             projectile_radius: 3.5,
             projectile_lifetime: 1.2,
@@ -2642,11 +2781,16 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
 
             preferred_range: 130.0,
             shoot_range: 160.0,
-            attack_cooldown: 0.75,
+            // `PopoFreak/Alarm_1:2,9`: `alarm[1] = 15 + random(5)`, plus 30
+            // on the tick that arms `ammo = 8` and `alarm[2] = 15`.
+            attack_cooldown: 1.5833,
+            // Eight `Alarm_2` ticks, two `IDPDBullet`s each.
             bullets_per_shot: 16,
             burst: true,
+            // `Alarm_2:18` `alarm[2] = 1`.
             burst_interval: 0.033,
             fan_spread: 0.0,
+            // `Alarm_2:8,14` `motion_add(..., 4 + random(3))`.
             projectile_speed: 165.0,
             projectile_spread: 0.35,
             projectile_damage: 3,

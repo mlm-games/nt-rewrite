@@ -78,8 +78,8 @@ pub fn in_game(state: Res<AppState>) -> bool {
 /// (campfire couch anim, `Always`), `deaths::tick_revive` (coop downed
 /// timers, `Always`), `environment::tick_fog` (area-fog scroll,
 /// `Always`, self-gated on pause), and the environment sim half
-/// (`apply_surface_effects` after `player_move`/`enemy_ai`,
-/// `tick_proximity_mines` before `apply_explosions`,
+/// (`tick_motes` / `tick_native_motion` / `tick_ground_flames` after
+/// `player_move`/`enemy_ai`, `recenter_prop_corpse` and
 /// `tick_environment_hazards` after `apply_explosions`, all `Combat`).
 /// NOT registered (audited gaps): presentation-only systems with no
 /// sim state (`face_aim` flip — resolved renderer-side from AimDir;
@@ -453,12 +453,6 @@ pub fn build_sim_schedule() -> Schedule {
                 enemies::tick_toxic_gas
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
-                environment::apply_surface_effects
-                    .in_set(NtSimSet::Combat)
-                    .run_if(gameplay_active),
-                environment::tick_proximity_mines
-                    .in_set(NtSimSet::Combat)
-                    .run_if(gameplay_active),
                 environment::tick_motes
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
@@ -472,6 +466,12 @@ pub fn build_sim_schedule() -> Schedule {
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
                 combat::apply_explosions
+                    .in_set(NtSimSet::Combat)
+                    .run_if(gameplay_active),
+                environment::recenter_prop_corpse
+                    .in_set(NtSimSet::Combat)
+                    .run_if(gameplay_active),
+                boss_ai::throne_annihilate_props
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
                 environment::tick_environment_hazards

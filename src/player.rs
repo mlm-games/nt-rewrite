@@ -581,6 +581,7 @@ pub fn tick_hold_abilities(
     mut horror_q: Query<&mut HorrorCharge>,
     mut frog_q: Query<&mut FrogCharge>,
     mut telek_q: Query<&mut Telekinesis>,
+    floor: Option<Res<FloorMask>>,
 ) {
     let Ok((player_e, ppos, mut player, mut health, mut pvel, aim)) = player_q.single_mut() else {
         return;
@@ -590,6 +591,13 @@ pub fn tick_hold_abilities(
     let dt = time.delta_secs;
 
     if player.ability == AbilityKind::Telekinesis && held {
+        // GML `scrEyesTelekinesis.gml:14`: `_strength = 1 +
+        // scr_skill_get(mut_throne_butt)` px per STEP, i.e. 30/60 px per
+        // second at 30 Hz, over the `game_screen_width/2 x
+        // game_screen_height/2` box (the macros are fixed 320/240, so
+        // 160 x 120). GML sets POSITION behind `place_free` per axis; the
+        // port drives velocity, so the walkable mask gates each axis the
+        // same way instead.
         let strength = if player.throne_butt { 60.0 } else { 30.0 };
         if let Ok(mut t) = telek_q.single_mut() {
             t.timer = GTimer::from_seconds(0.25, TimerMode::Once);
@@ -598,13 +606,23 @@ pub fn tick_hold_abilities(
                 timer: GTimer::from_seconds(0.25, TimerMode::Once),
             });
         }
+        let free_x = |p: glam::Vec2| {
+            floor
+                .as_ref()
+                .is_none_or(|m| m.is_walkable(p))
+        };
         for (epos, mut evel) in &mut enemies {
             let epos_v = epos.0;
             if (epos_v.x - pos.x).abs() > 160.0 || (epos_v.y - pos.y).abs() > 120.0 {
                 continue;
             }
             let to_player = (pos - epos_v).normalize_or_zero();
-            evel.0 += to_player * strength * dt;
+            if free_x(glam::Vec2::new(epos_v.x + to_player.x, epos_v.y)) {
+                evel.0.x += to_player.x * strength * dt;
+            }
+            if free_x(glam::Vec2::new(epos_v.x, epos_v.y + to_player.y)) {
+                evel.0.y += to_player.y * strength * dt;
+            }
         }
         for (ppos_proj, mut v, team, _) in &mut projectiles {
             if *team != Team::Enemy {

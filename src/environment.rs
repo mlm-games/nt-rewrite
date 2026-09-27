@@ -14,144 +14,16 @@ use crate::anim::SpriteAnim;
 use crate::combat::{Explosion, HitFlash};
 use crate::comps_a::{
     ARENA_H, ARENA_W, DamageSource, FloorMask, GameCleanup, Health, LevelCleanup, Player,
-    Projectile, ProjectileTyp, Team, Velocity, boiling_veins_damage,
+    Projectile, ProjectileTyp, Team, Velocity, WallTile, boiling_veins_damage,
 };
 use crate::comps_b::{
-    Dash, Enemy, FxAngle, GmlImage, GroundPhysics, Mote, MoteScale, MoteStrip, NativeAngle,
-    NativeDepth, NativeExplosionKind, NativeFlip, NativeLifetime, NativeMotion, NativeWallMotion,
-    PickupLifetime, Prop, PropSprites, TopSmall, TrapFire,
+    FxAngle, GmlImage, GroundPhysics, Mote, MoteScale, MoteStrip, NativeAngle, NativeDepth,
+    NativeExplosionKind, NativeFlip, NativeLifetime, NativeMotion, NativeWallMotion, Portal, Prop,
+    PropSprites, TopSmall, TrapFire,
 };
-use crate::enemy_data::enemy_def;
 use crate::secrets::SecretTriggers;
 use crate::spatial::{Pos, move_bounce_solid};
 use crate::time::{GTimer, TimerMode};
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum SurfaceKind {
-    Cobweb,
-    Ice,
-}
-
-/// Friction/conveyor patch (bevy `SurfaceZone` parity: kind +
-/// half-extents; the center rides on [`Pos`], matching bevy's
-/// `Transform + SurfaceZone` pair).
-#[derive(Component, Clone, Copy, Debug)]
-pub struct SurfaceZone {
-    pub kind: SurfaceKind,
-    pub half_size: glam::Vec2,
-}
-
-pub fn point_in_zone(point: glam::Vec2, center: glam::Vec2, half_size: glam::Vec2) -> bool {
-    let delta = (point - center).abs();
-    delta.x <= half_size.x && delta.y <= half_size.y
-}
-
-/// Cobweb wins over ice on overlap (bevy parity).
-pub fn surface_at_point(
-    point: glam::Vec2,
-    zones: impl IntoIterator<Item = (glam::Vec2, SurfaceZone)>,
-) -> Option<SurfaceKind> {
-    let mut result = None;
-
-    for (center, zone) in zones {
-        if !point_in_zone(point, center, zone.half_size) {
-            continue;
-        }
-
-        match zone.kind {
-            SurfaceKind::Cobweb => return Some(SurfaceKind::Cobweb),
-            SurfaceKind::Ice => result = Some(SurfaceKind::Ice),
-        }
-    }
-
-    result
-}
-
-/// Per-surface velocity rewrite (bevy `surface_velocity` parity:
-/// cobweb damps and caps low, ice counteracts base friction so bodies
-/// glide and caps high). `base_friction`/`max_speed` come from the
-/// actor (player stats, enemy def, or the 0.84/240 fallback).
-pub fn surface_velocity(
-    kind: SurfaceKind,
-    velocity: glam::Vec2,
-    dt: f32,
-    base_friction: f32,
-    max_speed: f32,
-) -> glam::Vec2 {
-    match kind {
-        SurfaceKind::Cobweb => {
-            let retention = 0.72_f32.powf(dt * crate::SIM_HZ as f32);
-            let mut next = velocity * retention;
-            let cap = max_speed.max(1.0) * 0.52;
-
-            if next.length() > cap {
-                next = next.normalize_or_zero() * cap;
-            }
-
-            next
-        }
-
-        SurfaceKind::Ice => {
-            let friction = base_friction.clamp(0.05, 0.999);
-            let compensation = (1.0 / friction).powf(dt * crate::SIM_HZ as f32);
-            let retention = 0.992_f32.powf(dt * crate::SIM_HZ as f32);
-
-            let mut next = velocity * compensation * retention;
-            let cap = max_speed.max(1.0) * 1.28;
-
-            if next.length() > cap {
-                next = next.normalize_or_zero() * cap;
-            }
-
-            next
-        }
-    }
-}
-
-/// Rewrite actor velocities standing on a surface zone (bevy
-/// `apply_surface_effects` parity). Dashing actors skip; players use
-/// their own friction/speed, enemies their def speed (floored at 40).
-#[allow(clippy::type_complexity)]
-pub fn apply_surface_effects(
-    time: Res<SimTime>,
-    zones: Query<(&Pos, &SurfaceZone)>,
-    mut actors: Query<
-        (
-            &Pos,
-            &mut Velocity,
-            Option<&Player>,
-            Option<&Enemy>,
-            Option<&Dash>,
-        ),
-        (Without<SurfaceZone>, Without<Projectile>),
-    >,
-) {
-    let dt = time.delta_secs;
-
-    for (pos, mut velocity, player, enemy, dash) in &mut actors {
-        if dash.is_some() {
-            continue;
-        }
-
-        let Some(surface) = surface_at_point(
-            pos.0,
-            zones.iter().map(|(zone_pos, zone)| (zone_pos.0, *zone)),
-        ) else {
-            continue;
-        };
-
-        let (friction, max_speed) = if let Some(player) = player {
-            (player.friction, player.speed * player.speed_mult)
-        } else if let Some(enemy) = enemy {
-            let def = enemy_def(enemy.kind);
-            (0.84, def.speed.max(40.0))
-        } else {
-            (0.84, 240.0)
-        };
-
-        velocity.0 = surface_velocity(surface, velocity.0, dt, friction, max_speed);
-    }
-}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum EnvironmentHazardKind {
@@ -194,18 +66,6 @@ impl EnvironmentHazardSpec {
             damage: 1,
             duration: 3.0,
             tick: 0.24,
-            hurts_player: true,
-            hurts_enemies: true,
-        }
-    }
-
-    pub fn fire_trap() -> Self {
-        Self {
-            kind: EnvironmentHazardKind::Fire,
-            radius: 42.0,
-            damage: 2,
-            duration: 9_999.0,
-            tick: 0.38,
             hurts_player: true,
             hurts_enemies: true,
         }
@@ -317,11 +177,11 @@ impl SurfacePulse {
 }
 
 /// Renderer-side record for bevy `sprite_from_candidates` decal
-/// entities (cobweb / ice / fire-trap visuals): the resolved art path
-/// (`None` = solid fallback rect, bevy `Sprite` without image), base
-/// tint, drawn size, and x-flip. Alpha always comes from the paired
-/// [`SurfacePulse`] via `alpha_at` (bevy `animate_environment`
-/// overwrites the sprite alpha every frame).
+/// entities (fire-trap visuals): the resolved art path (`None` = solid
+/// fallback rect, bevy `Sprite` without image), base tint, drawn size,
+/// and x-flip. Alpha always comes from the paired [`SurfacePulse`] via
+/// `alpha_at` (bevy `animate_environment` overwrites the sprite alpha
+/// every frame).
 #[derive(Component, Clone, Copy, Debug)]
 pub struct PulseSprite {
     pub path: Option<&'static str>,
@@ -354,7 +214,11 @@ pub fn tick_environment_hazards(
     time: Res<SimTime>,
     mut commands: Commands,
     mut secrets: ResMut<SecretTriggers>,
-    mut hazards: Query<(Entity, &Pos, &mut EnvironmentHazard)>,
+    paused: Option<Res<crate::state::Paused>>,
+    portals: Query<Entity, With<Portal>>,
+    walls: Query<&Pos, With<WallTile>>,
+    mut traps: Query<(Entity, &Pos, &mut FireTrap), With<Prop>>,
+    mut hazards: Query<(Entity, &Pos, &mut EnvironmentHazard), Without<Prop>>,
     mut targets: Query<
         (Entity, &Pos, &Team, &mut Health, Option<&Player>),
         (
@@ -365,6 +229,15 @@ pub fn tick_environment_hazards(
     >,
 ) {
     let dt = time.delta_secs;
+    step_fire_traps(
+        &mut commands,
+        dt,
+        paused.is_some_and(|p| p.0),
+        portals.is_empty(),
+        &walls,
+        &mut traps,
+    );
+
     for (hazard_entity, hazard_pos, mut hazard) in hazards.iter_mut() {
         hazard.life.tick(dt);
         hazard.damage_tick.tick(dt);
@@ -430,7 +303,10 @@ pub fn valid_environment_position(pos: glam::Vec2, radius: f32) -> bool {
     pos.x.abs() <= ARENA_W * 0.5 - radius && pos.y.abs() <= ARENA_H * 0.5 - radius
 }
 
-/// Explosion payload shared by prop deaths and mines.
+/// Explosion payload shared by prop deaths and mines. GML
+/// `Explosion/Explosion.yy` uses `mskExplosion` (64x64, origin 32), so
+/// every blast's effective hit radius is 32 px and
+/// `Explosion/Create_0.gml:3` sets `damage = 5`.
 #[derive(Clone, Copy, Debug)]
 pub struct ExplosionPayload {
     pub radius: f32,
@@ -440,94 +316,119 @@ pub struct ExplosionPayload {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct PropDeathEffect {
     pub explosion: Option<ExplosionPayload>,
+    /// GML `repeat (N) { instance_create(..., Explosion) }`.
+    pub blasts: u8,
+    /// `orandom(J)` scatter per blast (0 = the exact prop position).
+    pub blast_jitter: f32,
     pub hazard: Option<EnvironmentHazardSpec>,
     pub ground_flames: u8,
+    /// GML `WaterMineExplode/Step_0.gml:13-24`: 16 `EnemyBullet3` on a
+    /// 360/16 ring at `motion_add(ang, 5 + random(7))`, `team = -1`.
+    pub mine_ring: bool,
+    /// `orandom(J)` scatter per `GroundFlame` (GML passes 16 for barrels,
+    /// 24 for cars).
+    pub flame_jitter: f32,
+    /// GML `prop/Destroy_0.gml:12` `if (raddrop > 0) scrRadDrop(x, y, raddrop)`.
+    pub rad_drop: u32,
     pub dust_ring: u8,
     pub feather_burst: Option<FeatherBurst>,
 }
 
 /// Visual-only petal/leaf/money scatter (GML `Feather` with a tinted
 /// sprite: Bush leaves, MoneyPile bills). Real sprite motes now —
-/// see [`Mote`].
+/// see [`Mote`]. GML rolls `repeat 3 + irandom(3)` (leaves) and
+/// `repeat 7 + irandom(7)` (bills); `irandom(n)` is inclusive, so the
+/// counts are 3..=6 and 7..=14.
 #[derive(Clone, Copy, Debug)]
 pub struct FeatherBurst {
-    pub count: u8,
+    pub min: u8,
+    pub max: u8,
     pub strip: MoteStrip,
 }
 
 impl PropDeathEffect {
-    pub fn toxic_barrel() -> Self {
-        Self {
-            explosion: Some(ExplosionPayload {
-                radius: 95.0,
-                damage: 5,
-            }),
-            hazard: Some(EnvironmentHazardSpec::toxic_barrel()),
-            ground_flames: 4,
-            ..Default::default()
-        }
+    fn blast(radius: f32, damage: i32) -> Option<ExplosionPayload> {
+        Some(ExplosionPayload { radius, damage })
     }
 
-    pub fn car() -> Self {
-        Self {
-            explosion: Some(ExplosionPayload {
-                radius: 155.0,
-                damage: 8,
-            }),
-            hazard: None,
-            ground_flames: 6,
-            ..Default::default()
-        }
-    }
-
-    pub fn mine() -> Self {
-        Self {
-            explosion: Some(ExplosionPayload {
-                radius: 118.0,
-                damage: 7,
-            }),
-            hazard: Some(EnvironmentHazardSpec::mine_fire()),
-            ground_flames: 4,
-            ..Default::default()
-        }
-    }
-
+    /// GML `Barrel/Destroy_0.gml:1-6` verbatim: one `Explosion` plus
+    /// 4 `GroundFlame` at `orandom(16)`.
     pub fn legacy_barrel() -> Self {
         Self {
-            explosion: Some(ExplosionPayload {
-                radius: 110.0,
-                damage: 6,
-            }),
-            hazard: None,
+            explosion: Self::blast(32.0, 5),
             ground_flames: 4,
+            flame_jitter: 16.0,
             ..Default::default()
         }
     }
 
+    /// GML `ToxicBarrel/Destroy_0.gml:1-9`: one `Explosion`, 25
+    /// `ToxicGas`, 4 `GroundFlame` at `orandom(16)`.
+    pub fn toxic_barrel() -> Self {
+        Self {
+            explosion: Self::blast(32.0, 5),
+            hazard: Some(EnvironmentHazardSpec::toxic_barrel()),
+            ground_flames: 4,
+            flame_jitter: 16.0,
+            ..Default::default()
+        }
+    }
+
+    /// GML `Car/Destroy_0.gml:1-9` verbatim: THREE `Explosion` at
+    /// `orandom(3)` plus 6 `GroundFlame` at `orandom(24)`.
+    pub fn car() -> Self {
+        Self {
+            explosion: Self::blast(32.0, 5),
+            blasts: 3,
+            blast_jitter: 3.0,
+            ground_flames: 6,
+            flame_jitter: 24.0,
+            ..Default::default()
+        }
+    }
+
+    /// GML `WaterMineExplode/Step_0.gml`: one `Explosion` at
+    /// `orandom(3)` from `y - 8`, 12 `Bubble`, and the 16-bullet
+    /// `EnemyBullet3` ring.
+    pub fn mine() -> Self {
+        Self {
+            explosion: Self::blast(32.0, 5),
+            blast_jitter: 3.0,
+            mine_ring: true,
+            ..Default::default()
+        }
+    }
+
+    /// GML `SmallGenerator/Destroy_0.gml`: a `GreenExplosion`
+    /// (`damage = 12`, `Create_0.gml:3`) plus 6 `GroundFlame` at
+    /// `random(64) - 32`.
     pub fn small_generator() -> Self {
         Self {
-            explosion: Some(ExplosionPayload {
-                radius: 110.0,
-                damage: 12,
-            }),
-            hazard: None,
+            explosion: Self::blast(32.0, 12),
             ground_flames: 6,
+            flame_jitter: 32.0,
             ..Default::default()
         }
     }
 
+    /// GML `BigGenerator/Destroy_0.gml:4-31` verbatim: THREE `Explosion`
+    /// at the exact position, 6 `GroundFlame`, the 10-mote 36-degree
+    /// dust ring, and `scrRadDrop(x, y, 35)`.
     pub fn big_generator() -> Self {
         Self {
-            explosion: Some(ExplosionPayload {
-                radius: 130.0,
-                damage: 8,
-            }),
-            hazard: None,
+            explosion: Self::blast(32.0, 5),
+            blasts: 3,
             ground_flames: 6,
+            flame_jitter: 16.0,
+            rad_drop: 35,
+            dust_ring: 10,
             ..Default::default()
         }
     }
 
+    /// GML `BigSkull/Destroy_0.gml:3-11` / `Anchor/Destroy_0.gml:3-9`
+    /// verbatim: 10 `Dust` motes on a directed 36-degree ring at
+    /// speed 3 from a random start angle.
     pub fn dust_ring() -> Self {
         Self {
             dust_ring: 10,
@@ -535,24 +436,49 @@ impl PropDeathEffect {
         }
     }
 
+    /// GML `Bush/Destroy_0.gml:3-7`: `repeat 3 + irandom(3)` `sprLeaf`.
     pub fn leaves() -> Self {
         Self {
             feather_burst: Some(FeatherBurst {
-                count: 5,
+                min: 3,
+                max: 6,
                 strip: MoteStrip::Leaf,
             }),
             ..Default::default()
         }
     }
 
+    /// GML `MoneyPile/Destroy_0.gml:4-8`:
+    /// `repeat 7 + irandom(7)` `sprMoney`.
     pub fn money() -> Self {
         Self {
             feather_burst: Some(FeatherBurst {
-                count: 10,
+                min: 7,
+                max: 14,
                 strip: MoteStrip::Money,
             }),
             ..Default::default()
         }
+    }
+}
+
+/// Directed dust ring (GML `var _ang = random_angle; repeat 10 { ...
+/// motion_add(_ang, 3); _ang += 36 }`).
+fn spawn_dust_ring(commands: &mut Commands, particles_on: bool, pos: glam::Vec2, count: u8) {
+    if !particles_on {
+        return;
+    }
+    let mut rng = rand::rng();
+    let mut ang = rng.random_range(0.0..std::f32::consts::TAU);
+    for _ in 0..count {
+        spawn_native_dust_mote(
+            commands,
+            true,
+            pos,
+            glam::Vec2::from_angle(ang),
+            3.0,
+        );
+        ang += 36.0_f32.to_radians();
     }
 }
 
@@ -565,18 +491,36 @@ pub fn spawn_prop_corpse(
     let mut ec = commands.spawn((GameCleanup, LevelCleanup, *sprites, Pos(pos)));
     if sprites.dead == "images/sprScorchmark.png" {
         ec.insert((NativeDepth(5.0), GmlImage::new(sprites.dead, 1, 0.0)));
-    } else {
-        if let Some(def) = catalog.def(sprites.dead) {
-            ec.insert(SpriteAnim::oneshot(sprites.dead, def));
+    } else if let Some(def) = catalog.def(sprites.dead) {
+        // GML `Corpse/Create_0.gml:5` `image_speed = 0.4`; `Other_7.gml`
+        // parks on the last frame. No `PickupLifetime`: `Corpse` has no
+        // lifetime, so a wreck survives the whole floor.
+        ec.insert(SpriteAnim::oneshot_with_image_speed(
+            sprites.dead,
+            def,
+            0.4,
+        ));
+    }
+}
+
+/// GML `Corpse/Other_7.gml:10-15` and `Corpse/Alarm_0.gml:16-21`
+/// verbatim: a corpse off the floor snaps to the nearest `Floor` tile's
+/// bbox centre. Corpses are the only `PropSprites` entities without a
+/// [`crate::comps_b::Prop`] body.
+pub fn recenter_prop_corpse(
+    mask: Res<FloorMask>,
+    mut corpses: Query<&mut Pos, (With<PropSprites>, Without<Prop>)>,
+) {
+    for mut pos in &mut corpses {
+        if mask.is_walkable(pos.0) {
+            continue;
         }
-        ec.insert(PickupLifetime {
-            timer: GTimer::from_seconds(12.0, TimerMode::Once),
-        });
+        pos.0 = mask.cell_center(mask.world_to_cell(pos.0));
     }
 }
 
 pub fn spawn_prop_death_effect(
-    mut commands: &mut Commands,
+    commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
     particles_on: bool,
     pos: glam::Vec2,
@@ -586,66 +530,114 @@ pub fn spawn_prop_death_effect(
 ) {
     let effect = explicit.or_else(|| legacy_explosive.then_some(PropDeathEffect::legacy_barrel()));
 
+    // GML `prop/Destroy_0.gml` spawns NOTHING when the object overrides
+    // no effect: just a `Corpse`, `snd_dead` and the rad drop.
     let Some(effect) = effect else {
-        let mut rng = rand::rng();
-        crate::effects::spawn_burst(
-            &mut commands,
-            &mut rng,
-            pos,
-            8,
-            [0.78, 0.65, 0.42, 1.0],
-            (50.0, 150.0),
-        );
         return;
     };
 
     if let Some(explosion) = effect.explosion {
-        commands.spawn((
-            GameCleanup,
-            LevelCleanup,
-            crate::combat::Explosion {
-                timer: GTimer::from_seconds(0.04, TimerMode::Once),
-                radius: explosion.radius,
-                damage: explosion.damage,
-                team: Team::Player,
-                hits_player: true,
-                source,
-            },
-            Pos(pos),
-        ));
+        let mut rng = rand::rng();
+        for _ in 0..effect.blasts.max(1) {
+            let jitter = effect.blast_jitter;
+            let off = if jitter > 0.0 {
+                glam::Vec2::new(
+                    rng.random_range(-jitter..jitter),
+                    rng.random_range(-jitter..jitter),
+                )
+            } else {
+                glam::Vec2::ZERO
+            };
+            commands.spawn((
+                GameCleanup,
+                LevelCleanup,
+                crate::combat::Explosion {
+                    timer: GTimer::from_seconds(0.04, TimerMode::Once),
+                    radius: explosion.radius,
+                    damage: explosion.damage,
+                    team: Team::Player,
+                    hits_player: true,
+                    source,
+                },
+                Pos(pos + off),
+            ));
+        }
     }
 
     if let Some(hazard) = effect.hazard {
         spawn_environment_hazard(commands, pos, hazard);
     }
 
+    if effect.mine_ring {
+        // GML `WaterMineExplode/Step_0.gml:15-24`: an even 360/16 ring.
+        let mut rng = rand::rng();
+        let mut ang = rng.random_range(0.0..std::f32::consts::TAU);
+        for _ in 0..16 {
+            let dir = glam::Vec2::new(ang.cos(), ang.sin());
+            let speed = rng.random_range(5.0..12.0) * 30.0;
+            commands.spawn((
+                GameCleanup,
+                LevelCleanup,
+                Team::Enemy,
+                Projectile {
+                    damage: 1,
+                    life: GTimer::from_seconds(4.0, TimerMode::Once),
+                    radius: 3.0,
+                    knockback: 120.0,
+                    explosive: false,
+                    source,
+                },
+                Velocity(dir * speed),
+                crate::comps_a::ProjectileFriction(0.6),
+                crate::comps_a::BouncesLeft(255),
+                crate::comps_a::ShellWallBounce {
+                    add: 0.0,
+                    cap: 540.0,
+                    decay: 0.9,
+                    rearm: None,
+                },
+                crate::comps_a::ProjectileTyp(1),
+                crate::comps_a::ProjectileFade("images/sprEBullet3Disappear.png"),
+                Pos(pos + glam::Vec2::new(0.0, -12.0)),
+            ));
+            ang += std::f32::consts::TAU / 16.0;
+        }
+    }
+
     if effect.ground_flames > 0 {
+        let jitter = effect.flame_jitter;
         let mut rng = rand::rng();
         for _ in 0..effect.ground_flames {
-            let off = glam::Vec2::new(rng.random_range(-24.0..24.0), rng.random_range(-24.0..24.0));
+            let off = if jitter > 0.0 {
+                glam::Vec2::new(
+                    rng.random_range(-jitter..jitter),
+                    rng.random_range(-jitter..jitter),
+                )
+            } else {
+                glam::Vec2::ZERO
+            };
             spawn_ground_flame(commands, pos + off, false);
         }
     }
 
     if effect.dust_ring > 0 {
-        spawn_motes(
-            commands,
-            catalog,
-            particles_on,
-            pos,
-            MoteStrip::Dust,
-            effect.dust_ring as usize,
-        );
+        spawn_dust_ring(commands, particles_on, pos, effect.dust_ring);
+    }
+
+    if effect.rad_drop > 0 {
+        crate::pickups::spawn_rad_burst(commands, catalog, pos, effect.rad_drop);
     }
 
     if let Some(feather) = effect.feather_burst {
+        let mut rng = rand::rng();
+        let count = rng.random_range(feather.min..=feather.max.max(feather.min));
         spawn_motes(
             commands,
             catalog,
             particles_on,
             pos,
             feather.strip,
-            feather.count as usize,
+            count as usize,
         );
     }
 }
@@ -877,8 +869,9 @@ pub fn spawn_trap_fire_with_image(
     image_angle: Option<f32>,
 ) -> Entity {
     let mut rng = rand::rng();
+    let frames = 7;
     let image_speed = 0.2 + rng.random_range(0.0..0.1);
-    let image = GmlImage::new(path, 7, image_speed);
+    let image = GmlImage::new(path, frames, image_speed);
     let native_angle = image_angle.unwrap_or_else(|| rng.random_range(0.0..std::f32::consts::TAU));
     commands
         .spawn((
@@ -888,7 +881,13 @@ pub fn spawn_trap_fire_with_image(
             team,
             Projectile {
                 damage: 1,
-                life: GTimer::from_seconds(4.0, TimerMode::Once),
+                // GML `TrapFire/Other_7.gml`: the jet only lives until its
+                // strip runs out, i.e. 7 frames at `image_speed
+                // 0.2 + random(0.1)` — 24..35 steps.
+                life: GTimer::from_seconds(
+                    frames as f32 / image_speed.max(0.05) / 30.0,
+                    TimerMode::Once,
+                ),
                 radius: 8.0,
                 knockback: 0.0,
                 explosive: false,
@@ -1091,6 +1090,111 @@ pub fn tick_native_motion(
     }
 }
 
+/// GML `objects/Trap` — the solid, indestructible flamethrower that
+/// `scrPopProps.gml:24-28` bolts to a freshly created small wall in the
+/// scrapyards. `Alarm_0.gml:1-4` flips the emitting axis, re-arms at 90
+/// steps and opens the emitter for 45; `Step_0.gml:4-27` launches one
+/// `TrapFire` (speed 6) from every unblocked edge on each of those 45
+/// steps, then self-destroys once a wall covers it.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct FireTrap {
+    /// GML `side = choose(0, 1)`: 0 emits along +/-y, 1 along +/-x.
+    pub side: bool,
+    pub alarm: f32,
+    pub fire: i32,
+}
+
+impl Default for FireTrap {
+    fn default() -> Self {
+        Self {
+            side: rand::rng().random_bool(0.5),
+            alarm: 90.0 + rand::rng().random_range(0.0..30.0),
+            fire: 0,
+        }
+    }
+}
+
+/// GML `Trap/Step_0.gml` + `Trap/Alarm_0.gml`. Paused ticks and steps
+/// with a live `Portal` suppress emission (`current_frame_active`,
+/// `!instance_exists(Portal)`); the sound cue is the audio layer's job.
+/// Driven from [`tick_environment_hazards`] because `schedule.rs` owns
+/// the system list and has no slot for the trap cycle.
+fn step_fire_traps(
+    commands: &mut Commands,
+    dt: f32,
+    paused: bool,
+    portal_open: bool,
+    walls: &Query<&Pos, With<WallTile>>,
+    traps: &mut Query<(Entity, &Pos, &mut FireTrap), With<Prop>>,
+) {
+    let steps = dt * crate::SIM_HZ as f32;
+    let emit = !paused && !portal_open;
+    let wall_centers: Vec<glam::Vec2> = walls.iter().map(|p| p.0).collect();
+    let wall_half = crate::worldgen::WALL_PX * 0.5;
+    let covered = |p: glam::Vec2| {
+        wall_centers
+            .iter()
+            .any(|w| (p.x - w.x).abs() < wall_half && (p.y - w.y).abs() < wall_half)
+    };
+
+    for (entity, pos, mut trap) in traps.iter_mut() {
+        if emit {
+            trap.alarm -= steps;
+            if trap.alarm <= 0.0 {
+                // GML `Alarm_0.gml:1-4`.
+                trap.side = !trap.side;
+                trap.alarm = 90.0;
+                trap.fire = 45;
+            }
+        }
+
+        if emit && trap.fire > 0 {
+            let (dir, jets) = if trap.side {
+                (
+                    [
+                        glam::Vec2::new(-1.0, 0.0),
+                        glam::Vec2::new(1.0, 0.0),
+                    ],
+                    [
+                        (glam::Vec2::new(-4.0, 8.0), glam::Vec2::new(-8.0, 0.0)),
+                        (glam::Vec2::new(20.0, 8.0), glam::Vec2::new(24.0, 0.0)),
+                    ],
+                )
+            } else {
+                (
+                    [
+                        glam::Vec2::new(0.0, -1.0),
+                        glam::Vec2::new(0.0, 1.0),
+                    ],
+                    [
+                        (glam::Vec2::new(8.0, -4.0), glam::Vec2::new(0.0, -16.0)),
+                        (glam::Vec2::new(8.0, 20.0), glam::Vec2::new(0.0, 16.0)),
+                    ],
+                )
+            };
+            for i in 0..2 {
+                if !covered(pos.0 + jets[i].1) {
+                    // GML `TrapFire` jets travel 6 px/step.
+                    spawn_trap_fire(
+                        commands,
+                        pos.0 + jets[i].0,
+                        dir[i],
+                        6.0 * 30.0,
+                        Team::Enemy,
+                        None,
+                    );
+                }
+            }
+            trap.fire -= 1;
+        }
+
+        // GML `Trap/Step_0.gml:27`.
+        if covered(pos.0) {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
 pub fn tick_ground_flames(time: Res<SimTime>, mut q: Query<(&mut GroundFlame, &mut GmlImage)>) {
     let steps = time.delta_secs * crate::SIM_HZ as f32;
     for (mut flame, mut image) in &mut q {
@@ -1284,25 +1388,6 @@ pub fn spawn_motes(
     }
 }
 
-/// Floor mine trigger (bevy `environment.rs:467-509` sim half:
-/// trigger radius + mine payload; the screen-effect pulse and corpse
-/// art resolve renderer-side, trauma stays sim-side).
-/// Port adaptation: positions are [`Pos`], teams gate the trigger.
-#[derive(Component, Clone, Copy, Debug)]
-pub struct ProximityMine {
-    pub trigger_radius: f32,
-    pub payload: PropDeathEffect,
-}
-
-impl Default for ProximityMine {
-    fn default() -> Self {
-        Self {
-            trigger_radius: 54.0,
-            payload: PropDeathEffect::mine(),
-        }
-    }
-}
-
 /// GML `Dust/Step_0` + `Smoke/Step_0` + `Feather/Step_0` + `Curse`
 /// integration (sim half): flat-friction slide + spin + grow/decay on
 /// `MoteScale`, feather fall-sway (`x += 0.35*sin(fall/7)`,
@@ -1476,38 +1561,3 @@ pub fn tick_fog(
     fog.scroll = fog_scroll_step(fog.scroll, time.delta_secs * 30.0);
 }
 
-/// Detonate mines touched by player/enemy actors (bevy parity:
-/// corpse + death effect + 0.20 trauma, then despawn).
-pub fn tick_proximity_mines(
-    mut commands: Commands,
-    catalog: Res<repame_anim::AnimCatalog>,
-    save: Res<crate::savedata_part::SaveData>,
-    mut trauma: ResMut<repame_fx::Trauma>,
-    mines: Query<(Entity, &Pos, &ProximityMine, Option<&PropSprites>), With<Prop>>,
-    targets: Query<(&Pos, &Team), Without<ProximityMine>>,
-) {
-    for (mine_e, mine_pos, mine, sprites) in &mines {
-        let center = mine_pos.0;
-        let triggered = targets.iter().any(|(target_pos, team)| {
-            matches!(*team, Team::Player | Team::Enemy)
-                && target_pos.0.distance(center) <= mine.trigger_radius
-        });
-        if !triggered {
-            continue;
-        }
-        if let Some(ps) = sprites.copied() {
-            spawn_prop_corpse(&mut commands, &catalog, center, &ps);
-        }
-        spawn_prop_death_effect(
-            &mut commands,
-            &catalog,
-            save.settings.particles,
-            center,
-            Some(mine.payload),
-            false,
-            None,
-        );
-        trauma.add(0.20);
-        commands.entity(mine_e).despawn();
-    }
-}

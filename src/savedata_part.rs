@@ -27,6 +27,12 @@ use crate::keymap::KeyBindings;
 
 pub const SAVE_VERSION: u32 = 5;
 
+/// GML `save_get_value("etc", "protowep", wep_rusty_revolver)`
+/// (`PlayButton/Other_10.gml:11`, `scrInit.gml:154`).
+pub fn default_protowep() -> WeaponId {
+    crate::data::WEAPON_RUSTY_REVOLVER
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct RaceLoadout {
@@ -115,6 +121,12 @@ pub struct SaveData {
     /// GML `etc.hard`: hardmode unlocked (loop 2 reached).
     #[serde(default)]
     pub hardmode_unlocked: bool,
+    /// GML `etc.protowep` (`PlayButton/Other_10.gml:11` loads it into
+    /// `UberCont.protowep`, `scrSave.gml:44` writes it back). The vault
+    /// prototype weapon, so a prototype earned in run N survives into
+    /// run N+1. Defaults to `wep_rusty_revolver` (56).
+    #[serde(default = "default_protowep")]
+    pub protowep: WeaponId,
     #[serde(default)]
     pub unlocked_characters: Vec<String>,
     #[serde(default)]
@@ -651,6 +663,7 @@ impl Default for SaveData {
             achievements: BTreeMap::new(),
             unlocked_cheats: false,
             hardmode_unlocked: false,
+            protowep: default_protowep(),
             tutorial_done: false,
             settings: SettingsData::default(),
             key_bindings: KeyBindings::default(),

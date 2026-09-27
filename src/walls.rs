@@ -29,10 +29,12 @@ use crate::comps_a::{
     PendingWallBreak, Player, Run, Toast, WallCell, WallTile, WallVisuals,
 };
 use crate::comps_b::{
-    BigGenerator, BossBrain, Enemy, Prop, ThroneCarpet, ThroneRoomState, ThroneStatueProp,
+    BigGenerator, BossBrain, Enemy, Prop, PropSprites, ThroneCarpet, ThroneRoomState,
+    ThroneStatueProp, UnbreakableProp,
 };
 use crate::data::EnemyKind;
 use crate::effects::spawn_burst;
+use crate::environment::PropDeathEffect;
 use crate::msg::Queue;
 use crate::spatial::Pos;
 use crate::worldgen::WALL_PX;
@@ -212,24 +214,49 @@ pub struct CountedGenerator;
 /// Throne-room prop deaths: destroyed big generators announce
 /// `GENERATOR x/y` and, once all are down, halve the Throne (loop 0
 /// only) with a `THE THRONE WEAKENS` toast; destroyed statues pop their
-/// guardian ring as deferred spawns (bevy parity, drained by the shared
-/// [`PendingEnemySpawn`] flush).
+/// guardians as deferred spawns (drained by the shared
+/// [`PendingEnemySpawn`] flush). GML `objects/Nothing/Create_0.gml:5-11`
+/// also runs here: the moment a `Nothing` (Throne) exists, every
+/// `BigGeneratorInactive` becomes a real `BigGenerator`.
+#[allow(clippy::type_complexity)]
 pub fn handle_throne_room_props(
     mut commands: Commands,
     mut throne_room: ResMut<ThroneRoomState>,
     mut toast: ResMut<Toast>,
     run: Res<Run>,
     mut bosses: Query<(&Enemy, &mut Health), With<BossBrain>>,
-    props: Query<(
+    mut props: Query<(
         Entity,
-        &Prop,
+        &mut Prop,
         Option<&BigGenerator>,
         Option<&ThroneStatueProp>,
+        Option<&UnbreakableProp>,
         &Pos,
         Option<&CountedGenerator>,
+        Option<Mut<PropSprites>>,
     )>,
 ) {
-    for (e, prop, big_gen, statue, pos, counted) in &props {
+    for (e, mut prop, big_gen, statue, unbreakable, pos, counted, mut sprites) in &mut props {
+        if unbreakable.is_some() {
+            if big_gen.is_some() && !prop.destructible {
+                // GML `Nothing/Create_0.gml:5-11`: swap the inactive
+                // casing for a live generator (its art and the
+                // `max_hp` from `BigGenerator/Create_0.gml:1-4`).
+                prop.hp = if run.loop_count == 0 { 230 } else { 50 };
+                prop.destructible = true;
+                if let Some(sprites) = sprites.as_deref_mut() {
+                    sprites.idle = "images/sprBigGenerator.png";
+                    sprites.hurt = "images/sprBigGeneratorHurt.png";
+                    sprites.dead = "images/sprBigGeneratorDead.png";
+                }
+                commands.entity(e).remove::<UnbreakableProp>();
+                commands
+                    .entity(e)
+                    .insert(PropDeathEffect::big_generator());
+            }
+            continue;
+        }
+
         if prop.hp > 0 {
             continue;
         }
@@ -261,21 +288,19 @@ pub fn handle_throne_room_props(
             }
         }
 
-        if let Some(statue) = statue {
-            if counted.is_none() {
-                commands.entity(e).insert(CountedGenerator);
-                let center = pos.0;
-                for i in 0..statue.guardian_count {
-                    let ang = i as f32 * std::f32::consts::TAU / statue.guardian_count as f32;
-                    let p = center + glam::Vec2::new(ang.cos(), ang.sin()) * 36.0;
-                    queue_enemy_spawn(
-                        &mut commands,
-                        EnemyKind::PalaceGuardian,
-                        p,
-                        1.0,
-                        run.loop_count,
-                    );
-                }
+        if statue.is_some() && counted.is_none() {
+            commands.entity(e).insert(CountedGenerator);
+            // GML `ThroneStatue/Destroy_0.gml:5-7` verbatim:
+            // `repeat (1 + GameCont.loops) { instance_create(x, y, Guardian) }`
+            // — uncapped, all at the statue's exact position.
+            for _ in 0..1 + run.loop_count {
+                queue_enemy_spawn(
+                    &mut commands,
+                    EnemyKind::Guardian,
+                    pos.0,
+                    1.0,
+                    run.loop_count,
+                );
             }
         }
     }

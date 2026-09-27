@@ -13,7 +13,7 @@ use repame_sim::SimTime;
 
 use crate::comps_a::{Inventory, Player, RaceState, Run, Toast};
 use crate::comps_b::{BossBrain, Enemy, Pickup, PickupKind};
-use crate::data::{AreaId, RaceId, SecretTarget, WeaponId};
+use crate::data::{AreaId, RaceId, SecretTarget};
 use crate::enemy_data::enemy_def;
 
 /// Tracks secret eligibility across a floor run.
@@ -21,7 +21,12 @@ use crate::enemy_data::enemy_def;
 pub struct SecretTriggers {
     queued: Option<SecretTarget>,
     pub last_secret: Option<SecretTarget>,
+    /// GML `CanOasis` (`WantBoss/Step_0:14-24`) needs a chest opened and
+    /// no kills; taking damage is not part of it, so `oasis_eligible`
+    /// only gates the per-floor snapshot.
     pub oasis_eligible: bool,
+    /// Recorded for the HUD/debug pass only — GML has no damage
+    /// condition on any secret route.
     pub damage_taken_this_floor: bool,
 
     pub oasis_chests_ready: bool,
@@ -102,7 +107,6 @@ impl SecretTriggers {
 
     pub fn mark_damage_taken(&mut self) {
         self.damage_taken_this_floor = true;
-        self.oasis_eligible = false;
     }
 }
 
@@ -134,8 +138,10 @@ pub fn observe_oasis_floor_start(
 }
 
 /// Flag the floor as oasis-ready once every chest is opened while
-/// (nearly) nothing was killed (bevy `detect_oasis_eligibility`
-/// parity: <= 2% kills, <= 10% on 1-3).
+/// (nearly) nothing was killed. GML `WantBoss/Step_0:14-24` (the
+/// `CanOasis` marker: at least one `ChestOpen`, no unopened `chestprop`
+/// or rad/rogue chest, and fewer than 2% of the enemies dead — 10% on
+/// the area's last subarea).
 pub fn detect_oasis_eligibility(
     run: Res<Run>,
     mut triggers: ResMut<SecretTriggers>,
@@ -146,7 +152,6 @@ pub fn detect_oasis_eligibility(
         || run.area != AreaId::Desert
         || run.floor_in_area > 3
         || !triggers.oasis_eligible
-        || triggers.damage_taken_this_floor
     {
         return;
     }
@@ -156,6 +161,9 @@ pub fn detect_oasis_eligibility(
         .filter(|p| matches!(p.kind, PickupKind::Chest(_)))
         .count();
     if chests_left > 0 || !triggers.oasis_snapshot_done {
+        return;
+    }
+    if triggers.oasis_floor_chests_initial == 0 {
         return;
     }
 
@@ -174,8 +182,9 @@ pub fn detect_oasis_eligibility(
 }
 
 /// Arm the 10 s bandit window once Big Bandit spawns on a ready floor;
-/// killing him in time queues the Oasis (bevy
-/// `tick_oasis_bandit_window` parity, `SimTime` for `Time<Fixed>`).
+/// killing him in time queues the Oasis. GML: the window is
+/// `CanOasis/Alarm_0` (300 ticks) and the trigger is
+/// `BanditBoss/Destroy_0:13-21` — no damage condition.
 pub fn tick_oasis_bandit_window(
     time: Res<SimTime>,
     mut triggers: ResMut<SecretTriggers>,
@@ -184,7 +193,7 @@ pub fn tick_oasis_bandit_window(
     if !triggers.oasis_chests_ready {
         return;
     }
-    if triggers.damage_taken_this_floor || !triggers.oasis_eligible {
+    if !triggers.oasis_eligible {
         triggers.oasis_chests_ready = false;
         return;
     }
@@ -217,7 +226,10 @@ pub fn tick_oasis_bandit_window(
 }
 
 /// Carrying a cursed weapon through Crystal Caves queues the Cursed
-/// Caves (bevy `detect_cursed_caves` parity).
+/// Caves (bevy `detect_cursed_caves` parity). GML
+/// `scrPlayerCountCursed` (`scripts/scrPlayerUncurse/scrPlayerUncurse.gml:3-15`)
+/// counts cursed weapon *slots*, and the trigger itself is
+/// `GameCont/Other_5:110-112` (`area == area_caves` plus a curse).
 pub fn detect_cursed_caves(
     run: Res<Run>,
     mut triggers: ResMut<SecretTriggers>,
@@ -231,19 +243,9 @@ pub fn detect_cursed_caves(
         return;
     };
 
-    if inv.weapons.iter().any(|&w| is_cursed_weapon(w)) {
+    if inv.cursed.iter().any(|c| *c) {
         triggers.queue(SecretTarget::CursedCaves);
     }
-}
-
-fn is_cursed_weapon(w: WeaponId) -> bool {
-    if w.0 == 0 {
-        return false;
-    }
-    if let Some(data) = crate::weapons_data::WEAPONS.get(w.0 as usize) {
-        return data.wep_gold || data.wep_rads >= 12 || (90..=127).contains(&w.0);
-    }
-    (90..=127).contains(&w.0)
 }
 
 /// Queue the IDPD HQ for Rogues past loop 1 (Labs/Palace), plus the

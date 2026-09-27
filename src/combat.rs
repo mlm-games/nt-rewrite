@@ -23,7 +23,7 @@ use crate::comps_a::{
 };
 use crate::comps_b::{
     Beam, BigDogMissileState, ChestKind, Corpse, CorpseCollision, CustomExplosion, DeploysSentry,
-    Dying, Enemy, EnemyBrain, ExplosionVisual, GmlImage, GoldBarrelDrop, HazardCloud, HurtAnim,
+    Dying, Enemy, EnemyBrain, ExplosionVisual, GmlImage, HazardCloud, HurtAnim,
     LoopTransition, NativeDepth, NativeExplosionKind, Pickup, PickupLifetime, PlasmaBurst, Portal,
     PortalPhase, PortalShock, PortalState, Prop, PropNestMarkers, PropSprites, RadChestContainer,
     SecretEntrance, SentryTurret, Shield, SpawnsWeaponPickup, StaticFx, ThroneRoomState,
@@ -1203,6 +1203,7 @@ pub fn corpse_hits(
         >,
     )>,
     player_q: Query<&Player, With<Player>>,
+    catalog: Res<repame_anim::AnimCatalog>,
     audio: Res<GameAudio>,
     frame: Res<CurrentFrame>,
     mut cues: ResMut<Queue<AudioCue>>,
@@ -1269,6 +1270,11 @@ pub fn corpse_hits(
                         hurt: crate::anim::derive_hurt_path(idle),
                         timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
                         was_moving,
+                        rate: catalog
+                            .def(idle)
+                            .map(|d| d.fps)
+                            .unwrap_or(1.0)
+                            .max(1.0),
                     });
                     audio.play_hit(&mut cues);
                 }
@@ -1639,7 +1645,6 @@ pub fn move_projectiles(
     >,
     entrances: Query<&SecretEntrance>,
     nests: Query<&PropNestMarkers, With<Prop>>,
-    gold_barrels: Query<&GoldBarrelDrop>,
     rad_chests: Query<&RadChestContainer>,
     frame: Res<CurrentFrame>,
     run: Res<Run>,
@@ -1807,7 +1812,6 @@ pub fn move_projectiles(
                         &mut props,
                         &entrances,
                         &nests,
-                        &gold_barrels,
                         &rad_chests,
                         &mut secrets,
                         &audio,
@@ -1873,7 +1877,6 @@ pub fn move_projectiles(
                             &mut props,
                             &entrances,
                             &nests,
-                            &gold_barrels,
                             &rad_chests,
                             &mut secrets,
                             &audio,
@@ -1938,7 +1941,6 @@ pub fn move_projectiles(
                         &mut props,
                         &entrances,
                         &nests,
-                        &gold_barrels,
                         &rad_chests,
                         &mut secrets,
                         &audio,
@@ -2049,7 +2051,6 @@ pub fn move_projectiles(
                     &mut props,
                     &entrances,
                     &nests,
-                    &gold_barrels,
                     &rad_chests,
                     &mut secrets,
                     &audio,
@@ -3824,7 +3825,6 @@ pub fn apply_explosions(
             Option<&PropSprites>,
             Option<&SecretEntrance>,
             Option<&PropNestMarkers>,
-            Option<&GoldBarrelDrop>,
             Option<&RadChestContainer>,
         ),
         (With<Prop>, Without<Player>),
@@ -3837,15 +3837,6 @@ pub fn apply_explosions(
         .single()
         .map(|(_, _, _, p, _, _, _)| p.crown == CrownKind::Death)
         .unwrap_or(false);
-    let (gold_owned, gold_steroids) = player_q
-        .single()
-        .map(|(_, _, _, _, _, inv, race)| {
-            (
-                inv.weapons.iter().copied().collect(),
-                race.race == RaceId::Steroids,
-            )
-        })
-        .unwrap_or((Vec::new(), false));
     for (e, mut boom, pos, feel_applied, visual) in &mut q {
         boom.timer.tick(time.delta_secs);
         let fused = boom.timer.just_finished();
@@ -3935,7 +3926,7 @@ pub fn apply_explosions(
                 }
             }
             let mut destroyed_props = Vec::new();
-            for (prop_e, mut prop, ppos, death_effect, sprites, entrance, nest, gold, rad) in
+            for (prop_e, mut prop, ppos, death_effect, sprites, entrance, nest, rad) in
                 &mut props
             {
                 if !prop.destructible {
@@ -3959,7 +3950,6 @@ pub fn apply_explosions(
                             sprites.copied(),
                             entrance.map(|s| s.target),
                             nest.map(|n| n.snowman).unwrap_or(false),
-                            gold.is_some(),
                             rad.is_some(),
                         ));
                     }
@@ -3974,7 +3964,6 @@ pub fn apply_explosions(
                 sprites,
                 entrance,
                 is_snowman,
-                is_gold,
                 is_rad,
             ) in destroyed_props
             {
@@ -4013,23 +4002,6 @@ pub fn apply_explosions(
                     for _ in 0..6 {
                         spawn_rad(&mut commands, &catalog, center, 1);
                     }
-                }
-
-                if is_gold {
-                    let weapon = crate::decide_wep::decide_wep_gold(
-                        &mut rand::rng(),
-                        run.loop_count,
-                        &gold_owned,
-                        gold_steroids,
-                    );
-                    spawn_pickup(
-                        &mut commands,
-                        &catalog,
-                        crate::comps_b::PickupKind::Weapon(weapon),
-                        center + glam::Vec2::new(0.0, -14.0),
-                        0,
-                        false,
-                    );
                 }
 
                 if is_rad {

@@ -4591,6 +4591,11 @@ pub fn tick_scrap_missiles(
                 hurt: "images/sprScrapBossMissileHurt.png",
                 timer: GTimer::from_seconds(50.0 / 30.0, TimerMode::Once),
                 was_moving: false,
+                rate: anim
+                    .as_deref()
+                    .map(|a| a.fps)
+                    .unwrap_or(1.0)
+                    .max(1.0),
             });
         }
 

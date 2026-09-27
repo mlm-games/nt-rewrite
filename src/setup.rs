@@ -37,25 +37,21 @@ use crate::comps_a::{
     SelectedCharacter, Team, Toast, Velocity, WallCell, WallTile,
 };
 use crate::comps_b::{
-    BigGenerator, BloodFlower, ChestKind, CrownPedestal, Enemy, FloorTransition, GoldBarrelDrop,
-    GoldCar, LoopTransition, ManholeCover, PendingDelayedBoss, PortalClear, Prop, PropHpTracker,
-    PropNestMarkers, PropSprites, ProtoStatue, RadChestContainer, SecretEntrance, ThroneCarpet,
-    ThroneStatueProp,
+    BigGenerator, BloodFlower, ChestKind, CrownPedestal, Enemy, FloorTransition, GoldCar,
+    GroundDetail, LoopTransition, ManholeCover, PendingDelayedBoss, PortalClear, Prop,
+    PropHpTracker, PropNestMarkers, PropSprites, PropTier, ProtoStatue, RadChestContainer,
+    SecretEntrance, ThroneCarpet, ThroneStatueProp, UnbreakableProp,
 };
 use crate::crown::{apply_crown_to_spawn, crown_name_for_toast};
 use crate::data::{
-    AmmoKind, AreaId, CrownKind, EnemyKind, RaceId, SecretTarget, SkinLetter, WEAPON_REVOLVER,
-    WEAPON_RUSTY_REVOLVER, WeaponId, ammo_max, area_for_floor, race_starter_weapon,
-    resolve_start_weapon,
+    AmmoKind, AreaId, CrownKind, EnemyKind, RaceId, SecretTarget, SkinLetter,
+    UltraMutationId, WEAPON_REVOLVER, WeaponId, ammo_max, area_for_floor,
+    race_starter_weapon, resolve_start_weapon,
 };
 use crate::enemies::{EnemySpawnContext, difficulty_multiplier, spawn_enemy_at};
 use crate::enemy_data::enemy_def;
-use crate::environment::{
-    EnvironmentHazardSpec, PropDeathEffect, ProximityMine, PulseSprite, SurfacePulse,
-    pick_first_present, spawn_environment_hazard,
-};
+use crate::environment::{PropDeathEffect, SurfacePulse};
 use crate::msg::Queue;
-use crate::pickups::spawn_chest;
 use crate::progression::DeferredFloorGen;
 use crate::savedata_part::{PassiveKind, SaveData, character_def};
 use crate::spatial::Pos;
@@ -548,12 +544,23 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
         let tutorial = world
             .get_resource::<SaveData>()
             .is_some_and(|s| !s.tutorial_done && (s.settings.show_tutorial || s.total_runs == 0));
-        let mut run = world.resource_mut::<Run>();
+        // GML `PlayButton/Other_10` + `scrInit.gml:155`: `protowep` loads
+    // `etc.protowep` (default rusty revolver), so the prototype earned in
+    // one run carries into the next. `protocurse` is not persisted.
+    let protowep = world
+        .resource::<crate::savedata_part::SaveData>()
+        .protowep;
+    let mut run = world.resource_mut::<Run>();
+    run.protowep = protowep;
+    run.protocurse = false;
         run.floor = 1;
         run.world = 1;
         run.area = area_for_floor(1, 0);
         run.loop_count = u32::from(hardmode);
         run.hardmode = hardmode;
+        // GML `GameCont/Create_0.gml:84-88`: `if scrGameIsHardmode() {
+        // hard = 13; loops++ }`.
+        run.hard = if hardmode { 13 } else { 0 };
         run.floor_in_area = 1;
         run.gen_seed = seed;
         run.portal_open = false;
@@ -571,12 +578,6 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
         run.won = false;
         run.tutorial = tutorial;
         run.blood_crown = false;
-        // GML `PlayButton/Other_10` + `scrInit`: `protowep` loads
-        // `etc.protowep` (default rusty revolver); custom runs force
-        // it. The port has no custom runs and no etc store, so the
-        // default rides every run.
-        run.protowep = WEAPON_RUSTY_REVOLVER;
-        run.protocurse = false;
         run.waypoints.clear();
         run.push_waypoint();
         world.resource_mut::<crate::state::Paused>().0 = false;
@@ -662,6 +663,7 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
         let player_spawn = glam::Vec2::new(crate::comps_a::TILE * 0.5, crate::comps_a::TILE * 0.5);
         // Player hp is in the just-spawned bundle: read it back for the
         // half-health HealthChest arm (GML reads the live player).
+        let tutorial = world.get_resource::<Run>().is_some_and(|r| r.tutorial);
         let (half, rogue, life, love, hardmode, area, sub, loops) = {
             let mut half = false;
             let mut rogue = race == RaceId::Rogue;
@@ -698,6 +700,7 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
                 same_weapons_for: 0,
                 horror_done: false,
                 hardmode,
+                tutorial,
                 player_pos: player_spawn,
                 seed: gen_seed ^ 0xC0E5_75EED,
             },
@@ -722,6 +725,8 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
                 &run,
                 false,
                 false,
+                CrownKind::None,
+                None,
                 &plan,
                 &mut mask,
             );
@@ -794,15 +799,30 @@ pub fn empty_anim_catalog() -> repame_anim::AnimCatalog {
     .expect("empty catalog parses")
 }
 
-/// Ordinary-prop art candidates (bevy `spawn_prop` first-listed order).
+/// Ordinary-prop art candidates. GML picks these with `choose(...)` /
+/// `instance_nearest(...).styleb` at `Create_0` time, never by hash, so
+/// the caller passes the tile's `styleb` and the roll is drawn here.
 /// Only the picked path is recorded: strips resolve renderer-side.
-fn prop_candidates(kind: PropKind) -> &'static [&'static str] {
+fn prop_candidates(kind: PropKind, styleb: bool) -> &'static [&'static str] {
     match kind {
-        PropKind::Cactus => &[
-            "images/sprCactus.png",
-            "images/sprCactus2.png",
-            "images/sprCactus3.png",
-        ],
+        PropKind::None => &[],
+        // GML `Cactus/Create_0.gml:7-39` verbatim: `styleb == 1` swaps the
+        // whole triple for the `sprCactusB*` set.
+        PropKind::Cactus => {
+            if styleb {
+                &[
+                    "images/sprCactusB.png",
+                    "images/sprCactusB2.png",
+                    "images/sprCactusB3.png",
+                ]
+            } else {
+                &[
+                    "images/sprCactus.png",
+                    "images/sprCactus2.png",
+                    "images/sprCactus3.png",
+                ]
+            }
+        }
         PropKind::BigSkull => &["images/sprBigSkullOpen.png"],
         PropKind::GroundDecal => &["images/sprDetail0.png"],
         PropKind::Barrel => &["images/sprBarrel.png"],
@@ -822,15 +842,32 @@ fn prop_candidates(kind: PropKind) -> &'static [&'static str] {
             "images/sprNightCactus3.png",
         ],
         PropKind::Crystal => &["images/sprCrystalProp.png"],
-        PropKind::Hydrant => &["images/sprHydrant.png", "images/sprIcicle.png"],
+        // GML `Hydrant/Create_0.gml:4-12`: `styleb == 0` is the hydrant,
+        // anything else is an icicle.
+        PropKind::Hydrant => {
+            if styleb {
+                &["images/sprIcicle.png"]
+            } else {
+                &["images/sprHydrant.png"]
+            }
+        }
         PropKind::StreetLight => &["images/sprStreetLight.png"],
-        PropKind::SodaMachine => &["images/sprSodaMachine.png", "images/sprNewsStand.png"],
+        // GML `SodaMachine/Create_0.gml:4-13`: `styleb == 0` is the soda
+        // machine, anything else is a news stand.
+        PropKind::SodaMachine => {
+            if styleb {
+                &["images/sprNewsStand.png"]
+            } else {
+                &["images/sprSodaMachine.png"]
+            }
+        }
         PropKind::Tube => &["images/sprTube.png"],
         PropKind::MutantTube => &["images/sprMutantTube.png"],
         PropKind::Pillar => &["images/sprNuclearPillar.png"],
         PropKind::SmallGenerator => &["images/sprSmallGenerator.png"],
         PropKind::Anchor => &["images/sprAnchor.png"],
-        PropKind::WaterPlant => &["images/sprWaterPlant.png", "images/sprWaterPlant2.png"],
+        // GML `WaterPlant/Create_0.gml:4` `choose(sprWaterPlant2, sprWaterPlant)`.
+        PropKind::WaterPlant => &["images/sprWaterPlant2.png", "images/sprWaterPlant.png"],
         PropKind::OasisBarrel => &["images/sprOasisBarrel.png"],
         PropKind::WaterMine => &["images/sprWaterMine.png"],
         PropKind::MoneyPile => &["images/sprMoneyPile.png"],
@@ -840,59 +877,105 @@ fn prop_candidates(kind: PropKind) -> &'static [&'static str] {
         PropKind::PizzaBox => &["images/sprPizzaBox.png"],
         PropKind::PlantPot => &["images/sprPlantPotIdle.png"],
         PropKind::BigGenerator => &["images/sprBigGenerator.png"],
+        PropKind::BigGeneratorInactive => &["images/sprBigGeneratorInactive.png"],
         PropKind::ThroneStatue => &["images/sprThroneStatue.png"],
-        PropKind::Cobweb | PropKind::IcePatch | PropKind::FireTrap | PropKind::Mine => {
-            &["images/sprDetail0.png"]
-        }
+        PropKind::Trap => &["images/sprTrap.png"],
     }
 }
 
-/// Ordinary-prop combat stats: (collision size, hp, legacy explosive,
-/// death effect). Bevy `spawn_prop` table verbatim, art columns dropped.
-fn prop_stats(kind: PropKind, loop_count: u32) -> (f32, i32, bool, Option<PropDeathEffect>) {
+/// Ordinary-prop stats. `extent` is the sprite's collision rect
+/// (`collisionKind` + `bbox_*` per `sprites/<name>/<name>.yy`); `tier`
+/// is GML `size`, the knockdown tier `enemy/Collision_prop.gml:20`
+/// compares against. `max_hp`/`snd`/`raddrop` are per-object verbatim.
+struct PropStats {
+    extent: glam::Vec2,
+    tier: u8,
+    hp: i32,
+    explosive: bool,
+    effect: Option<PropDeathEffect>,
+}
+
+fn prop_stats(kind: PropKind, styleb: bool, loop_count: u32) -> PropStats {
+    let s = |w: f32, h: f32, tier: u8, hp: i32, effect: Option<PropDeathEffect>| PropStats {
+        extent: glam::Vec2::new(w, h),
+        tier,
+        hp,
+        explosive: false,
+        effect,
+    };
     match kind {
-        PropKind::Cactus | PropKind::NightCactus => (24.0, 2, false, None),
-        PropKind::BigSkull => (32.0, 50, false, Some(PropDeathEffect::dust_ring())),
-        PropKind::Barrel => (24.0, 1, true, None),
-        PropKind::Pipe => (24.0, 1, false, None),
-        PropKind::Tires => (28.0, 6, false, None),
-        PropKind::ToxicBarrel => (24.0, 1, false, Some(PropDeathEffect::toxic_barrel())),
-        PropKind::Car => (38.0, 20, false, Some(PropDeathEffect::car())),
-        PropKind::Cocoon => (24.0, 8, false, None),
-        PropKind::Snowman => (24.0, 10, false, None),
-        PropKind::Torch => (12.0, 20, false, None),
-        PropKind::GoldBarrel => (24.0, 1, false, Some(PropDeathEffect::legacy_barrel())),
-        PropKind::BonePile | PropKind::NightBonePile => (22.0, 2, false, None),
-        PropKind::Crystal => (22.0, 2, false, None),
-        PropKind::Hydrant => (24.0, 5, false, None),
-        PropKind::StreetLight => (20.0, 5, false, None),
-        PropKind::SodaMachine => (26.0, 24, false, None),
-        PropKind::Tube => (20.0, 2, false, None),
-        PropKind::MutantTube => (24.0, 24, false, None),
-        PropKind::Pillar => (24.0, 70, false, None),
-        PropKind::SmallGenerator => (24.0, 40, false, Some(PropDeathEffect::small_generator())),
-        PropKind::Anchor => (28.0, 50, false, Some(PropDeathEffect::dust_ring())),
-        PropKind::WaterPlant => (20.0, 2, false, None),
-        PropKind::OasisBarrel => (22.0, 2, false, None),
-        PropKind::WaterMine => (20.0, 20, false, Some(PropDeathEffect::mine())),
-        PropKind::MoneyPile => (22.0, 1, false, Some(PropDeathEffect::money())),
-        PropKind::YVStatue => (22.0, 15, false, None),
-        PropKind::Bush => (22.0, 1, false, Some(PropDeathEffect::leaves())),
-        PropKind::BigFlower => (24.0, 8, false, None),
-        PropKind::PizzaBox => (22.0, 4, false, None),
-        PropKind::PlantPot => (20.0, 3, false, None),
-        PropKind::BigGenerator => (
-            40.0,
+        PropKind::None | PropKind::GroundDecal => s(0.0, 0.0, 1, 9_999, None),
+        PropKind::Cactus | PropKind::NightCactus => s(24.0, 24.0, 1, 2, None),
+        // `sprBigSkullOpen` bbox 33x23, `shd32` shadow, `size = 2`.
+        PropKind::BigSkull => s(33.0, 23.0, 2, 50, Some(PropDeathEffect::dust_ring())),
+        // `Barrel` is a 24x24 full-rect sprite; `Barrel` is also the only
+        // prop with no `Destroy_0`, so `explosive` replays the barrel
+        // chain.
+        PropKind::Barrel => PropStats {
+            extent: glam::Vec2::splat(24.0),
+            tier: 1,
+            hp: 1,
+            explosive: true,
+            effect: None,
+        },
+        PropKind::Pipe => s(24.0, 24.0, 1, 1, None),
+        PropKind::Tires => s(24.0, 24.0, 1, 6, None),
+        PropKind::ToxicBarrel => s(24.0, 24.0, 1, 1, Some(PropDeathEffect::toxic_barrel())),
+        PropKind::Car => s(32.0, 32.0, 1, 20, Some(PropDeathEffect::car())),
+        PropKind::Cocoon => s(24.0, 24.0, 1, 8, None),
+        PropKind::Snowman => s(30.0, 30.0, 1, 10, None),
+        PropKind::Torch => s(12.0, 28.0, 1, 20, None),
+        PropKind::GoldBarrel => s(24.0, 24.0, 1, 1, Some(PropDeathEffect::legacy_barrel())),
+        PropKind::BonePile | PropKind::NightBonePile => s(25.0, 16.0, 1, 2, None),
+        PropKind::Crystal => s(16.0, 20.0, 1, 2, None),
+        // The `styleb` variant is the `sprIcicle` full-rect 24x24 box.
+        PropKind::Hydrant => {
+            if styleb {
+                s(24.0, 24.0, 1, 5, None)
+            } else {
+                s(17.0, 21.0, 1, 5, None)
+            }
+        }
+        PropKind::StreetLight => s(17.0, 46.0, 1, 5, None),
+        PropKind::SodaMachine => {
+            if styleb {
+                s(22.0, 26.0, 1, 24, None)
+            } else {
+                s(29.0, 31.0, 1, 24, None)
+            }
+        }
+        PropKind::Tube => s(32.0, 32.0, 1, 2, None),
+        PropKind::MutantTube => s(32.0, 32.0, 1, 24, None),
+        PropKind::Pillar => s(32.0, 39.0, 1, 70, None),
+        PropKind::SmallGenerator => {
+            s(30.0, 32.0, 1, 40, Some(PropDeathEffect::small_generator()))
+        }
+        // `size = 2`, `shd48` shadow.
+        PropKind::Anchor => s(40.0, 36.0, 2, 50, Some(PropDeathEffect::dust_ring())),
+        PropKind::WaterPlant => s(10.0, 17.0, 1, 2, None),
+        PropKind::OasisBarrel => s(15.0, 13.0, 1, 2, None),
+        PropKind::WaterMine => s(21.0, 34.0, 1, 20, Some(PropDeathEffect::mine())),
+        PropKind::MoneyPile => s(32.0, 24.0, 1, 1, Some(PropDeathEffect::money())),
+        PropKind::YVStatue => s(24.0, 32.0, 1, 15, None),
+        PropKind::Bush => s(20.0, 17.0, 1, 1, Some(PropDeathEffect::leaves())),
+        PropKind::BigFlower => s(30.0, 28.0, 1, 8, None),
+        PropKind::PizzaBox => s(24.0, 24.0, 1, 4, None),
+        PropKind::PlantPot => s(16.0, 24.0, 1, 3, None),
+        // `size = 5`, 230 hp (50 past the first loop).
+        PropKind::BigGenerator => s(
+            84.0,
+            95.0,
+            5,
             if loop_count == 0 { 230 } else { 50 },
-            false,
             Some(PropDeathEffect::big_generator()),
         ),
-        PropKind::ThroneStatue => (32.0, 1000, false, None),
-        PropKind::GroundDecal
-        | PropKind::Cobweb
-        | PropKind::IcePatch
-        | PropKind::FireTrap
-        | PropKind::Mine => (0.0, 9_999, false, None),
+        // GML `BigGeneratorInactive`: `max_hp = 2500`, `canbreak = 0`.
+        PropKind::BigGeneratorInactive => s(84.0, 95.0, 1, 2500, None),
+        // GML `ThroneStatue`: `max_hp = 1000`, `canbreak = 0`,
+        // `size = 5`.
+        PropKind::ThroneStatue => s(16.0, 32.0, 5, 1000, None),
+        // GML `Trap`: `sprTrap` is a 32x24 full-rect solid.
+        PropKind::Trap => s(32.0, 24.0, 1, 1, None),
     }
 }
 
@@ -909,48 +992,6 @@ pub fn ground_decal_for_floor(floor: u32) -> &'static str {
         13..=15 => "images/sprPalaceTopDecal.png",
         _ => "images/sprDesertTopDecal.png",
     }
-}
-
-/// Pick the recorded art path: hash-pick among catalog-present
-/// candidates (bevy parity), else the first candidate. hurt/dead fall
-/// back to idle — strips resolve renderer-side. City cars use the frozen
-/// strip (`Car/Create_0.gml` `area_city` arm verbatim).
-fn pick_prop_idle(
-    catalog: &repame_anim::AnimCatalog,
-    run: &Run,
-    kind: PropKind,
-    pos: glam::Vec2,
-) -> (&'static str, bool) {
-    // GML `Car/Create_0.gml:8-12` verbatim: `area_city` swaps the whole
-    // triple to the frozen strips (hurt/dead resolve from this idle).
-    if kind == PropKind::Car && run.area == AreaId::City {
-        return (
-            "images/sprFrozenCar.png",
-            prop_hash_flip(run.gen_seed, pos, 0x53),
-        );
-    }
-    let seed = run.gen_seed;
-    let candidates = prop_candidates(kind);
-    let present: Vec<&'static str> = candidates
-        .iter()
-        .copied()
-        .filter(|p| catalog.def(p).is_some())
-        .collect();
-    let idle = if present.len() <= 1 {
-        candidates
-            .iter()
-            .copied()
-            .find(|p| catalog.def(p).is_some())
-            .unwrap_or(candidates[0])
-    } else {
-        present[prop_hash_pick(seed, pos, 0x52, present.len())]
-    };
-    let flip = if kind == PropKind::SodaMachine {
-        false
-    } else {
-        prop_hash_flip(seed, pos, 0x53)
-    };
-    (idle, flip)
 }
 
 /// Prop hurt/dead art for a picked idle strip (GML prop objects carry
@@ -985,6 +1026,9 @@ fn prop_hurt_dead_paths(idle: &'static str) -> (&'static str, &'static str) {
         "images/sprCactus.png" => ("images/sprCactusHurt.png", "images/sprCactusDead.png"),
         "images/sprCactus2.png" => ("images/sprCactus2Hurt.png", "images/sprCactus2Dead.png"),
         "images/sprCactus3.png" => ("images/sprCactus3Hurt.png", "images/sprCactus3Dead.png"),
+        "images/sprCactusB.png" => ("images/sprCactusBHurt.png", "images/sprCactusBDead.png"),
+        "images/sprCactusB2.png" => ("images/sprCactusB2Hurt.png", "images/sprCactusB2Dead.png"),
+        "images/sprCactusB3.png" => ("images/sprCactusB3Hurt.png", "images/sprCactusB3Dead.png"),
         "images/sprBigSkullOpen.png" => (
             "images/sprBigSkullOpenHurt.png",
             "images/sprBigSkullDead.png",
@@ -1092,183 +1136,81 @@ fn resolve_prop_art(
     (hurt, dead)
 }
 
-/// Prop sim half (bevy `world::spawn_prop` minus sprites/anchors:
-/// `Prop` + tracker + `NextHurt` + recorded art paths + death effect +
-/// kind markers). Functional kinds: `FireTrap` emits its hazard (plus
-/// the trap visual), `Mine` becomes a proximity mine (plus its throb),
-/// `Cobweb`/`IcePatch` become `SurfaceZone` patches (plus subtle pulse
-/// decals), `Torch` throbs. `GroundDecal` records art only (non-solid,
-/// bevy parity).
+/// Prop sim half: `Prop` + tracker + `NextHurt` + recorded art paths +
+/// death effect + kind markers. GML `objects/prop/Create_0.gml:3` fixes
+/// `image_speed = 0.4` (frames per step) for every destructible prop, so
+/// the idle/hurt strips run at 12 fps regardless of the atlas `fps`.
+/// Functional kinds: `Trap` is a solid flamethrower emitter, `Torch`
+/// throbs, `ThroneStatue`/`BigGeneratorInactive` are `canbreak = 0`.
+/// `GroundDecal` records art only (non-solid).
 pub fn spawn_prop_sim(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
     run: &Run,
     kind: PropKind,
     pos: glam::Vec2,
+    styleb: bool,
 ) -> Option<Entity> {
-    match kind {
-        PropKind::Cobweb => {
-            // Bevy `spawn_prop` Cobweb arm verbatim: zone + subtle pulse
-            // + first-present decal sprite (srgba tint, 36px).
-            commands.spawn((
-                GameCleanup,
-                LevelCleanup,
-                crate::environment::SurfaceZone {
-                    kind: crate::environment::SurfaceKind::Cobweb,
-                    half_size: glam::Vec2::splat(18.0),
-                },
-                SurfacePulse::subtle(pos.x * 0.017),
-                PulseSprite {
-                    path: pick_first_present(
-                        catalog,
-                        &[
-                            "images/sprCobweb.png",
-                            "images/sprSpiderWeb.png",
-                            "images/sprWeb.png",
-                            "images/sprCocoon.png",
-                            "images/sprBones.png",
-                        ],
-                    ),
-                    tint: [0.78, 0.78, 0.72, 0.62],
-                    size: 36.0,
-                    flip_x: false,
-                },
-                crate::spatial::Pos(pos),
-            ));
-            return None;
-        }
-        PropKind::IcePatch => {
-            // Bevy IcePatch arm verbatim: zone + subtle pulse + decal.
-            commands.spawn((
-                GameCleanup,
-                LevelCleanup,
-                crate::environment::SurfaceZone {
-                    kind: crate::environment::SurfaceKind::Ice,
-                    half_size: glam::Vec2::splat(20.0),
-                },
-                SurfacePulse::subtle(pos.y * 0.014),
-                PulseSprite {
-                    path: pick_first_present(
-                        catalog,
-                        &["images/sprIceDecal.png", "images/sprIcePatch.png"],
-                    ),
-                    tint: [0.62, 0.86, 1.0, 0.58],
-                    size: 40.0,
-                    flip_x: false,
-                },
-                crate::spatial::Pos(pos),
-            ));
-            return None;
-        }
-        PropKind::FireTrap => {
-            // Bevy FireTrap arm verbatim: hazard entity (which carries
-            // the hazard pulse via `spawn_environment_hazard`) plus the
-            // 32px fire visual with the same fire tint.
-            let e = spawn_environment_hazard(commands, pos, EnvironmentHazardSpec::fire_trap());
-            commands.entity(e).insert(PulseSprite {
-                path: pick_first_present(
-                    catalog,
-                    &[
-                        "images/sprTrapFire.png",
-                        "images/sprFireTrap.png",
-                        "images/sprFireTrapIdle.png",
-                        "images/sprTorchFire.png",
-                        "images/sprTorch.png",
-                        "images/sprFlameBall.png",
-                    ],
-                ),
-                tint: EnvironmentHazardSpec::fire_trap().kind.color(),
-                size: 32.0,
-                flip_x: false,
-            });
-            // Bevy's trap arm phases the shared hazard pulse
-            // `hazard(pos.x * 0.011)` (distinct from spill hazards).
+    if kind == PropKind::None {
+        return None;
+    }
+    if kind == PropKind::GroundDecal {
+        // Bevy draws the route floor's top-decal strip here (gray tint
+        // renderer-side), falling back to detail art when the catalog
+        // lacks it.
+        let decal = ground_decal_for_floor(run.floor);
+        let idle = if catalog.def(decal).is_some() {
+            decal
+        } else {
+            prop_idle_for(catalog, run, kind, pos, styleb)
+        };
+        return Some(
             commands
-                .entity(e)
-                .insert(SurfacePulse::hazard(pos.x * 0.011));
-            return None;
-        }
-        PropKind::Mine => {
-            let idle_path: &'static str = "images/sprMine.png";
-            let flip = prop_hash_flip(run.gen_seed, pos, 0x51);
-            let (hurt, dead) = resolve_prop_art(catalog, idle_path);
-            let mut ec = commands.spawn((
-                GameCleanup,
-                LevelCleanup,
-                Prop {
-                    size: glam::Vec2::splat(18.0),
-                    hp: 2,
-                    destructible: true,
-                    explosive: false,
-                },
-                PropHpTracker { last_hp: 2 },
-                NextHurt::default(),
-                PropSprites {
-                    idle: idle_path,
-                    hurt,
-                    dead,
-                    flip_x: flip,
-                },
-                ProximityMine::default(),
-                PropDeathEffect::mine(),
-                // Bevy mine arm: the prop sprite itself throbs
-                // (`SurfacePulse::hazard(pos.y * 0.019)`).
-                SurfacePulse::hazard(pos.y * 0.019),
-                Pos(pos),
-            ));
-            // Hurt-flash tracker: `prop_hurt_on_damage` bails without it.
-            if let Some(def) = catalog.def(idle_path) {
-                ec.insert(SpriteAnim::new(idle_path, def));
-            }
-            return Some(ec.id());
-        }
-        PropKind::GroundDecal => {
-            // Bevy draws the route floor's top-decal strip here (gray
-            // tint renderer-side), falling back to detail art when the
-            // catalog lacks it.
-            let decal = ground_decal_for_floor(run.floor);
-            let idle = if catalog.def(decal).is_some() {
-                decal
-            } else {
-                pick_prop_idle(catalog, run, kind, pos).0
-            };
-            return Some(
-                commands
-                    .spawn((
-                        GameCleanup,
-                        LevelCleanup,
-                        PropSprites {
-                            idle,
-                            hurt: idle,
-                            dead: idle,
-                            flip_x: false,
-                        },
-                        crate::comps_b::GroundDecalTint,
-                        Pos(pos),
-                    ))
-                    .id(),
-            );
-        }
-        _ => {}
+                .spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    PropSprites {
+                        idle,
+                        hurt: idle,
+                        dead: idle,
+                        flip_x: false,
+                    },
+                    crate::comps_b::GroundDecalTint,
+                    Pos(pos),
+                ))
+                .id(),
+        );
     }
 
-    let (size, hp, explosive, effect) = prop_stats(kind, run.loop_count);
-    let (idle, flip) = pick_prop_idle(catalog, run, kind, pos);
-    // GML prop objects swap to hurt/dead strips on damage/death; the
-    // hurt system (`prop_hurt_on_damage`) and corpse spawner
-    // (`spawn_prop_corpse`) both read these, and the hurt system bails
-    // without a `SpriteAnim` tracker — so record real paths and insert
-    // the tracker (missing strips fall back to idle).
+    let stats = prop_stats(kind, styleb, run.loop_count);
+    let idle = prop_idle_for(catalog, run, kind, pos, styleb);
+    // GML `FloorMaker/Step_0.gml:33-49` mirrors the +x column's
+    // `BigGeneratorInactive` (`image_xscale = -1`) to face the corridor.
+    let flip = if matches!(kind, PropKind::SodaMachine) {
+        // GML `SodaMachine/Create_0.gml:17` pins `image_xscale = 1`.
+        false
+    } else if kind == PropKind::BigGeneratorInactive {
+        pos.x > 0.0
+    } else {
+        prop_hash_flip(run.gen_seed, pos, 0x53)
+    };
     let (hurt, dead) = resolve_prop_art(catalog, idle);
+    // GML `canbreak = 0` (`ThroneStatue`, `BigGeneratorInactive`): the
+    // port's every weapon path gates on `Prop::destructible`, and
+    // `ThroneStatue/Step_1.gml:4` re-pins `hp = 1000` every step, so
+    // damage can never kill a statue.
+    let unbreakable = matches!(kind, PropKind::ThroneStatue | PropKind::BigGeneratorInactive);
+    let hp = stats.hp;
     let mut ec = commands.spawn((
         GameCleanup,
         LevelCleanup,
         Prop {
-            size: glam::Vec2::splat(size),
+            size: stats.extent,
             hp,
-            destructible: true,
-            explosive,
+            destructible: !unbreakable,
+            explosive: stats.explosive,
         },
+        PropTier(stats.tier),
         PropHpTracker { last_hp: hp },
         NextHurt::default(),
         PropSprites {
@@ -1279,10 +1221,14 @@ pub fn spawn_prop_sim(
         },
         Pos(pos),
     ));
-    if let Some(def) = catalog.def(idle) {
-        ec.insert(SpriteAnim::new(idle, def));
+    if unbreakable {
+        ec.insert(UnbreakableProp);
     }
-    if let Some(fx) = effect {
+    // GML `image_speed = 0.4` on every destructible prop.
+    if let Some(def) = catalog.def(idle) {
+        ec.insert(SpriteAnim::with_image_speed(idle, def, PROP_IMAGE_SPEED));
+    }
+    if let Some(fx) = stats.effect {
         ec.insert(fx);
     }
     match kind {
@@ -1322,19 +1268,27 @@ pub fn spawn_prop_sim(
                 ..Default::default()
             });
         }
-        // Bevy `spawn_prop` Torch arm: the torch flame throbs.
+        // The torch flame throbs.
         PropKind::Torch => {
             ec.insert(SurfacePulse::hazard(pos.x * 0.01 + pos.y * 0.02));
         }
-        PropKind::GoldBarrel => {
-            ec.insert(GoldBarrelDrop);
-        }
-        PropKind::BigGenerator => {
+        PropKind::BigGenerator | PropKind::BigGeneratorInactive => {
             ec.insert(BigGenerator { index: 0 });
         }
+        // GML `ThroneStatue/Destroy_0.gml:5-7`: `repeat (1 + loops)`, no
+        // cap, all at the statue's exact position.
         PropKind::ThroneStatue => {
             ec.insert(ThroneStatueProp {
-                guardian_count: (1 + run.loop_count).min(6) as u8,
+                guardian_count: (1 + run.loop_count) as u8,
+            });
+        }
+        // GML `Trap/Create_0.gml:2-6` + a `TrapScorchMark` decal.
+        PropKind::Trap => {
+            ec.insert(crate::environment::FireTrap::default());
+            ec.insert(crate::comps_b::GroundDetail {
+                path: "images/sprTrapScorchMark.png",
+                frame: 0,
+                flip_x: prop_hash_flip(run.gen_seed, pos, 0x55),
             });
         }
         _ => {}
@@ -1342,9 +1296,50 @@ pub fn spawn_prop_sim(
     Some(ec.id())
 }
 
-/// Rad chest container (bevy `spawn_rad_container` sim half: destructible
-/// prop + container marker; opening logic lives in
-/// `tick_rad_container_contact`'s port phase).
+/// GML `objects/prop/Create_0.gml:3` `image_speed = 0.4`, frames per
+/// step, so the effective rate is `0.4 * SIM_HZ` = 12 fps.
+pub const PROP_IMAGE_SPEED: f32 = 0.4;
+
+/// GML art pick: `choose(...)` for the multi-strip props and the
+/// `styleb`-gated variant sets for Cactus / Hydrant / SodaMachine /
+/// WaterPlant. Only the picked path is recorded.
+fn prop_idle_for(
+    catalog: &repame_anim::AnimCatalog,
+    run: &Run,
+    kind: PropKind,
+    pos: glam::Vec2,
+    styleb: bool,
+) -> &'static str {
+    // GML `Car/Create_0.gml:7-12` verbatim: `area_city` swaps the whole
+    // triple to the frozen strips.
+    if kind == PropKind::Car && run.area == AreaId::FrozenCity {
+        return "images/sprFrozenCar.png";
+    }
+    let candidates = prop_candidates(kind, styleb);
+    let present: Vec<&'static str> = candidates
+        .iter()
+        .copied()
+        .filter(|p| catalog.def(p).is_some())
+        .collect();
+    if present.len() <= 1 {
+        return present
+            .first()
+            .copied()
+            .unwrap_or(candidates[0]);
+    }
+    present[prop_hash_pick(
+        run.gen_seed,
+        pos,
+        0x52,
+        present.len(),
+    )]
+}
+
+/// Rad chest container: destructible prop + container marker; opening
+/// logic lives in `tick_rad_container_contact`'s port phase.
+/// GML `RadChest/Create_0.gml:12,15`: `spr_dead = sprRadChestCorpse` and
+/// `image_speed = 0`, so the closed chest never animates and its corpse
+/// is the dedicated 3-frame strip.
 pub fn spawn_rad_container(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
@@ -1355,28 +1350,36 @@ pub fn spawn_rad_container(
     // `play_hurt` falls back to idle when the strip is absent, so the
     // literal is safe without a catalog gate here.
     let hurt_path: &'static str = "images/sprRadChestHurt.png";
+    let dead_path: &'static str = "images/sprRadChestCorpse.png";
     let mut ec = commands.spawn((
         GameCleanup,
         LevelCleanup,
         Prop {
-            size: glam::Vec2::splat(26.0),
+            size: glam::Vec2::splat(16.0),
             hp: 4,
             destructible: true,
             explosive: false,
         },
+        PropTier(2),
         PropHpTracker { last_hp: 4 },
         NextHurt::default(),
         PropSprites {
             idle: idle_path,
             hurt: hurt_path,
-            dead: idle_path,
+            dead: if catalog.def(dead_path).is_some() {
+                dead_path
+            } else {
+                idle_path
+            },
             flip_x: prop_hash_flip(seed, pos, 0x54),
         },
         RadChestContainer,
         Pos(pos),
     ));
     if let Some(def) = catalog.def(idle_path) {
-        ec.insert(SpriteAnim::new(idle_path, def));
+        let mut anim = SpriteAnim::new(idle_path, def);
+        anim.fps = 0.0;
+        ec.insert(anim);
     }
     ec.id()
 }
@@ -1485,6 +1488,70 @@ pub fn spawn_secret_entrances(
     }
 }
 
+/// GML `scripts/scrPopulate/scrPopulate.gml:26-30` creates a `Detail` for
+/// `random(6) < 1` per floor tile; `objects/Detail/Create_0.gml` picks
+/// `sprDetail<area>`, bails when the nearest `Floor` tile has `styleb`
+/// and the area is not City, freezes `image_speed` and lands on a random
+/// frame with a random mirror.
+fn spawn_ground_details(
+    commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
+    run: &Run,
+    plan: &LevelPlan,
+) {
+    let Some(strip) = detail_strip_for_area(run.area) else {
+        return;
+    };
+    let def = catalog.def(strip);
+    let frame_count = def.map(|d| d.frames.max(1)).unwrap_or(1);
+    // GML `Detail/Create_0.gml:8`: `styleb && area != area_city` bails.
+    // The port only carries the floor's aggregate `styleb`, not the
+    // per-tile flag GML reads off `instance_nearest`.
+    if plan.styleb && run.area != AreaId::FrozenCity {
+        return;
+    }
+    let mut rng = StdRng::seed_from_u64(run.gen_seed ^ 0x0D37A1);
+    for pos in &plan.details {
+        commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            GroundDetail {
+                path: strip,
+                frame: rng.random_range(0..frame_count),
+                flip_x: rng.random_bool(0.5),
+            },
+            Pos(*pos),
+        ));
+    }
+}
+
+/// GML `Detail/Create_0.gml:1` `asset_get_index("sprDetail" +
+/// string(GameCont.area))`; a missing strip destroys the instance, so
+/// `area_vault`(100), `area_mansion`(103), `area_jungle`(105) and
+/// `area_hq`(106) have no `Detail` at all.
+fn detail_strip_for_area(area: AreaId) -> Option<&'static str> {
+    Some(match area {
+        AreaId::Campfire => "images/sprDetail0.png",
+        AreaId::Desert => "images/sprDetail1.png",
+        AreaId::Sewers => "images/sprDetail2.png",
+        AreaId::Scrapyards => "images/sprDetail3.png",
+        AreaId::CrystalCaves => "images/sprDetail4.png",
+        AreaId::FrozenCity | AreaId::City => "images/sprDetail5.png",
+        AreaId::Labs => "images/sprDetail6.png",
+        AreaId::Oasis => "images/sprDetail101.png",
+        AreaId::PizzaSewers => "images/sprDetail102.png",
+        AreaId::CursedCaves => "images/sprDetail104.png",
+        AreaId::Palace
+        | AreaId::Vault
+        | AreaId::CrownVault
+        | AreaId::HQ
+        | AreaId::Jungle
+        | AreaId::Loop => {
+            return None;
+        }
+    })
+}
+
 /// Wall bodies for a wall-cell set (shared by [`spawn_level`] and the
 /// title campfire below): indestructible `WallTile` bodies plus the
 /// screen-end mark. `floor_set` drives `is_screen_end_wall`.
@@ -1523,12 +1590,18 @@ fn spawn_wall_tiles(
 /// props, secret entrances, chests, enemies, boss extras, throne carpet,
 /// crown-vault pedestal). Floor/wall/decal/bone/detail `Sprite`s,
 /// transition quads and anchors are renderer-owned and skipped.
+/// `crown` / `ultra` are the live player's, because GML resolves the
+/// chest art variants, the Crown of Curses roll and the Steroids gates
+/// off `GameCont.crown` and `scr_ultra_get` at chest `Create_0` time.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_level(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
     run: &Run,
     scarier_face: bool,
     heavy_heart: bool,
+    crown: CrownKind,
+    ultra: Option<UltraMutationId>,
     plan: &LevelPlan,
     mask: &mut FloorMask,
 ) {
@@ -1543,6 +1616,8 @@ pub fn spawn_level(
     spawn_wall_tiles(&mut *commands, wall_set.into_iter().collect(), &floor_set);
 
     spawn_secret_entrances(commands, catalog, run, scarier_face, heavy_heart);
+
+    spawn_ground_details(commands, catalog, run, plan);
 
     let mut events = plan.population_events.clone();
     if events.is_empty() {
@@ -1609,38 +1684,98 @@ pub fn spawn_level(
         scarier_face,
         heavy_heart,
     };
+    let crown_kind = crown;
+    let ambidextrous = ultra == Some(UltraMutationId::SteroidsAmbidextrous);
+    let get_loaded = ultra == Some(UltraMutationId::SteroidsGetArmed);
+    let mut chest_order = 0u32;
     let mut enemy_count = 0usize;
     for event in &events {
         match *event {
             PopulationEvent::Prop { kind, pos } => {
-                spawn_prop_sim(commands, catalog, run, kind, pos);
+                spawn_prop_sim(commands, catalog, run, kind, pos, plan.styleb);
             }
-            PopulationEvent::Chest(chest) => match chest {
-                ChestSpawn::Weapon(p) if run.area == AreaId::CursedCaves => {
-                    spawn_chest(commands, catalog, ChestKind::CursedBig, p);
-                    commands.spawn((
-                        GameCleanup,
-                        LevelCleanup,
-                        PortalClear {
-                            timer: GTimer::from_seconds(5.0 / 30.0, crate::time::TimerMode::Once),
-                            scale: 1.0,
-                        },
-                        Pos(p),
-                    ));
+            PopulationEvent::Chest(chest) => {
+                // GML resolves `sprite_index` / `spr_dead`, the Crown of
+                // Curses roll and `dropseed` in `Create_0`, so the chest
+                // context is built once here and every chest on the floor
+                // is spawned through it.
+                let ctx = crate::pickups::ChestCtx {
+                    worldgen: true,
+                    area: run.area,
+                    crown: crown_kind,
+                    ambidextrous: ambidextrous,
+                    get_loaded: get_loaded,
+                    gen_seed: run.gen_seed,
+                    order: chest_order,
+                };
+                chest_order += 1;
+                let mut spawn = |kind: ChestKind, p: glam::Vec2| {
+                    crate::pickups::spawn_chest_with(commands, catalog, kind, p, &ctx)
+                };
+                match chest {
+                    ChestSpawn::Weapon(p) if run.area == AreaId::CursedCaves => {
+                        spawn(ChestKind::CursedBig, p);
+                        commands.spawn((
+                            GameCleanup,
+                            LevelCleanup,
+                            PortalClear {
+                                timer: GTimer::from_seconds(5.0 / 30.0, crate::time::TimerMode::Once),
+                                scale: 1.0,
+                            },
+                            Pos(p),
+                        ));
+                    }
+                    // GML `GenCont/Alarm_1.gml:78-88`: in the Cursed Caves
+                    // a `BigWeaponChest` also becomes a `CursedBigChest`.
+                    ChestSpawn::Custom(ChestKind::BigWeapon, p) if run.area == AreaId::CursedCaves => {
+                        spawn(ChestKind::CursedBig, p);
+                        commands.spawn((
+                            GameCleanup,
+                            LevelCleanup,
+                            PortalClear {
+                                timer: GTimer::from_seconds(5.0 / 30.0, crate::time::TimerMode::Once),
+                                scale: 1.0,
+                            },
+                            Pos(p),
+                        ));
+                    }
+                    // GML `GenCont/Alarm_1.gml:89-94`: in Y.V. Mansion
+                    // every weapon chest is a `GoldChest`.
+                    ChestSpawn::Weapon(p) if run.area == AreaId::City => {
+                        spawn(ChestKind::Gold, p);
+                    }
+                    ChestSpawn::Weapon(p) => {
+                        spawn(ChestKind::Weapon, p);
+                    }
+                    ChestSpawn::Ammo(p) => {
+                        // GML `AmmoChest/Create_0.gml:5-14`, per chest, in
+                        // the arena only (never the final palace subarea):
+                        // `!irandom(40) && (area >= 4 || loops > 0)` is an
+                        // `IDPDChest`, else `random(1) < 0.25` an
+                        // `AmmoChestMystery`.
+                        let palace_finale =
+                            run.area == AreaId::Palace && run.floor_in_area >= crate::worldgen::gml_max_subarea(crate::worldgen::gml_area_from_run(run));
+                        let mut kind = ChestKind::Ammo;
+                        if !palace_finale {
+                            let mut rng = rand::rng();
+                            let gml_area = crate::worldgen::gml_area_from_run(run) as i32;
+                            let idpd_ok = gml_area >= 4 || run.loop_count > 0;
+                            if idpd_ok && rng.random_range(0..40) == 0 {
+                                kind = ChestKind::Idpd;
+                            } else if rng.random::<f32>() < 0.25 {
+                                kind = ChestKind::Mystery;
+                            }
+                        }
+                        spawn(kind, p);
+                    }
+                    ChestSpawn::Custom(kind, p) => {
+                        spawn(kind, p);
+                    }
+                    ChestSpawn::Rad(p) => {
+                        spawn_rad_container(commands, catalog, run.gen_seed, p);
+                    }
                 }
-                ChestSpawn::Weapon(p) => {
-                    spawn_chest(commands, catalog, ChestKind::Weapon, p);
-                }
-                ChestSpawn::Ammo(p) => {
-                    spawn_chest(commands, catalog, ChestKind::Ammo, p);
-                }
-                ChestSpawn::Custom(kind, p) => {
-                    spawn_chest(commands, catalog, kind, p);
-                }
-                ChestSpawn::Rad(p) => {
-                    spawn_rad_container(commands, catalog, run.gen_seed, p);
-                }
-            },
+            }
             PopulationEvent::Enemy { kind, pos } => {
                 enemy_count += 1;
                 spawn_enemy_at(
@@ -1788,7 +1923,15 @@ fn reset_menu_room_resources(world: &mut World) {
     // into the menu room.
     world.insert_resource(Run::default());
     {
-        let mut run = world.resource_mut::<Run>();
+        // GML `PlayButton/Other_10` + `scrInit.gml:155`: `protowep` loads
+    // `etc.protowep` (default rusty revolver), so the prototype earned in
+    // one run carries into the next. `protocurse` is not persisted.
+    let protowep = world
+        .get_resource::<crate::savedata_part::SaveData>()
+        .map_or(crate::data::WeaponId(0), |s| s.protowep);
+    let mut run = world.resource_mut::<Run>();
+    run.protowep = protowep;
+    run.protocurse = false;
         run.floor = 0;
         run.world = 0;
         run.area = crate::data::AreaId::Campfire;
@@ -2061,6 +2204,7 @@ pub fn setup_title_campfire(world: &mut World) {
                     &camp_run,
                     crate::worldgen::PropKind::NightCactus,
                     at,
+                    false,
                 );
             }
             // `Alarm_1` topdecal half: night-desert top decals ride the
@@ -2073,6 +2217,7 @@ pub fn setup_title_campfire(world: &mut World) {
                     &camp_run,
                     crate::worldgen::PropKind::GroundDecal,
                     at,
+                    false,
                 );
             }
             // `scrCampfireMenuCreate` actors verbatim (positions in world

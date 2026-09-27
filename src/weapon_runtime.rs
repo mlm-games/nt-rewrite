@@ -272,6 +272,7 @@ pub fn weapon_sleep_secs(id: WeaponId) -> f32 {
         "SCREWDRIVER" | "WRENCH" | "GUITAR" => 4.0,
         "LASER RIFLE" | "LASER PISTOL" => 2.0,
         "ENERGY SWORD" | "ENERGY SCREWDRIVER" => 5.0,
+        "DOG SPIN ATTACK" => 0.0,
         _ => match fam {
             WeaponFamily::Empty => 0.0,
             WeaponFamily::Automatic | WeaponFamily::Pistol => 1.5,
@@ -1058,7 +1059,10 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
                 1.2, 0.07, 10.0, 7.0, 200.0,
                 [1.0, 0.72, 0.3], Vec2::splat(11.0));
 
-            set_split(def, 16, std::f32::consts::PI, 420.0, 3, 0.32, 3.0, 50.0,
+            // GML `FlakBullet/Destroy_0.gml:1-7`: 16 `Bullet2` at
+            // `motion_add(random_angle, 8 + random(8))` — speed 8..16
+            // px/step, `Bullet2` damage 2 / knockback_speed 2.
+            set_split(def, 16, std::f32::consts::PI, 360.0, 2, 0.32, 3.0, 60.0,
                 [1.0, 0.88, 0.55], Vec2::new(8.0, 3.0));
         }
 
@@ -1066,7 +1070,9 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
             set_explosive(def, 45, 1, 360.0, 1.2, 0.05, 12.0, 8.0, 240.0,
                 [1.0, 0.66, 0.22], Vec2::splat(12.0));
 
-            set_split(def, 20, std::f32::consts::PI, 460.0, 3, 0.36, 3.0, 55.0,
+            // GML `SuperFlakBullet/Destroy_0.gml:3-11`: a 5-bullet ring
+            // (`_ang += 72`) of `FlakBullet` at `random_range(12, 16)`.
+            set_split(def, 5, std::f32::consts::PI, 420.0, 8, 0.32, 3.5, 180.0,
                 [1.0, 0.9, 0.6], Vec2::new(8.0, 3.0));
         }
 
@@ -1248,10 +1254,24 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
         }
 
         "CLUSTER LAUNCHER" => {
-            set_explosive(def, 8, 1, 310.0, 0.72, 0.14, 9.0, 7.0, 170.0,
+            // GML `scrFire.gml:632` fires `ClusterNade` at 8 px/step with
+            // `scr_projectile_spread(8)`; `ClusterNade/Create_0.gml:3-8`
+            // sets `alarm[0] = 30` (1.0 s fuse), `damage = 7`,
+            // `knockback_speed = 10` (300 px/s) and inherits
+            // `Grenade/Collision_Wall.gml:18-19` — it bounces at `speed *= 0.6`
+            // instead of detonating.
+            set_explosive(def, 7, 1, 240.0, 1.0, 0.14, 9.0, 7.0, 300.0,
                 [1.0, 0.62, 0.22], Vec2::splat(11.0));
+            def.bounces = 255;
 
-            set_split(def, 6, 0.75, 340.0, 3, 0.4, 3.0, 45.0,
+            // GML `ClusterNade/Destroy_0.gml:1-13`: `8 + Death-crown`
+            // `SmallGrenade` on `random_angle` at `random_range(3, 5)`
+            // px/step, each inheriting `motion_add(parent_direction, 2)`
+            // and `friction = 0.4`. `SmallGrenade/Create_0.gml` is a
+            // `Grenade` child: damage 5, `alarm[0] = irandom_range(10, 20)`,
+            // `knockback_speed = 10` (300 px/s), and `Collision_Wall`
+            // destroys it outright.
+            set_split(def, 8, std::f32::consts::PI, 120.0, 5, 15.0 / 30.0, 3.0, 300.0,
                 [1.0, 0.78, 0.38], Vec2::splat(7.0));
         }
 
@@ -1347,6 +1367,15 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
 
         "SLEDGEHAMMER" => {
             set_melee(def, 24, 80.0, 2.45, 6.0, [0.88, 0.78, 0.48]);
+        }
+
+        "DOG SPIN ATTACK" => {
+            // GML `scrFire.gml:789-796`: the arm is only
+            // `instance_create(x, y, DogSpinAttack) { team; creator; ammo = 15 }`
+            // — no projectile, no `scr_weapon_post`, no screen shake.
+            set_ranged(def, 0, 1, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0,
+                [0.9, 0.9, 0.9], Vec2::splat(1.0));
+            def.shake = 0.0;
         }
 
         "GUITAR" | "ELECTRIC GUITAR" => {

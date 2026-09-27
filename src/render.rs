@@ -49,8 +49,10 @@ use crate::comps_a::{
     SlashProjectile, TILE, Team, Velocity, WallCell, WallTile,
 };
 use crate::comps_b::{
-    Beam, BigDogMissileState, BossBrain, BossPhase, ChestKind, Corpse, Enemy, EnemyBrain, FxAngle,
-    GmlImage, GroundDecalTint, HazardCloud, HurtAnim, MaggotSpawnCharge, Mote, MoteScale,
+    Beam, BigDogMissileState, BossBrain, BossPhase, ChestArt, ChestKind, Corpse, Enemy, EnemyBrain,
+    FxAngle,
+    GmlImage, GroundDecalTint, GroundDetail, HazardCloud, HurtAnim, MaggotSpawnCharge, Mote,
+    MoteScale,
     NativeAngle, NativeDepth, NativeFlip, NativeScale, OpenedChest, Pickup, PickupKind,
     PickupLifetime, Portal, PortalClear, PortalShock, PortalStrike, Prop, PropSprites, Shield,
     CrownObject, InvisiWall,
@@ -976,6 +978,8 @@ pub fn pickup_art(kind: &PickupKind) -> Cow<'static, str> {
         PickupKind::Chest(kind) => match kind {
             ChestKind::Weapon => Cow::Borrowed("images/sprWeaponChest.png"),
             ChestKind::Ammo => Cow::Borrowed("images/sprAmmoChest.png"),
+            ChestKind::Mystery => Cow::Borrowed("images/sprAmmoChestMystery.png"),
+            ChestKind::Gold => Cow::Borrowed("images/sprGoldChest.png"),
             ChestKind::Rad => Cow::Borrowed("images/sprRadChest.png"),
             ChestKind::Health => Cow::Borrowed("images/sprHealthChest.png"),
             ChestKind::CursedBig => Cow::Borrowed("images/sprCursedChestBig.png"),
@@ -2340,7 +2344,10 @@ pub fn world_instances_cached(
                     false,
                     true,
                     0.0,
-                    [0.0, 0.0, 0.0, 0.4],
+                    // GML `scrShadows.gml:29` verbatim: the wall
+                    // `outspr` is `draw_sprite_ext`ed with `c_black`
+                    // at alpha 1, mirrored on Y.
+                    [0.0, 0.0, 0.0, 1.0],
                 ) {
                     s.z = Z_SHADOW;
                     wall_shadows.push(s);
@@ -2396,6 +2403,27 @@ pub fn world_instances_cached(
                     s.z = Z_GROUND_DETAIL;
                     out.push(s);
                 }
+            }
+        }
+    }
+
+    // GML `Detail` ground-decal scatter (`scrPopulate.gml:26-30`, one
+    // `random(6) < 1` per room tile). `Detail/Create_0.gml` is static
+    // (`image_speed = 0`), randomly mirrored and on a random frame, and
+    // sits on the floor below every prop.
+    {
+        let mut q = world.query::<(&Pos, &GroundDetail)>();
+        for (pos, detail) in q.iter(world) {
+            if let Some(mut s) = assets.sprite_for(
+                detail.path,
+                detail.frame as i32,
+                pos.0,
+                detail.flip_x,
+                0.0,
+                [1.0; 4],
+            ) {
+                s.z = Z_GROUND_DETAIL;
+                out.push(s);
             }
         }
     }
@@ -2727,37 +2755,62 @@ pub fn world_instances_cached(
     // sizes to the catalog cell — no override. Animated kinds (rads at
     // 12fps from a random start, chest idle shimmer) ride their live
     // `SpriteAnim` frame; static kinds sit on frame 0.
+    // Chests drive a fractional `image_index` by hand (GML
+    // `chestprop/Step_0.gml:4-7`, `image_speed = 0`), so a live
+    // `GmlImage` on the pickup wins over the catalog-fps `SpriteAnim`.
     {
-        let mut q = world.query::<(&Pos, &Pickup, Option<&SpriteAnim>)>();
-        for (pos, pickup, anim) in q.iter(world) {
-            let path = pickup_art(&pickup.kind);
-            let frame = anim.map(|a| a.frame as i32).unwrap_or(0);
-            if let Some(s) = assets.sprite_for(&path, frame, pos.0, false, 0.0, [1.0; 4]) {
+        let mut q = world.query::<(
+            &Pos,
+            &Pickup,
+            Option<&SpriteAnim>,
+            Option<&GmlImage>,
+            Option<&ChestArt>,
+        )>();
+        for (pos, pickup, anim, image, art) in q.iter(world) {
+            let fallback = pickup_art(&pickup.kind);
+            let path = art.map(|a| a.idle).unwrap_or(fallback.as_ref());
+            let frame = image
+                .map(|i| i.frame())
+                .or_else(|| anim.map(|a| a.frame as i32))
+                .unwrap_or(0);
+            if let Some(s) = assets.sprite_for(path, frame, pos.0, false, 0.0, [1.0; 4]) {
                 out.push(s);
             }
         }
     }
 
-    // Opened chests: bevy `open_chest` swaps to the kind-specific open
-    // art frozen on the last frame (weapon/ammo frame 0, rad corpse
-    // frame 2 clamped to the strip, exactly like bevy's
-    // `last_frame.min(def.frames - 1)`).
+    // Opened chests: GML spawns a `ChestOpen` whose `image_speed = 0.4`
+    // walks the open strip and `ChestOpen/Other_7.gml:1-2` parks it on
+    // `image_number - 1`. Single-frame open art therefore never moves,
+    // so the terminal frame is the whole animation for every kind
+    // except the multi-frame mystery/protopen strips.
     {
-        let mut q = world.query::<(&Pos, &OpenedChest)>();
-        for (pos, opened) in q.iter(world) {
+        let mut q = world.query::<(&Pos, &OpenedChest, Option<&ChestArt>)>();
+        for (pos, opened, art) in q.iter(world) {
             let (path, last) = match opened.0 {
                 ChestKind::Weapon => ("images/sprWeaponChestOpen.png", 0u32),
                 ChestKind::Ammo => ("images/sprAmmoChestOpen.png", 0u32),
+                // GML `ChestOpen` walks this 5-frame strip at
+                // `image_speed = 0.4` and `Other_7.gml:1-2` parks it on
+                // `image_number - 1`, i.e. frame 4.
+                ChestKind::Mystery => ("images/sprAmmoChestMysteryOpen.png", 4u32),
+                ChestKind::Gold => ("images/sprGoldChestOpen.png", 0u32),
+                // GML `prop/Destroy_0.gml:2-8` -> `Corpse`, which freezes
+                // on `image_number - 1` after `image_speed = 0.4`.
                 ChestKind::Rad => ("images/sprRadChestCorpse.png", 2u32),
                 ChestKind::Health => ("images/sprHealthChestOpen.png", 0u32),
-                ChestKind::CursedBig => ("images/sprCursedChestBigOpen.png", 0u32),
+                // GML `CursedBigChest/Destroy_0.gml:2`: the opened cursed
+                // big chest is the plain big-weapon open art;
+                // `sprCursedChestBigOpen` is never drawn in GML.
+                ChestKind::CursedBig => ("images/sprWeaponChestBigOpen.png", 0u32),
                 ChestKind::Rogue => ("images/sprRogueAmmoChestOpen.png", 0u32),
                 ChestKind::Proto => ("images/sprProtoChestOpen.png", 0u32),
                 ChestKind::BigWeapon => ("images/sprWeaponChestBigOpen.png", 0u32),
-                ChestKind::RadBig => ("images/sprRadChestBigDead.png", 0u32),
-                ChestKind::RadMaggot => ("images/sprRadChestMaggotDead.png", 0u32),
+                ChestKind::RadBig => ("images/sprRadChestBigDead.png", 2u32),
+                ChestKind::RadMaggot => ("images/sprRadChestMaggotDead.png", 3u32),
                 ChestKind::Idpd => ("images/sprIDPDChestOpen.png", 0u32),
             };
+            let path = art.map(|a| a.open).unwrap_or(path);
             let frames = strip_frames(assets, path);
             let frame = last.min(frames.saturating_sub(1)) as i32;
             if let Some(s) = assets.sprite_for(path, frame, pos.0, false, 0.0, [1.0; 4]) {
@@ -7919,7 +7972,10 @@ fn push_shadow(
         pos + spec.offset,
         false,
         0.0,
-        [1.0, 1.0, 1.0, 0.4],
+        // GML `scrShadows` composites the `shd*` strips with a plain
+        // `draw_sprite` onto a transparent surface: no tint, no alpha.
+        // The strips are already opaque black silhouettes in the atlas.
+        [1.0, 1.0, 1.0, 1.0],
     ) {
         out.push(s);
     }
@@ -7976,6 +8032,23 @@ pub fn shadow_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIns
     let mut q = world.query::<(&Pos, &Pickup)>();
     for (pos, pickup) in q.iter(world) {
         push_pickup_shadow(&mut out, assets, pos.0, pickup.kind);
+    }
+    // GML `ProtoChest/Collision_Player.gml:5` only swaps `sprite_index` on
+    // the live chest, so `scrShadows`' `with chestprop` arm keeps drawing
+    // its `shd24`. Every other chest open becomes a `ChestOpen`, which
+    // `scrShadows` never draws.
+    {
+        let mut q = world.query::<(&Pos, &OpenedChest)>();
+        for (pos, opened) in q.iter(world) {
+            if opened.0 == ChestKind::Proto {
+                push_shadow(
+                    &mut out,
+                    assets,
+                    pos.0,
+                    ShadowSpec::new("images/shd24.png", 0.0, -1.0),
+                );
+            }
+        }
     }
     let mut q = world.query_filtered::<
         (&Pos, &Prop, Option<&PropSprites>),
@@ -10756,6 +10829,56 @@ pub fn spiral_figures(
 /// the repose text overlay.
 pub fn fx_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInstance> {
     let mut out = Vec::new();
+
+    // GML `scrDrawInteractionHUD` (`scripts/scrDrawPlayerHUD/
+    // scrDrawPlayerHUD.gml:339-370`) + `draw_pickup_button`
+    // (`scripts/draw_gamepad_button/draw_gamepad_button.gml:43-101`).
+    // The weapon NAME line rides the text pass; the two sprite parts
+    // ride this one: the `sprEPickup` "E" pill at `(x, y-7)` (drawn at
+    // full opacity with `_offset = 7`), and `scrDrawTypeAmmo`'s
+    // background/icon pair at `(x + 7, y - 14)` with the background on
+    // subimage 2 and the icon at `_frames - ceil(_frames * fill)`, so
+    // a full magazine is icon frame 0.
+    {
+        let Some(label) = world.get_resource::<crate::pickups::WeaponLabel>() else {
+            return out;
+        };
+        let Some(target) = label.target else {
+            return out;
+        };
+        if label.text.is_empty() {
+            return out;
+        }
+        let Some(at) = world.get::<Pos>(target).map(|p| p.0) else {
+            return out;
+        };
+        if let Some(mut s) = assets.sprite_for(
+            crate::hud::PICKUP_BUTTON_ART,
+            label.button_frame as i32,
+            at + Vec2::new(0.0, -7.0),
+            false,
+            0.0,
+            [1.0; 4],
+        ) {
+            s.z = Z_FX;
+            out.push(s);
+        }
+        if let Some((bg, icon)) = label.ammo_gauge {
+            let at = at + Vec2::new(7.0, -14.0);
+            if let Some(mut s) = assets.sprite_for(bg, 2, at, false, 0.0, [1.0; 4]) {
+                s.z = Z_FX;
+                out.push(s);
+            }
+            let frames = strip_frames(assets, icon);
+            let full = frames.saturating_sub(1);
+            let idx = (full as f32 * label.ammo_fill).ceil();
+            let frame = (full as f32 - idx).round().clamp(0.0, full as f32) as i32;
+            if let Some(mut s) = assets.sprite_for(icon, frame, at, false, 0.0, [1.0; 4]) {
+                s.z = Z_FX;
+                out.push(s);
+            }
+        }
+    }
 
     // Beams: oriented strip quads spanning the sim segment. `Pos` is
     // the segment center (`spawn_beam_shot`/`boss_ai` parity), so the

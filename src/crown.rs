@@ -15,15 +15,24 @@ use repame_sim::SimTime;
 
 use crate::comps_a::{
     CrownState, FloorStarted, GameCleanup, Health, Hitbox, Inventory, LevelCleanup, Player,
-    Projectile, SaveDirty, SelectedCharacter, Team, Toast, Velocity,
+    Projectile, Run, Team, Toast, Velocity,
 };
-use crate::comps_b::{Ally, ChestKind, CrownObject, CrownPedestal, Enemy, Pickup, PickupKind, Shield};
+use crate::comps_b::{
+    Ally, ChestKind, CrownObject, CrownPedestal, Enemy, Pickup, PickupKind, RadChestContainer, Shield,
+};
 use crate::data::{AmmoKind, CrownKind, WeaponId, ammo_pickup_amount};
 use crate::enemy_data::enemy_def;
 use crate::msg::Queue;
-use crate::savedata_part::SaveData;
 use crate::spatial::Pos;
 use crate::time::{GTimer, TimerMode};
+
+/// GML `VaultStatue` (`objects/VaultStatue/Create_0.gml:1-3`: `max_hp
+/// = 50`, `size = 2`, `rad = 0`) — the crown-vault guard. The body is a
+/// `Prop`; this marker is the `instance_exists(VaultStatue)` test that
+/// `CrownPickup/Collision_Player:18,24` gates the type-3 portal and the
+/// statue kill on.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct VaultStatue;
 
 /// Apply a crown's spawn-time stats. Dependency-free (pure `Player` /
 /// `Health` / `Inventory` mutation) so `setup.rs` can call it later.
@@ -31,7 +40,7 @@ pub fn apply_crown_to_spawn(
     crown: CrownKind,
     player: &mut Player,
     health: &mut Health,
-    inv: &mut Inventory,
+    _inv: &mut Inventory,
 ) {
     player.crown = crown;
 
@@ -67,9 +76,8 @@ pub fn apply_crown_to_spawn(
         }
 
         CrownKind::Destiny => {
-            if inv.weapons[1] == WeaponId::NONE {
-                inv.weapons[1] = WeaponId::ASSAULT_RIFLE;
-            }
+            // GML `scrCrownApplyEquipEffect:118-139`: Destiny's whole
+            // effect is one free mutation pick (`codpick`), once per run.
             player.mutation_picks_owed += 1;
         }
 
@@ -232,19 +240,10 @@ pub fn tick_crown_curses(
     }
 }
 
-const DESTINY_POOL: [WeaponId; 7] = [
-    WeaponId::ASSAULT_RIFLE,
-    WeaponId::CROSSBOW,
-    WeaponId::GRENADE_LAUNCHER,
-    WeaponId(38),
-    WeaponId(58),
-    WeaponId(72),
-    WeaponId(104),
-];
-
-/// Floor-start bonuses for Destiny (deterministic weapon swap), Risk
-/// (ammo refill), Luck (clamp to 1 HP) and Guns (bonus weapon drop,
-/// skipped in secret areas).
+/// Floor-start bonuses for Risk (ammo refill), Luck (clamp to 1 HP) and
+/// Guns (bonus weapon drop, skipped in secret areas). GML has no
+/// Destiny floor-start effect: "NARROW FUTURE" is the narrowed
+/// level-up offer (`LevCont/Create_0:75,143-149`), not a weapon pool.
 pub fn crown_floor_start_bonus(
     mut started: ResMut<Queue<FloorStarted>>,
     mut commands: Commands,
@@ -268,22 +267,8 @@ pub fn crown_floor_start_bonus(
         return;
     };
 
-    for (player, mut state, mut inv, pos, mut health) in &mut q {
+    for (player, _state, mut inv, pos, mut health) in &mut q {
         match player.crown {
-            CrownKind::Destiny => {
-                if !state.destiny_ready {
-                    continue;
-                }
-                state.destiny_ready = false;
-
-                let idx = ((pos.0.x.abs() as usize)
-                    + player.level as usize * 3
-                    + floor.floor as usize)
-                    % DESTINY_POOL.len();
-                let slot = inv.current.min(inv.weapon_slots.saturating_sub(1));
-                inv.weapons[slot] = DESTINY_POOL[idx];
-            }
-
             CrownKind::Risk => {
                 for ammo in [
                     AmmoKind::Bullets,
@@ -364,59 +349,99 @@ pub fn crown_name_for_toast(crown: CrownKind) -> &'static str {
     }
 }
 
-/// Crown of Love: weapon/rad chests become ammo chests. Runs on floor
-/// start and continuously for boss-drop chests.
+/// GML runs the crown chest conversions ONCE inside `scrPopChests` (the
+/// crowns region, lines 124-143), i.e. once per generated room — never per
+/// frame. This keys the pass off `Run.gen_seed`, which changes exactly when
+/// a new level is generated, so a mid-floor chest is NOT converted and a
+/// generated one always is.
+fn claim_crown_convert(run: &Run, done: &mut Local<Option<u64>>) -> bool {
+    if done.as_ref() == Some(&run.gen_seed) {
+        return false;
+    }
+    **done = Some(run.gen_seed);
+    true
+}
+
+/// Crown of Love: `scripts/scrPopChests.gml:131-143` verbatim — `with
+/// chestprop { if object_index != ProtoChest && object_index !=
+/// RogueChest { -> AmmoChest } }` plus a second `with RadChest` arm.
+/// `chestprop` is hierarchy-inclusive, so the set is every chest kind
+/// except Proto and Rogue; the rad chests are `prop` descendants and get
+/// their own arm (the port keeps plain `RadChest` as a `Prop`).
 pub fn tick_crown_love_convert(
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
+    run: Res<Run>,
     player_q: Query<&Player, With<Player>>,
     mut chests: Query<(Entity, &Pickup, &Pos)>,
+    mut rad_props: Query<(Entity, &Pos), With<RadChestContainer>>,
+    mut done: Local<Option<u64>>,
 ) {
     let Ok(player) = player_q.single() else {
         return;
     };
-    if player.crown != CrownKind::Love {
+    if player.crown != CrownKind::Love || !claim_crown_convert(&run, &mut done) {
         return;
     }
     for (e, pickup, pos) in &mut chests {
-        // GML Crown Love: every chestprop (Weapon/Rad/Ammo/Health/
-        // CursedBig — no Proto/Rogue kinds exist yet) becomes Ammo.
-        let is_convertible = matches!(
+        if !matches!(
             pickup.kind,
-            PickupKind::Chest(ChestKind::Weapon)
-                | PickupKind::Chest(ChestKind::Rad)
-                | PickupKind::Chest(ChestKind::Ammo)
-                | PickupKind::Chest(ChestKind::Health)
-                | PickupKind::Chest(ChestKind::CursedBig)
-        );
-        if !is_convertible {
+            PickupKind::Chest(
+                ChestKind::Weapon
+                    | ChestKind::BigWeapon
+                    | ChestKind::CursedBig
+                    | ChestKind::Gold
+                    | ChestKind::Idpd
+                    | ChestKind::Ammo
+                    | ChestKind::Mystery
+                    | ChestKind::Health
+                    | ChestKind::RadBig
+                    | ChestKind::RadMaggot
+            )
+        ) {
             continue;
         }
         let at = pos.0;
         commands.entity(e).despawn();
         crate::pickups::spawn_chest(&mut commands, &catalog, ChestKind::Ammo, at);
     }
+    for (e, pos) in &mut rad_props {
+        let at = pos.0;
+        commands.entity(e).despawn();
+        crate::pickups::spawn_chest(&mut commands, &catalog, ChestKind::Ammo, at);
+    }
 }
 
-/// Crown of Life: rad chests become health chests (GML `scrPopChests`
-/// crowns region). Runs on floor start and continuously, mirroring the
-/// Love converter.
+/// Crown of Life: `scripts/scrPopChests.gml:124-129` verbatim — `with
+/// RadChest { -> HealthChest }`, hierarchy-inclusive over `RadChest`,
+/// `RadChestBig` and `RadMaggotChest`.
 pub fn tick_crown_life_convert(
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
+    run: Res<Run>,
     player_q: Query<&Player, With<Player>>,
     mut chests: Query<(Entity, &Pickup, &Pos)>,
+    mut rad_props: Query<(Entity, &Pos), With<RadChestContainer>>,
+    mut done: Local<Option<u64>>,
 ) {
     let Ok(player) = player_q.single() else {
         return;
     };
-    if player.crown != CrownKind::Life {
+    if player.crown != CrownKind::Life || !claim_crown_convert(&run, &mut done) {
         return;
     }
     for (e, pickup, pos) in &mut chests {
-        if !matches!(pickup.kind, PickupKind::Chest(ChestKind::Rad)) {
+        if !matches!(
+            pickup.kind,
+            PickupKind::Chest(ChestKind::RadBig | ChestKind::RadMaggot)
+        ) {
             continue;
         }
+        let at = pos.0;
+        commands.entity(e).despawn();
+        crate::pickups::spawn_chest(&mut commands, &catalog, ChestKind::Health, at);
+    }
+    for (e, pos) in &mut rad_props {
         let at = pos.0;
         commands.entity(e).despawn();
         crate::pickups::spawn_chest(&mut commands, &catalog, ChestKind::Health, at);
@@ -493,19 +518,19 @@ pub fn tick_crown_object(
 
 /// Port id (save identity) for a crown: GML crowns are 1-based with an
 /// extra offset (`crown_port_to_gml` parity).
-fn crown_port_to_gml(id: u8) -> u8 {
+pub fn crown_port_to_gml(id: u8) -> u8 {
     if id == 0 { 1 } else { id + 1 }
 }
 
 /// Crown pedestal pickup: touch range applies the crown, resets crown
-/// state, records the unlock (row + next-run `start_crown` stamp via
-/// `unlock_crown`, bevy parity), toasts, and consumes the pedestal.
+/// state, uncurses, opens the type-3 vault portal when the pedestal is
+/// undefended, records the toast, and consumes the pedestal.
+/// Crown *unlocking* is not here: GML `scrCrownUnlock` only runs from
+/// `scrUnlocksWinOrLoop` (`scripts/scrUnlocks.gml:243-245`).
 pub fn tick_crown_pedestal(
     mut commands: Commands,
     mut toast: ResMut<Toast>,
-    mut save: ResMut<SaveData>,
-    mut dirty: ResMut<SaveDirty>,
-    selected: Res<SelectedCharacter>,
+    catalog: Res<repame_anim::AnimCatalog>,
     mut q_player: Query<
         (
             &Pos,
@@ -517,7 +542,9 @@ pub fn tick_crown_pedestal(
         With<Player>,
     >,
     pedestals: Query<(Entity, &Pos, &CrownPedestal)>,
+    statues: Query<Entity, With<VaultStatue>>,
     crowns: Query<Entity, With<CrownObject>>,
+    mut shots: Query<(Entity, &Team), With<Projectile>>,
 ) {
     let Ok((ppos, mut player, mut health, mut inv, mut state)) = q_player.single_mut() else {
         return;
@@ -529,30 +556,16 @@ pub fn tick_crown_pedestal(
         }
         apply_crown_to_spawn(ped.kind, &mut player, &mut health, &mut inv);
         *state = CrownState::new(ped.kind);
-        // GML `CrownPickup/Collision_Player`: taking a crown uncurses.
+        // GML `CrownPickup/Collision_Player:12-16`: taking a crown uncurses.
         inv.cursed = [false, false, false];
 
-        let gml = crown_port_to_gml(ped.kind as u8);
-        let had = (gml as usize) < 14
-            && save
-                .crown_got
-                .get(&selected.0)
-                .is_some_and(|r| r[gml as usize]);
-        save.unlock_crown(selected.0, gml);
-        if !had {
-            dirty.0 = true;
+        // GML `CrownPickup/Collision_Player:18-20`: an undefended pedestal
+        // (no `VaultStatue`) opens the type-3 portal on the spot, so the
+        // vault can be left without clearing it.
+        if statues.is_empty() {
+            crate::progression::spawn_portal(&mut commands, &catalog, &mut shots, pos.0, 3);
         }
-        // GML `CROWN_LIFE`: unlocking a crown as any character.
-        if crate::savedata_part::unlock_achievement(&mut save, 22) {
-            dirty.0 = true;
-            toast.show("CROWN LIFE");
-        }
-        // GML `VAULT_RAIDER`: every crown held as any character.
-        let raider = save.crown_got.values().any(|r| r.iter().all(|b| *b));
-        if raider && crate::savedata_part::unlock_achievement(&mut save, 39) {
-            dirty.0 = true;
-            toast.show("VAULT RAIDER");
-        }
+
         toast.show(&format!(
             "{} TAKEN",
             crown_name_for_toast(ped.kind).to_ascii_uppercase()

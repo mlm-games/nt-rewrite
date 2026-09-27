@@ -657,6 +657,14 @@ pub enum PickupKind {
 pub enum ChestKind {
     Weapon,
     Ammo,
+    /// GML `AmmoChestMystery`: 25% of ammo chests in Crystal Caves
+    /// and later (`AmmoChest/Create_0.gml:10-13`). Pays `x3` of one ammo
+    /// type the player is not holding, or under Get Loaded `x3` of all
+    /// five except the two `scrAmmoDecideType(_player, true)` returns.
+    Mystery,
+    /// GML `GoldChest`: Y.V. Mansion weapon chests
+    /// (`GenCont/Alarm_1.gml:89-94`), `scrDecideWepGold` loot.
+    Gold,
     Rad,
     /// GML `HealthChest`: heals 4 (8 with Second Stomach).
     Health,
@@ -684,6 +692,20 @@ pub enum ChestKind {
 /// ride the curse-system phase.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct PickupCurse;
+
+/// GML per-chest `sprite_index` / `spr_dead` variants, chosen in
+/// `Create_0` and fixed for the chest's life: Oasis
+/// `sprClamChest`/`Open` (`WeaponChest/Create_0.gml:12-15`), Crown of
+/// Curses `sprCursedChest` (`WeaponChest/Create_0.gml:16-18`),
+/// Ambidextrous `sprWeaponChestSteroidsUltra` (`:19-21`), Steroids Get
+/// Loaded `sprAmmoChestSteroids` (`AmmoChest/Create_0.gml:16-19`),
+/// Pizza Sewers `choose(sprPizzaChest1, sprPizzaChest2)` /
+/// `sprPizzaChestOpen` (`HealthChest/Create_0.gml:12-15`).
+#[derive(Component, Clone, Copy, Debug)]
+pub struct ChestArt {
+    pub idle: &'static str,
+    pub open: &'static str,
+}
 
 impl From<WeaponKind> for PickupKind {
     fn from(k: WeaponKind) -> Self {
@@ -810,6 +832,10 @@ pub struct HurtAnim {
     pub hurt: &'static str,
     pub timer: Timer,
     pub was_moving: bool,
+    /// GML never changes `image_speed` on a hurt flip, so the return
+    /// to `spr_idle` must resume the rate the entity was built with
+    /// (props: `prop/Create_0.gml:3` `image_speed = 0.4`).
+    pub rate: f32,
 }
 
 #[derive(Component)]
@@ -852,6 +878,12 @@ pub struct GmlImage {
     pub looping: bool,
     pub finished: bool,
     pub destroy_on_end: bool,
+    /// GML hand-driven first-frame ramp (`chestprop/Step_0.gml:4-7`):
+    /// while `image_index < 1` the index advances by
+    /// `random(first_jitter)` instead of `image_speed`, so the entity
+    /// dwells on frame 0 for a random run before the strip plays.
+    /// `0.0` disables the ramp (every other GML object).
+    pub first_jitter: f32,
 }
 
 impl GmlImage {
@@ -864,6 +896,17 @@ impl GmlImage {
             looping: true,
             finished: false,
             destroy_on_end: false,
+            first_jitter: 0.0,
+        }
+    }
+
+    /// GML `chestprop/Step_0.gml:4-7` verbatim ramp: `image_speed = 0`
+    /// (the built-in advance is off) and the index is driven by hand —
+    /// `random(0.04)` while `image_index < 1`, else `+0.4`.
+    pub fn ramped(path: &'static str, frames: u32, image_speed: f32, first_jitter: f32) -> Self {
+        Self {
+            first_jitter,
+            ..Self::new(path, frames, image_speed)
         }
     }
 
@@ -894,6 +937,21 @@ impl GmlImage {
             self.phase
         };
         (frame.floor() as i32).clamp(0, self.frames.max(1) as i32 - 1)
+    }
+
+    /// `ramp_draw` is the GML `random(first_jitter)` sample for the
+    /// first-frame dwell; the caller passes `1.0` when the ramp is off.
+    pub fn advance_ramped(&mut self, steps: f32, ramp_draw: f32) -> bool {
+        if self.finished {
+            return false;
+        }
+        if self.first_jitter > 0.0 && self.phase < 1.0 {
+            self.phase += self.first_jitter * ramp_draw;
+            if self.phase < 1.0 {
+                return false;
+            }
+        }
+        self.advance(steps)
     }
 
     pub fn advance(&mut self, steps: f32) -> bool {
@@ -1059,6 +1117,51 @@ pub struct PropSprites {
     pub idle: &'static str,
     pub hurt: &'static str,
     pub dead: &'static str,
+    pub flip_x: bool,
+}
+
+/// GML `prop.size` is a knockdown *tier* (1..5), not a pixel box, and is
+/// the only gate on `enemy/Collision_prop.gml:20`
+/// (`if (size > other.size && meleedamage > 0 ...)`). The Rust `Prop.size`
+/// is the pixel AABB, so the tier rides alongside it.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct PropTier(pub u8);
+
+/// GML `canbreak = 0` (`ThroneStatue/Create_0.gml:2`,
+/// `BigGeneratorInactive/Create_0.gml:2`). `ThroneStatue/Step_1.gml:4`
+/// re-pins `hp = 1000` every step, so a statue can never die from damage.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct UnbreakableProp;
+
+/// GML `chestprop/Create_0.gml:10` `dropseed =
+/// rng_next_int(RNGStates.WeaponDrops)`, drawn in `Create_0` before any
+/// subclass roll. `BigWeaponChest/Collision_Player.gml:14` and
+/// `CursedBigChest/Collision_Player.gml:14` `random_set_seed(dropseed)`
+/// before rolling their three weapons, so a chest's contents are fixed
+/// at spawn.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct DropSeed(pub u32);
+
+/// GML `chestprop` ground physics: `friction = 0.4`
+/// (`chestprop/Create_0.gml:5`), the `if speed > 4 speed = 4` cap
+/// (`chestprop/Step_0.gml:9-10`), `move_bounce_solid(true)` on walls
+/// (`Collision_Wall.gml:4`), and the `motion_add(..., 1)` shove from an
+/// overlapping chest (`Collision_chestprop.gml:5`) or `motion_add(...,
+/// 0.5)` from a walking enemy (`enemy/Collision_chestprop.gml:4`).
+/// Velocities are px per second (GML px per step times `SIM_HZ`).
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct ChestPropMotion {
+    pub vel: Vec2,
+}
+
+/// GML `Detail` ground-decal scatter (`scrPopulate.gml:26-30`, one
+/// `random(6) < 1` per room tile; `Detail/Create_0.gml` picks
+/// `sprDetail<area>`, bails when the tile is `styleb` outside City, and
+/// lands on a random frame with a random mirror).
+#[derive(Component, Clone, Copy, Debug)]
+pub struct GroundDetail {
+    pub path: &'static str,
+    pub frame: u32,
     pub flip_x: bool,
 }
 
@@ -1317,9 +1420,6 @@ pub struct PopoNadeM;
 
 #[derive(Component, Clone, Copy, Debug)]
 pub struct SnowmanAmbush;
-
-#[derive(Component, Clone, Copy, Debug)]
-pub struct GoldBarrelDrop;
 
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RadChestContainer;

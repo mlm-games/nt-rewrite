@@ -362,6 +362,133 @@ impl GameAudio {
         Self::cue(cues, "sndVanWarning", 0.7, 0.05);
     }
 
+    // --- Pickup / chest cues (GML stems verbatim).
+
+    /// GML `Rad/Step_0.gml:33` `snd_play(sndRadPickup)`.
+    pub fn play_rad_pickup(&self, cues: &mut Queue<AudioCue>) {
+        Self::cue(cues, "sndRadPickup", 0.5, 0.15);
+    }
+
+    /// GML `HPPickup/Collision_Player.gml:18`
+    /// `scr_skill_get(mut_second_stomach) ? sndHPPickupBig : sndHPPickup`.
+    pub fn play_hp_pickup(&self, cues: &mut Queue<AudioCue>, big: bool) {
+        Self::cue(
+            cues,
+            if big { "sndHPPickupBig" } else { "sndHPPickup" },
+            0.6,
+            0.05,
+        );
+    }
+
+    /// GML `AmmoPickup/Collision_Player.gml:26` `sndAmmoPickup`.
+    pub fn play_ammo_pickup(&self, cues: &mut Queue<AudioCue>) {
+        Self::cue(cues, "sndAmmoPickup", 0.6, 0.05);
+    }
+
+    /// GML `WeaponChest/Collision_Player.gml:26-34`: Oasis
+    /// `sndOasisChest` / Curses `sndCursedChest` / else `sndWeaponChest`.
+    pub fn play_weapon_chest_open(&self, cues: &mut Queue<AudioCue>, underwater: bool, cursed: bool) {
+        Self::cue(
+            cues,
+            if underwater {
+                "sndOasisChest"
+            } else if cursed {
+                "sndCursedChest"
+            } else {
+                "sndWeaponChest"
+            },
+            0.6,
+            0.05,
+        );
+    }
+
+    /// GML `AmmoChest/Collision_Player.gml:23` / `AmmoChestMystery:32`
+    /// / `IDPDChest/Collision_Player.gml:15`:
+    /// `snd_play(GameCont.underwater ? sndOasisChest : sndAmmoChest)`.
+    pub fn play_ammo_chest_open(&self, cues: &mut Queue<AudioCue>, underwater: bool) {
+        Self::cue(
+            cues,
+            if underwater {
+                "sndOasisChest"
+            } else {
+                "sndAmmoChest"
+            },
+            0.6,
+            0.05,
+        );
+    }
+
+    /// GML `GoldChest/Collision_Player.gml:10` `sndGoldChest`.
+    pub fn play_gold_chest(&self, cues: &mut Queue<AudioCue>) {
+        Self::cue(cues, "sndGoldChest", 0.6, 0.05);
+    }
+
+    /// GML `RogueChest/Collision_Player.gml:17` (and
+    /// `RogueAmmo/Collision_Player.gml:20`) `sndRogueCanister`.
+    pub fn play_rogue_canister(&self, cues: &mut Queue<AudioCue>) {
+        Self::cue(cues, "sndRogueCanister", 0.6, 0.05);
+    }
+
+    /// GML `RadChest/Destroy_0.gml:11-12` / `RadMaggotChest/Destroy_0.gml:11`
+    /// `snd_play(sndEXPChest)` — the rad-chest family, never the
+    /// generic pickup blip.
+    pub fn play_exp_chest(&self, cues: &mut Queue<AudioCue>) {
+        Self::cue(cues, "sndEXPChest", 0.6, 0.05);
+    }
+
+    /// GML `CursedPickup/Create_0.gml:8` `snd_play_hit(sndCursedPickup, 0.2)`.
+    pub fn play_cursed_pickup(&self, cues: &mut Queue<AudioCue>) {
+        Self::cue(cues, "sndCursedPickup", 0.2, 0.0);
+    }
+
+    /// GML `Player/Collision_WepPickup.gml:14-27`: guitar /
+    /// electric-guitar / gold / plain weapon collect stems.
+    pub fn play_weapon_pickup(&self, cues: &mut Queue<AudioCue>, weapon: crate::data::WeaponId) {
+        let meta = crate::weapon_runtime::weapon_meta(weapon);
+        let name = if meta.wep_gold {
+            "sndGoldPickup"
+        } else if meta.wep_sprt == "sprGuitar" {
+            "sndGuitarPickup"
+        } else if meta.wep_sprt == "sprElectricGuitar" {
+            "sndSwapElectricGuitar"
+        } else {
+            "sndWeaponPickup"
+        };
+        Self::cue(cues, name, 0.6, 0.05);
+    }
+
+    /// GML `BigWeaponChest/Collision_Player.gml:26-28` /
+    /// `CursedBigChest:29-31`: `snd_play_hit(sndBig*Chest)` plus the
+    /// per-race `snd_play_hit_big(snd_chst)` thump. `chst` stem is
+    /// `scr_race_get_sound(race, "Chst", sndMutant1Chst)`.
+    pub fn play_big_chest_open(
+        &self,
+        cues: &mut Queue<AudioCue>,
+        cursed: bool,
+        chst: &'static str,
+    ) {
+        Self::cue(
+            cues,
+            if cursed {
+                "sndBigCursedChest"
+            } else {
+                "sndBigWeaponChest"
+            },
+            0.6,
+            0.05,
+        );
+        Self::cue(cues, chst, 0.9, 0.05);
+    }
+
+    /// GML `Player/Collision_WepPickup.gml:67` `snd_play(wep_swap[wep])`
+    /// — the per-weapon swap stem.
+    pub fn play_weapon_swap(&self, cues: &mut Queue<AudioCue>, weapon: crate::data::WeaponId) {
+        let swap = crate::weapon_runtime::weapon_meta(weapon).wep_swap;
+        if !swap.is_empty() {
+            Self::cue(cues, swap, 0.6, 0.05);
+        }
+    }
+
     /// GML weapon-name -> (stem, volume, var) dispatch (bevy
     /// `play_weapon_fire` selection half, verbatim branch order).
     pub fn weapon_fire_cue(weapon_name: &str, underwater: bool) -> (&'static str, f32, f32) {

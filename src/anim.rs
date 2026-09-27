@@ -6,6 +6,7 @@
 //! Ported from nt's `game/anim.rs` (frame laws byte-identical).
 
 use bevy_ecs::prelude::*;
+use rand::RngExt;
 use repame_anim::AnimCatalog;
 use repame_sim::SimTime;
 
@@ -18,6 +19,14 @@ use crate::time::{GTimer, TimerMode};
 
 /// Frame-animated sprite state. `frames`/`fps` come from the catalog
 /// def at (re)path time; the renderer resolves pixels from there.
+///
+/// `fps` is the *effective* rate. `assets/images/anims.ron` carries a
+/// hand-authored per-strip rate, not the GML `image_speed`, so any
+/// object whose GML source states an `image_speed` must build its
+/// `SpriteAnim` with [`SpriteAnim::with_image_speed`] — the reference
+/// project runs every sprite at one frame per step (all `.yy` have
+/// `playbackSpeed: 1`), so the verbatim rate is
+/// `image_speed * SIM_HZ` frames per second.
 #[derive(Component, Clone, Debug)]
 pub struct SpriteAnim {
     pub path: String,
@@ -31,21 +40,54 @@ pub struct SpriteAnim {
 
 impl SpriteAnim {
     pub fn new(path: impl Into<String>, def: &repame_anim::AnimDef) -> Self {
-        Self {
-            path: path.into(),
-            frames: def.frames.max(1),
-            fps: def.fps,
-            frame: 0,
-            timer: GTimer::from_seconds(1.0 / def.fps.max(0.1), TimerMode::Repeating),
-            oneshot: false,
-            finished: false,
-        }
+        Self::build(path.into(), def.frames.max(1), def.fps, false)
     }
 
     pub fn oneshot(path: impl Into<String>, def: &repame_anim::AnimDef) -> Self {
-        let mut a = Self::new(path, def);
-        a.oneshot = true;
-        a
+        Self::build(path.into(), def.frames.max(1), def.fps, true)
+    }
+
+    /// GML `image_speed` verbatim: frames per step, so the displayed
+    /// rate is `image_speed * SIM_HZ` regardless of the atlas entry.
+    pub fn with_image_speed(
+        path: impl Into<String>,
+        def: &repame_anim::AnimDef,
+        image_speed: f32,
+    ) -> Self {
+        Self::build(
+            path.into(),
+            def.frames.max(1),
+            image_speed * crate::SIM_HZ as f32,
+            false,
+        )
+    }
+
+    /// GML `image_speed` on a one-shot strip (hurt flashes, corpses):
+    /// advances to the last frame and parks, as `SpriteAnim` already
+    /// does for `oneshot`.
+    pub fn oneshot_with_image_speed(
+        path: impl Into<String>,
+        def: &repame_anim::AnimDef,
+        image_speed: f32,
+    ) -> Self {
+        Self::build(
+            path.into(),
+            def.frames.max(1),
+            image_speed * crate::SIM_HZ as f32,
+            true,
+        )
+    }
+
+    fn build(path: String, frames: u32, fps: f32, oneshot: bool) -> Self {
+        Self {
+            path,
+            frames,
+            fps,
+            frame: 0,
+            timer: GTimer::from_seconds(1.0 / fps.max(0.1), TimerMode::Repeating),
+            oneshot,
+            finished: false,
+        }
     }
 
     pub fn set_path(&mut self, path: impl Into<String>, def: &repame_anim::AnimDef, oneshot: bool) {
@@ -56,6 +98,24 @@ impl SpriteAnim {
         self.oneshot = oneshot;
         self.finished = false;
         self.timer = GTimer::from_seconds(1.0 / def.fps.max(0.1), TimerMode::Repeating);
+    }
+
+    /// Repath keeping the current GML rate, for hurt/idle swaps that
+    /// must not silently fall back to the atlas entry.
+    pub fn set_path_at_rate(
+        &mut self,
+        path: impl Into<String>,
+        frames: u32,
+        fps: f32,
+        oneshot: bool,
+    ) {
+        self.path = path.into();
+        self.frames = frames.max(1);
+        self.fps = fps;
+        self.frame = 0;
+        self.oneshot = oneshot;
+        self.finished = false;
+        self.timer = GTimer::from_seconds(1.0 / fps.max(0.1), TimerMode::Repeating);
     }
 }
 
@@ -88,8 +148,14 @@ pub fn tick_gml_images(
     mut q: Query<(Entity, &mut GmlImage)>,
 ) {
     let steps = time.delta_secs * crate::SIM_HZ as f32;
+    let mut rng = rand::rng();
     for (entity, mut image) in &mut q {
-        if image.advance(steps) && image.destroy_on_end {
+        let draw = if image.first_jitter > 0.0 && image.phase < 1.0 {
+            rng.random_range(0.0..1.0)
+        } else {
+            1.0
+        };
+        if image.advance_ramped(steps, draw) && image.destroy_on_end {
             commands.entity(entity).despawn();
         }
     }
@@ -196,9 +262,12 @@ pub fn play_hurt(
         idle
     };
     let def = catalog.def(path).unwrap_or(def);
-    anim.set_path(path, def, true);
+    // GML `image_speed` survives the flip (nothing in the hurt path
+    // writes it), so the strip runs at the entity's own rate.
+    let rate = anim.fps;
+    anim.set_path_at_rate(path, def.frames.max(1), rate, true);
 
-    let secs = (3.0 / def.fps.max(1.0)).max(0.12).min(0.35);
+    let secs = (3.0 / rate.max(1.0)).max(0.12).min(0.35);
 
     commands.entity(entity).try_insert(HurtAnim {
         idle,
@@ -206,6 +275,7 @@ pub fn play_hurt(
         hurt: path,
         timer: GTimer::from_seconds(secs, TimerMode::Once),
         was_moving: false,
+        rate,
     });
 }
 
@@ -375,10 +445,11 @@ pub fn tick_hurt_anims(
         if !(frame_done || (anim.oneshot && anim.finished)) {
             continue;
         }
-        // GML restores `spr_idle` unconditionally (never walk).
+        // GML restores `spr_idle` unconditionally (never walk), at the
+        // entity's own `image_speed`.
         let path = hurt.idle;
         if let Some(def) = catalog.def(path) {
-            anim.set_path(path, def, false);
+            anim.set_path_at_rate(path, def.frames.max(1), hurt.rate, false);
         }
         if let Some(ref mut pa) = pa {
             pa.moving = false;

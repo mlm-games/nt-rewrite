@@ -2,16 +2,15 @@
 //! `world.rs` floor generation (plus `is_secret_area` from
 //! the GML secret-area scripts).
 //!
-//! Scope: `LevelPlan`, `PropKind`, `ChestSpawn`, `Maker` + `step_delta`,
-//! `rng_choose`, `turn_table`, `gml_area`, `gml_area_from_run`,
+//! Scope: `LevelPlan`, `PropKind`, `ChestSpawn`, `Gen`/`Maker` +
+//! `step_delta`, `rng_choose`, `turn_table`, `gml_area`, `gml_area_from_run`,
 //! `generation_goal`, `generation_goal_for_run`, `is_screen_end_wall`,
 //! `floor_cell_for_wall`, `wall_cell_at`, `generate_level`,
 //! `generate_palace_last`, `generate_campfire`, `generate_hq_last`,
 //! `world_of`, `floor_in_world`, `boss_for_floor`,
-//! `boss_for_floor_and_loop`, `is_secret_area`, plus the `run_for` test
-//! helper and the oracle tests that only touch ported items.
+//! `boss_for_floor_and_loop`, `is_secret_area`.
 //!
-//! Wall helpers (`walls_cover_tile`, `populate_throne_room`, `trim_chests`,
+//! Wall helpers (`wall_point`, `nearest_wall`, `populate_throne_room`,
 //! `big_bandit_count`) and the full `populate` live here too.
 //!
 //! Transform notes:
@@ -22,14 +21,14 @@
 //! - Logic, RNG call order, tables and comments are byte-identical to source.
 //!
 //! TODO(port) index: all helpers landed (cell_center_*, wall_*,
-//! side_solid, walls_cover_tile*, is_boss_subarea*, game_hard,
-//! populate + tables). Remaining world.rs surface (spawning entities
-//! from plans, wall visuals) belongs to the setup phase, not this file.
+//! is_boss_subarea*, game_hard, populate + tables). Remaining world.rs
+//! surface (spawning entities from plans, wall visuals) belongs to the setup
+//! phase, not this file.
 
 use glam::Vec2;
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::comps_a::Run;
 use crate::comps_b::ChestKind;
@@ -70,6 +69,9 @@ pub enum PopulationEvent {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PropKind {
+    /// GML spawns nothing on the roll (e.g. the last palace subarea, or
+    /// a city tile inside 128 px with no earlier branch taken).
+    None,
     Cactus,
     BigSkull,
     GroundDecal,
@@ -107,12 +109,12 @@ pub enum PropKind {
     PizzaBox,
     PlantPot,
 
-    Cobweb,
-    IcePatch,
-    FireTrap,
-    Mine,
+    /// GML `objects/Trap`: the solid flamethrower on a scrapyards small
+    /// wall (`scrPopProps.gml:24-28`).
+    Trap,
 
     BigGenerator,
+    BigGeneratorInactive,
     ThroneStatue,
 }
 
@@ -239,12 +241,61 @@ pub fn is_screen_end_wall(wx: i32, wy: i32, floor_set: &HashSet<(i32, i32)>) -> 
     floor_n <= 1
 }
 
+/// GML `scrAreaGetMaxSubarea`.
+pub fn gml_max_subarea(area: i32) -> u32 {
+    match area {
+        1 | 3 | 5 | 7 | 106 => 3,
+        _ => 1,
+    }
+}
+
+/// GML keeps five RNG states and re-seeds GameMaker's default `random()`
+/// stream between `scrPopulate` phases from `rng_next_int(<state>)`
+/// (`scrPopulate.gml:35,184,202,223,241,272`); `scrPopEnemies.gml:10`
+/// re-seeds that same default stream from the advanced `Enemies` LCG on
+/// *every* call. The port draws one `StdRng` per phase out of `run.gen_seed`
+/// so a phase can no longer shift its neighbours, but neither the re-seed
+/// chain nor the advanced LCG is ported, so GameMaker's exact sequences
+/// still differ.
+const RNG_DEFAULT: u64 = 0x2545_F491_4F6C_DD1D;
+const RNG_BONES: u64 = 0xBF58_476D_1CE4_E5B9;
+const RNG_ENEMIES: u64 = 0x94D0_49BB_1331_11EB;
+const RNG_ENEMY_CALL: u64 = 0xD6E8_FEB8_6659_FD93;
+const RNG_PROPS: u64 = 0xA076_1D64_78BD_642F;
+const RNG_CHEST: u64 = 0xE703_7ED1_A0B4_28DB;
+const RNG_PIZZA: u64 = 0x8EBC_6AF0_9C88_C6E3;
+
+fn phase_rng(seed: u64, state: u64) -> StdRng {
+    StdRng::seed_from_u64(seed ^ state)
+}
+
+/// GML `point_distance(floor.x, floor.y, 10016, 10016)`. A `Floor` instance
+/// sits at `10000 + 32k`, so the spawn point is a half tile off the tile
+/// centre -- `scrMakeFloor`, `FloorMaker/Step_0`, `scrPopulate` and
+/// `scrPopEnemies` all measure from the tile *origin*.
+fn cell_dist2_origin(cx: i32, cy: i32) -> f32 {
+    let (x, y) = cell_center_i(cx, cy);
+    let (dx, dy) = (x - TILE * 0.5, y - TILE * 0.5);
+    dx * dx + dy * dy
+}
+
+/// GML `point_distance(bbox_center_x, bbox_center_y, 10016, 10016)` -- the
+/// metric `scrPopProps` uses for `_spawn_distance` (the tile centre).
+fn cell_dist2_center(cx: i32, cy: i32) -> f32 {
+    let (x, y) = cell_center_i(cx, cy);
+    x * x + y * y
+}
+
 #[derive(Clone, Copy)]
 struct Maker {
     x: i32,
     y: i32,
 
     dir: i32,
+    /// GML `FloorMaker/Create_0:3` `styleb`, 1 maker in 6. See
+    /// [`Gen::create_maker`] for why the rewrite's float `rng_float` is read
+    /// as the original integer `random(6)`.
+    styleb: bool,
 }
 
 impl Maker {
@@ -259,6 +310,562 @@ impl Maker {
             180 => (-1, 0),
             _ => (0, -1),
         }
+    }
+}
+
+/// GML `Floor/Create_0:1-4` destroys a `Floor` that overlaps an existing
+/// one, so `instance_number(Floor)` is exactly the number of distinct cells
+/// the maker loop has stamped -- which is what `plan.floor_cells` counts.
+fn live_makers(n: usize, i: usize, next: &[Maker], branches: &[Maker]) -> i64 {
+    // GML `instance_destroy` is deferred to the end of the step, so a maker
+    // that just killed itself still counts for the rest of the frame, as
+    // does every maker spawned earlier in the frame.
+    (n - i + next.len() + branches.len()) as i64
+}
+
+/// GML `scrMakeFloor.gml:53-59`, the 8-cell ring (no centre), in draw order.
+const RING8: [(i32, i32); 8] = [
+    (1, 0),
+    (1, 1),
+    (0, 1),
+    (0, -1),
+    (-1, 0),
+    (1, -1),
+    (-1, -1),
+    (-1, 1),
+];
+
+/// GML `scrMakeFloor.gml:210-217` -- cursed caves stamps the same eight cells
+/// in a different order.
+const RING8_CURSED: [(i32, i32); 8] = [
+    (-1, 0),
+    (-1, -1),
+    (-1, 1),
+    (1, 0),
+    (1, -1),
+    (1, 1),
+    (0, 1),
+    (0, -1),
+];
+
+struct Gen {
+    area: i32,
+    is_last: bool,
+    rng: StdRng,
+    seen: HashSet<(i32, i32)>,
+    /// GML `Floor/Create_0:16` copies the styleb of the maker nearest the
+    /// new floor; the port records the *creating* maker's styleb (first
+    /// stamp wins, matching the duplicate-destroy).
+    styleb_cells: HashMap<(i32, i32), bool>,
+    root_styleb: Option<bool>,
+    plan: LevelPlan,
+}
+
+impl Gen {
+    fn new(run: &Run, area: i32, styleb: bool) -> Gen {
+        Gen {
+            area,
+            is_last: run.floor_in_area >= gml_max_subarea(area),
+            rng: StdRng::seed_from_u64(run.gen_seed),
+            seen: HashSet::new(),
+            styleb_cells: HashMap::new(),
+            root_styleb: None,
+            plan: LevelPlan {
+                floor_cells: Vec::new(),
+                wall_cells: HashSet::new(),
+                small_walls: Vec::new(),
+                bones: Vec::new(),
+                bone_sprite: "images/sprBones.png",
+                details: Vec::new(),
+                props: Vec::new(),
+                chests: Vec::new(),
+                enemies: Vec::new(),
+                population_events: Vec::new(),
+                boss: None,
+                boss_count: 1,
+                styleb,
+            },
+        }
+    }
+
+    fn f(&mut self, n: f32) -> f32 {
+        self.rng.random::<f32>() * n
+    }
+
+    fn floor(&mut self, cx: i32, cy: i32, styleb: bool) {
+        if self.seen.insert((cx, cy)) {
+            self.styleb_cells.insert((cx, cy), styleb);
+            self.plan.floor_cells.push((cx, cy));
+        }
+    }
+
+    /// GML `point_distance(x, y, 10016, 10016) > 48` gates every chest and
+    /// the terminating floor stamp.
+    fn far(&self, cx: i32, cy: i32) -> bool {
+        cell_dist2_origin(cx, cy) > 48.0 * 48.0
+    }
+
+    fn chest(&mut self, kind: fn(Vec2) -> ChestSpawn, cx: i32, cy: i32) {
+        self.plan.chests.push(kind(cell_center_px(cx, cy)));
+    }
+
+    /// GML `objects/FloorMaker/Create_0.gml`: a direction draw, a styleb
+    /// draw and a `Floor` stamp -- for the initial maker *and* for every
+    /// `instance_create(x, y, FloorMaker)` branch.
+    fn create_maker(&mut self, x: i32, y: i32) -> Maker {
+        let dir = rng_choose(&mut self.rng, &[0, 0, 90, 180, 270]);
+        // GML `FloorMaker/Create_0:3` reads `styleb = !rng_float(Generation, 6
+        // - (area == 104 * 4))`. `104 * 4` is 416, never an area, so the
+        // divisor is 6 everywhere. The original NT expression is
+        // `!random(6)` -- an *integer* 0..5, true only at 0 -- so styleb is
+        // 1 in 6. The rewrite's `rng_float` returns a real, and a literal
+        // `!real` is `real == 0` (LCG hit 0, ~1 in 2.1e9), which would kill
+        // the whole alternate-material path in `Floor/Create_0:49-109`.
+        let mut styleb = self.f(6.0) < 1.0;
+        if self.area == 100 {
+            styleb = false;
+        }
+        if self.root_styleb.is_none() {
+            self.root_styleb = Some(styleb);
+        }
+        self.floor(x, y, styleb);
+        Maker { x, y, dir, styleb }
+    }
+
+    /// GML `scripts/scrMakeFloor/scrMakeFloor.gml:11-240`. Several cases
+    /// mutate the maker (`x += ldrx(64, direction)`, `x += rng_choose(...)`),
+    /// so every later stage reads the live position, not the step position.
+    fn make_floor(&mut self, m: &mut Maker) {
+        let s = m.styleb;
+        match self.area {
+            1 => {
+                if self.f(2.0) < 1.0 {
+                    for (dx, dy) in [(0, 0), (1, 0), (1, 1), (0, 1)] {
+                        self.floor(m.x + dx, m.y + dy, s);
+                    }
+                } else {
+                    self.floor(m.x, m.y, s);
+                }
+            }
+            3 => {
+                if self.f(8.0) < 1.0 || self.is_last {
+                    let (xo, yo) = if self.is_last {
+                        (
+                            rng_choose(&mut self.rng, &[0, 1, 0, 0, -1]),
+                            rng_choose(&mut self.rng, &[0, 1, 0, 0, -1]),
+                        )
+                    } else {
+                        (0, 0)
+                    };
+                    for (dx, dy) in [
+                        (0, 0),
+                        (1, 0),
+                        (1, 1),
+                        (0, 1),
+                        (0, -1),
+                        (-1, 0),
+                        (1, -1),
+                        (-1, -1),
+                        (-1, 1),
+                    ] {
+                        self.floor(m.x + xo + dx, m.y + yo + dy, s);
+                    }
+                } else {
+                    self.floor(m.x, m.y, s);
+                }
+            }
+            5 => {
+                if self.f(11.0) < 1.0 {
+                    if self.f(2.0) < 1.0 {
+                        for (dx, dy) in RING8 {
+                            self.floor(m.x + dx, m.y + dy, s);
+                        }
+                    } else {
+                        for (dx, dy) in [
+                            (2, -2),
+                            (2, -1),
+                            (2, 0),
+                            (2, 1),
+                            (2, 2),
+                            (-2, -2),
+                            (-2, -1),
+                            (-2, 0),
+                            (-2, 1),
+                            (-2, 2),
+                            (0, -2),
+                            (-1, -2),
+                            (1, -2),
+                            (0, 2),
+                            (-1, 2),
+                            (1, 2),
+                        ] {
+                            self.floor(m.x + dx, m.y + dy, s);
+                        }
+                    }
+                } else {
+                    self.floor(m.x, m.y, s);
+                }
+            }
+            7 => {
+                if self.f(16.0) < 1.0 {
+                    for dy in -1..=2 {
+                        for dx in -1..=2 {
+                            self.floor(m.x + dx, m.y + dy, s);
+                        }
+                    }
+                } else {
+                    for (dx, dy) in [(0, 0), (1, 0), (1, 1), (0, 1)] {
+                        self.floor(m.x + dx, m.y + dy, s);
+                    }
+                }
+            }
+            100 => {
+                if self.f(8.0) < 1.0 {
+                    if rng_choose(&mut self.rng, &[0, 1, 2]) == 1 {
+                        for dx in [1, 2, 0, -1, -2] {
+                            self.floor(m.x + dx, m.y, s);
+                        }
+                    } else {
+                        for dy in [1, 2, 0, -1, -2] {
+                            self.floor(m.x, m.y + dy, s);
+                        }
+                    }
+                } else {
+                    self.floor(m.x, m.y, s);
+                }
+            }
+            103 | 107 => {
+                let n = self.plan.floor_cells.len();
+                if n != 0 && n % 12 == 0 {
+                    let (dx, dy) = m.step_delta();
+                    m.x += dx;
+                    m.y += dy;
+                    for (ox, oy) in RING8 {
+                        self.floor(m.x + ox, m.y + oy, s);
+                    }
+                } else {
+                    self.floor(m.x, m.y, s);
+                }
+            }
+            106 => {
+                let n = self.plan.floor_cells.len();
+                if n != 0 && n % 8 == 0 {
+                    let (dx, dy) = m.step_delta();
+                    m.x += dx * 2;
+                    m.y += dy * 2;
+                    for (ox, oy) in [
+                        (-2, -2),
+                        (-2, -1),
+                        (-2, 0),
+                        (-2, 1),
+                        (-2, 2),
+                        (2, -2),
+                        (2, -1),
+                        (2, 0),
+                        (2, 1),
+                        (2, 2),
+                        (-1, 2),
+                        (0, 2),
+                        (1, 2),
+                        (-1, -2),
+                        (0, -2),
+                        (1, -2),
+                    ] {
+                        self.floor(m.x + ox, m.y + oy, s);
+                    }
+                    m.x += dx * 2;
+                    m.y += dy * 2;
+                } else if self.f(3.0) < 1.0 {
+                    self.floor(m.x, m.y, s);
+                    for (ox, oy) in RING8 {
+                        self.floor(m.x + ox, m.y + oy, s);
+                    }
+                } else {
+                    for _ in 0..4 {
+                        self.floor(m.x, m.y, s);
+                        let (dx, dy) = m.step_delta();
+                        m.x += dx;
+                        m.y += dy;
+                        self.floor(m.x, m.y, s);
+                        self.chest(ChestSpawn::Ammo, m.x, m.y);
+                    }
+                    if self.f(3.0) < 1.0 {
+                        for (ox, oy) in RING8 {
+                            self.floor(m.x + ox, m.y + oy, s);
+                        }
+                    }
+                }
+            }
+            101 => {
+                self.floor(m.x, m.y, s);
+                if self.f(3.0) < 1.0 {
+                    for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                        self.floor(m.x + dx, m.y + dy, s);
+                    }
+                }
+            }
+            104 => {
+                if self.plan.floor_cells.len() < 4 {
+                    for (ox, oy) in RING8_CURSED {
+                        self.floor(m.x + ox, m.y + oy, s);
+                    }
+                }
+                m.x += rng_choose(&mut self.rng, &[0, 2, -2]);
+                m.y += rng_choose(&mut self.rng, &[0, 2, -2]);
+                for (ox, oy) in RING8_CURSED {
+                    self.floor(m.x + ox, m.y + oy, s);
+                }
+            }
+            105 => {
+                if self.f(4.0) < 1.0 {
+                    for (dx, dy) in [(0, 0), (1, 0), (1, 1), (0, 1)] {
+                        self.floor(m.x + dx, m.y + dy, s);
+                    }
+                } else {
+                    self.floor(m.x, m.y, s);
+                }
+            }
+            _ => {
+                self.floor(m.x, m.y, s);
+            }
+        }
+    }
+
+    /// GML `scripts/scrMakeFloor/scrMakeFloor.gml:242-458` plus
+    /// `objects/FloorMaker/Step_0.gml:69-78`. `instance_destroy()` is
+    /// deferred, so a maker that just died still evaluates its branch roll
+    /// (and still spawns the child).
+    fn run_makers(&mut self, goal: usize, mut makers: Vec<Maker>) {
+        let mut guard = 0u32;
+        while !makers.is_empty() {
+            guard += 1;
+            if guard > 200_000 {
+                break;
+            }
+            let n = makers.len();
+            let mut next: Vec<Maker> = Vec::with_capacity(n);
+            let mut branches: Vec<Maker> = Vec::new();
+
+            for i in 0..n {
+                let mut m = makers[i];
+
+                if self.plan.floor_cells.len() > goal {
+                    if self.far(m.x, m.y) {
+                        self.floor(m.x, m.y, m.styleb);
+                        self.chest(ChestSpawn::Rad, m.x, m.y);
+                    }
+                    continue;
+                }
+
+                // GML `FloorMaker/Step_0`: the maker steps one 32px tile along
+                // `direction` BEFORE the area event, so every stamp below
+                // lands on the cell it just moved into.
+                let (dx, dy) = m.step_delta();
+                m.x += dx;
+                m.y += dy;
+
+                self.make_floor(&mut m);
+                let trn = turn_table(&mut self.rng, self.area);
+                m.dir = (m.dir + trn).rem_euclid(360);
+
+                if self.area == 6 && trn.abs() == 90 && self.f(2.0) < 1.0 {
+                    for (ox, oy) in RING8 {
+                        self.floor(m.x + ox, m.y + oy, m.styleb);
+                    }
+                    if self.f(3.0) < 1.0 {
+                        // GML spawns four `Server` objects here
+                        // (`scrMakeFloor.gml:297-302`); the port has no
+                        // `Server` prop, so only the four rolls are kept.
+                        for _ in 0..4 {
+                            let _ = self.f(4.0) < 3.0;
+                        }
+                    }
+                }
+
+                if (trn == 180 || (trn.abs() == 90 && (self.area == 3 || self.area == 104)))
+                    && self.far(m.x, m.y)
+                {
+                    self.floor(m.x, m.y, m.styleb);
+                    if self.area != 107 && self.area != 0 {
+                        self.chest(ChestSpawn::Weapon, m.x, m.y);
+                    }
+                }
+
+                let mut destroyed = false;
+                match self.area {
+                    0 => {
+                        let live = live_makers(n, i, &next, &branches) as f32;
+                        if self.f(19.0 + live) > 22.0 {
+                            destroyed = true;
+                            if self.far(m.x, m.y) {
+                                self.floor(m.x, m.y, m.styleb);
+                            }
+                        }
+                        if self.f(4.0) < 1.0 {
+                            branches.push(self.create_maker(m.x, m.y));
+                        }
+                    }
+                    106 => {
+                        if self.f(10.0) < 1.0 && self.far(m.x, m.y) {
+                            self.chest(ChestSpawn::Ammo, m.x, m.y);
+                            self.floor(m.x, m.y, m.styleb);
+                        }
+                        let live = live_makers(n, i, &next, &branches);
+                        if self.plan.floor_cells.len() as i64 > live * 28 {
+                            branches.push(self.create_maker(m.x, m.y));
+                        }
+                    }
+                    1 | 101 => {
+                        let live = live_makers(n, i, &next, &branches) as f32;
+                        if self.f(19.0 + live) > 20.0 {
+                            destroyed = true;
+                            if self.far(m.x, m.y) {
+                                self.chest(ChestSpawn::Ammo, m.x, m.y);
+                                self.floor(m.x, m.y, m.styleb);
+                            }
+                        }
+                        if self.f(8.0) < 1.0 {
+                            branches.push(self.create_maker(m.x, m.y));
+                        }
+                    }
+                    2 => {
+                        let live = live_makers(n, i, &next, &branches) as f32;
+                        if self.f(14.0 + live) > 15.0 {
+                            if self.far(m.x, m.y) {
+                                self.chest(ChestSpawn::Ammo, m.x, m.y);
+                                self.floor(m.x, m.y, m.styleb);
+                            }
+                            destroyed = true;
+                        }
+                        if self.f(15.0) < 1.0 {
+                            branches.push(self.create_maker(m.x, m.y));
+                        }
+                    }
+                    3 => {
+                        let live = live_makers(n, i, &next, &branches) as f32;
+                        if self.f(39.0 + live) > 40.0 {
+                            if self.far(m.x, m.y) {
+                                self.chest(ChestSpawn::Ammo, m.x, m.y);
+                                self.floor(m.x, m.y, m.styleb);
+                            }
+                            destroyed = true;
+                        }
+                        if self.f(25.0) < 1.0 {
+                            branches.push(self.create_maker(m.x, m.y));
+                        }
+                    }
+                    4 | 104 => {
+                        if !(self.area == 104 && self.f(4.0) >= 1.0) {
+                            let live = live_makers(n, i, &next, &branches) as f32;
+                            if self.f(9.0 + live) > 10.0 {
+                                destroyed = true;
+                                if self.far(m.x, m.y) {
+                                    self.chest(ChestSpawn::Ammo, m.x, m.y);
+                                    self.floor(m.x, m.y, m.styleb);
+                                }
+                            }
+                            if self.f(4.0) < 1.0 {
+                                branches.push(self.create_maker(m.x, m.y));
+                            }
+                        }
+                    }
+                    5 => {
+                        let live = live_makers(n, i, &next, &branches) as f32;
+                        if self.f(14.0 + live) > 15.0 {
+                            destroyed = true;
+                            if self.far(m.x, m.y) {
+                                self.floor(m.x, m.y, m.styleb);
+                                self.chest(ChestSpawn::Ammo, m.x, m.y);
+                            }
+                        }
+                        if self.f(15.0) < 1.0 {
+                            branches.push(self.create_maker(m.x, m.y));
+                        }
+                    }
+                    6 => {
+                        let live = live_makers(n, i, &next, &branches) as f32;
+                        if self.f(21.0 + live) > 22.0 {
+                            destroyed = true;
+                            if self.far(m.x, m.y) {
+                                self.floor(m.x, m.y, m.styleb);
+                                self.chest(ChestSpawn::Ammo, m.x, m.y);
+                            }
+                        }
+                        if self.f(20.0) < 1.0 {
+                            branches.push(self.create_maker(m.x, m.y));
+                        }
+                    }
+                    7 | 102 => {
+                        if self.area == 7 {
+                            let live = live_makers(n, i, &next, &branches) as f32;
+                            if self.f(8.0 + live) > 9.0 {
+                                destroyed = true;
+                                if self.far(m.x, m.y) {
+                                    self.chest(ChestSpawn::Ammo, m.x, m.y);
+                                    self.floor(m.x, m.y, m.styleb);
+                                }
+                            }
+                            if self.f(16.0) < 1.0 {
+                                branches.push(self.create_maker(m.x, m.y));
+                            }
+                        }
+                        let live = live_makers(n, i, &next, &branches) as f32;
+                        if self.f(9.0 + live) > 10.0 {
+                            if self.far(m.x, m.y) {
+                                self.chest(ChestSpawn::Ammo, m.x, m.y);
+                                self.floor(m.x, m.y, m.styleb);
+                            }
+                            destroyed = true;
+                        }
+                        if self.f(5.0) < 1.0 {
+                            branches.push(self.create_maker(m.x, m.y));
+                        }
+                    }
+                    103 | 107 => {
+                        let live = live_makers(n, i, &next, &branches) as f32;
+                        if self.f(31.0 + live) > 32.0 {
+                            destroyed = true;
+                            if self.far(m.x, m.y) {
+                                self.floor(m.x, m.y, m.styleb);
+                                self.chest(ChestSpawn::Ammo, m.x, m.y);
+                            }
+                        }
+                        if self.f(20.0) < 1.0 {
+                            branches.push(self.create_maker(m.x, m.y));
+                        }
+                    }
+                    _ => {}
+                }
+
+                if self.area == 101 || self.area == 105 {
+                    let live = live_makers(n, i, &next, &branches) as f32;
+                    if self.f(19.0 + live) > 20.0 {
+                        destroyed = true;
+                        if self.far(m.x, m.y) {
+                            self.chest(ChestSpawn::Ammo, m.x, m.y);
+                            self.floor(m.x, m.y, m.styleb);
+                        }
+                    }
+                    if self.f(14.0) < 1.0 {
+                        branches.push(self.create_maker(m.x, m.y));
+                    }
+                }
+
+                if !destroyed {
+                    next.push(m);
+                }
+            }
+
+            makers = next;
+            makers.extend(branches);
+        }
+    }
+
+    fn finish(mut self) -> (LevelPlan, HashMap<(i32, i32), bool>) {
+        if let Some(root) = self.root_styleb {
+            self.plan.styleb = root;
+        }
+        (self.plan, self.styleb_cells)
     }
 }
 
@@ -309,7 +916,7 @@ fn turn_table(rng: &mut StdRng, area: i32) -> i32 {
 /// Skipped exactly where `scrAreaHasSafespawn` is false (campfire, crib,
 /// vault, palace/HQ finales; the port has no Crib area so that arm is
 /// vacuous).
-fn apply_safespawn_shift(plan: &mut LevelPlan, _rng: &mut StdRng, run: &Run) {
+fn apply_safespawn_shift(plan: &mut LevelPlan, run: &Run) {
     let no_safe = matches!(
         run.area,
         AreaId::Campfire | AreaId::Vault | AreaId::CrownVault
@@ -339,13 +946,12 @@ fn apply_safespawn_shift(plan: &mut LevelPlan, _rng: &mut StdRng, run: &Run) {
     // rings shift.
     let mut stacked = 0usize;
     for _ in 0..16 {
+        // GML `GenCont/Step_0:8`: `distance_to_point(10016, 10016)` measured
+        // from the Floor ORIGIN, not the tile centre.
         let near = plan
             .floor_cells
             .iter()
-            .filter(|(cx, cy)| {
-                let (px, py) = cell_center_i(*cx, *cy);
-                px * px + py * py <= safedis * safedis
-            })
+            .filter(|(cx, cy)| cell_dist2_origin(*cx, *cy) <= safedis * safedis)
             .count()
             + stacked;
         if near < maxfloors {
@@ -372,463 +978,35 @@ fn apply_safespawn_shift(plan: &mut LevelPlan, _rng: &mut StdRng, run: &Run) {
 pub fn generate_level(run: &Run) -> LevelPlan {
     let area = gml_area_from_run(run);
 
-    if area == 7 && ((run.floor.max(1) - 1) % 15) + 1 == 15 {
-        return generate_palace_last(run);
-    }
     if run.area == AreaId::Campfire {
         return generate_campfire(run);
+    }
+    if area == 7 && ((run.floor.max(1) - 1) % 15) + 1 == 15 {
+        return generate_palace_last(run);
     }
     if area == 106 && run.floor_in_area >= 3 {
         return generate_hq_last(run);
     }
     let goal = generation_goal_for_run(run);
-    let mut rng = StdRng::seed_from_u64(run.gen_seed);
 
-    let styleb = rng.random::<f32>() * 6.0 < 1.0;
+    let mut genr = Gen::new(run, area, false);
+    let initial = genr.create_maker(0, 0);
+    genr.run_makers(goal, vec![initial]);
+    let (mut plan, styleb_cells) = genr.finish();
 
-    let mut plan = LevelPlan {
-        floor_cells: Vec::new(),
-        wall_cells: HashSet::new(),
-        small_walls: Vec::new(),
-        bones: Vec::new(),
-        bone_sprite: "images/sprBones.png",
-        details: Vec::new(),
-        props: Vec::new(),
-        chests: Vec::new(),
-        enemies: Vec::new(),
-        population_events: Vec::new(),
-        boss: None,
-        boss_count: 1,
-        styleb,
-    };
-
-    let mut seen = HashSet::new();
-    let stamp_cell = |p: (i32, i32), seen: &mut HashSet<(i32, i32)>, out: &mut Vec<(i32, i32)>| {
-        if seen.insert(p) {
-            out.push(p);
-        }
-    };
-
-    let mut makers = vec![Maker {
-        x: 0,
-        y: 0,
-        dir: rng_choose(&mut rng, &[0, 0, 90, 180, 270]),
-    }];
-    stamp_cell((0, 0), &mut seen, &mut plan.floor_cells);
-
-    let mut guard = 0;
-    while !makers.is_empty() && plan.floor_cells.len() <= goal {
-        guard += 1;
-        if guard > 200_000 {
-            break;
-        }
-
-        let n_makers = makers.len();
-        let mut next_makers = Vec::with_capacity(n_makers);
-        let mut new_branches = Vec::new();
-
-        for mi in 0..n_makers {
-            let mut m = makers[mi];
-
-            let (dx, dy) = m.step_delta();
-            m.x += dx;
-            m.y += dy;
-            let (mx, my) = (m.x, m.y);
-
-            match area {
-                1 => {
-                    if rng.random::<f32>() * 2.0 < 1.0 {
-                        for p in [(mx, my), (mx + 1, my), (mx + 1, my + 1), (mx, my + 1)] {
-                            stamp_cell(p, &mut seen, &mut plan.floor_cells);
-                        }
-                    } else {
-                        stamp_cell((mx, my), &mut seen, &mut plan.floor_cells);
-                    }
-                }
-                3 => {
-                    let is_max = run.floor_in_area >= 3;
-                    if rng.random::<f32>() * 8.0 < 1.0 || is_max {
-                        let (xoff, yoff) = if is_max {
-                            let xo = rng_choose(&mut rng, &[0, 1, 0, 0, -1]);
-                            let yo = rng_choose(&mut rng, &[0, 1, 0, 0, -1]);
-                            (xo, yo)
-                        } else {
-                            (0, 0)
-                        };
-
-                        for dy2 in -1..=1 {
-                            for dx2 in -1..=1 {
-                                stamp_cell(
-                                    (mx + xoff + dx2, my + yoff + dy2),
-                                    &mut seen,
-                                    &mut plan.floor_cells,
-                                );
-                            }
-                        }
-                    } else {
-                        stamp_cell((mx, my), &mut seen, &mut plan.floor_cells);
-                    }
-                }
-                5 => {
-                    if rng.random::<f32>() * 11.0 < 1.0 {
-                        if rng.random::<f32>() * 2.0 < 1.0 {
-                            for p in [
-                                (mx + 1, my),
-                                (mx + 1, my + 1),
-                                (mx, my + 1),
-                                (mx, my - 1),
-                                (mx - 1, my),
-                                (mx + 1, my - 1),
-                                (mx - 1, my - 1),
-                                (mx - 1, my + 1),
-                            ] {
-                                stamp_cell(p, &mut seen, &mut plan.floor_cells);
-                            }
-                        } else {
-                            for p in [
-                                (mx + 2, my - 2),
-                                (mx + 2, my - 1),
-                                (mx + 2, my),
-                                (mx + 2, my + 1),
-                                (mx + 2, my + 2),
-                                (mx - 2, my - 2),
-                                (mx - 2, my - 1),
-                                (mx - 2, my),
-                                (mx - 2, my + 1),
-                                (mx - 2, my + 2),
-                                (mx, my - 2),
-                                (mx - 1, my - 2),
-                                (mx + 1, my - 2),
-                                (mx, my + 2),
-                                (mx - 1, my + 2),
-                                (mx + 1, my + 2),
-                            ] {
-                                stamp_cell(p, &mut seen, &mut plan.floor_cells);
-                            }
-                        }
-                        stamp_cell((mx, my), &mut seen, &mut plan.floor_cells);
-                    } else {
-                        stamp_cell((mx, my), &mut seen, &mut plan.floor_cells);
-                    }
-                }
-                7 => {
-                    if rng.random::<f32>() * 16.0 < 1.0 {
-                        for dy2 in -1..=2 {
-                            for dx2 in -1..=2 {
-                                stamp_cell((mx + dx2, my + dy2), &mut seen, &mut plan.floor_cells);
-                            }
-                        }
-                    } else {
-                        for p in [(mx, my), (mx + 1, my), (mx + 1, my + 1), (mx, my + 1)] {
-                            stamp_cell(p, &mut seen, &mut plan.floor_cells);
-                        }
-                    }
-                }
-                100 => {
-                    if rng.random::<f32>() * 8.0 < 1.0 {
-                        if rng.random_range(0..3) == 1 {
-                            for o in [-2, -1, 0, 1, 2] {
-                                stamp_cell((mx + o, my), &mut seen, &mut plan.floor_cells);
-                            }
-                        } else {
-                            for o in [-2, -1, 0, 1, 2] {
-                                stamp_cell((mx, my + o), &mut seen, &mut plan.floor_cells);
-                            }
-                        }
-                    } else {
-                        stamp_cell((mx, my), &mut seen, &mut plan.floor_cells);
-                    }
-                }
-                103 | 107 => {
-                    if !plan.floor_cells.is_empty() && plan.floor_cells.len() % 12 == 0 {
-                        let (dx2, dy2) = m.step_delta();
-                        m.x += dx2;
-                        m.y += dy2;
-                        let (nx, ny) = (m.x, m.y);
-                        // GML ring only: 8 cells, no center.
-                        for p in [
-                            (nx + 1, ny),
-                            (nx + 1, ny + 1),
-                            (nx, ny + 1),
-                            (nx, ny - 1),
-                            (nx - 1, ny),
-                            (nx + 1, ny - 1),
-                            (nx - 1, ny - 1),
-                            (nx - 1, ny + 1),
-                        ] {
-                            stamp_cell(p, &mut seen, &mut plan.floor_cells);
-                        }
-                    } else {
-                        stamp_cell((mx, my), &mut seen, &mut plan.floor_cells);
-                    }
-                }
-                106 => {
-                    if !plan.floor_cells.is_empty() && plan.floor_cells.len() % 8 == 0 {
-                        let (dx2, dy2) = m.step_delta();
-                        m.x += dx2 * 2;
-                        m.y += dy2 * 2;
-                        let (nx, ny) = (m.x, m.y);
-                        // GML 16-cell cross verbatim (5+5 columns, 3+3 rows).
-                        for p in [
-                            (nx - 2, ny - 2),
-                            (nx - 2, ny - 1),
-                            (nx - 2, ny),
-                            (nx - 2, ny + 1),
-                            (nx - 2, ny + 2),
-                            (nx + 2, ny - 2),
-                            (nx + 2, ny - 1),
-                            (nx + 2, ny),
-                            (nx + 2, ny + 1),
-                            (nx + 2, ny + 2),
-                            (nx - 1, ny + 2),
-                            (nx, ny + 2),
-                            (nx + 1, ny + 2),
-                            (nx - 1, ny - 2),
-                            (nx, ny - 2),
-                            (nx + 1, ny - 2),
-                        ] {
-                            stamp_cell(p, &mut seen, &mut plan.floor_cells);
-                        }
-                        m.x += dx2 * 2;
-                        m.y += dy2 * 2;
-                    } else if rng.random::<f32>() * 3.0 < 1.0 {
-                        for p in [
-                            (mx, my),
-                            (mx + 1, my),
-                            (mx + 1, my + 1),
-                            (mx, my + 1),
-                            (mx, my - 1),
-                            (mx - 1, my),
-                            (mx + 1, my - 1),
-                            (mx - 1, my - 1),
-                            (mx - 1, my + 1),
-                        ] {
-                            stamp_cell(p, &mut seen, &mut plan.floor_cells);
-                        }
-                    } else {
-                        for _ in 0..4 {
-                            stamp_cell((m.x, m.y), &mut seen, &mut plan.floor_cells);
-                            let (dx2, dy2) = m.step_delta();
-                            m.x += dx2;
-                            m.y += dy2;
-                            stamp_cell((m.x, m.y), &mut seen, &mut plan.floor_cells);
-                            plan.chests.push(ChestSpawn::Ammo(cell_center_px(m.x, m.y)));
-                        }
-                        if rng.random::<f32>() * 3.0 < 1.0 {
-                            for p in [
-                                (mx + 1, my),
-                                (mx + 1, my + 1),
-                                (mx, my + 1),
-                                (mx, my - 1),
-                                (mx - 1, my),
-                                (mx + 1, my - 1),
-                                (mx - 1, my - 1),
-                                (mx - 1, my + 1),
-                            ] {
-                                stamp_cell(p, &mut seen, &mut plan.floor_cells);
-                            }
-                        }
-                    }
-                }
-                101 => {
-                    stamp_cell((mx, my), &mut seen, &mut plan.floor_cells);
-                    if rng.random::<f32>() * 3.0 < 1.0 {
-                        for p in [(mx - 1, my), (mx + 1, my), (mx, my - 1), (mx, my + 1)] {
-                            stamp_cell(p, &mut seen, &mut plan.floor_cells);
-                        }
-                    }
-                }
-                104 => {
-                    if plan.floor_cells.len() < 4 {
-                        for p in [
-                            (mx - 1, my),
-                            (mx - 1, my - 1),
-                            (mx - 1, my + 1),
-                            (mx + 1, my),
-                            (mx + 1, my - 1),
-                            (mx + 1, my + 1),
-                            (mx, my + 1),
-                            (mx, my - 1),
-                        ] {
-                            stamp_cell(p, &mut seen, &mut plan.floor_cells);
-                        }
-                    }
-                    m.x += rng_choose(&mut rng, &[0, 2, -2]);
-                    m.y += rng_choose(&mut rng, &[0, 2, -2]);
-                    let (nx, ny) = (m.x, m.y);
-                    for p in [
-                        (nx - 1, ny),
-                        (nx - 1, ny - 1),
-                        (nx - 1, ny + 1),
-                        (nx + 1, ny),
-                        (nx + 1, ny - 1),
-                        (nx + 1, ny + 1),
-                        (nx, ny + 1),
-                        (nx, ny - 1),
-                    ] {
-                        stamp_cell(p, &mut seen, &mut plan.floor_cells);
-                    }
-                    stamp_cell((nx, ny), &mut seen, &mut plan.floor_cells);
-                }
-                105 => {
-                    if rng.random::<f32>() * 4.0 < 1.0 {
-                        for p in [(mx, my), (mx + 1, my), (mx + 1, my + 1), (mx, my + 1)] {
-                            stamp_cell(p, &mut seen, &mut plan.floor_cells);
-                        }
-                    } else {
-                        stamp_cell((mx, my), &mut seen, &mut plan.floor_cells);
-                    }
-                }
-                _ => {
-                    stamp_cell((mx, my), &mut seen, &mut plan.floor_cells);
-                }
-            }
-
-            let trn = turn_table(&mut rng, area);
-            m.dir = (m.dir + trn).rem_euclid(360);
-
-            if area == 6 && trn.abs() == 90 && rng.random::<f32>() * 2.0 < 1.0 {
-                for p in [
-                    (mx + 1, my),
-                    (mx + 1, my + 1),
-                    (mx, my + 1),
-                    (mx, my - 1),
-                    (mx - 1, my),
-                    (mx + 1, my - 1),
-                    (mx - 1, my - 1),
-                    (mx - 1, my + 1),
-                ] {
-                    stamp_cell(p, &mut seen, &mut plan.floor_cells);
-                }
-            }
-
-            let dist_from_spawn = ((mx * 32).pow(2) + (my * 32).pow(2)) as f32;
-            if dist_from_spawn > 48.0 * 48.0
-                && (trn == 180 || (trn.abs() == 90 && (area == 3 || area == 104)))
-            {
-                // GML stamps the turn Floor unconditionally, then the
-                // weapon chest everywhere except areas 107/0.
-                stamp_cell((mx, my), &mut seen, &mut plan.floor_cells);
-                if area != 107 && area != 0 {
-                    plan.chests.push(ChestSpawn::Weapon(cell_center_px(mx, my)));
-                }
-            }
-
-            let n = (next_makers.len() + new_branches.len() + (n_makers - mi)) as f32;
-            let mut dies = match area {
-                0 => rng.random::<f32>() * (19.0 + n) > 22.0,
-                // `101 | 105` below overlaps an earlier arm in the bevy
-                // source too (world.rs:645) — kept byte-identical.
-                #[allow(unreachable_patterns)]
-                1 | 101 | 105 => rng.random::<f32>() * (19.0 + n) > 20.0,
-                2 => rng.random::<f32>() * (14.0 + n) > 15.0,
-                3 => rng.random::<f32>() * (39.0 + n) > 40.0,
-                4 | 104 => {
-                    if area == 104 && rng.random::<f32>() * 4.0 >= 1.0 {
-                        false
-                    } else {
-                        rng.random::<f32>() * (9.0 + n) > 10.0
-                    }
-                }
-                5 => rng.random::<f32>() * (14.0 + n) > 15.0,
-                6 => rng.random::<f32>() * (21.0 + n) > 22.0,
-                7 => rng.random::<f32>() * (8.0 + n) > 9.0,
-                102 => rng.random::<f32>() * (9.0 + n) > 10.0,
-                103 | 107 => rng.random::<f32>() * (31.0 + n) > 32.0,
-                106 => false,
-                _ => rng.random::<f32>() * (19.0 + n) > 20.0,
-            };
-
-            if area == 7 && !dies {
-                dies = rng.random::<f32>() * (9.0 + n) > 10.0;
-            }
-
-            if dies && dist_from_spawn > 48.0 * 48.0 {
-                // GML area-0: the AmmoChest line is commented out —
-                // Floor only.
-                if area != 0 {
-                    plan.chests.push(ChestSpawn::Ammo(cell_center_px(mx, my)));
-                }
-                stamp_cell((mx, my), &mut seen, &mut plan.floor_cells);
-            }
-
-            if area == 106 && dist_from_spawn > 48.0 * 48.0 && rng.random::<f32>() * 10.0 < 1.0 {
-                plan.chests.push(ChestSpawn::Ammo(cell_center_px(mx, my)));
-                stamp_cell((mx, my), &mut seen, &mut plan.floor_cells);
-            }
-
-            if dies {
-                continue;
-            }
-
-            if area == 106 {
-                if plan.floor_cells.len() > makers.len() * 28 {
-                    new_branches.push(Maker {
-                        x: mx,
-                        y: my,
-                        dir: m.dir,
-                    });
-                }
-                next_makers.push(m);
-                continue;
-            }
-
-            let branches = match area {
-                0 => rng.random::<f32>() * 4.0 < 1.0,
-                1 | 101 => rng.random::<f32>() * 8.0 < 1.0,
-                2 => rng.random::<f32>() * 15.0 < 1.0,
-                3 => rng.random::<f32>() * 25.0 < 1.0,
-                4 | 104 => rng.random::<f32>() * 4.0 < 1.0,
-                5 => rng.random::<f32>() * 15.0 < 1.0,
-                6 => rng.random::<f32>() * 20.0 < 1.0,
-                7 => rng.random::<f32>() * 16.0 < 1.0,
-                102 => rng.random::<f32>() * 5.0 < 1.0,
-                103 | 107 => rng.random::<f32>() * 20.0 < 1.0,
-                // Unreachable in bevy too (`1 | 101` above covers 101) —
-                // kept byte-identical.
-                #[allow(unreachable_patterns)]
-                101 | 105 => rng.random::<f32>() * 14.0 < 1.0,
-                _ => false,
-            };
-
-            let branches = branches || (area == 7 && rng.random::<f32>() * 5.0 < 1.0);
-            if branches {
-                new_branches.push(Maker {
-                    x: mx,
-                    y: my,
-                    dir: m.dir,
-                });
-            }
-
-            next_makers.push(m);
-        }
-
-        makers = next_makers;
-        makers.extend(new_branches);
-    }
-
-    apply_safespawn_shift(&mut plan, &mut rng, run);
-
-    if let Some(&(fx, fy)) = plan
-        .floor_cells
-        .iter()
-        .max_by_key(|c| c.0.abs() + c.1.abs())
-    {
-        plan.chests.push(ChestSpawn::Rad(cell_center_px(fx, fy)));
-    }
+    apply_safespawn_shift(&mut plan, run);
 
     let floors = plan.floor_cells.clone();
     build_walls(run, &floors, &mut plan);
     let walls = plan.wall_cells.clone();
-    populate(run, &floors, &walls, &mut plan, &mut rng);
+    populate(run, &floors, &walls, &mut plan, &styleb_cells);
     plan
 }
 
-// TODO(port): calls `build_walls` and `populate` (world.rs:837/874, outside
-// this port's scope). Body below is otherwise byte-identical to world.rs:680.
+/// GML `objects/FloorMaker/Step_0.gml:4-67`: the palace finale is laid out by
+/// the maker's own Step, not by `scrMakeFloor`, and `GenCont/Alarm_0` skips
+/// `scrPopulate` there, so no bones, props, enemies or chests.
 fn generate_palace_last(run: &Run) -> LevelPlan {
-    let mut rng = StdRng::seed_from_u64(run.gen_seed);
-    let _ = &mut rng;
     let mut plan = LevelPlan {
         floor_cells: Vec::new(),
         wall_cells: HashSet::new(),
@@ -845,83 +1023,84 @@ fn generate_palace_last(run: &Run) -> LevelPlan {
         styleb: false,
     };
     let mut seen = HashSet::new();
-    for fy in 0..48 {
-        let diy = (fy as i32 - 24) * 32;
-        for fx in 0..8 {
-            if diy < -43 && (fx == 0 || fx == 7) {
+    // GML `FloorMaker/Step_0.gml:12-31`: 48 rows upward from the spawn tile,
+    // 8 columns from `dix = -4`, the outermost two columns cut for the last
+    // four rows (`diy < -43`). GML writes the grid at `x + dix*32 + 16`, a
+    // half-tile offset the 32px cell grid cannot hold, so the +16 is dropped.
+    for row in 0..48i32 {
+        let diy = -row;
+        for col in 0..8i32 {
+            let dix = col - 4;
+            if (dix == -4 || dix == 3) && diy < -43 {
                 continue;
             }
-            let c = (fx - 4, fy - 24);
+            let c = (dix, diy);
             if seen.insert(c) {
                 plan.floor_cells.push(c);
             }
         }
+        // GML :27-30 -- every fifth row between 10 and 33 tiles up.
+        if (-diy) % 5 == 0 && -diy > 9 && -diy < 34 {
+            let py = (diy * 32 - 32) as f32;
+            for sx in [-80.0f32, 112.0f32] {
+                plan.props.push((PropKind::ThroneStatue, Vec2::new(sx, py)));
+            }
+        }
+    }
+    // GML :33-49: four inactive generators; the two at `diy*32 + 384 + 64`
+    // sit 20 rows further up, and `NothingInactive` marks the far end.
+    for sx in [176.0f32, -144.0f32] {
+        for py in [-928.0f32, -1088.0f32] {
+            plan.props.push((PropKind::BigGeneratorInactive, Vec2::new(sx, py)));
+        }
+    }
+    // GML :51-63: each inactive generator lays six `Floor`s. `bbox_top` of
+    // `sprBigGeneratorInactive` is 1, so `(bbox_top div 32) + yy` is 0..2 --
+    // the arena's own bottom three rows, not rows under the generator.
+    for (gx, _) in [(176.0f32, 0.0f32), (-144.0f32, 0.0f32)] {
+        let gcol = (gx / 32.0).floor() as i32;
+        for yy in 0..3i32 {
+            for xx in 0..2i32 {
+                let c = (gcol + xx - 1, yy);
+                if seen.insert(c) {
+                    plan.floor_cells.push(c);
+                }
+            }
+        }
     }
     let floors = plan.floor_cells.clone();
     build_walls(run, &floors, &mut plan);
-    let walls = plan.wall_cells.clone();
-    populate(run, &floors, &walls, &mut plan, &mut rng);
+    populate_throne_room(&mut plan);
     plan
 }
 
-// TODO(port): calls `build_walls` and `populate` (world.rs:837/874, outside
-// this port's scope). Body below is otherwise byte-identical to world.rs:717.
 fn generate_campfire(run: &Run) -> LevelPlan {
-    let mut rng = StdRng::seed_from_u64(run.gen_seed);
-    let mut plan = LevelPlan {
-        floor_cells: Vec::new(),
-        wall_cells: HashSet::new(),
-        small_walls: Vec::new(),
-        bones: Vec::new(),
-        bone_sprite: "images/sprBones.png",
-        details: Vec::new(),
-        props: Vec::new(),
-        chests: Vec::new(),
-        enemies: Vec::new(),
-        population_events: Vec::new(),
-        boss: None,
-        boss_count: 1,
-        styleb: false,
-    };
-    let mut seen = HashSet::new();
+    // GML `objects/GenCont/Create_0.gml:20-30`: a 5x3 floor block, then SEVEN
+    // `FloorMaker` instances stacked on the spawn point, plus the ordinary one
+    // at :43 -- eight makers running the area-0 turn table.
+    let mut genr = Gen::new(run, 0, false);
     for xx in -2..=2 {
         for yy in -1..=1 {
-            let c = (xx, yy);
-            if seen.insert(c) {
-                plan.floor_cells.push(c);
-            }
+            genr.floor(xx, yy, false);
         }
     }
+    let mut makers = Vec::with_capacity(8);
+    for _ in 0..7 {
+        makers.push(genr.create_maker(0, 0));
+    }
+    makers.push(genr.create_maker(0, 0));
+    let goal = generation_goal_for_run(run);
+    genr.run_makers(goal, makers);
+    let (mut plan, styleb_cells) = genr.finish();
 
-    for _ in 0..40 {
-        let idx = rng.random_range(0..plan.floor_cells.len());
-        let (cx, cy) = plan.floor_cells[idx];
-        let dir = rng.random_range(0..4);
-        let (nx, ny) = match dir {
-            0 => (cx + 1, cy),
-            1 => (cx - 1, cy),
-            2 => (cx, cy + 1),
-            _ => (cx, cy - 1),
-        };
-        if seen.insert((nx, ny)) {
-            plan.floor_cells.push((nx, ny));
-        }
-        if plan.floor_cells.len() >= 60 {
-            break;
-        }
-    }
     let floors = plan.floor_cells.clone();
     build_walls(run, &floors, &mut plan);
     let walls = plan.wall_cells.clone();
-    populate(run, &floors, &walls, &mut plan, &mut rng);
+    populate(run, &floors, &walls, &mut plan, &styleb_cells);
     plan
 }
 
-// TODO(port): calls `build_walls` and `populate` (world.rs:837/874, outside
-// this port's scope). Body below is otherwise byte-identical to world.rs:767.
 fn generate_hq_last(run: &Run) -> LevelPlan {
-    let mut rng = StdRng::seed_from_u64(run.gen_seed);
-    let _ = &mut rng;
     let mut plan = LevelPlan {
         floor_cells: Vec::new(),
         wall_cells: HashSet::new(),
@@ -938,38 +1117,75 @@ fn generate_hq_last(run: &Run) -> LevelPlan {
         styleb: true,
     };
     let mut seen = HashSet::new();
-    for fx in 0..10 {
-        for fy in 0..10 {
-            let c = (fx - 5, fy - 5);
-            if seen.insert(c) {
-                plan.floor_cells.push(c);
+    let mut cells: Vec<(i32, i32)> = Vec::new();
+    macro_rules! stamp {
+        ($c:expr) => {
+            if seen.insert($c) {
+                cells.push($c);
             }
+        };
+    }
+    // GML `objects/FloorMaker/Create_0.gml:37-48`.
+    for row in 0..10i32 {
+        for col in 0..10i32 {
+            stamp!((col - 5, -row));
         }
     }
-
-    for fx in 0..8 {
-        for (sx, sy) in [(fx - 4, 6), (fx - 4, -7)] {
-            if seen.insert((sx, sy)) {
-                plan.floor_cells.push((sx, sy));
-            }
-            if seen.insert((sx, sy + 1)) {
-                plan.floor_cells.push((sx, sy + 1));
-            }
-        }
+    // GML :50-81 -- the shaft pairs and the two `LastIntro` wings. Every GML
+    // x lands on a half tile, so the cells collapse onto the 32px grid.
+    for c in [
+        (-1, -11),
+        (-1, -10),
+        (0, -11),
+        (0, -10),
+        (-1, -11),
+        (-1, -10),
+        (1, -11),
+        (1, -10),
+        (-1, 1),
+        (-1, 2),
+        (0, 1),
+        (0, 2),
+        (-1, 1),
+        (-1, 2),
+        (1, 1),
+        (1, 2),
+        (-7, -6),
+        (-6, -6),
+        (-6, -5),
+        (-6, -4),
+        (-6, -3),
+        (5, -6),
+        (5, -5),
+        (5, -4),
+        (5, -3),
+        (6, -6),
+        (6, -5),
+        (6, -4),
+        (6, -3),
+    ] {
+        stamp!(c);
     }
-    for fy in 0..4 {
-        for (sx, sy) in [(6, fy - 2), (-7, fy - 2)] {
-            if seen.insert((sx, sy)) {
-                plan.floor_cells.push((sx, sy));
-            }
-        }
+    plan.floor_cells = cells;
+    // GML :85-88: four hand-placed `Wall`s, which `mcr_floor_make_walls`
+    // never generates.
+    for (wx, wy) in [(-4i32, -13i32), (-4, -2), (5, -13), (5, -2)] {
+        plan.wall_cells.insert((wx, wy));
+    }
+    // GML :89-92: four `PlantPot`s.
+    for (px, py) in [
+        (-56.0f32, -240.0f32),
+        (-56.0, -32.0),
+        (88.0, -240.0),
+        (88.0, -32.0),
+    ] {
+        plan.props.push((PropKind::PlantPot, Vec2::new(px, py)));
     }
     let floors = plan.floor_cells.clone();
     build_walls(run, &floors, &mut plan);
-    let walls = plan.wall_cells.clone();
-    populate(run, &floors, &walls, &mut plan, &mut rng);
     plan
 }
+
 
 fn rebuild_population_events(plan: &mut LevelPlan, base_events: &[PopulationEvent]) {
     let mut events: Vec<PopulationEvent> = base_events
@@ -994,47 +1210,6 @@ fn rebuild_population_events(plan: &mut LevelPlan, base_events: &[PopulationEven
     plan.population_events = events;
 }
 
-// world.rs:1904-1927, verbatim (Open Mind mutation: two bonus chests,
-// skipped for chest-less areas). Seeded: GML draws from the Generation
-// stream, so callers pass the run seed.
-pub fn apply_open_mind_bonus(plan: &mut LevelPlan, area: AreaId, floor_in_area: u32, seed: u64) {
-    let no_chests = matches!(area, AreaId::Campfire | AreaId::Vault | AreaId::CrownVault)
-        || (area == AreaId::HQ && floor_in_area >= 3);
-    if no_chests || plan.floor_cells.is_empty() {
-        return;
-    }
-    use rand::rngs::StdRng;
-    use rand::{RngExt, SeedableRng};
-    let mut rng = StdRng::seed_from_u64(seed ^ 0x0BAD_C0DE);
-    for _ in 0..2 {
-        let idx = rng.random_range(0..plan.floor_cells.len());
-        let (cx, cy) = plan.floor_cells[idx];
-        let pos = cell_center_px(cx, cy);
-
-        match rng.random_range(0..3) {
-            0 => plan.chests.push(ChestSpawn::Weapon(pos)),
-            1 => plan.chests.push(ChestSpawn::Ammo(pos)),
-            _ => plan.chests.push(ChestSpawn::Rad(pos)),
-        }
-    }
-    let mut base_events: Vec<PopulationEvent> = plan.population_events.clone();
-    if base_events.is_empty() {
-        base_events.extend(
-            plan.enemies
-                .iter()
-                .copied()
-                .map(|(kind, pos)| PopulationEvent::Enemy { kind, pos }),
-        );
-        base_events.extend(
-            plan.props
-                .iter()
-                .copied()
-                .map(|(kind, pos)| PopulationEvent::Prop { kind, pos }),
-        );
-    }
-    rebuild_population_events(plan, &base_events);
-}
-
 /// GML `scrPopChests` input: everything the permutation pass reads.
 /// `seed` threads the Generation RNG stream (GML `random`/`irandom`
 /// inside `scrPopChests` draw from the level-generation stream, so equal
@@ -1056,6 +1231,13 @@ pub struct ChestPermuteCtx {
     pub same_weapons_for: u32,
     pub horror_done: bool,
     pub hardmode: bool,
+    /// GML raises the tutorial's weapon chest from `TutCont/Alarm_0:53`
+    /// (`if (!_any) instance_create(10016, 10016, WeaponChest)`), and
+    /// `scrPopChests` — the only caller of the trim, `scrPopulate:224` —
+    /// never runs for the 5-floor `TutCont` arena. Its `do…until` removes the
+    /// last chest of a kind, so trimming the tutorial would delete the only
+    /// gun pickup in the level.
+    pub tutorial: bool,
     pub player_pos: Vec2,
     pub seed: u64,
 }
@@ -1067,6 +1249,69 @@ pub struct ChestPermuteOut {
     pub horror: bool,
 }
 
+/// GML `scrPopChests.gml:37-41,45-49,53-57`.
+fn trim_chest_kind(list: &mut Vec<Vec2>, keep: usize, rng: &mut StdRng) {
+    loop {
+        let target = Vec2::new(
+            rng.random_range(-250.0..250.0),
+            rng.random_range(-250.0..250.0),
+        );
+        if !list.is_empty() {
+            let mut best = 0usize;
+            let mut best_d = f32::MAX;
+            for (i, p) in list.iter().enumerate() {
+                let d = p.distance_squared(target);
+                if d < best_d {
+                    best_d = d;
+                    best = i;
+                }
+            }
+            list.remove(best);
+        }
+        if list.len() <= keep {
+            break;
+        }
+    }
+}
+
+/// GML `scrPopChests.gml:192-222`.
+fn replace_prop_with_chest(
+    plan: &mut LevelPlan,
+    list: &mut Vec<Vec2>,
+    area: &AreaId,
+    base_events: &mut Vec<PopulationEvent>,
+) {
+    if !list.is_empty() || *area == AreaId::Campfire || is_secret_area(*area) {
+        return;
+    }
+    // GML skips a fixed list of prop objects; none of the `PropKind`s the
+    // port can emit is on it, so every prop is a candidate.
+    let spawn = Vec2::new(TILE * 0.5, TILE * 0.5);
+    let mut best: Option<(usize, Vec2, f32)> = None;
+    for (index, &(_, at)) in plan.props.iter().enumerate() {
+        let d2 = at.distance_squared(spawn);
+        if d2 > 160.0 * 160.0 && best.is_none_or(|(_, _, bd)| d2 > bd) {
+            best = Some((index, at, d2));
+        }
+    }
+    let Some((index, at, _)) = best else {
+        return;
+    };
+    let (prop_kind, _) = plan.props.remove(index);
+    if let Some(event_index) = base_events.iter().position(|event| {
+        matches!(
+            event,
+            PopulationEvent::Prop {
+                kind: event_kind,
+                pos: event_pos,
+            } if *event_kind == prop_kind && *event_pos == at
+        )
+    }) {
+        base_events.remove(event_index);
+    }
+    list.push(at);
+}
+
 /// Verbatim `scripts/scrPopChests/scrPopChests.gml`: vault proto-chest +
 /// chestless areas, Open-Mind bonus counts, trim to 1 + bonus per base
 /// kind (GML destroys nearest-to-`10016+orandom(250)`; the port shuffles
@@ -1075,9 +1320,7 @@ pub struct ChestPermuteOut {
 /// desert styleb maggot), crown Life/Love conversions, mimic rolls, and
 /// the hardmode desert 1-1 `BigWeaponChest` arm.
 pub fn apply_chest_permutations(plan: &mut LevelPlan, ctx: ChestPermuteCtx) -> ChestPermuteOut {
-    use rand::rngs::StdRng;
-    use rand::{RngExt, SeedableRng};
-    let mut rng = StdRng::seed_from_u64(ctx.seed);
+    let mut rng = phase_rng(ctx.seed, RNG_CHEST);
     let mut out = ChestPermuteOut { horror: false };
     let mut base_events: Vec<PopulationEvent> = plan
         .population_events
@@ -1158,8 +1401,11 @@ pub fn apply_chest_permutations(plan: &mut LevelPlan, ctx: ChestPermuteCtx) -> C
         return out;
     }
 
-    // Campfire and the HQ finale hold no chests.
-    if ctx.area == AreaId::Campfire || (ctx.area == AreaId::HQ && ctx.subarea >= 3) {
+    // GML `GenCont/Alarm_0.gml:45-48`: the palace and HQ finales never call
+    // `scrPopulate`, and every chest they own is destroyed on entry.
+    let finale = (ctx.area == AreaId::Palace && ctx.subarea >= 3)
+        || (ctx.area == AreaId::HQ && ctx.subarea >= 3);
+    if ctx.area == AreaId::Campfire || finale {
         plan.chests.clear();
         for (k, p) in customs {
             plan.chests.push(ChestSpawn::Custom(k, p));
@@ -1168,8 +1414,9 @@ pub fn apply_chest_permutations(plan: &mut LevelPlan, ctx: ChestPermuteCtx) -> C
         return out;
     }
 
-    // Open-Mind bonus counts, then trim each base kind to 1 + bonus
-    // (GML destroys nearest-to-random-point; uniform shuffle here).
+    // GML `scrPopChests.gml:25-31`: Open Mind adds `2 * level` extra chests
+    // worth of *allowance* (one `choose(1,2,3)` per roll) -- it never creates
+    // one itself.
     let (mut wb, mut ab, mut rb) = (0usize, 0usize, 0usize);
     if ctx.open_mind {
         for _ in 0..2 {
@@ -1180,55 +1427,24 @@ pub fn apply_chest_permutations(plan: &mut LevelPlan, ctx: ChestPermuteCtx) -> C
             }
         }
     }
-    let mut trim = |v: &mut Vec<Vec2>, keep: usize| {
-        // Fisher-Yates shuffle, then truncate.
-        for i in (1..v.len()).rev() {
-            let j = rng.random_range(0..=i);
-            v.swap(i, j);
-        }
-        v.truncate(keep);
-    };
-    trim(&mut weapons, 1 + wb);
-    trim(&mut ammos, 1 + ab);
-    trim(&mut rads, 1 + rb);
 
-    // GML `scrReplacePropWithChest`: a missing base kind converts the
-    // furthest eligible prop past 160 px (statues/decals excluded).
-    let mut top_up = |v: &mut Vec<Vec2>, keep: usize| {
-        if keep == 0 || !v.is_empty() {
-            return;
-        }
-        let mut best: Option<(usize, Vec2, f32)> = None;
-        for (index, &(kind, at)) in plan.props.iter().enumerate() {
-            match kind {
-                PropKind::ThroneStatue | PropKind::YVStatue | PropKind::GroundDecal => continue,
-                _ => {}
-            }
-            let d = at.length_squared();
-            if d > 160.0 * 160.0 && best.is_none_or(|(_, _, bd)| d > bd) {
-                best = Some((index, at, d));
-            }
-        }
-        if let Some((index, at, _)) = best {
-            let (kind, _) = plan.props.remove(index);
-            if let Some(event_index) = base_events.iter().position(|event| {
-                matches!(
-                    event,
-                    PopulationEvent::Prop {
-                        kind: event_kind,
-                        pos: event_pos,
-                    } if *event_kind == kind && *event_pos == at
-                )
-            }) {
-                base_events.remove(event_index);
-            }
-            v.push(at);
-        }
-    };
-    top_up(&mut weapons, 1 + wb);
-    top_up(&mut ammos, 1 + ab);
-    top_up(&mut rads, 1 + rb);
-    drop(top_up);
+    // GML `scrPopChests.gml:35-58`: `do { destroy the chest nearest
+    // 10016 + orandom(250) } until instance_number(kind) <= _tot + _bonus`.
+    // The body always runs once, so a kind holding exactly `_tot` chests
+    // comes out empty. The tutorial never reaches this pass.
+    if !ctx.tutorial {
+        trim_chest_kind(&mut weapons, 1 + wb, &mut rng);
+        trim_chest_kind(&mut rads, 1 + rb, &mut rng);
+        trim_chest_kind(&mut ammos, 1 + ab, &mut rng);
+    }
+
+    // GML `scrPopChests.gml:61-63` then `scrPopChests.gml:192-222`: one call
+    // per kind, each refusing when that kind still exists, on the campfire,
+    // on every `area >= 100` secret, and on the HQ finale -- so route areas
+    // only. It converts the furthest prop past 160 px.
+    for list in [&mut rads, &mut weapons, &mut ammos] {
+        replace_prop_with_chest(plan, list, &ctx.area, &mut base_events);
+    }
 
     // Rad permutations, in GML order.
     let mut rad_out: Vec<(ChestSpawn, Option<(EnemyKind, Vec2)>)> = Vec::new();
@@ -1272,7 +1488,16 @@ pub fn apply_chest_permutations(plan: &mut LevelPlan, ctx: ChestPermuteCtx) -> C
     // non-Rogue chest plus every Rad becomes Ammo.
     if ctx.crown_life {
         for (c, _) in final_chests.iter_mut() {
-            if matches!(&*c, ChestSpawn::Rad(_)) {
+            // GML `scrPopChests.gml:124-129` is `with RadChest`, which is
+            // hierarchy-inclusive: plain `RadChest`, `RadChestBig` AND
+            // `RadMaggotChest` (the latter two both declare
+            // `parentObjectId: RadChest`).
+            if matches!(&*c, ChestSpawn::Rad(_))
+                || matches!(
+                    &*c,
+                    ChestSpawn::Custom(ChestKind::RadBig | ChestKind::RadMaggot, _)
+                )
+            {
                 let p = (*c).pos();
                 *c = ChestSpawn::Custom(ChestKind::Health, p);
             }
@@ -1424,29 +1649,49 @@ pub(crate) fn build_walls(_run: &Run, floors: &[(i32, i32)], plan: &mut LevelPla
     }
 }
 
-// world.rs:869-871, verbatim.
-fn side_solid(walls: &std::collections::HashSet<(i32, i32)>, cx: i32, cy: i32, dx: i32) -> bool {
-    let wx = cx * 2 + if dx < 0 { -1 } else { 2 };
-    walls.contains(&(wx, cy * 2)) && walls.contains(&(wx, cy * 2 + 1))
+/// GML `place_meeting(x, y, Wall)` reduced to a point lookup: a `Wall` is
+/// `sprWall*Bot`, bbox `0,0..15,15`, so a point belongs to the 16px cell it
+/// falls in. Generated walls never occupy a floor's own 2x2 block, but a
+/// `scrPopProps` small wall can -- and GML tests exactly that.
+fn wall_point_in(walls: &HashSet<(i32, i32)>, small: &[(i16, i16)], px: f32, py: f32) -> bool {
+    let wx = (px / WALL_PX).floor() as i32;
+    let wy = (py / WALL_PX).floor() as i32;
+    walls.contains(&(wx, wy)) || small.contains(&(wx as i16, wy as i16))
 }
 
-// world.rs:1864-1868, verbatim.
-fn walls_cover_tile_with_smalls(plan: &LevelPlan, cx: i32, cy: i32) -> bool {
-    plan.small_walls
-        .iter()
-        .any(|&(wx, wy)| (wx as i32).div_euclid(2) == cx && (wy as i32).div_euclid(2) == cy)
+fn wall_point(plan: &LevelPlan, walls: &HashSet<(i32, i32)>, px: f32, py: f32) -> bool {
+    wall_point_in(walls, &plan.small_walls, px, py)
 }
 
-// world.rs:127-138, verbatim except `crate::game::secret_areas::is_secret_area`
-// becomes the local `is_secret_area` (same port convention as the file header).
-// (`is_boss_subarea` itself is ported alongside: `is_boss_subarea_run`'s
-// verbatim body calls it, and it is pure over `u32`.)
+/// GML `instance_nearest(x, y, Wall)` (measured to the instance origin, which
+/// is the top-left of its 16px mask).
+fn nearest_wall(plan: &LevelPlan, walls: &HashSet<(i32, i32)>, px: f32, py: f32) -> Option<Vec2> {
+    let mut best: Option<(f32, Vec2)> = None;
+    for &(wx, wy) in walls {
+        let at = Vec2::new(wx as f32 * WALL_PX, wy as f32 * WALL_PX);
+        let d = at.distance_squared(Vec2::new(px, py));
+        if best.is_none_or(|(bd, _)| d < bd) {
+            best = Some((d, at));
+        }
+    }
+    for &(wx, wy) in &plan.small_walls {
+        let at = Vec2::new(wx as f32 * WALL_PX, wy as f32 * WALL_PX);
+        let d = at.distance_squared(Vec2::new(px, py));
+        if best.is_none_or(|(bd, _)| d < bd) {
+            best = Some((d, at));
+        }
+    }
+    best.map(|(_, at)| at)
+}
+
+#[allow(dead_code)]
 fn is_boss_subarea(floor: u32) -> bool {
     let rf = ((floor.max(1) - 1) % 15) + 1;
 
     matches!(rf, 3 | 7 | 11 | 15)
 }
 
+#[allow(dead_code)]
 fn is_boss_subarea_run(run: &Run) -> bool {
     if is_secret_area(run.area) {
         return false;
@@ -1454,39 +1699,34 @@ fn is_boss_subarea_run(run: &Run) -> bool {
     is_boss_subarea(run.floor)
 }
 
-// GML `scrAreaGetDifficulty` verbatim: subarea + loops*16 +
-// max-subareas of previous areas. Since route floor-1 = previous
-// max-subareas + (subarea-1), that collapses to floor + loops*16
-// (the old `floor-1` form undercounted by exactly 1 past floor 1).
-// Hardmode starts at `hard = 13` (GML `GameCont/Create_0`).
+/// GML `GameCont.hard` is a live accumulator, not `scrAreaGetDifficulty`:
+/// `GameCont/Create_0.gml:9` seeds it at 0 (`:85-88` sets 13 and bumps
+/// `loops` in hardmode) and `GameCont/Other_5.gml:136` adds
+/// `scrGameIsHardmode() ? 2 : 1` on every room advance -- including the
+/// secret areas that `Other_5` routes back to. `scrPopulate.gml:4` reads the
+/// accumulator, so floor 1 populates with `hard = 0`.
 pub fn game_hard(run: &Run) -> f32 {
-    run.hard.max(1) as f32
+    run.hard as f32
 }
 
-// world.rs:874-1695, verbatim except `crate::game::areas::AreaId::X` becomes
-// `AreaId::X` (top import), `crate::game::secret_areas::is_secret_area`
-// becomes the local `is_secret_area`, and the inner
-// `use crate::game::areas::AreaId;` is dropped (covered by the top import).
-// Every branch, table and `rng` call is preserved in order, including the
-// duplicated `sy`/`wx` probe lines in the small-walls loop (the second
-// `rng.random_range` draw is load-bearing for seeded determinism).
+/// GML `scripts/scrPopulate/scrPopulate.gml` end to end, with each phase on
+/// its own stream (see `phase_rng`). The chest restriction lives in
+/// `apply_chest_permutations` because the trim needs the Open-Mind count.
 fn populate(
     run: &Run,
     floors: &[(i32, i32)],
-    walls: &std::collections::HashSet<(i32, i32)>,
+    walls: &HashSet<(i32, i32)>,
     plan: &mut LevelPlan,
-    rng: &mut StdRng,
+    styleb_cells: &HashMap<(i32, i32), bool>,
 ) {
     let area = gml_area_from_run(run);
-    let boss_sub = is_boss_subarea_run(run);
-
+    let is_last = run.floor_in_area >= gml_max_subarea(area);
     let hard = game_hard(run);
     let enemy_cap = 3.0 + hard / 1.5;
-    let rf_route = ((run.floor.max(1) - 1) % 15) + 1;
-    let skip_enemies =
-        (boss_sub && rf_route == 15) || (run.area == AreaId::HQ && run.floor_in_area >= 3);
+    let plan_styleb = plan.styleb;
+    let styleb_of = |cx: i32, cy: i32| *styleb_cells.get(&(cx, cy)).unwrap_or(&plan_styleb);
 
-    let mut prop_tiles: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
+    let mut prop_tiles: HashSet<(i32, i32)> = HashSet::new();
     for chest in &plan.chests {
         let pos = chest.pos();
         prop_tiles.insert((
@@ -1500,7 +1740,7 @@ fn populate(
             ((pos.y - TILE * 0.5) / TILE).floor() as i32,
         ));
     }
-    let mut population_events: Vec<PopulationEvent> = plan
+    let mut events: Vec<PopulationEvent> = plan
         .enemies
         .iter()
         .copied()
@@ -1512,527 +1752,584 @@ fn populate(
                 .map(|(kind, pos)| PopulationEvent::Prop { kind, pos }),
         )
         .collect();
+    let mut enemy_calls: u64 = 0;
 
+    // GML :16-31 -- default stream, `_spawndist = 120` for this pass (the
+    // city-boss 150 override only lands on :33, after it).
+    let mut rng = phase_rng(run.gen_seed, RNG_DEFAULT);
     for &(cx, cy) in floors {
-        let (px, py) = cell_center_i(cx, cy);
-        let dist_sq = px * px + py * py;
-        let place_free = !prop_tiles.contains(&(cx, cy));
-        let wall_blocked = walls_cover_tile(walls, cx, cy)
-            || plan.small_walls.iter().any(|&(wx, wy)| {
-                (wx as i32).div_euclid(2) == cx && (wy as i32).div_euclid(2) == cy
-            });
-        if !skip_enemies
-            && rng.random::<f32>() * (10.0 + hard) < hard
-            && dist_sq > 120.0 * 120.0
-            && place_free
+        if rng.random::<f32>() * (10.0 + hard) < hard
+            && cell_dist2_origin(cx, cy) > 120.0 * 120.0
+            && !prop_tiles.contains(&(cx, cy))
         {
+            let mut er = phase_rng(
+                run.gen_seed.wrapping_add(enemy_calls.wrapping_mul(0x9E37_79B9)),
+                RNG_ENEMY_CALL,
+            );
+            enemy_calls += 1;
             let props_before = plan.props.len();
             let enemies_before = plan.enemies.len();
             scr_pop_enemies(
                 run,
                 area,
-                plan.styleb,
+                styleb_of(cx, cy),
+                is_last,
                 &mut plan.enemies,
                 &mut plan.props,
                 &mut prop_tiles,
-                rng,
-                Vec2::new(px, py),
+                &mut er,
                 (cx, cy),
-                wall_blocked,
+                &plan.small_walls,
+                walls,
             );
             record_population_delta(
-                &mut population_events,
+                &mut events,
                 props_before,
                 &plan.props,
                 enemies_before,
                 &plan.enemies,
             );
         }
+        // GML :26-30 -- `random_range(bbox_left, bbox_right)`, i.e. an offset
+        // in [0,31) from the tile ORIGIN.
         if rng.random::<f32>() * 6.0 < 1.0 {
-            plan.details.push(Vec2::new(
-                px + rng.random_range(-14.0..14.0),
-                py + rng.random_range(-14.0..14.0),
-            ));
+            let ux = rng.random_range(0.0..31.0);
+            let uy = rng.random_range(0.0..31.0);
+            plan.details.push(Vec2::new(cx as f32 * TILE + ux, cy as f32 * TILE + uy));
         }
     }
 
-    let (bone_sprite, bone_chance, bone_lower_only) = match run.area {
-        AreaId::Desert => ("images/sprBones.png", 1.0, false),
-        AreaId::Campfire => ("images/sprNightBones.png", 1.0, false),
-        AreaId::Scrapyards => ("images/sprScrapDecal.png", 1.0 / 7.0, false),
-        AreaId::City | AreaId::FrozenCity => ("images/sprIceDecal.png", 1.0 / 7.0, false),
-        AreaId::CrystalCaves => ("images/sprCaveDecal.png", 1.0 / 9.0, false),
-        AreaId::CursedCaves => ("images/sprInvCaveDecal.png", 1.0 / 9.0, false),
-        AreaId::Oasis => ("images/sprCoral.png", 1.0 / 9.0, false),
-        AreaId::Sewers => ("images/sprSewerDecal.png", 1.0 / 10.0, true),
-        AreaId::PizzaSewers => ("images/sprPizzaSewerDecal.png", 1.0 / 10.0, true),
-        AreaId::Jungle => ("images/sprJungleDecal.png", 1.0 / 10.0, true),
-        _ => ("images/sprBones.png", 0.0, false),
+    // GML :37-177 -- bone decals, on the Generation stream. `None` means the
+    // area has no bone branch at all (mansion, labs, palace, vault, HQ, crib
+    // and pizza sewers: the second `area_sewers` arm at :158-166 is a dead
+    // duplicate of the first, so 102 never matches it).
+    let bone_pass: Option<(i32, bool)> = match area {
+        1 => Some((0, false)),
+        0 => Some((0, false)),
+        3 => Some((7, false)),
+        5 => Some((7, false)),
+        4 => Some((9, false)),
+        104 => Some((9, false)),
+        101 => Some((9, false)),
+        2 => Some((10, true)),
+        105 => Some((10, true)),
+        _ => None,
     };
-    plan.bone_sprite = bone_sprite;
-
-    for &(cx, cy) in floors {
-        let (px, py) = cell_center_i(cx, cy);
-
-        if bone_chance > 0.0
-            && side_solid(walls, cx, cy, -1)
-            && side_solid(walls, cx, cy, 1)
-            && !walls_cover_tile_with_smalls(plan, cx, cy)
-        {
-            if bone_lower_only {
-                if rng.random::<f32>() < bone_chance {
-                    plan.bones.push((Vec2::new(px - 16.0, py), false));
-                    plan.bones.push((Vec2::new(px + 16.0, py), true));
+    plan.bone_sprite = match area {
+        0 => "images/sprNightBones.png",
+        3 => "images/sprScrapDecal.png",
+        5 => "images/sprIceDecal.png",
+        4 => "images/sprCaveDecal.png",
+        104 => "images/sprInvCaveDecal.png",
+        101 => "images/sprCoral.png",
+        2 => "images/sprSewerDecal.png",
+        105 => "images/sprJungleDecal.png",
+        _ => "images/sprBones.png",
+    };
+    if let Some((roll, paired)) = bone_pass {
+        let mut rng = phase_rng(run.gen_seed, RNG_BONES);
+        for &(cx, cy) in floors {
+            let (ox, oy) = (cx as f32 * TILE, cy as f32 * TILE);
+            // GML :41 etc -- three single-point probes, not an edge test:
+            // `!place_free(x - 32, y) && !place_free(x + 32, y) &&
+            // place_free(x, y)`.
+            if wall_point(plan, walls, ox - 32.0, oy)
+                || !wall_point(plan, walls, ox + 32.0, oy)
+                || wall_point(plan, walls, ox, oy)
+            {
+                continue;
+            }
+            if paired {
+                if roll == 0 || rng.random_range(0i32..roll) < 1 {
+                    plan.bones.push((Vec2::new(ox, oy + 16.0), false));
+                    plan.bones.push((Vec2::new(ox + 32.0, oy + 16.0), true));
                 }
             } else {
-                let spots = [
-                    (Vec2::new(px - 16.0, py - 16.0), false),
-                    (Vec2::new(px - 16.0, py), false),
-                    (Vec2::new(px + 16.0, py - 16.0), true),
-                    (Vec2::new(px + 16.0, py), true),
-                ];
-                for (pos, flip) in spots {
-                    if bone_chance >= 1.0 || rng.random::<f32>() < bone_chance {
-                        plan.bones.push((pos, flip));
+                for (dx, dy, flip) in [
+                    (0.0, 0.0, false),
+                    (0.0, 16.0, false),
+                    (32.0, 0.0, true),
+                    (32.0, 16.0, true),
+                ] {
+                    if roll == 0 || rng.random_range(0i32..roll) < 1 {
+                        plan.bones.push((Vec2::new(ox + dx, oy + dy), flip));
                     }
                 }
             }
         }
     }
 
-    let outer_spawn_dist = if area == 5 && run.floor_in_area == 3 {
-        150.0
-    } else {
-        120.0
-    };
-    if !skip_enemies {
-        for &(cx, cy) in floors {
-            let (px, py) = cell_center_i(cx, cy);
-            let dist_sq = px * px + py * py;
-            let place_free = !prop_tiles.contains(&(cx, cy));
-            let wall_blocked = walls_cover_tile(walls, cx, cy)
-                || plan.small_walls.iter().any(|&(wx, wy)| {
-                    (wx as i32).div_euclid(2) == cx && (wy as i32).div_euclid(2) == cy
-                });
-            if (plan.enemies.len() as f32) < enemy_cap
-                && dist_sq > outer_spawn_dist * outer_spawn_dist
-                && place_free
-            {
-                let props_before = plan.props.len();
-                let enemies_before = plan.enemies.len();
-                scr_pop_enemies(
-                    run,
-                    area,
-                    plan.styleb,
-                    &mut plan.enemies,
-                    &mut plan.props,
-                    &mut prop_tiles,
-                    rng,
-                    Vec2::new(px, py),
-                    (cx, cy),
-                    wall_blocked,
-                );
-                record_population_delta(
-                    &mut population_events,
-                    props_before,
-                    &plan.props,
-                    enemies_before,
-                    &plan.enemies,
-                );
-            }
-            let place_free = !prop_tiles.contains(&(cx, cy));
-            if run.blood_crown
-                && rng.random::<f32>() * (8.0 + hard) < hard
-                && dist_sq > outer_spawn_dist * outer_spawn_dist
-                && place_free
-            {
-                let props_before = plan.props.len();
-                let enemies_before = plan.enemies.len();
-                scr_pop_enemies(
-                    run,
-                    area,
-                    plan.styleb,
-                    &mut plan.enemies,
-                    &mut plan.props,
-                    &mut prop_tiles,
-                    rng,
-                    Vec2::new(px, py),
-                    (cx, cy),
-                    walls_cover_tile(walls, cx, cy)
-                        || plan.small_walls.iter().any(|&(wx, wy)| {
-                            (wx as i32).div_euclid(2) == cx && (wy as i32).div_euclid(2) == cy
-                        }),
-                );
-                record_population_delta(
-                    &mut population_events,
-                    props_before,
-                    &plan.props,
-                    enemies_before,
-                    &plan.enemies,
-                );
-            }
-        }
-    }
-    let small_walls_allowed = !boss_sub
-        && !matches!(
-            run.area,
-            AreaId::HQ | AreaId::Vault | AreaId::CrownVault | AreaId::Labs | AreaId::Campfire
-        )
-        && !(((run.floor.max(1) - 1) % 15) + 1 == 15 && run.area == AreaId::Palace);
+    // GML :183-198 -- the capped pass, then the Blood-crown pass.
+    let mut rng = phase_rng(run.gen_seed, RNG_ENEMIES);
+    let spawndist = if area == 5 && is_last { 150.0 } else { 120.0 };
     for &(cx, cy) in floors {
-        let (px, py) = cell_center_i(cx, cy);
-        let dist_sq = px * px + py * py;
-        if small_walls_allowed
+        if (plan.enemies.len() as f32) < enemy_cap
+            && cell_dist2_origin(cx, cy) > spawndist * spawndist
             && !prop_tiles.contains(&(cx, cy))
-            && rng.random::<f32>() * 5.0 < 1.0
-            && dist_sq > 100.0 * 100.0
         {
-            let sx = px + rng.random_range(-8.0..8.0);
-            let _sy = py + rng.random_range(-8.0..8.0);
-            let _wx = (sx / WALL_PX).floor() as i32;
-            let sy = py + rng.random_range(-8.0..8.0);
-            let wx = (sx / WALL_PX).floor() as i32;
-            let wy = (sy / WALL_PX).floor() as i32;
-            plan.small_walls.push((wx as i16, wy as i16));
-            prop_tiles.insert((cx, cy));
+            let mut er = phase_rng(
+                run.gen_seed.wrapping_add(enemy_calls.wrapping_mul(0x9E37_79B9)),
+                RNG_ENEMY_CALL,
+            );
+            enemy_calls += 1;
+            let props_before = plan.props.len();
+            let enemies_before = plan.enemies.len();
+            scr_pop_enemies(
+                run,
+                area,
+                styleb_of(cx, cy),
+                is_last,
+                &mut plan.enemies,
+                &mut plan.props,
+                &mut prop_tiles,
+                &mut er,
+                (cx, cy),
+                &plan.small_walls,
+                walls,
+            );
+            record_population_delta(
+                &mut events,
+                props_before,
+                &plan.props,
+                enemies_before,
+                &plan.enemies,
+            );
+        }
+        if run.blood_crown
+            && rng.random::<f32>() * (8.0 + hard) < hard
+            && cell_dist2_origin(cx, cy) > spawndist * spawndist
+            && !prop_tiles.contains(&(cx, cy))
+        {
+            let mut er = phase_rng(
+                run.gen_seed.wrapping_add(enemy_calls.wrapping_mul(0x9E37_79B9)),
+                RNG_ENEMY_CALL,
+            );
+            enemy_calls += 1;
+            let props_before = plan.props.len();
+            let enemies_before = plan.enemies.len();
+            scr_pop_enemies(
+                run,
+                area,
+                styleb_of(cx, cy),
+                is_last,
+                &mut plan.enemies,
+                &mut plan.props,
+                &mut prop_tiles,
+                &mut er,
+                (cx, cy),
+                &plan.small_walls,
+                walls,
+            );
+            record_population_delta(
+                &mut events,
+                props_before,
+                &plan.props,
+                enemies_before,
+                &plan.enemies,
+            );
         }
     }
+
+    // GML :201-203 -- `with (Floor) scrPopProps()`. The small-wall pass shares
+    // the function, so it interleaves with the per-area prop chain instead of
+    // running as a separate sweep.
+    let chest_tiles: HashSet<(i32, i32)> = plan
+        .chests
+        .iter()
+        .map(|c| {
+            let pos = c.pos();
+            (
+                ((pos.x - TILE * 0.5) / TILE).floor() as i32,
+                ((pos.y - TILE * 0.5) / TILE).floor() as i32,
+            )
+        })
+        .collect();
+    let mut rng = phase_rng(run.gen_seed, RNG_PROPS);
     for &(cx, cy) in floors {
         if prop_tiles.contains(&(cx, cy)) {
             continue;
         }
+        let (ox, oy) = (cx as f32 * TILE, cy as f32 * TILE);
         let (px, py) = cell_center_i(cx, cy);
-        let dist_sq = px * px + py * py;
+        let d2 = cell_dist2_center(cx, cy);
+        let styleb = styleb_of(cx, cy);
 
-        let unlikeliness: i32 = if run.area == AreaId::Jungle {
+        // GML :12-32. `random(5) < 1` is the FIRST operand, so every floor of
+        // every area pays the draw before any area test.
+        let walls_ok = rng.random::<f32>() * 5.0 < 1.0
+            && d2 > 100.0 * 100.0
+            && !(area == 106 || area == 100 || (area == 0 && run.loop_count == 0) || area == 107 || area == 6)
+            && (area != 102 || rng.random::<f32>() * 3.0 < 1.0)
+            && !(area == 3 && is_last)
+            && !(area == 7 && is_last)
+            && (area != 5 || rng.random::<f32>() * 3.0 < 1.0)
+            && area != 102
+            && !(area == 2 && styleb);
+        if walls_ok {
+            // GML :17-18 -- two draws spanning the 32px bbox, each snapped
+            // down to a 16px multiple.
+            let ux = rng.random_range(0.0..31.0);
+            let uy = rng.random_range(0.0..31.0);
+            let sx = (ux as i32).div_euclid(16) * 16;
+            let sy = (uy as i32).div_euclid(16) * 16;
+            if !wall_point(plan, walls, ox + sx as f32, oy + sy as f32) {
+                plan.small_walls.push(((cx * 2 + sx / 16) as i16, (cy * 2 + sy / 16) as i16));
+                prop_tiles.insert((cx, cy));
+                // GML :24-28 -- the scrapyards trap, on the tile's own corner.
+                if area == 3
+                    && rng.random::<f32>() * 4.0 < 1.0
+                    && d2 > 64.0 * 64.0
+                    && sx == 0
+                    && sy == 0
+                    && !chest_tiles.contains(&(cx, cy))
+                {
+                    let pos = Vec2::new(ox, oy);
+                    plan.props.push((PropKind::Trap, pos));
+                    events.push(PopulationEvent::Prop {
+                        kind: PropKind::Trap,
+                        pos,
+                    });
+                }
+            }
+            continue;
+        }
+
+        // GML :34-38.
+        let unlikeliness: i32 = if area == 105 {
             2
-        } else if run.area == AreaId::Campfire {
+        } else if area == 0 {
             7
         } else {
             10
         };
-        // GML `scrPopProps:38`: `if (random(_unlikeliness) > 1) exit`. `random(n)`
-        // is an integer in 0..n-1, so the gate keeps 2 of n rolls, and it runs
-        // *before* the per-area `choose` chain -- so it must be drawn here,
-        // not after the kind.
         if rng.random_range(0i32..unlikeliness) > 1 {
             continue;
         }
 
-        let is_secret = is_secret_area(run.area);
-        let kind = if is_secret {
-            match run.area {
-                AreaId::Oasis => {
-                    let r: f32 = rng.random();
-                    if r < 0.025 {
-                        PropKind::Anchor
-                    } else if r < 0.35 {
-                        PropKind::WaterPlant
-                    } else if r < 0.50 {
-                        PropKind::OasisBarrel
-                    } else if r < 0.62 {
-                        PropKind::WaterMine
-                    } else {
-                        PropKind::GroundDecal
-                    }
-                }
-                AreaId::PizzaSewers => {
-                    if rng.random::<f32>() < 0.7 {
-                        PropKind::PizzaBox
-                    } else {
-                        PropKind::GroundDecal
-                    }
-                }
-                AreaId::Jungle => {
-                    if rng.random::<f32>() * 30.0 < 1.0 {
-                        PropKind::BigFlower
-                    } else if rng.random::<f32>() < 0.55 {
-                        PropKind::Bush
-                    } else {
-                        PropKind::GroundDecal
-                    }
-                }
-                AreaId::CursedCaves => PropKind::GroundDecal,
-                AreaId::City => {
-                    let r = rng.random_range(0..10);
-                    match r {
-                        0..=3 => PropKind::MoneyPile,
-                        4 => PropKind::YVStatue,
-                        5 => PropKind::GoldBarrel,
-                        _ => PropKind::GroundDecal,
-                    }
-                }
-                AreaId::Vault | AreaId::CrownVault => PropKind::Torch,
-                AreaId::HQ => {
-                    if rng.random::<f32>() < 0.5 {
-                        PropKind::PlantPot
-                    } else {
-                        PropKind::GroundDecal
-                    }
-                }
-                _ => PropKind::GroundDecal,
+        // GML :40-135, one `else if` chain on `spawnarea`.
+        let mut made: Vec<PropKind> = Vec::new();
+        if area == 1 {
+            if rng.random::<f32>() * 60.0 < 1.0 {
+                made.push(PropKind::BigSkull);
+            } else if styleb && rng.random::<f32>() * 5.0 < 1.0 {
+                made.push(PropKind::BonePile);
+            } else {
+                made.push(rng_choose(
+                    &mut rng,
+                    &[
+                        PropKind::Cactus,
+                        PropKind::Cactus,
+                        PropKind::GroundDecal,
+                        PropKind::Cactus,
+                    ],
+                ));
             }
+        } else if area == 106 {
+            // GML :51-61. The `TopPot` triple has no `PropKind`, so its roll
+            // is kept and nothing is emitted.
+            if !styleb && !is_last {
+                made.push(PropKind::PlantPot);
+            }
+            if is_last {
+                let _ = rng.random::<f32>() * 6.0 < 1.0;
+            }
+        } else if area == 2 && d2 > 96.0 * 96.0 {
+            made.push(rng_choose(
+                &mut rng,
+                &[
+                    PropKind::Pipe,
+                    PropKind::Pipe,
+                    PropKind::ToxicBarrel,
+                    PropKind::Pipe,
+                    PropKind::Pipe,
+                    PropKind::ToxicBarrel,
+                    PropKind::GroundDecal,
+                ],
+            ));
+        } else if area == 0 {
+            made.push(rng_choose(
+                &mut rng,
+                &[
+                    PropKind::NightCactus,
+                    PropKind::NightCactus,
+                    PropKind::NightBonePile,
+                    PropKind::GroundDecal,
+                ],
+            ));
+        } else if area == 4 {
+            if styleb && rng.random::<f32>() * 5.0 < 1.0 {
+                made.push(PropKind::BonePile);
+            } else {
+                made.push(rng_choose(
+                    &mut rng,
+                    &[
+                        PropKind::Crystal,
+                        PropKind::Crystal,
+                        PropKind::GroundDecal,
+                        PropKind::Cocoon,
+                    ],
+                ));
+            }
+        } else if area == 104 {
+            if styleb && rng.random::<f32>() * 5.0 < 1.0 {
+                made.push(PropKind::BonePile);
+            } else {
+                made.push(PropKind::GroundDecal);
+            }
+        } else if area == 3 {
+            made.push(rng_choose(
+                &mut rng,
+                &[
+                    PropKind::Tires,
+                    PropKind::Car,
+                    PropKind::Tires,
+                    PropKind::Car,
+                    PropKind::Car,
+                    PropKind::Tires,
+                    PropKind::GroundDecal,
+                ],
+            ));
+        } else if area == 5 && d2 > 32.0 * 32.0 {
+            if rng.random::<f32>() * 35.0 < 1.0 {
+                made.push(rng_choose(
+                    &mut rng,
+                    &[PropKind::Snowman, PropKind::SodaMachine],
+                ));
+            } else if rng.random::<f32>() * 3.0 < 1.0 {
+                if rng.random::<f32>() * 2.0 < 1.0 {
+                    if let Some(at) = nearest_wall(plan, walls, ox, oy) {
+                        prop_tiles.insert((cx, cy));
+                        let pos = at + Vec2::new(8.0, 8.0);
+                        plan.props.push((PropKind::GroundDecal, pos));
+                        events.push(PopulationEvent::Prop {
+                            kind: PropKind::GroundDecal,
+                            pos,
+                        });
+                        continue;
+                    }
+                } else {
+                    made.push(PropKind::StreetLight);
+                }
+            } else if d2 > 128.0 * 128.0 {
+                made.push(rng_choose(
+                    &mut rng,
+                    &[PropKind::Hydrant, PropKind::Car],
+                ));
+            }
+        } else if area == 6 && rng.random::<f32>() * 4.0 < 1.0 {
+            made.push(rng_choose(
+                &mut rng,
+                &[
+                    PropKind::Tube,
+                    PropKind::Tube,
+                    PropKind::Tube,
+                    PropKind::Tube,
+                    PropKind::MutantTube,
+                ],
+            ));
+        } else if area == 7 && !is_last {
+            made.push(rng_choose(
+                &mut rng,
+                &[
+                    PropKind::Pillar,
+                    PropKind::SmallGenerator,
+                    PropKind::GroundDecal,
+                ],
+            ));
+        } else if area == 100 {
+            made.push(PropKind::Torch);
+        } else if area == 101 {
+            if rng.random::<f32>() * 40.0 < 1.0 {
+                made.push(PropKind::Anchor);
+            } else if d2 > 96.0 * 96.0 {
+                made.push(rng_choose(
+                    &mut rng,
+                    &[
+                        PropKind::WaterPlant,
+                        PropKind::WaterPlant,
+                        PropKind::GroundDecal,
+                        PropKind::GroundDecal,
+                        PropKind::OasisBarrel,
+                        PropKind::WaterMine,
+                        PropKind::WaterMine,
+                    ],
+                ));
+            }
+        } else if area == 103 && d2 > 64.0 * 64.0 {
+            made.push(rng_choose(
+                &mut rng,
+                &[
+                    PropKind::MoneyPile,
+                    PropKind::MoneyPile,
+                    PropKind::MoneyPile,
+                    PropKind::YVStatue,
+                    PropKind::GoldBarrel,
+                    PropKind::MoneyPile,
+                ],
+            ));
+        } else if area == 102 {
+            made.push(rng_choose(
+                &mut rng,
+                &[
+                    PropKind::PizzaBox,
+                    PropKind::PizzaBox,
+                    PropKind::GroundDecal,
+                ],
+            ));
+        } else if area == 105 {
+            if rng.random::<f32>() * 30.0 < 1.0 {
+                made.push(rng_choose(
+                    &mut rng,
+                    &[
+                        PropKind::BigFlower,
+                        PropKind::BigFlower,
+                        PropKind::GroundDecal,
+                    ],
+                ));
+            } else {
+                made.push(PropKind::Bush);
+            }
+        }
+
+        if made.is_empty() {
+            continue;
+        }
+        // GML :98 -- the street light keeps its `orandom(4)` offsets; every
+        // other prop lands on the tile centre.
+        let pos = if made.contains(&PropKind::StreetLight) {
+            Vec2::new(
+                px + rng.random_range(-4.0..4.0),
+                py + rng.random_range(-4.0..4.0),
+            )
         } else {
-            match area {
-                1 => {
-                    if rng.random::<f32>() * 60.0 < 1.0 {
-                        PropKind::BigSkull
-                    } else if plan.styleb && rng.random::<f32>() * 5.0 < 1.0 {
-                        PropKind::BonePile
-                    } else if rng.random::<f32>() * 4.0 < 3.0 {
-                        if plan.styleb {
-                            PropKind::NightCactus
-                        } else {
-                            PropKind::Cactus
-                        }
-                    } else {
-                        PropKind::GroundDecal
-                    }
-                }
-
-                2 => {
-                    if dist_sq < 96.0 * 96.0 {
-                        PropKind::GroundDecal
-                    } else {
-                        let roll = rng.random_range(0..7);
-                        match roll {
-                            0..=3 => PropKind::Pipe,
-                            4..=5 => PropKind::ToxicBarrel,
-                            _ => PropKind::GroundDecal,
-                        }
-                    }
-                }
-
-                3 => {
-                    let roll = rng.random_range(0..7);
-                    match roll {
-                        0..=2 => PropKind::Tires,
-                        3..=4 => PropKind::Car,
-                        _ => PropKind::GroundDecal,
-                    }
-                }
-
-                4 => {
-                    let r: f32 = rng.random();
-                    if r < 0.25 {
-                        PropKind::Crystal
-                    } else if r < 0.45 {
-                        PropKind::Cocoon
-                    } else if r < 0.55 {
-                        PropKind::BonePile
-                    } else if r < 0.75 {
-                        PropKind::Cobweb
-                    } else {
-                        PropKind::GroundDecal
-                    }
-                }
-
-                5 => {
-                    if dist_sq < 32.0 * 32.0 {
-                        PropKind::GroundDecal
-                    } else {
-                        let r: f32 = rng.random();
-                        if r < 0.18 {
-                            PropKind::IcePatch
-                        } else if r < 0.28 {
-                            PropKind::Snowman
-                        } else if r < 0.36 {
-                            PropKind::SodaMachine
-                        } else if r < 0.44 {
-                            PropKind::StreetLight
-                        } else if r < 0.54 {
-                            if dist_sq < 128.0 * 128.0 {
-                                PropKind::GroundDecal
-                            } else {
-                                PropKind::Hydrant
-                            }
-                        } else if r < 0.60 {
-                            if dist_sq < 128.0 * 128.0 {
-                                PropKind::GroundDecal
-                            } else {
-                                PropKind::Car
-                            }
-                        } else {
-                            PropKind::GroundDecal
-                        }
-                    }
-                }
-
-                6 => {
-                    let r: f32 = rng.random();
-                    if r < 0.30 {
-                        PropKind::Tube
-                    } else if r < 0.38 {
-                        PropKind::MutantTube
-                    } else if r < 0.50 {
-                        PropKind::ToxicBarrel
-                    } else if r < 0.60 {
-                        PropKind::FireTrap
-                    } else if r < 0.65 {
-                        PropKind::Mine
-                    } else {
-                        PropKind::GroundDecal
-                    }
-                }
-
-                7 => {
-                    let r: f32 = rng.random();
-                    if r < 0.20 {
-                        PropKind::Pillar
-                    } else if r < 0.35 {
-                        PropKind::SmallGenerator
-                    } else if r < 0.42 {
-                        PropKind::Torch
-                    } else if r < 0.50 {
-                        PropKind::FireTrap
-                    } else if r < 0.55 {
-                        PropKind::Mine
-                    } else {
-                        PropKind::GroundDecal
-                    }
-                }
-
-                _ => PropKind::GroundDecal,
-            }
+            Vec2::new(px, py)
         };
-
-        let too_close = match kind {
-            PropKind::Anchor => false,
-            PropKind::WaterPlant | PropKind::OasisBarrel | PropKind::WaterMine => {
-                dist_sq < 96.0 * 96.0
-            }
-            PropKind::MoneyPile | PropKind::YVStatue | PropKind::GoldBarrel => {
-                dist_sq < 64.0 * 64.0
-            }
-            _ => false,
-        };
-        if too_close {
-            continue;
+        prop_tiles.insert((cx, cy));
+        for kind in made {
+            plan.props.push((kind, pos));
+            events.push(PopulationEvent::Prop { kind, pos });
         }
-
-        let claims_tile = !matches!(
-            kind,
-            PropKind::GroundDecal | PropKind::Cobweb | PropKind::IcePatch | PropKind::FireTrap
-        );
-
-        if claims_tile && dist_sq < 64.0 * 64.0 {
-            continue;
-        }
-
-        if claims_tile {
-            prop_tiles.insert((cx, cy));
-        }
-        let pos = Vec2::new(px, py);
-        plan.props.push((kind, pos));
-        population_events.push(PopulationEvent::Prop { kind, pos });
     }
 
-    if boss_sub {
-        let kind = boss_for_floor_and_loop(run.floor, run.loop_count);
-        plan.boss = Some(kind);
+    // GML :241,259-269 -- pizza sewers hold no boss: every enemy is destroyed
+    // and the furthest floor gets four turtles and a rat.
+    if area == 102 {
+        plan.enemies.clear();
+        let mut rng = phase_rng(run.gen_seed, RNG_PIZZA);
+        if let Some(&(fx, fy)) = plan
+            .floor_cells
+            .iter()
+            .max_by(|a, b| {
+                cell_dist2_origin(a.0, a.1)
+                    .partial_cmp(&cell_dist2_origin(b.0, b.1))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+        {
+            let (px, py) = cell_center_i(fx, fy);
+            for _ in 0..4 {
+                let dx = rng.random_range(-2.0..2.0);
+                let dy = rng.random_range(-2.0..2.0);
+                let pos = Vec2::new(px + dx, py + dy);
+                plan.enemies.push((EnemyKind::Turtle, pos));
+                events.push(PopulationEvent::Enemy {
+                    kind: EnemyKind::Turtle,
+                    pos,
+                });
+            }
+            let pos = Vec2::new(px, py);
+            plan.enemies.push((EnemyKind::Rat, pos));
+            events.push(PopulationEvent::Enemy {
+                kind: EnemyKind::Rat,
+                pos,
+            });
+        }
+    }
+
+    // GML :319-376.
+    plan.boss = boss_for_run(run, area, is_last);
+    if let Some(kind) = plan.boss {
         if matches!(kind, EnemyKind::BigBandit | EnemyKind::BigBanditLoop) {
             plan.boss_count = big_bandit_count(run.loop_count);
         }
-    } else {
-        match run.area {
-            AreaId::PizzaSewers => plan.boss = Some(EnemyKind::FrogQueen),
-            AreaId::Sewers if run.loop_count >= 1 => plan.boss = Some(EnemyKind::Mom),
-            AreaId::Labs if run.loop_count >= 1 => plan.boss = Some(EnemyKind::Technomancer),
-            AreaId::CrystalCaves if run.loop_count >= 1 => plan.boss = Some(EnemyKind::Hyper),
-            AreaId::CrownVault | AreaId::Vault => plan.boss = Some(EnemyKind::OldGuardian),
-            AreaId::HQ => plan.boss = Some(EnemyKind::Captain),
-            _ => {}
-        }
     }
 
-    let rf = ((run.floor.max(1) - 1) % 15) + 1;
-    if rf == 15 && !is_secret_area(run.area) {
-        populate_throne_room(run, plan);
-    }
-
-    let is_no_chest_area = matches!(
-        run.area,
-        AreaId::Campfire | AreaId::Vault | AreaId::CrownVault
-    ) || (run.area == AreaId::HQ && run.floor_in_area >= 3);
-    if !is_no_chest_area {
-        let has_weapon = plan
-            .chests
-            .iter()
-            .any(|c| matches!(c, ChestSpawn::Weapon(_)));
-        let has_ammo = plan.chests.iter().any(|c| matches!(c, ChestSpawn::Ammo(_)));
-        if !has_weapon || !has_ammo {
-            let mut best: Option<(f32, usize)> = None;
-            for (i, (_, p)) in plan.props.iter().enumerate() {
-                let d2 = p.length_squared();
-                if d2 < 160.0 * 160.0 {
-                    continue;
-                }
-                if best.map(|(bd, _)| d2 > bd).unwrap_or(true) {
-                    best = Some((d2, i));
-                }
-            }
-            if let Some((_, idx)) = best {
-                let pos = plan.props[idx].1;
-                let removed_kind = plan.props[idx].0;
-                plan.props.remove(idx);
-                population_events.retain(|event| match event {
-                    PopulationEvent::Prop {
-                        kind,
-                        pos: event_pos,
-                    } => *kind != removed_kind || *event_pos != pos,
-                    _ => true,
-                });
-                if !has_weapon {
-                    plan.chests.push(ChestSpawn::Weapon(pos));
-                } else {
-                    plan.chests.push(ChestSpawn::Ammo(pos));
-                }
-            }
-        }
-    }
-
-    trim_chests(&mut plan.chests);
-
-    // GML `GenCont/Alarm_0` tutorial arm verbatim: the `TutCont` level
-    // holds no roaming enemies and no boss wants. The scripted
-    // `WeaponChest` (GML `TutCont/Alarm_0` on entering PickingUp) ships
-    // in the plan so the walkthrough has a gun to pick up; the exit
-    // portal is scripted by the `TutorialState` Fin latch, not here.
+    // GML `GenCont/Alarm_0:24-37` -- the `TutCont` level keeps no roaming
+    // enemy, no chest and no boss; the scripted `WeaponChest` (GML
+    // `TutCont/Alarm_0` on entering PickingUp) ships in the plan so the
+    // walkthrough has a gun to pick up.
     if run.tutorial {
         plan.enemies.clear();
         plan.chests.clear();
         plan.boss = None;
-        if let Some(&(fx, fy)) = plan
-            .floor_cells
-            .iter()
-            .max_by_key(|c| c.0.abs() + c.1.abs())
-        {
+        if let Some(&(fx, fy)) = plan.floor_cells.iter().max_by_key(|c| c.0.abs() + c.1.abs()) {
             plan.chests.push(ChestSpawn::Weapon(cell_center_px(fx, fy)));
         }
-        population_events.retain(|event| !matches!(event, PopulationEvent::Enemy { .. }));
+        events.retain(|event| !matches!(event, PopulationEvent::Enemy { .. }));
     }
-    if rf == 15 && !is_secret_area(run.area) {
-        population_events.clear();
-        population_events.extend(
-            plan.props
-                .iter()
-                .copied()
-                .map(|(kind, pos)| PopulationEvent::Prop { kind, pos }),
-        );
-    }
-    population_events.extend(plan.chests.iter().copied().map(PopulationEvent::Chest));
-    plan.population_events = population_events;
+    events.extend(plan.chests.iter().copied().map(PopulationEvent::Chest));
+    plan.population_events = events;
 }
 
+/// GML `scrPopulate.gml:319-377` plus the secret-area bosses at :347-377.
+fn boss_for_run(run: &Run, area: i32, is_last: bool) -> Option<EnemyKind> {
+    // GML :319-321 -- `WantBoss` sits outside the `_has_boss` gate, so the
+    // Big Bandit guards every desert subarea.
+    if area == 1 && !run.tutorial {
+        return Some(big_bandit_kind(run.loop_count));
+    }
+    if !is_last {
+        return None;
+    }
+    if is_secret_area(run.area) {
+        return match area {
+            2 if run.loop_count > 0 => Some(EnemyKind::FrogQueen),
+            4 | 104 if run.loop_count > 0 => Some(EnemyKind::Hyper),
+            6 if run.loop_count > 0 => Some(EnemyKind::Technomancer),
+            _ => None,
+        };
+    }
+    match area {
+        3 => Some(big_dog_kind(run.loop_count)),
+        5 => Some(lil_hunter_kind(run.loop_count)),
+        7 => Some(EnemyKind::Throne),
+        _ => None,
+    }
+}
+
+fn big_bandit_kind(loop_count: u32) -> EnemyKind {
+    if loop_count > 0 {
+        EnemyKind::BigBanditLoop
+    } else {
+        EnemyKind::BigBandit
+    }
+}
+
+fn big_dog_kind(loop_count: u32) -> EnemyKind {
+    if loop_count > 0 {
+        EnemyKind::BigDogLoop
+    } else {
+        EnemyKind::BigDog
+    }
+}
+
+fn lil_hunter_kind(loop_count: u32) -> EnemyKind {
+    if loop_count > 0 {
+        EnemyKind::LilHunterLoop
+    } else {
+        EnemyKind::LilHunter
+    }
+}
+
+
+/// GML `scrPopulate.gml:319-377`: Big Bandit on desert 1-1/1-2/1-3, Big Dog
+/// on scrapyards 5-3, Lil Hunter on city 9-3, Throne on 15-3 -- nothing on
+/// 2-1, 4-1, 6-1, 13-1 or 13-2.
 pub fn boss_for_floor_and_loop(floor: u32, loop_count: u32) -> EnemyKind {
     let rf = ((floor.max(1) - 1) % 15) + 1;
     match rf {
-        3 if loop_count > 0 => EnemyKind::BigBanditLoop,
-        3 => EnemyKind::BigBandit,
-        7 if loop_count > 0 => EnemyKind::BigDogLoop,
-        7 => EnemyKind::BigDog,
-        11 if loop_count > 0 => EnemyKind::LilHunterLoop,
-        11 => EnemyKind::LilHunter,
+        1..=3 => big_bandit_kind(loop_count),
+        7 => big_dog_kind(loop_count),
+        11 => lil_hunter_kind(loop_count),
         15 => EnemyKind::Throne,
         _ => EnemyKind::BigBandit,
     }
@@ -2131,15 +2428,22 @@ fn scr_pop_enemies(
     run: &Run,
     area: i32,
     styleb: bool,
+    is_last: bool,
     enemies: &mut Vec<(EnemyKind, Vec2)>,
     props: &mut Vec<(PropKind, Vec2)>,
     prop_tiles: &mut HashSet<(i32, i32)>,
     rng: &mut StdRng,
-    center: Vec2,
     cell: (i32, i32),
-    wall_blocked: bool,
+    small_walls: &[(i16, i16)],
+    walls: &HashSet<(i32, i32)>,
 ) {
-    if center.length_squared() < 160.0 * 160.0 || wall_blocked {
+    let (cx, cy) = cell;
+    let center = Vec2::from(cell_center_i(cx, cy));
+    // GML `scrPopEnemies.gml:8` -- one origin-distance test and a single-point
+    // `place_meeting(x, y, Wall)` at the Floor's own origin.
+    if cell_dist2_origin(cx, cy) < 160.0 * 160.0
+        || wall_point_in(walls, small_walls, cx as f32 * TILE, cy as f32 * TILE)
+    {
         return;
     }
     // GML `scrPopEnemies:12`: `var _loop_rand = random(_loops)`. `random(n)` is
@@ -2153,11 +2457,6 @@ fn scr_pop_enemies(
     if run.area == AreaId::Campfire {
         return;
     }
-    let max_subarea = match area {
-        1 | 3 | 5 | 7 | 106 => 3,
-        _ => 1,
-    };
-    let is_last = run.floor_in_area == max_subarea;
 
     match area {
         1 => {
@@ -2350,6 +2649,7 @@ fn scr_pop_enemies(
                     &[
                         EnemyKind::LaserCrystal,
                         EnemyKind::LaserCrystal,
+                        EnemyKind::LaserCrystal,
                         EnemyKind::RhinoFreak,
                         EnemyKind::LightningCrystal,
                         EnemyKind::BuffGator,
@@ -2368,7 +2668,6 @@ fn scr_pop_enemies(
                         EnemyKind::Spider,
                         EnemyKind::Spider,
                         EnemyKind::Spider,
-                        EnemyKind::LaserCrystal,
                         EnemyKind::LaserCrystal,
                     ],
                 );
@@ -2426,6 +2725,8 @@ fn scr_pop_enemies(
                 );
             } else if rng.random::<f32>() * 14.0 < 1.0 {
                 for _ in 0..10 {
+                    // GML `scrPopEnemies.gml:103-104`: sixteen entries, 13 of
+                    // them `Freak`.
                     spawn_pop_enemy(
                         enemies,
                         rng,
@@ -2510,7 +2811,9 @@ fn scr_pop_enemies(
                     ],
                 );
             } else if rng.random::<f32>() * 16.0 < 1.0 {
-                spawn_pop_enemy(enemies, rng, center, &[EnemyKind::IdpdGrunt]);
+                // GML `scrPopEnemies.gml:120-121` spawns `IDPDSpawn`, the IDPD
+                // portal spawner, not a live grunt; the port has no portal
+                // spawner prop, so the roll is kept and nothing is emitted.
             }
         }
         101 => {
@@ -2665,11 +2968,19 @@ fn cluster_kind(kind: EnemyKind) -> EnemyKind {
 }
 
 fn cluster_source_skips(kind: EnemyKind, loops: u32, rng: &mut StdRng) -> bool {
-    // GML `scrPopulate:288`: `if (random(60) > _loops) continue`. `random(60)`
-    // is an integer in 0..59, so the cluster runs on (loops + 1) of 60 rolls,
-    // not loops of 60.
+    // GML `scrPopulate:288-294`: `if (random(60) > _loops) continue`.
+    // `random(60)` is an integer in 0..59, so the cluster runs on
+    // (loops + 1) of 60 rolls, not loops of 60. The GML text names all four
+    // mimics even though they are `chestprop` children rather than `enemy`
+    // instances, so the port keeps the list verbatim.
     rng.random_range(0i32..60) > loops as i32
-        || matches!(kind, EnemyKind::MaggotSpawn)
+        || matches!(
+            kind,
+            EnemyKind::Mimic
+                | EnemyKind::SuperMimic
+                | EnemyKind::WepMimic
+                | EnemyKind::MaggotSpawn
+        )
 }
 
 pub fn apply_loop_population_clusters(
@@ -2707,7 +3018,9 @@ pub fn apply_loop_population_clusters(
                 pos: source_pos + Vec2::new(x, y),
             });
         }
-        if source_pos.length_squared() < 128.0 * 128.0 {
+        // GML `scrPopulate.gml:307`: `distance_to_point(10016, 10016) < 128` on
+        // the enemy instance, so the half-tile offset applies here too.
+        if source_pos.distance_squared(Vec2::splat(TILE * 0.5)) < 128.0 * 128.0 {
             out.portal_clears.push(source_pos);
             next.push(PopulationEvent::PortalClear {
                 pos: source_pos,
@@ -2741,77 +3054,29 @@ pub fn apply_loop_enemy_clusters(
             let y = rng.random_range(-4.0..4.0);
             enemies.push((kind, source_pos + Vec2::new(x, y)));
         }
-        if source_pos.length_squared() < 128.0 * 128.0 {
+        // GML `scrPopulate.gml:307`: `distance_to_point(10016, 10016) < 128` on
+        // the enemy instance, so the half-tile offset applies here too.
+        if source_pos.distance_squared(Vec2::splat(TILE * 0.5)) < 128.0 * 128.0 {
             out.portal_clears.push(source_pos);
         }
     }
     out
 }
 
-fn walls_cover_tile(walls: &std::collections::HashSet<(i32, i32)>, cx: i32, cy: i32) -> bool {
-    for ox in 0..2 {
-        for oy in 0..2 {
-            if walls.contains(&(cx * 2 + ox, cy * 2 + oy)) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn populate_throne_room(_run: &Run, plan: &mut LevelPlan) {
-    plan.props
-        .retain(|(k, _)| !matches!(k, PropKind::Mine | PropKind::FireTrap));
+/// GML `objects/FloorMaker/Step_0.gml:27-49` -- `plan` already holds the
+/// arena floors and the ten statues; only the four inactive generators and
+/// the boss flag are added here. `NothingInactive` has no `PropKind`.
+fn populate_throne_room(plan: &mut LevelPlan) {
     plan.enemies.clear();
-
-    let gens = [
-        Vec2::new(-220.0, 120.0),
-        Vec2::new(220.0, 120.0),
-        Vec2::new(-220.0, -120.0),
-        Vec2::new(220.0, -120.0),
-    ];
-    for p in gens {
-        plan.props.push((PropKind::BigGenerator, p));
-    }
-
-    for i in 0..9 {
-        let y = -320.0 + i as f32 * 80.0;
-        plan.props.push((PropKind::ThroneStatue, Vec2::new(0.0, y)));
-    }
     plan.boss = Some(EnemyKind::Throne);
     plan.boss_count = 1;
 }
 
-fn trim_chests(chests: &mut Vec<ChestSpawn>) {
-    use std::collections::HashMap;
-    let mut furthest: HashMap<u8, ChestSpawn> = HashMap::new();
-    for c in chests.iter().copied() {
-        let key = match c {
-            ChestSpawn::Weapon(_) => 0u8,
-            ChestSpawn::Ammo(_) => 1,
-            ChestSpawn::Rad(_) => 2,
-            // Permutation customs postdate the trim; keep them as-is.
-            ChestSpawn::Custom(_, _) => continue,
-        };
-        let d = c.pos().length_squared();
-        let keep = match furthest.get(&key) {
-            Some(existing) => d > existing.pos().length_squared(),
-            None => true,
-        };
-        if keep {
-            furthest.insert(key, c);
-        }
-    }
-    chests.clear();
-    for (_, c) in furthest {
-        chests.push(c);
-    }
-}
-
+/// GML `objects/WantBoss/Create_0.gml:3`: `number = max(GameCont.loops * 2, 1)`.
 pub fn big_bandit_count(loop_count: u32) -> u32 {
     if loop_count == 0 {
         1
     } else {
-        loop_count.saturating_mul(2).max(2)
+        loop_count.saturating_mul(2).max(1)
     }
 }

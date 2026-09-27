@@ -63,9 +63,9 @@ use crate::comps_a::{
 use crate::comps_b::{
     Ally, BIG_DOG_MISSILE_DAMAGE, BIG_DOG_MISSILE_HP, BIG_DOG_MISSILE_RADIUS, BigDogMissileState,
     BloodAmmo, ChestKind, CryAnim, CustomExplosion, Dash, DeploysSentry, Enemy, GmlImage,
-    HazardCloud, NativeAngle, NativeDepth, NativeExplosionKind, PickupKind, PlasmaBurst,
+    HazardCloud, NativeAngle, NativeDepth, NativeExplosionKind, NativeFlip, PickupKind, PlasmaBurst,
     PopPopCharges, PortalStrike, PortalSucking, Prop, PropSprites, SecretEntrance, Shield, Slowed,
-    SnareZone, SpawnsWeaponPickup, SwingFx, Telekinesis, WeaponVisual,
+    SpawnsWeaponPickup, SwingFx, Telekinesis, WeaponVisual,
 };
 use crate::data::{
     AbilityKind, AmmoKind, AreaId, CrownKind, HazardDef, HazardKind, MutationId, RaceId, SplitDef,
@@ -81,7 +81,7 @@ use crate::environment::{
 };
 use crate::input::NtInput;
 use crate::msg::Queue;
-use crate::pickups::{spawn_chest, spawn_flung_weapon_pickup, spawn_pickup, spawn_rad_burst};
+use crate::pickups::{spawn_chest_with, spawn_flung_weapon_pickup, spawn_pickup, spawn_rad_burst};
 use crate::savedata_part::{SaveData, character_def, check_progress_unlocks};
 use crate::secrets::SecretTriggers;
 use crate::spatial::{PLAYER_RADIUS, Pos, move_bounce_solid, move_contact_solid};
@@ -155,6 +155,30 @@ pub struct FireArch {
     pub plasma: Option<PlasmaBurst>,
     pub plasma_scale: f32,
     pub hits_all: bool,
+    pub spin: Option<SpinSpawn>,
+}
+
+/// GML `objects/DogSpinAttack/*`: a body that rides its creator, throws a
+/// 6-round `AllyBullet` volley every 5 steps, spins `4 * turn` degrees
+/// per volley, and self-destructs when `ammo` (15) runs out.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct SpinAttack {
+    pub creator: Entity,
+    /// GML `turn = choose(1, -1)`.
+    pub turn: f32,
+    pub direction: f32,
+    pub ammo: i32,
+    /// GML `alarm[0]`: 7 steps to the first volley, 5 thereafter.
+    pub alarm: GTimer,
+    /// GML `scr_ultra_get(Race.BigDog, UltraSkill.UltraSpin)` mirror volley.
+    pub ultra_spin: bool,
+}
+
+/// Per-shot spin parameters (`scrFire.gml:789-796`).
+#[derive(Clone, Copy, Debug)]
+pub struct SpinSpawn {
+    pub ammo: i32,
+    pub ultra_spin: bool,
 }
 
 /// Archetype lookup by (base) weapon name, mirroring bevy
@@ -172,13 +196,10 @@ fn projectile_arch(id: WeaponId) -> FireArch {
     }
     let base = base_weapon_name(full);
     match base {
-        "SENTRY GUN" => FireArch {
-            sentry: Some(DeploysSentry {
-                life: 14.0,
-                fire_interval: 0.18,
-                range: 360.0,
-                projectile_speed: 640.0,
-                projectile_damage: 3,
+        "DOG SPIN ATTACK" => FireArch {
+            spin: Some(SpinSpawn {
+                ammo: 15,
+                ultra_spin: false,
             }),
             ..FireArch::default()
         },
@@ -941,6 +962,14 @@ fn spawn_pellets(commands: &mut Commands, fx: &mut FireFx, shot: &GunShot, playe
     let mut archetype = projectile_arch(id);
     let mut def = shot.def;
     apply_weapon_mutation_mods(&mut def, &mut archetype, player);
+    // GML `ClusterNade/Destroy_0.gml:1`: `8 + scrCrownCheck(crwn_death)`
+    // children. The count is baked here because the split is resolved at
+    // the projectile's death, long after the fire.
+    if base_weapon_name(def.name) == "CLUSTER LAUNCHER"
+        && let Some(split) = &mut def.split
+    {
+        split.pellets += u8::from(player.crown == CrownKind::Death);
+    }
 
     if let Some(mut beam) = archetype.beam {
         beam.damage = def.damage;
@@ -954,30 +983,28 @@ fn spawn_pellets(commands: &mut Commands, fx: &mut FireFx, shot: &GunShot, playe
         return;
     }
 
-    if let Some(sentry) = archetype.sentry {
-        let sentry_arch = FireArch {
-            sentry: Some(sentry),
-            ..FireArch::default()
-        };
-        spawn_player_projectile_with_source(
+    // GML `scrFire.gml:361-370`: the sentry gun is not a projectile at
+    // all — `instance_create(x, y, SentryGun) { motion_add(_gunangle, 6) }`
+    // deploys the turret body on the spot.
+    if base_weapon_name(def.name) == "SENTRY GUN" {
+        crate::spawns::spawn_sentry_gun(
             commands,
-            muzzle,
+            shot.pos,
             shot.aim.normalize_or_zero(),
-            260.0,
-            0,
-            0.9,
-            6.0,
-            0.0,
-            false,
-            def.color,
-            Vec2::splat(10.0),
-            0,
-            0,
-            None,
-            None,
-            sentry_arch,
-            Some(DamageSource::player_weapon(shot.player_ent, id)),
-            Some(id),
+            Team::Player,
+        );
+        return;
+    }
+
+    if let Some(spin) = archetype.spin {
+        spawn_dog_spin_attack(
+            commands,
+            shot.pos,
+            shot.player_ent,
+            SpinSpawn {
+                ultra_spin: matches!(player.ultra, Some(UltraMutationId::BigDogHeavyArtillery)),
+                ..spin
+            },
         );
         return;
     }
@@ -1024,6 +1051,103 @@ fn spawn_pellets(commands: &mut Commands, fx: &mut FireFx, shot: &GunShot, playe
         );
     }
     // Shell casings are render juice (GroundPhysics sprites); omitted.
+}
+
+/// GML `scrFire.gml:789-796` / `DogSpinAttack/Create_0.gml:1-7`.
+fn spawn_dog_spin_attack(
+    commands: &mut Commands,
+    pos: Vec2,
+    creator: Entity,
+    spec: SpinSpawn,
+) {
+    let mut rng = rand::rng();
+    commands.spawn((
+        LevelCleanup,
+        SpinAttack {
+            creator,
+            turn: if rng.random_bool(0.5) { 1.0 } else { -1.0 },
+            direction: rng.random_range(0.0..std::f32::consts::TAU),
+            ammo: spec.ammo,
+            alarm: GTimer::from_seconds(7.0 / 30.0, TimerMode::Once),
+            ultra_spin: spec.ultra_spin,
+        },
+        Pos(pos),
+    ));
+}
+
+/// GML `DogSpinAttack/Alarm_0.gml:18-58`. Driven from [`move_swing_fx`]
+/// because `schedule.rs` owns the system list and has no dedicated slot
+/// for the spin body.
+fn tick_dog_spin_attacks(
+    time: Res<SimTime>,
+    commands: &mut Commands,
+    cues: &mut Queue<AudioCue>,
+    spins: &mut Query<(Entity, &mut SpinAttack, &mut Pos), (With<SpinAttack>, Without<Player>)>,
+    creators: &Query<&Pos, With<Player>>,
+) {
+    let dt = time.delta_secs;
+    for (e, mut spin, mut pos) in spins.iter_mut() {
+        let Ok(owner) = creators.get(spin.creator) else {
+            commands.entity(e).despawn();
+            continue;
+        };
+        // GML `Alarm_0.gml:6-16`: the body rides the creator's position.
+        pos.0 = owner.0;
+        spin.alarm.tick(dt);
+        if !spin.alarm.just_finished() {
+            continue;
+        }
+
+        for volley in 0..usize::from(spin.ultra_spin) + 1 {
+            let sign = if volley == 0 { 1.0 } else { -1.0 };
+            for _ in 0..6 {
+                let ang = spin.direction * sign;
+                spawn_ally_bullet(
+                    commands,
+                    pos.0 + Vec2::new(24.0 * ang.cos(), 16.0 * ang.sin()),
+                    Vec2::new(ang.cos(), ang.sin()) * 60.0,
+                    spin.creator,
+                );
+                spin.direction += 60.0_f32.to_radians();
+            }
+        }
+
+        spin.direction += 4.0_f32.to_radians() * spin.turn;
+        spin.ammo -= 1;
+        if spin.ammo <= 0 {
+            cue(cues, "sndScrapBossSpinEnd", 0.6, 0.05);
+            commands.entity(e).despawn();
+            continue;
+        }
+        spin.alarm = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
+    }
+}
+
+/// GML `AllyBullet/Create_0.gml:3-5`: `typ = 1` (deflectable), damage 3,
+/// `spr_fade = sprAllyBulletHit`, destroyed on a wall.
+fn spawn_ally_bullet(
+    commands: &mut Commands,
+    pos: Vec2,
+    vel: Vec2,
+    creator: Entity,
+) {
+    commands.spawn((
+        GameCleanup,
+        LevelCleanup,
+        Team::Player,
+        Projectile {
+            damage: 3,
+            life: GTimer::from_seconds(4.0, TimerMode::Once),
+            radius: 4.0,
+            knockback: 120.0,
+            explosive: false,
+            source: Some(DamageSource::player_weapon(creator, WeaponId::NONE)),
+        },
+        Velocity(vel),
+        ProjectileTyp(1),
+        ProjectileFade("images/sprAllyBulletHit.png"),
+        Pos(pos),
+    ));
 }
 
 /// GML slash life = anim length at image_speed 0.4 (12 anim-fps).
@@ -1499,7 +1623,17 @@ pub fn spawn_player_projectile_with_source(
         // Bevy gates on ids 7/44 (plain + golden launcher only):
         // grenade shotguns/rifles/ultras keep their shell behavior.
         let full = weapon_meta(w).wep_name;
-        if full == "GRENADE LAUNCHER" || full == "GOLDEN GRENADE LAUNCHER" {
+        // GML `scrFire` spawns the base `Grenade` object for the grenade
+        // launcher (`Grenade/Create_0.gml:10-11` -> friction 0.1 with
+        // `alarm[1] = 6`), the sticky launcher (`:219-223` reuses
+        // `Grenade` with `sticky = true`) and the cluster launcher
+        // (`ClusterNade` inherits `Grenade`), so all three run
+        // `Grenade/Alarm_1` (friction -> 0.4 + 4 `Smoke`).
+        if full == "GRENADE LAUNCHER"
+            || full == "GOLDEN GRENADE LAUNCHER"
+            || full == "STICKY LAUNCHER"
+            || full == "CLUSTER LAUNCHER"
+        {
             ec.insert(ProjectileFriction(0.1));
             ec.insert(GrenadeFuse {
                 smoke_armed: false,
@@ -1783,11 +1917,16 @@ pub fn hammerhead_chew(
 
 /// Lifetime tick for swing markers. Slash hitbox motion itself is
 /// `Velocity` integration in `move_projectiles`; this only retires the
-/// marker so it cannot leak.
+/// marker so it cannot leak. Also drives the `DogSpinAttack` body
+/// (`objects/DogSpinAttack/Alarm_0.gml`), which has no slot of its own
+/// in `schedule.rs`.
 pub fn move_swing_fx(
     time: Res<SimTime>,
     mut commands: Commands,
+    mut cues: ResMut<Queue<AudioCue>>,
     mut q: Query<(Entity, &mut SwingFx)>,
+    mut spins: Query<(Entity, &mut SpinAttack, &mut Pos), (With<SpinAttack>, Without<Player>)>,
+    creators: Query<&Pos, With<Player>>,
 ) {
     for (e, mut fx) in &mut q {
         fx.timer.tick(time.delta_secs);
@@ -1795,6 +1934,7 @@ pub fn move_swing_fx(
             commands.entity(e).despawn();
         }
     }
+    tick_dog_spin_attacks(time, &mut commands, &mut cues, &mut spins, &creators);
 }
 
 /// GML Cuz `spr_cry` swap lifetime: retire the marker headlessly.
@@ -1815,36 +1955,194 @@ pub fn tick_cry_anim(
 // Ability-field ticks
 // ---------------------------------------------------------------------------
 
+/// GML `objects/TangleSeed/*` (`scrPowers.gml:126`): a 12 px/step seed
+/// that becomes a [`Tangle`] on the first `hitme` or `Wall` it touches.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct SnareSeed {
+    pub creator: Entity,
+    /// GML `TangleSeed/Destroy_0.gml` under
+    /// `scr_ultra_get(Race.Plant, UltraSkill.Trapper)`: the destroy path
+    /// (wall contact and enemy contact both run it) also seeds a ring of
+    /// 5 tangles at `move_contact_solid(_ang, 26 + irandom(8))`.
+    pub trapper: bool,
+}
+
+/// GML `objects/Tangle/*`: the snare body. No lifetime and no timer — it
+/// persists until the Plant's next ability press runs
+/// `instance_destroy(Tangle)` (`scrPowers.gml:128`).
+#[derive(Component, Clone, Copy, Debug)]
+pub struct Tangle {
+    pub creator: Entity,
+    pub team: Team,
+}
+
+/// `sprTangle` collision box is 47x33; the overlap test is a circle at
+/// half the shorter side.
+const TANGLE_RADIUS: f32 = 16.0;
+
+/// GML `scripts/scrPowers/scrPowers.gml:116-131` (Race.Plant) plus
+/// `scripts/scrControlAutoSnare/scrControlAutoSnare.gml`. The seed flies
+/// at `gunangle` and only becomes a snare where it lands, so the arm
+/// spawns a travelling [`SnareSeed`] and clears every live [`Tangle`].
+fn spawn_snare_seed(
+    commands: &mut Commands,
+    cues: &mut Queue<AudioCue>,
+    pos: Vec2,
+    dir: Vec2,
+    creator: Entity,
+    throne_butt: bool,
+    trapper: bool,
+) {
+    commands.spawn((
+        LevelCleanup,
+        SnareSeed { creator, trapper },
+        Velocity(dir * 12.0 * 30.0),
+        GmlImage::new("images/sprTangleSeed.png", 1, 0.0),
+        NativeDepth(1.0),
+        Pos(pos),
+    ));
+    cue(
+        cues,
+        if throne_butt { "sndPlantFireTB" } else { "sndPlantFire" },
+        0.7,
+        0.05,
+    );
+}
+
+/// GML `TangleSeed/Collision_hitme.gml:1-8` +
+/// `Collision_Wall.gml:1-9` + `Tangle/Create_0.gml:1-14`.
+fn plant_tangle(
+    commands: &mut Commands,
+    cues: &mut Queue<AudioCue>,
+    pos: Vec2,
+    team: Team,
+    creator: Entity,
+    throne_butt: bool,
+    trapper: bool,
+    rng: &mut rand::rngs::ThreadRng,
+) {
+    let ultra = if trapper { "sndPlantSnareTrapperTB" } else { "sndPlantSnareTB" };
+    let plain = if trapper {
+        "sndPlantSnareTrapper"
+    } else {
+        "sndPlantSnare"
+    };
+    cue(
+        cues,
+        if throne_butt { ultra } else { plain },
+        0.7,
+        0.05,
+    );
+    // GML `Tangle/Create_0.gml:4-5`: `image_xscale = choose(1, -1)`,
+    // `image_speed = 0.4` over the 6-frame strip.
+    let body = |commands: &mut Commands, at: Vec2, rng: &mut rand::rngs::ThreadRng| {
+        commands.spawn((
+            LevelCleanup,
+            Tangle { creator, team },
+            GmlImage::new("images/sprTangle.png", 6, 0.4),
+            NativeFlip(rng.random_bool(0.5)),
+            NativeAngle(0.0),
+            NativeDepth(1.0),
+            Pos(at),
+        ));
+    };
+    body(commands, pos, rng);
+    if trapper {
+        let mut ang = rng.random_range(0.0..std::f32::consts::TAU);
+        for _ in 0..5 {
+            let at = pos
+                + Vec2::new(ang.cos(), ang.sin()) * rng.random_range(26.0..34.0);
+            body(commands, at, rng);
+            ang += 72.0_f32.to_radians();
+        }
+    }
+}
+
 #[allow(clippy::type_complexity)]
 pub fn tick_snare_zones(
     time: Res<SimTime>,
     mut commands: Commands,
-    player_q: Query<&Player, With<Player>>,
-    mut zones: Query<(Entity, &Pos, &mut SnareZone)>,
-    mut enemies: Query<(Entity, &Pos, &mut Health), (With<Enemy>, Without<Slowed>)>,
+    mut cues: ResMut<Queue<AudioCue>>,
+    mask: Option<Res<FloorMask>>,
+    player_q: Query<(&Player, &Team), With<Player>>,
+    mut seeds: Query<(Entity, &mut Pos, &SnareSeed, &Velocity), (With<SnareSeed>, Without<Player>)>,
+    // `Without<SnareSeed>` keeps this disjoint from the travelling-seed
+    // query above, which holds `&mut Pos`; a seed is despawned as it
+    // plants, so no entity is ever both.
+    tangles: Query<&Pos, (With<Tangle>, Without<Player>, Without<SnareSeed>)>,
+    mut enemies: Query<
+        (
+            Entity,
+            &mut Pos,
+            &Hitbox,
+            &mut Health,
+            Option<&mut Velocity>,
+        ),
+        (With<Enemy>, Without<Player>, Without<SnareSeed>, Without<Tangle>),
+    >,
 ) {
-    let throne_butt = player_q.single().map(|p| p.throne_butt).unwrap_or(false);
-    for (e, zpos, mut zone) in &mut zones {
-        zone.timer.tick(time.delta_secs);
-        if zone.timer.just_finished() {
+    let dt = time.delta_secs;
+    let (throne_butt, team) = player_q
+        .single()
+        .map(|(p, t)| (p.throne_butt, *t))
+        .unwrap_or((false, Team::Player));
+    let walkable = |p: Vec2| mask.as_deref().is_none_or(|m| m.is_walkable(p));
+
+    // Seed travel: GML `TangleSeed` keeps `speed = 12` forever and is
+    // consumed by the first body or wall it reaches.
+    let mut rng = rand::rng();
+    for (e, mut spos, seed, vel) in &mut seeds {
+        spos.0 += vel.0 * dt;
+        let hit_wall = !walkable(spos.0);
+        let hit_body = enemies
+            .iter()
+            .any(|(_, epos, hitbox, _, _)| epos.0.distance(spos.0) <= hitbox.radius);
+        if hit_wall || hit_body {
+            plant_tangle(
+                &mut commands,
+                &mut cues,
+                spos.0,
+                team,
+                seed.creator,
+                throne_butt,
+                seed.trapper,
+                &mut rng,
+            );
             commands.entity(e).despawn();
-            continue;
         }
-        let z = zpos.0;
-        for (ee, epos, mut health) in &mut enemies {
-            if epos.0.distance(z) <= zone.radius {
-                if throne_butt && health.hp <= (health.max / 3).max(1) && health.hp > 0 {
-                    health.hp = 0;
+    }
+
+    // GML `Tangle/Collision_enemy.gml:4-22`, once per tick of overlap.
+    for tangle_pos in &tangles {
+        let tpos = tangle_pos.0;
+        for (_, mut epos, hitbox, mut health, mut vel) in &mut enemies {
+            if epos.0.distance(tpos) > hitbox.radius + TANGLE_RADIUS {
+                continue;
+            }
+            if let Some(vel) = vel.as_mut() {
+                let step = vel.0 * dt;
+                let rewound = epos.0 - step * 0.9;
+                if walkable(rewound) {
+                    epos.0 = rewound;
+                } else {
+                    epos.0 -= step;
                 }
-                commands.entity(ee).insert(Slowed {
-                    timer: GTimer::from_seconds(0.4, TimerMode::Once),
-                    factor: if throne_butt { 0.02 } else { zone.slow },
-                });
+            }
+            // GML :13-21 — float compare against `max_hp * 0.33`, a
+            // 5 px/step shove away from the tangle, then `hp = 0`.
+            if throne_butt && (health.hp as f32) <= health.max as f32 * 0.33 {
+                if let Some(vel) = vel.as_mut() {
+                    vel.0 += (epos.0 - tpos).normalize_or_zero() * 5.0 * 30.0;
+                }
+                health.hp = 0;
             }
         }
     }
 }
 
+/// GML has no per-tick `Slowed` component: the Plant snare is the
+/// positional rewind in [`tick_snare_zones`]. Kept as a live system
+/// because `schedule.rs` links it.
 pub fn tick_slowed(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -1958,11 +2256,16 @@ pub fn robot_eat_drops(
     inv: &mut Inventory,
     weapon: WeaponId,
     auto_collect: bool,
+    run_area: crate::data::AreaId,
+    gen_seed: u64,
 ) {
     let tb = u32::from(player.throne_butt);
     let life_crown = player.crown == CrownKind::Life;
     let ammo_cap = |player: &Player, kind: AmmoKind| player.ammo_cap(kind);
-    let medkit_mult = player.medkit_mult;
+    // GML `HPPickup/Collision_Player.gml:11-14` heals exactly `num`
+    // (2, 4 with Second Stomach, +1 with Haste) — no crown or ultra
+    // multiplier exists on this path.
+    let medkit_num = crate::pickups::hppickup_num(player);
     let mut rng = rand::rng();
 
     // One HP-or-ammo drop; `hp_amount` is the medkit size when HP wins.
@@ -1976,8 +2279,7 @@ pub fn robot_eat_drops(
         let wants_hp = !life_crown && rng.random_range(0..health.max.max(1)) as i32 > health.hp;
         if wants_hp {
             if auto_collect {
-                let heal = (hp_amount as f32 * medkit_mult).round() as i32;
-                health.hp = (health.hp + heal).min(health.max);
+                health.hp = (health.hp + hp_amount).min(health.max);
             } else {
                 let off = Vec2::new(rng.random_range(-12.0..12.0), rng.random_range(-12.0..12.0));
                 spawn_pickup(
@@ -2017,39 +2319,41 @@ pub fn robot_eat_drops(
 
     if weapon_meta(weapon).wep_gold {
         for _ in 0..(4 + tb) {
-            drop_hp_or_ammo(commands, pos, player, health, inv, &mut rng, 2);
+            drop_hp_or_ammo(commands, pos, player, health, inv, &mut rng, medkit_num);
         }
     }
     if matches!(player.ultra, Some(UltraMutationId::RobotRegurgitate))
         && rng.random::<f32>() <= 0.43
     {
         // GML Regurgitate roll (no life-crown gate on this branch).
+        // `__spawn_pickup` creates at the caller's own `x, y` with no
+        // offset, and there is no `GenCont`, so no curse roll — but the
+        // area/ultra art variants still apply.
+        let ctx = crate::pickups::ChestCtx {
+            worldgen: false,
+            area: run_area,
+            crown: player.crown,
+            ambidextrous: matches!(player.ultra, Some(UltraMutationId::SteroidsAmbidextrous)),
+            get_loaded: matches!(player.ultra, Some(UltraMutationId::SteroidsGetArmed)),
+            gen_seed,
+            order: 0,
+        };
         if player.crown == CrownKind::Love {
-            spawn_chest(
-                commands,
-                catalog,
-                ChestKind::Ammo,
-                pos + Vec2::new(16.0, 0.0),
-            );
+            spawn_chest_with(commands, catalog, ChestKind::Ammo, pos, &ctx);
         } else if rng.random_range(0..health.max.max(1)) as i32 > health.hp
             && rng.random_range(0..3) < 2
         {
-            spawn_chest(
-                commands,
-                catalog,
-                ChestKind::Health,
-                pos + Vec2::new(16.0, 0.0),
-            );
+            spawn_chest_with(commands, catalog, ChestKind::Health, pos, &ctx);
         } else {
             let kind = match rng.random_range(0..3) {
                 0 => ChestKind::Weapon,
                 _ => ChestKind::Ammo,
             };
-            spawn_chest(commands, catalog, kind, pos + Vec2::new(16.0, 0.0));
+            spawn_chest_with(commands, catalog, kind, pos, &ctx);
         }
     }
     for _ in 0..(1 + tb) {
-        drop_hp_or_ammo(commands, pos, player, health, inv, &mut rng, 2);
+        drop_hp_or_ammo(commands, pos, player, health, inv, &mut rng, medkit_num);
     }
 }
 
@@ -2071,8 +2375,11 @@ pub fn player_ability(
     mut cues: ResMut<Queue<AudioCue>>,
     mut rumble_q: ResMut<Queue<RumbleRequest>>,
     mut toast: ResMut<Toast>,
-    mut save: ResMut<SaveData>,
-    mut dirty: ResMut<SaveDirty>,
+    mut persist: ParamSet<(
+        ResMut<SaveData>,
+        ResMut<SaveDirty>,
+        Res<Run>,
+    )>,
     catalog: Res<repame_anim::AnimCatalog>,
     mut tut: Option<ResMut<crate::state::TutorialState>>,
     mut player_q: Query<
@@ -2093,6 +2400,8 @@ pub fn player_ability(
     mut walls_and_allies: ParamSet<(
         Query<(Entity, &WallCell, &Pos), With<WallTile>>,
         Query<Entity, With<Ally>>,
+        Query<&SnareSeed>,
+        Query<Entity, (With<Tangle>, Without<Player>)>,
     )>,
     mut enemies: Query<(Entity, &Pos, &mut Health), (With<Enemy>, Without<Player>)>,
 ) {
@@ -2131,9 +2440,16 @@ pub fn player_ability(
     {
         let press_edge = input.peek_fire_pressed();
         let release_edge = input.take_touch_released_fire();
+        // GML `scrControlAutoSnare.gml:21-23`: a `TangleSeed` already in
+        // flight blocks the auto-snare.
+        let seed_in_flight = walls_and_allies
+            .p2()
+            .iter()
+            .any(|s: &SnareSeed| s.creator == player_e);
         if race_state.race == RaceId::Plant
             && player.ability == AbilityKind::Snare
             && (press_edge || release_edge)
+            && !seed_in_flight
         {
             let from = ppos.0;
             let dir = aim.0;
@@ -2157,14 +2473,15 @@ pub fn player_ability(
             {
                 let snapped = (vpos - from).normalize_or_zero();
                 aim.0 = snapped;
-                player_ability_snare(
+                let live_tangles: Vec<Entity> = walls_and_allies.p3().iter().collect();
+                plant_snare(
                     &mut commands,
+                    &mut cues,
                     from,
                     snapped,
+                    player_e,
                     &player,
-                    &mut trauma,
-                    &mut chroma,
-                    &mut cues,
+                    &live_tangles,
                 );
                 return;
             }
@@ -2190,34 +2507,32 @@ pub fn player_ability(
         player.ultra_ability_mult
     };
 
-    /// GML Plant snare arm shared by the tap ability and
-    /// `scrControlAutoSnare`: spawns the `SnareZone` 70px along the aim.
+    /// GML `scrPowers.gml:116-131` (Race.Plant) shared by the tap ability
+    /// and `scrControlAutoSnare`: fire the seed down `aim` and clear every
+    /// live `Tangle`.
     #[allow(clippy::too_many_arguments)]
-    fn player_ability_snare(
+    fn plant_snare(
         commands: &mut Commands,
+        cues: &mut Queue<AudioCue>,
         pos: glam::Vec2,
         aim_v: glam::Vec2,
+        player_e: Entity,
         player: &Player,
-        trauma: &mut Trauma,
-        chroma: &mut ChromaticAberration,
-        cues: &mut Queue<AudioCue>,
+        live_tangles: &[Entity],
     ) {
-        let ability_mult = if player.throne_butt {
-            player.ultra_ability_mult * 1.35
-        } else {
-            player.ultra_ability_mult
-        };
-        commands.spawn((
-            LevelCleanup,
-            SnareZone {
-                timer: GTimer::from_seconds(2.5 * ability_mult.clamp(1.0, 2.0), TimerMode::Once),
-                radius: 110.0 * ability_mult.clamp(1.0, 1.8),
-                slow: (0.35 / ability_mult).clamp(0.12, 0.35),
-            },
-            Pos(pos + aim_v * 70.0),
-        ));
-        cue(cues, "sndAmmoPickup", 0.5, 0.15);
-        let _ = (trauma, chroma);
+        let trapper = matches!(player.ultra, Some(UltraMutationId::PlantTrapper));
+        spawn_snare_seed(
+            commands,
+            cues,
+            pos,
+            aim_v,
+            player_e,
+            player.throne_butt,
+            trapper,
+        );
+        for tangle in live_tangles {
+            commands.entity(*tangle).despawn();
+        }
     }
 
     /// GML wall segment test for the auto-snare ray (`collision_line`
@@ -2295,14 +2610,24 @@ pub fn player_ability(
             cue(&mut cues, "sndExplosionL", 0.9, 0.04);
         }
         AbilityKind::Snare => {
-            player_ability_snare(
+            // GML `scrPowers.gml:120-129`: a `TangleSeed` already in
+            // flight blocks the press.
+            let seed_in_flight = walls_and_allies
+                .p2()
+                .iter()
+                .any(|s: &SnareSeed| s.creator == player_e);
+            if seed_in_flight {
+                return;
+            }
+            let live_tangles: Vec<Entity> = walls_and_allies.p3().iter().collect();
+            plant_snare(
                 &mut commands,
+                &mut cues,
                 pos,
                 aim_v,
+                player_e,
                 &player,
-                &mut trauma,
-                &mut chroma,
-                &mut cues,
+                &live_tangles,
             );
         }
         AbilityKind::PopPop => {
@@ -2364,6 +2689,8 @@ pub fn player_ability(
                 &mut inv,
                 w,
                 false,
+                persist.p2().area,
+                persist.p2().gen_seed,
             );
             if was_cursed {
                 // GML curse eat: self-hit 7 + 10 `Curse` motes.
@@ -2386,9 +2713,9 @@ pub fn player_ability(
                 spawn_rad_burst(&mut commands, &catalog, pos, 15);
             }
 
-            let unlocked = check_progress_unlocks(&mut save, 0, 0, false, true, false);
+            let unlocked = check_progress_unlocks(&mut persist.p0(), 0, 0, false, true, false);
             for race in unlocked {
-                dirty.0 = true;
+                persist.p1().0 = true;
                 toast.show(&format!(
                     "UNLOCKED {}",
                     character_def(race).name.to_ascii_uppercase()
