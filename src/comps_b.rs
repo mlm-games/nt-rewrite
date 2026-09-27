@@ -386,6 +386,10 @@ pub struct EnemyBrain {
     pub preferred_range: f32,
     pub shoot_range: f32,
     pub attack: Timer,
+    /// Generic ranged-fire alarm. GML keeps `Alarm_1` (decide) and the
+    /// fire alarm as independent countdowns; sharing one register made the
+    /// decide re-arm starve every shot.
+    pub fire_alarm: Timer,
     pub burst_left: usize,
     pub burst_timer: Timer,
     pub dash: f32,

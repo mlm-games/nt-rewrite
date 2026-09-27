@@ -38,7 +38,7 @@ use crate::combat::{Explosion, queue_enemy_spawn, queue_enemy_spawn_no_kill};
 use crate::comps_a::{
     BossIntro, DamageSource, FloorMask, GameCleanup, Health, Hitbox, LevelCleanup, NextHurt,
     PendingWallBreak, Player, Projectile, RaceState, Run, Team, Toast, Velocity, WallCell,
-    WallTile, apply_gml_friction, gml_motion_add_clamp,
+    WallTile, gml_motion_add_clamp,
 };
 use crate::comps_b::{
     Beam, BossBrain, BossPhase, Enemy, EnemyBrain, HurtAnim, HyperOrbitCrystal, InvisiWall,
@@ -494,13 +494,6 @@ pub fn boss_ai(
         boss.special_timer.tick(dt);
         brain.melee.tick(dt);
 
-        if !matches!(
-            enemy.kind,
-            EnemyKind::BigBandit | EnemyKind::BigBanditLoop | EnemyKind::FrogQueen
-        ) {
-            apply_gml_friction(&mut vel.0, 0.4, dt);
-        }
-
         let fired = match enemy.kind {
             EnemyKind::BigBandit | EnemyKind::BigBanditLoop => big_bandit_ai(
                 &mut commands,
@@ -747,8 +740,6 @@ fn big_bandit_ai(
         EnemyKind::BigBandit
     };
     let mut fired = false;
-
-    apply_gml_friction(&mut vel.0, 0.4, dt);
 
     match boss.phase {
         BossPhase::Idle | BossPhase::Cooldown => {
@@ -1461,14 +1452,13 @@ fn throne_ai(
     let mut rng = rand::rng();
     let mut fired = false;
 
-    // GML `Create_0`: `alarm[1] = 30`, `friction = 1.7` (dispatcher
-    // already applies 0.4, so top up the remaining 1.3 here).
+    // GML `Create_0`: `alarm[1] = 30`. `friction = 1.7` is only read by
+    // `enemy/Collision_Wall`, so no per-step drag is applied.
     if boss.aux == 0.0 && brain.burst_left == 0 && boss.phase == BossPhase::Idle {
         brain.burst_left = 1;
         boss.pattern_index = 0;
         boss.attack_timer = GTimer::from_seconds(1.0 /* 30 ticks */, TimerMode::Once);
     }
-    apply_gml_friction(&mut vel.0, 1.3, dt);
 
     // `with enemy { destroy }` (everything but fellow bosses) and
     // `with Portal { destroy }`.
