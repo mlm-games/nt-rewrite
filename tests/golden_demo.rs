@@ -35,8 +35,9 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
+use bevy_ecs::prelude::World;
 use nt_rewrite::App;
-use nt_rewrite::comps_a::{Health, Inventory, Player, Projectile, Run};
+use nt_rewrite::comps_a::{FloorMask, Health, Inventory, Player, Projectile, Run};
 use nt_rewrite::comps_b::{Enemy, Pickup};
 use nt_rewrite::data::AmmoKind;
 use nt_rewrite::spatial::Pos;
@@ -148,6 +149,43 @@ fn scheduler(hw: &Hardware) -> Scheduler {
     sched
 }
 
+/// Straight-line walkability between two points, sampled every 8 px against
+/// the live `FloorMask`.
+fn clear_line(mask: &FloorMask, from: glam::Vec2, to: glam::Vec2) -> bool {
+    let steps = ((to - from).length() / 8.0).ceil().max(1.0) as usize;
+    (1..=steps).all(|i| mask.is_walkable(from + (to - from) * (i as f32 / steps as f32)))
+}
+
+/// Where the fire leg puts its target: the walkable cell centre nearest the
+/// player that still has an unobstructed line to it, at least 32 px out.
+///
+/// The tape's subject is the input -> sim pipeline (movement responds,
+/// firing spends ammo, kills increment), not the floor layout, so the target
+/// is derived from whatever the generator produced rather than pinned to a
+/// fixed offset. A hardcoded `player + (60, 0)` put the bandit inside a wall
+/// as soon as the starting arena changed shape, and every shot was eaten by
+/// geometry before it arrived.
+fn target_spot(w: &World, player_pos: glam::Vec2) -> Option<glam::Vec2> {
+    let mask = w.resource::<FloorMask>();
+    let mut cells: Vec<(i32, i32)> = mask.cells.iter().copied().collect();
+    cells.sort_unstable();
+    let mut best: Option<(f32, glam::Vec2)> = None;
+    for c in cells {
+        let at = mask.cell_center(c);
+        let d = at.distance(player_pos);
+        if d < 32.0 {
+            continue;
+        }
+        if !clear_line(mask, player_pos, at) {
+            continue;
+        }
+        if best.is_none_or(|(bd, _)| d < bd) {
+            best = Some((d, at));
+        }
+    }
+    best.map(|(_, at)| at)
+}
+
 fn run_tape() -> Vec<TickSnap> {
     let mut app = App::new_with_seed(4242);
     app.sim.world.insert_resource(AppState::InGame);
@@ -162,10 +200,11 @@ fn run_tape() -> Vec<TickSnap> {
             .next()
             .map(|(p, _)| p.0)
             .unwrap_or(glam::Vec2::ZERO);
+        let spot = target_spot(w, player_pos).expect("generator must offer a firing lane");
         nt_rewrite::setup::spawn_enemy(
             &mut w.commands(),
             nt_rewrite::EnemyKind::Bandit,
-            player_pos + glam::Vec2::new(60.0, 0.0),
+            spot,
             true,
         );
     }
