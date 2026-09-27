@@ -216,7 +216,10 @@ pub const WEAPON_CHICKEN_SWORD: WeaponId = WeaponId(46);
 pub const WEAPON_RUSTY_REVOLVER: WeaponId = WeaponId(56);
 pub const WEAPON_ROGUE_RIFLE: WeaponId = WeaponId(81);
 pub const WEAPON_DOG_SPIN_ATTACK: WeaponId = WeaponId(108);
+pub const WEAPON_GUITAR: WeaponId = WeaponId(115);
+pub const WEAPON_BLACK_SWORD: WeaponId = WeaponId(121);
 pub const WEAPON_GOLDEN_FROG_PISTOL: WeaponId = WeaponId(127);
+pub const WEAPON_ELECTRIC_GUITAR: WeaponId = WeaponId(128);
 
 /// GML `scrRaceGetStarterWeapon` verbatim.
 pub fn race_starter_weapon(race: RaceId) -> WeaponId {

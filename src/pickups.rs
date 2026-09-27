@@ -1381,7 +1381,7 @@ pub fn collect_pickups(
             &Pickup,
             Option<&mut GroundPhysics>,
             Option<&mut PickupLifetime>,
-            Option<&WepPickupAmmo>,
+            Option<&mut WepPickupAmmo>,
             Option<&PickupCurse>,
             Option<&ChestCurse>,
             Option<&DropSeed>,
@@ -1459,7 +1459,7 @@ pub fn collect_pickups(
         pickup,
         ground,
         lifetime,
-        wep_ammo,
+        mut wep_ammo,
         pickup_curse,
         chest_curse,
         drop_seed,
@@ -1520,20 +1520,26 @@ pub fn collect_pickups(
         // pickup's ammo payout sits OUTSIDE the pick if/else, so plain
         // mask overlap pays it whether or not the press landed, and
         // whether or not this is the nearest gun. The flag is consumed.
-        if is_weapon && wep_ammo.is_some_and(|f| f.0) {
-            if mask_overlap(player_pos, pickup_pos_value, WEP_AMMO_REACH) {
-                let PickupKind::Weapon(gun) = pickup.kind else {
-                    unreachable!()
-                };
-                pay_weapon_pickup_ammo(
-                    &mut commands,
-                    &mut inv,
-                    gun,
-                    player_pos,
-                    &player,
-                    &mut health,
-                );
-            }
+        if let Some(ammo_flag) = wep_ammo.as_deref_mut()
+            && ammo_flag.0
+            && is_weapon
+            && mask_overlap(player_pos, pickup_pos_value, WEP_AMMO_REACH)
+        {
+            let PickupKind::Weapon(gun) = pickup.kind else {
+                unreachable!()
+            };
+            // GML `Player/Collision_WepPickup.gml:103` is the unconditional
+            // trailing `other.ammo = 0`: the payout fires once per pickup.
+            // Leaving the flag set re-pays it every step the masks overlap.
+            ammo_flag.0 = false;
+            pay_weapon_pickup_ammo(
+                &mut commands,
+                &mut inv,
+                gun,
+                player_pos,
+                &player,
+                &mut health,
+            );
         }
 
         // GML reach: per-axis mask overlap (`place_meeting`).
@@ -2100,7 +2106,9 @@ pub fn collect_pickups(
                     );
                     commands
                         .entity(e2)
-                        .insert(WepPickupAmmo(wep_ammo.is_some_and(|f| f.0)));
+                        .insert(WepPickupAmmo(
+                            wep_ammo.as_deref().is_some_and(|f| f.0),
+                        ));
                     continue;
                 }
 

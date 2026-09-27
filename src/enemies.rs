@@ -941,9 +941,10 @@ fn integrate_verbatim(
     brain: &mut EnemyBrain,
     vel: &mut Velocity,
     pos: &mut Pos,
+    entity: Entity,
     solids: &[(glam::Vec2, glam::Vec2)],
     mask: &FloorMask,
-    positions: &[(glam::Vec2, i32)],
+    positions: &[(Entity, glam::Vec2, i32, f32)],
     kind: EnemyKind,
     epos: glam::Vec2,
     radius: f32,
@@ -958,15 +959,13 @@ fn integrate_verbatim(
     let saved_direction = vel.0.normalize_or_zero();
     let saved_speed = vel.0.length();
     let parent = matches!(law, EnemyWallLaw::Parent) && loops <= 3;
-    let contact = move_bounce_solid(
-        &mut pos.0,
-        &mut vel.0,
-        radius,
-        dt,
-        solids,
-        Some(mask),
-        !matches!(law, EnemyWallLaw::Slide | EnemyWallLaw::SlidePush),
-    );
+    // Always reflect. GML's `move_bounce_solid(silent)` argument only
+    // suppresses the collision EVENT — `JungleFly` and `Maggot` pass
+    // `false` and still bounce. Passing `bounce = false` here made them
+    // slide along walls instead, and `Slide` became identical to
+    // `PlainBounce`. The laws differ only in the restore and the extra
+    // `motion_add` below.
+    let contact = move_bounce_solid(&mut pos.0, &mut vel.0, radius, dt, solids, Some(mask), true);
 
     if parent && contact.is_some() {
         let post_speed = vel.0.length();
@@ -989,7 +988,7 @@ fn integrate_verbatim(
     }
 
     if separate_enemies {
-        separate(positions, epos, &mut vel.0, kind, loops, frame);
+        separate(positions, entity, epos, &mut vel.0, kind, loops, frame);
     }
     sync_heading(brain, vel);
 }
@@ -1173,9 +1172,16 @@ pub fn enemy_ai(
 
     // Pre-move snapshot for separation (bevy parity: pushes use the
     // snapshot, applied to the live position).
-    let positions: Vec<(glam::Vec2, i32)> = enemies
+    let positions: Vec<(Entity, glam::Vec2, i32, f32)> = enemies
         .iter()
-        .map(|(_, enemy, _, _, pos, _, _, _)| (pos.0, crate::enemy_data::gml_size(enemy.kind)))
+        .map(|(e, enemy, _, _, pos, _, _, _)| {
+            (
+                e,
+                pos.0,
+                crate::enemy_data::gml_size(enemy.kind),
+                crate::enemy_data::enemy_def(enemy.kind).radius,
+            )
+        })
         .collect();
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
 
@@ -1323,7 +1329,13 @@ pub fn enemy_ai(
         if emplacement {
             vel.0 = glam::Vec2::ZERO;
         } else if dashing {
-            pos.0 += vel.0 * dt;
+            // GML's dash only sets `speed`/`direction`
+            // (`Raven/Alarm_1.gml`, `DogGuardian/Alarm_1.gml`); the
+            // translation happens once, inside `enemy/Collision_Wall`'s
+            // `move_bounce_solid` below. Moving here as well integrated
+            // `vel * dt` twice, and the second (swept) test started from
+            // the unchecked first position — so a dash into a wall
+            // resolved from inside geometry and fought the bounce.
         } else if brain.speed > 0.0 {
             // Kinds with their own `Alarm_1` further down must not also run
             // the generic decide, or its re-arm starves their own decide.
@@ -1506,7 +1518,15 @@ pub fn enemy_ai(
             _ => {}
         }
 
-        separate(&positions, epos, &mut vel.0, enemy.kind, run.loop_count, current_frame);
+        separate(
+            &positions,
+            entity,
+            epos,
+            &mut vel.0,
+            enemy.kind,
+            run.loop_count,
+            current_frame,
+        );
 
         if enemy.kind == EnemyKind::Necromancer {
             if brain.attack.just_finished() {
@@ -2284,7 +2304,17 @@ pub fn tick_bandit(
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player_pos = player_q.single().ok().map(|p| p.0);
-    let positions: Vec<(glam::Vec2, i32)> = enemies.iter().map(|(_, enemy, _, _, p)| (p.0, crate::enemy_data::gml_size(enemy.kind))).collect();
+    let positions: Vec<(Entity, glam::Vec2, i32, f32)> = enemies
+        .iter()
+        .map(|(e, enemy, _, _, p)| {
+            (
+                e,
+                p.0,
+                crate::enemy_data::gml_size(enemy.kind),
+                crate::enemy_data::enemy_def(enemy.kind).radius,
+            )
+        })
+        .collect();
     let solids = prop_shapes(&props);
     let mut rng = rand::rng();
     for (entity, enemy, mut brain, mut vel, mut pos) in &mut enemies {
@@ -2383,6 +2413,7 @@ pub fn tick_bandit(
             &mut brain,
             &mut vel,
             &mut pos,
+            entity,
             &solids,
             &mask,
             &positions,
@@ -2427,10 +2458,20 @@ pub fn tick_maggot(
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player_pos = player_q.single().ok().map(|p| p.0);
-    let positions: Vec<(glam::Vec2, i32)> = enemies.iter().map(|(_, enemy, _, _, p, _)| (p.0, crate::enemy_data::gml_size(enemy.kind))).collect();
+    let positions: Vec<(Entity, glam::Vec2, i32, f32)> = enemies
+        .iter()
+        .map(|(e, enemy, _, _, p, _)| {
+            (
+                e,
+                p.0,
+                crate::enemy_data::gml_size(enemy.kind),
+                crate::enemy_data::enemy_def(enemy.kind).radius,
+            )
+        })
+        .collect();
     let solids = prop_shapes(&props);
     let mut rng = rand::rng();
-    for (_entity, enemy, mut brain, mut vel, mut pos, hurt) in &mut enemies {
+    for (entity, enemy, mut brain, mut vel, mut pos, hurt) in &mut enemies {
         if enemy.kind != EnemyKind::Maggot {
             continue;
         }
@@ -2472,6 +2513,7 @@ pub fn tick_maggot(
             &mut brain,
             &mut vel,
             &mut pos,
+            entity,
             &solids,
             &mask,
             &positions,
@@ -2511,7 +2553,17 @@ pub fn tick_maggot_spawn(
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player_pos = player_q.single().ok().map(|p| p.0);
-    let positions: Vec<(glam::Vec2, i32)> = enemies.iter().map(|(_, enemy, _, _, p, _, _, _) | (p.0, crate::enemy_data::gml_size(enemy.kind))).collect();
+    let positions: Vec<(Entity, glam::Vec2, i32, f32)> = enemies
+        .iter()
+        .map(|(e, enemy, _, _, p, _, _, _)| {
+            (
+                e,
+                p.0,
+                crate::enemy_data::gml_size(enemy.kind),
+                crate::enemy_data::enemy_def(enemy.kind).radius,
+            )
+        })
+        .collect();
     let solids = prop_shapes(&props);
     let spawns: Vec<(Entity, glam::Vec2)> = enemies
         .iter()
@@ -2564,6 +2616,7 @@ pub fn tick_maggot_spawn(
             &mut brain,
             &mut vel,
             &mut pos,
+            entity,
             &solids,
             &mask,
             &positions,
@@ -2632,10 +2685,20 @@ pub fn tick_bigmaggot(
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player_pos = player_q.single().ok().map(|p| p.0);
-    let positions: Vec<(glam::Vec2, i32)> = enemies.iter().map(|(_, enemy, _, _, p, _, _) | (p.0, crate::enemy_data::gml_size(enemy.kind))).collect();
+    let positions: Vec<(Entity, glam::Vec2, i32, f32)> = enemies
+        .iter()
+        .map(|(e, enemy, _, _, p, _, _)| {
+            (
+                e,
+                p.0,
+                crate::enemy_data::gml_size(enemy.kind),
+                crate::enemy_data::enemy_def(enemy.kind).radius,
+            )
+        })
+        .collect();
     let solids = prop_shapes(&props);
     let mut rng = rand::rng();
-    for (_entity, enemy, mut brain, mut vel, mut pos, health, hurt) in &mut enemies {
+    for (entity, enemy, mut brain, mut vel, mut pos, health, hurt) in &mut enemies {
         if enemy.kind != EnemyKind::BigMaggot || brain.burrow_state != 0 {
             continue;
         }
@@ -2705,6 +2768,7 @@ pub fn tick_bigmaggot(
             &mut brain,
             &mut vel,
             &mut pos,
+            entity,
             &solids,
             &mask,
             &positions,
@@ -2814,10 +2878,20 @@ pub fn tick_jungle_fly(
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player_pos = player_q.single().ok().map(|p| p.0);
-    let positions: Vec<(glam::Vec2, i32)> = enemies.iter().map(|(_, enemy, _, _, p, _) | (p.0, crate::enemy_data::gml_size(enemy.kind))).collect();
+    let positions: Vec<(Entity, glam::Vec2, i32, f32)> = enemies
+        .iter()
+        .map(|(e, enemy, _, _, p, _)| {
+            (
+                e,
+                p.0,
+                crate::enemy_data::gml_size(enemy.kind),
+                crate::enemy_data::enemy_def(enemy.kind).radius,
+            )
+        })
+        .collect();
     let solids = prop_shapes(&props);
     let mut rng = rand::rng();
-    for (_entity, enemy, mut brain, mut vel, mut pos, hurt) in &mut enemies {
+    for (entity, enemy, mut brain, mut vel, mut pos, hurt) in &mut enemies {
         if enemy.kind != EnemyKind::JungleFly {
             continue;
         }
@@ -2899,6 +2973,7 @@ pub fn tick_jungle_fly(
             &mut brain,
             &mut vel,
             &mut pos,
+            entity,
             &solids,
             &mask,
             &positions,
@@ -2987,7 +3062,17 @@ pub fn tick_scorpion(
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player_pos = player_q.single().ok().map(|p| p.0);
-    let positions: Vec<(glam::Vec2, i32)> = enemies.iter().map(|(_, enemy, _, _, p, _, _)| (p.0, crate::enemy_data::gml_size(enemy.kind))).collect();
+    let positions: Vec<(Entity, glam::Vec2, i32, f32)> = enemies
+        .iter()
+        .map(|(e, enemy, _, _, p, _, _)| {
+            (
+                e,
+                p.0,
+                crate::enemy_data::gml_size(enemy.kind),
+                crate::enemy_data::enemy_def(enemy.kind).radius,
+            )
+        })
+        .collect();
     let solids = prop_shapes(&props);
     let mut rng = rand::rng();
     for (entity, enemy, mut brain, mut vel, mut pos, mut anim, hurt) in &mut enemies {
@@ -3091,6 +3176,7 @@ pub fn tick_scorpion(
             &mut brain,
             &mut vel,
             &mut pos,
+            entity,
             &solids,
             &mask,
             &positions,
@@ -3132,7 +3218,17 @@ pub fn tick_gold_scorpion(
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player_pos = player_q.single().ok().map(|p| p.0);
-    let positions: Vec<(glam::Vec2, i32)> = enemies.iter().map(|(_, enemy, _, _, p, _, _)| (p.0, crate::enemy_data::gml_size(enemy.kind))).collect();
+    let positions: Vec<(Entity, glam::Vec2, i32, f32)> = enemies
+        .iter()
+        .map(|(e, enemy, _, _, p, _, _)| {
+            (
+                e,
+                p.0,
+                crate::enemy_data::gml_size(enemy.kind),
+                crate::enemy_data::enemy_def(enemy.kind).radius,
+            )
+        })
+        .collect();
     let solids = prop_shapes(&props);
     let mut rng = rand::rng();
     for (entity, enemy, mut brain, mut vel, mut pos, mut anim, hurt) in &mut enemies {
@@ -3252,6 +3348,7 @@ pub fn tick_gold_scorpion(
             &mut brain,
             &mut vel,
             &mut pos,
+            entity,
             &solids,
             &mask,
             &positions,
@@ -3283,7 +3380,17 @@ pub fn tick_sniper(
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player_pos = player_q.single().ok().map(|p| p.0);
-    let positions: Vec<(glam::Vec2, i32)> = enemies.iter().map(|(_, enemy, _, _, p) | (p.0, crate::enemy_data::gml_size(enemy.kind))).collect();
+    let positions: Vec<(Entity, glam::Vec2, i32, f32)> = enemies
+        .iter()
+        .map(|(e, enemy, _, _, p)| {
+            (
+                e,
+                p.0,
+                crate::enemy_data::gml_size(enemy.kind),
+                crate::enemy_data::enemy_def(enemy.kind).radius,
+            )
+        })
+        .collect();
     let solids = prop_shapes(&props);
     let mut rng = rand::rng();
     for (entity, enemy, mut brain, mut vel, mut pos) in &mut enemies {
@@ -3402,6 +3509,7 @@ pub fn tick_sniper(
             &mut brain,
             &mut vel,
             &mut pos,
+            entity,
             &solids,
             &mask,
             &positions,
@@ -3441,7 +3549,17 @@ pub fn tick_jungle_bandit(
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player_pos = player_q.single().ok().map(|p| p.0);
-    let positions: Vec<(glam::Vec2, i32)> = enemies.iter().map(|(_, enemy, _, _, p) | (p.0, crate::enemy_data::gml_size(enemy.kind))).collect();
+    let positions: Vec<(Entity, glam::Vec2, i32, f32)> = enemies
+        .iter()
+        .map(|(e, enemy, _, _, p)| {
+            (
+                e,
+                p.0,
+                crate::enemy_data::gml_size(enemy.kind),
+                crate::enemy_data::enemy_def(enemy.kind).radius,
+            )
+        })
+        .collect();
     let solids = prop_shapes(&props);
     let mut rng = rand::rng();
     for (entity, enemy, mut brain, mut vel, mut pos) in &mut enemies {
@@ -3558,6 +3676,7 @@ pub fn tick_jungle_bandit(
             &mut brain,
             &mut vel,
             &mut pos,
+            entity,
             &solids,
             &mask,
             &positions,
@@ -3597,7 +3716,17 @@ pub fn tick_melee_bandit(
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player_pos = player_q.single().ok().map(|p| p.0);
-    let positions: Vec<(glam::Vec2, i32)> = enemies.iter().map(|(_, enemy, _, _, p) | (p.0, crate::enemy_data::gml_size(enemy.kind))).collect();
+    let positions: Vec<(Entity, glam::Vec2, i32, f32)> = enemies
+        .iter()
+        .map(|(e, enemy, _, _, p)| {
+            (
+                e,
+                p.0,
+                crate::enemy_data::gml_size(enemy.kind),
+                crate::enemy_data::enemy_def(enemy.kind).radius,
+            )
+        })
+        .collect();
     let solids = prop_shapes(&props);
     let mut rng = rand::rng();
     for (entity, enemy, mut brain, mut vel, mut pos) in &mut enemies {
@@ -3729,6 +3858,7 @@ pub fn tick_melee_bandit(
             &mut brain,
             &mut vel,
             &mut pos,
+            entity,
             &solids,
             &mask,
             &positions,
@@ -3775,10 +3905,20 @@ pub fn tick_ballguy(
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player = player_q.single().ok().map(|(p, h)| (p.0, h.hp > 0));
-    let positions: Vec<(glam::Vec2, i32)> = enemies.iter().map(|(_, enemy, _, _, p, _, _) | (p.0, crate::enemy_data::gml_size(enemy.kind))).collect();
+    let positions: Vec<(Entity, glam::Vec2, i32, f32)> = enemies
+        .iter()
+        .map(|(e, enemy, _, _, p, _, _)| {
+            (
+                e,
+                p.0,
+                crate::enemy_data::gml_size(enemy.kind),
+                crate::enemy_data::enemy_def(enemy.kind).radius,
+            )
+        })
+        .collect();
     let solids = prop_shapes(&props);
     let mut rng = rand::rng();
-    for (_entity, enemy, mut brain, mut vel, mut pos, mut health, hurt) in &mut enemies {
+    for (entity, enemy, mut brain, mut vel, mut pos, mut health, hurt) in &mut enemies {
         if enemy.kind != EnemyKind::Ballguy {
             continue;
         }
@@ -3833,6 +3973,7 @@ pub fn tick_ballguy(
             &mut brain,
             &mut vel,
             &mut pos,
+            entity,
             &solids,
             &mask,
             &positions,
@@ -6909,7 +7050,8 @@ pub fn tick_shield_followers(
 /// `current_frame % 30` is 0. Each contributing pair also draws the two
 /// `orandom(1)` jitters and caps speed at 16 px/frame.
 fn separate(
-    positions: &[(glam::Vec2, i32)],
+    positions: &[(Entity, glam::Vec2, i32, f32)],
+    entity: Entity,
     epos: glam::Vec2,
     vel: &mut glam::Vec2,
     kind: EnemyKind,
@@ -6917,16 +7059,30 @@ fn separate(
     current_frame: u64,
 ) {
     let size = crate::enemy_data::gml_size(kind);
+    let radius = crate::enemy_data::enemy_def(kind).radius;
     let gated = loops > 3 && current_frame % 30 != 0;
     if gated {
         return;
     }
     let mut rng = rand::rng();
-    for (other, other_size) in positions {
+    for (other_entity, other, other_size, other_radius) in positions {
+        // GML collision events only fire against *other* instances. The
+        // snapshot includes self, and self sits at distance 0, so it always
+        // passed the overlap test and contributed a `normalize(-orandom)`
+        // impulse every step. With nothing removing that velocity between
+        // decides, every enemy random-walked up to the 16 px/frame cap
+        // (480 px/s) and stayed there.
+        if *other_entity == entity {
+            continue;
+        }
         if size > *other_size {
             continue;
         }
-        if epos.distance(*other) >= 28.0 {
+        // GML fires on mask overlap. The port approximates each mask as a
+        // circle, so the test is circle-circle overlap — a flat constant
+        // separated a 16px Maggot pair ~2x too eagerly and pushed
+        // wall-hugging enemies back into the wall.
+        if epos.distance(*other) >= radius + *other_radius {
             continue;
         }
         let jitter = glam::Vec2::new(

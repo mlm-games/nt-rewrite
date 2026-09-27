@@ -15,6 +15,14 @@ fn boot() -> App {
 
 fn boot_at(files_dir: Option<std::path::PathBuf>) -> App {
     let mut app = App::new();
+    if let Ok(st) = std::env::var("NT_DEBUG_STATE") {
+        let state = match st.as_str() {
+            "title" => nt_rewrite::state::AppState::Title,
+            "ingame" => nt_rewrite::state::AppState::InGame,
+            _ => nt_rewrite::state::AppState::MainMenu,
+        };
+        nt_rewrite::state::goto_state(&mut app.sim.world, state);
+    }
     #[cfg(target_os = "android")]
     if let Some(dir) = files_dir.as_ref() {
         if app.load_assets_from(&dir.join("assets")).is_ok() {

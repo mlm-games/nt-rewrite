@@ -5158,11 +5158,15 @@ pub const CREDIT_SECTIONS: &[&[&str]] = &[
     &["@wNUCLEAR THRONE"],
 ];
 
-/// GML `TutCont/Draw_64` instruction bar verbatim (keyboard lines;
-/// gamepad/touch variants live in the loc table the port does not
-/// ship): one bottom-letterbox row per step until the exit portal
-/// exists. Key names resolve from the live keymap (`move` quartet on
+/// GML `TutCont/Draw_64` instruction text (the keyboard variant, GML
+/// `text[]` index 1, which is what `is_keyboard(global.index)` selects).
+/// Key names resolve from the live keymap (the `move` quartet on
 /// Walking, the step action otherwise), GML `keymap_get` parity.
+///
+/// NOT ported: the `text[]` index 0 (touch) and index 2 (gamepad)
+/// variants, the pulsing lime touch-highlight circle and the red
+/// chest pointer, and the 36px bottom letterbox bar GML draws behind
+/// the text.
 pub fn tutorial_texts(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
     let step = world
         .get_resource::<crate::state::TutorialState>()
@@ -5196,7 +5200,7 @@ pub fn tutorial_texts(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
     let text = match step {
         crate::state::TutorialStep::Walking => {
             format!(
-                "WALK WITH @w{}, {}, {}, {}@s OR THE @wARROW KEYS",
+                "WALK USING @w{}, {}, {}, {}#@s OR THE @wARROW KEYS",
                 key_name("north"),
                 key_name("west"),
                 key_name("south"),
@@ -5207,7 +5211,7 @@ pub fn tutorial_texts(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
             format!("PICK UP A NEW WEAPON WITH @w{}@s", key_name("pick"))
         }
         crate::state::TutorialStep::Shooting => {
-            "AIM WITH THE MOUSE, @wLEFT BUTTON@s FIRES".to_string()
+            "AIM USING THE MOUSE, @wLEFT BUTTON@s FIRES".to_string()
         }
         crate::state::TutorialStep::Swapping => {
             format!(

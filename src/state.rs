@@ -188,17 +188,29 @@ pub fn tick_tutorial(world: &mut World, dt: f32) {
         return;
     }
     world.init_resource::<TutorialState>();
-    world.init_resource::<crate::comps_a::Toast>();
     let mut tut = world.resource_mut::<TutorialState>();
     tut.timer.tick(dt);
-    if tut.complete && tut.timer.just_finished() {
-        tut.complete = false;
-        tut.step = tut.step.next();
-        if tut.step == TutorialStep::Fin {
-            tut.timer = GTimer::from_seconds(45.0 / 30.0, TimerMode::Once);
-            tut.portal_open = true;
-            world.resource_mut::<crate::comps_a::Toast>().show("COOL, WE'RE DONE HERE!");
-        }
+    if !tut.complete || !tut.timer.just_finished() {
+        return;
+    }
+    tut.complete = false;
+    let prev = tut.step;
+    tut.step = tut.step.next();
+    if prev == TutorialStep::Fin {
+        // GML `TutCont/Alarm_0:12-15`: `step_current++` takes it past
+        // `Fin`, so `step_current > Fin` writes `game.tutorial = false`
+        // and spawns the exit `Portal`. Until this point the "COOL, WE'RE
+        // DONE HERE!" bar is still on screen, because `Draw_64` only
+        // hides it once the Portal exists.
+        tut.portal_open = true;
+        world.resource_mut::<crate::savedata_part::SaveData>().tutorial_done = true;
+        world.resource_mut::<crate::comps_a::SaveDirty>().0 = true;
+    } else if tut.step == TutorialStep::Fin {
+        // GML `Alarm_0:8` `if (step_current == Fin) alarm[0] = 45`.
+        // Nothing ever calls `complete_step(Fin)`, so this timer alone
+        // carries the tutorial to its exit.
+        tut.complete = true;
+        tut.timer = GTimer::from_seconds(45.0 / 30.0, TimerMode::Once);
     }
 }
 

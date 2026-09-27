@@ -2283,7 +2283,6 @@ pub fn tick_portal_suck(
     time: Res<SimTime>,
     mut commands: Commands,
     mut run: ResMut<Run>,
-    level_q: Query<Entity, With<LevelCleanup>>,
     weapon_q: Query<&Pickup>,
     rad_props: Query<(), With<RadChestContainer>>,
     mut proto_chests: Query<(Entity, &mut ProtoChestState, Option<&OpenedChest>), Without<Player>>,
@@ -2299,6 +2298,9 @@ pub fn tick_portal_suck(
         ),
         With<Player>,
     >,
+    // GML `GenCont/Destroy_0.gml:186`: every level instance is destroyed
+    // on room change; the carried proto chests survive.
+    level_q: Query<Entity, With<LevelCleanup>>,
     mut loop_transition: ResMut<LoopTransition>,
     mut trauma: ResMut<Trauma>,
     mut toast: ResMut<Toast>,
@@ -2352,7 +2354,12 @@ pub fn tick_portal_suck(
     if run.floor == 1 && run.floor_in_area == 1 && run.area == AreaId::Desert {
         let mut swords = 0u32;
         for pickup in &weapon_q {
-            if matches!(pickup.kind, PickupKind::Weapon(w) if w.0 == 46) {
+            // GML `wep_black_sword` is 121 (`macros_general.gml:481`);
+            // 46 is `wep_chicken_sword`.
+            if matches!(
+                pickup.kind,
+                PickupKind::Weapon(w) if w == crate::data::WEAPON_BLACK_SWORD
+            ) {
                 swords += 1;
             }
         }
@@ -2851,6 +2858,50 @@ pub fn tick_floor_transition(
             }
             run.portal_open = false;
             ft.active = false;
+
+            // GML `GenCont/Destroy_0.gml:169-176`: on the campfire at
+            // loop 1 the Fish gets a guitar dropped on the spawn tile
+            // (electric variant on skin C). `scrWeaponPickupCreate`'s
+            // `_has_ammo` defaults false, so it carries no ammo.
+            if run.area == crate::data::AreaId::Campfire
+                && run.loop_count == 1
+                && race.race == crate::data::RaceId::Fish
+            {
+                let guitar = if race.skin == crate::data::SkinLetter::C {
+                    crate::data::WEAPON_ELECTRIC_GUITAR
+                } else {
+                    crate::data::WEAPON_GUITAR
+                };
+                crate::pickups::spawn_pickup(
+                    &mut commands,
+                    &catalog,
+                    PickupKind::Weapon(guitar),
+                    pos.0,
+                    0,
+                    false,
+                );
+            }
+
+            // GML `GenCont/Destroy_0.gml:178-182`: a desert entry with
+            // banked `blackswords` re-drops that many Black Swords on the
+            // spawn tile and zeroes the counter.
+            if run.area == crate::data::AreaId::Desert
+                && run.loop_count > 0
+                && run.blackswords > 0
+            {
+                for _ in 0..run.blackswords {
+                    crate::pickups::spawn_pickup(
+                        &mut commands,
+                        &catalog,
+                        PickupKind::Weapon(crate::data::WEAPON_BLACK_SWORD),
+                        pos.0,
+                        0,
+                        false,
+                    );
+                }
+                run.blackswords = 0;
+            }
+
             // GML `GenCont/Destroy:186-187` verbatim:
             // `instance_destroy(SpiralCont)` at generation end. The
             // view spiral dies in the lifecycle step; the sim

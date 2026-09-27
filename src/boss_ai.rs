@@ -1067,10 +1067,13 @@ fn big_bandit_ai(
         enemy.touch_damage = 0;
     }
 
-    let before = pos.0;
-    pos.0 += vel.0 * dt;
     // GML `Collision_Wall.gml:4-8`: `charge > 0 || !intro` destroys the tile.
+    // Only the tile-breaking branch needs the swept segment, so only it
+    // pre-moves; `move_bounce_solid` does its own translation and doing
+    // both integrated `vel * dt` twice.
     if boss.phase == BossPhase::Charging || boss.aux == 0.0 {
+        let before = pos.0;
+        pos.0 += vel.0 * dt;
         queue_wall_breaks_along_segment(commands, walls, before, pos.0, def.radius * 0.9);
     } else {
         move_bounce_solid(&mut pos.0, &mut vel.0, def.radius, dt, props, Some(mask), true);
@@ -2842,10 +2845,11 @@ fn captain_ai(
         ));
     }
 
-    let before = pos.0;
-    pos.0 += vel.0 * dt;
-    // GML `Collision_Wall.gml:4-9`: `charge > 0` destroys the tile.
+    // GML `Collision_Wall.gml:4-9`: `charge > 0` destroys the tile. As
+    // above, only the breaking branch pre-moves.
     if boss.phase == BossPhase::Charging {
+        let before = pos.0;
+        pos.0 += vel.0 * dt;
         queue_wall_breaks_along_segment(commands, walls, before, pos.0, def.radius * 0.9);
     } else {
         move_bounce_solid(&mut pos.0, &mut vel.0, def.radius, dt, props, Some(mask), true);

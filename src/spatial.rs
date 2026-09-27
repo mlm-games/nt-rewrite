@@ -274,7 +274,7 @@ pub fn move_bounce_solid_displacement(
         let Some(contact) = first_swept_contact(*pos, remaining, radius, &shapes) else {
             *pos += remaining;
             clamp_to_arena(pos, radius);
-            break;
+            return first;
         };
         if first.is_none() {
             first = Some(contact);
@@ -296,9 +296,14 @@ pub fn move_bounce_solid_displacement(
             remaining -= contact.normal * remaining.dot(contact.normal);
         }
         if remaining.length_squared() <= 1e-8 {
-            break;
+            return first;
         }
     }
+    // Out of reflections with displacement left. A diagonal path into a
+    // corner burns one reflection per wall and used to drop the remainder,
+    // so the mover stalled and jittered in the corner instead of sliding
+    // out. Apply whatever is left.
+    *pos += remaining;
     clamp_to_arena(pos, radius);
     first
 }
