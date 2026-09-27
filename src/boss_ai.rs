@@ -1628,6 +1628,7 @@ pub fn throne_annihilate_props(
             &Pos,
             Option<&crate::environment::PropDeathEffect>,
             Option<&PropSprites>,
+            Option<&crate::comps_b::SpecialPropDeath>,
             Option<&mut NextHurt>,
         ),
         With<Prop>,
@@ -1646,7 +1647,7 @@ pub fn throne_annihilate_props(
     let reach = enemy_def(EnemyKind::Throne).radius;
 
     for (e, spos) in statue_q.iter() {
-        let Ok((_, p, _, _, _, _)) = props.get(e) else {
+        let Ok((_, p, _, _, _, _, _)) = props.get(e) else {
             continue;
         };
         let half = p.size / 2.0;
@@ -1666,7 +1667,7 @@ pub fn throne_annihilate_props(
     }
 
     let mut crushed: Vec<(Entity, glam::Vec2, i32)> = Vec::new();
-    for (prop_e, prop, ppos, _, _, _) in props.iter() {
+    for (prop_e, prop, ppos, _, _, _, _) in props.iter() {
         if !prop.destructible || generators.contains(prop_e) {
             continue;
         }

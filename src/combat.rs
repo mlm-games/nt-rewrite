@@ -1646,6 +1646,7 @@ pub fn move_projectiles(
             &Pos,
             Option<&PropDeathEffect>,
             Option<&PropSprites>,
+            Option<&crate::comps_b::SpecialPropDeath>,
             Option<&mut NextHurt>,
         ),
         With<Prop>,
@@ -1816,7 +1817,7 @@ pub fn move_projectiles(
         // GML `TrapFire/Collision_hitme.gml:1` — the jet flies straight
         // through props, so they neither take damage nor stop it.
         if !trap_fire {
-            for (prop_e, prop, prop_pos, death, _, _) in props.iter() {
+            for (prop_e, prop, prop_pos, death, _, _, _) in props.iter() {
                 let center = prop_pos.0;
                 let half = prop.size * 0.5;
                 if let Some(n) = circle_aabb_normal(pos, p.radius, center, half) {
@@ -1905,7 +1906,7 @@ pub fn move_projectiles(
                     let gated = props
                         .get(prop_e)
                         .ok()
-                        .and_then(|(_, _, _, _, _, nh)| nh)
+                        .and_then(|(_, _, _, _, _, _, nh)| nh)
                         .is_some_and(|nh| nh.0 > frame.0);
                     if !gated {
                         damage_destructible_prop_ctx(
@@ -1976,7 +1977,7 @@ pub fn move_projectiles(
                 {
                     let hp_before = props
                         .get(prop_e)
-                        .map(|(_, prop, _, _, _, _)| prop.hp)
+                        .map(|(_, prop, _, _, _, _, _)| prop.hp)
                         .unwrap_or(0);
                     damage_destructible_prop_ctx(
                         &mut commands,

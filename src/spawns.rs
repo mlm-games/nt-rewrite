@@ -23,6 +23,7 @@ use crate::comps_b::{
     SecretEntrance, SentryTurret, SpawnsWeaponPickup,
 };
 use crate::data::{EnemyKind, HazardDef, SplitDef};
+use crate::comps_b::SpecialPropDeath;
 use crate::environment::PropDeathEffect;
 use crate::msg::Queue;
 use crate::pickups::{random_weapon, spawn_pickup, spawn_rad, spawn_rad_burst};
@@ -638,6 +639,7 @@ pub fn damage_destructible_prop(
             &Pos,
             Option<&PropDeathEffect>,
             Option<&PropSprites>,
+            Option<&SpecialPropDeath>,
             Option<&mut NextHurt>,
         ),
         With<Prop>,
@@ -691,6 +693,7 @@ pub fn damage_destructible_prop_ctx(
             &Pos,
             Option<&PropDeathEffect>,
             Option<&PropSprites>,
+            Option<&SpecialPropDeath>,
             Option<&mut NextHurt>,
         ),
         With<Prop>,
@@ -714,7 +717,7 @@ pub fn damage_destructible_prop_ctx(
     let mut legacy_explosive = false;
     let mut death_copy: Option<PropDeathEffect> = None;
     let mut sprites_copy: Option<PropSprites> = None;
-    if let Ok((_, mut prop, _, de, sprites, nexthurt)) = props.get_mut(prop_e) {
+    if let Ok((_, mut prop, _, de, sprites, special, nexthurt)) = props.get_mut(prop_e) {
         prop.hp -= damage.max(1);
         if let Some(window) = nexthurt_window
             && let Some(mut nh) = nexthurt
@@ -722,7 +725,11 @@ pub fn damage_destructible_prop_ctx(
             nh.0 = window;
         }
         if prop.hp <= 0 {
-            dead = true;
+            // `VaultStatue` and `VenuzTV` own their death: both raise other
+            // objects, which the generic path has no queries to do.
+            if special.is_none() {
+                dead = true;
+            }
         }
         audio.play_hit(cues);
         legacy_explosive = prop.explosive;

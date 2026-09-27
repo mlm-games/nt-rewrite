@@ -44,11 +44,12 @@ use crate::comps_a::{
     gml_motion_add_clamp,
 };
 use crate::comps_b::{
-    BossBrain, Corpse, CorpseCollision, EliteBlocker, Enemy, EnemyBrain, FxAngle, GmlImage,
+    BossBrain, Corpse, CorpseCollision, CrownPedestal, EliteBlocker, Enemy, EnemyBrain, FxAngle,
+    GmlImage,
     HitWarning, HurtAnim, IdpdShieldUnit, IdpdVanBrain, LilHunterDie, MaggotSpawnCharge,
     MaggotSpawnInternalDrain, MomShot, NativeAngle, NativeDepth, PendingDelayedBoss, Pickup,
-    PickupLifetime, PopoNadeM, PopoShieldM, PortalClear, Prop, ProtoGuardian,
-    SCRAP_BOSS_MISSILE_RADIUS,
+    PickupLifetime, PopoNadeM, PopoShieldM, PortalClear, Prop, PropSprites, ProtoGuardian,
+    SCRAP_BOSS_MISSILE_RADIUS, SpecialPropDeath, YvCouch,
     ScrapBossMissileState, ShieldFollower, StaticFx, ThroneBall, ToxicGasState,
 };
 use crate::data::{AreaId, EnemyKind, SplitDef};
@@ -5433,6 +5434,101 @@ fn fire_popo_rocket(
         Velocity(d * speed * 30.0),
         Pos(at),
     ));
+}
+
+/// GML `objects/VenuzTV/Destroy_0` and `objects/VaultStatue/Destroy_0`.
+///
+/// Both props raise other objects on death, which the generic prop-damage
+/// path has no queries to do, so this owns their death outright (the generic
+/// path sees [`SpecialPropDeath`] and leaves them at `hp <= 0`).
+///
+/// `VaultStatue/Destroy_0.gml:1-14`: raise a `CrownGuardian` on the spot,
+/// zero every *other* statue (so one hit cascades), destroy the
+/// `CrownPickup`, and leave a `sprVaultStatueDead` corpse. Because GML
+/// defers `instance_destroy`, N statues yield N guardians.
+///
+/// `VenuzTV/Destroy_0.gml:3-14`: eight money feathers, destroy the
+/// `YungVenuzCouch`, raise `YVBoss`, destroy the `VenuzCouch`.
+pub fn tick_special_props(
+    mut commands: Commands,
+    catalog: Res<repame_anim::AnimCatalog>,
+    run: Res<Run>,
+    mut save: ResMut<crate::savedata_part::SaveData>,
+    mut dirty: ResMut<crate::comps_a::SaveDirty>,
+    mut props: Query<
+        (
+            Entity,
+            &mut Prop,
+            &Pos,
+            Option<&SpecialPropDeath>,
+            Option<&crate::crown::VaultStatue>,
+            Option<&PropSprites>,
+        ),
+        (With<Prop>, Without<Player>, Without<Enemy>),
+    >,
+    mut pedestals: Query<Entity, (With<CrownPedestal>, Without<Prop>)>,
+    mut couches: Query<(Entity, &Pos), (With<YvCouch>, Without<Prop>)>,
+) {
+    let mut rng = rand::rng();
+    let dying: Vec<(Entity, glam::Vec2, SpecialPropDeath)> = props
+        .iter()
+        .filter_map(|(e, prop, pos, kind, _, _)| {
+            (prop.hp <= 0).then(|| kind.map(|k| (e, pos.0, *k))).flatten()
+        })
+        .collect();
+    for (entity, at, kind) in dying {
+        if let Ok((_, _, _, _, _, sprites)) = props.get(entity) {
+            if let Some(ps) = sprites {
+                crate::environment::spawn_prop_corpse(&mut commands, &catalog, at, &ps);
+            }
+        }
+        match kind {
+            SpecialPropDeath::VaultStatue => {
+                queue_enemy_spawn(
+                    &mut commands,
+                    EnemyKind::CrownGuardian,
+                    at,
+                    1.0,
+                    run.loop_count,
+                );
+                for (other, mut oprop, _, _, is_statue, _) in &mut props {
+                    if other != entity && is_statue.is_some() {
+                        oprop.hp = 0;
+                    }
+                }
+                for pedestal in &mut pedestals {
+                    commands.entity(pedestal).despawn();
+                }
+            }
+            SpecialPropDeath::VenuzTv => {
+                for _ in 0..8 {
+                    let a = rng.random_range(0.0..std::f32::consts::TAU);
+                    crate::environment::spawn_native_streak(
+                        &mut commands,
+                        false,
+                        at,
+                        a,
+                        3.0 * 30.0,
+                    );
+                }
+                for (couch, cpos) in &mut couches {
+                    commands.entity(couch).despawn();
+                    queue_enemy_spawn(
+                        &mut commands,
+                        EnemyKind::YvBoss,
+                        cpos.0,
+                        1.0,
+                        run.loop_count,
+                    );
+                }
+                // GML `GameCont/Other_5.gml:42` / `YungCuz/Alarm_2.gml:2`.
+                if crate::savedata_part::try_unlock_race(&mut save, crate::data::RaceId::Cuz) {
+                    dirty.0 = true;
+                }
+            }
+        }
+        commands.entity(entity).despawn();
+    }
 }
 
 /// GML `objects/IceFlower` — the only route into `area_jungle`. The port

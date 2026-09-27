@@ -1170,6 +1170,17 @@ pub struct Prop {
     pub explosive: bool,
 }
 
+/// Props whose death runs a bespoke cascade instead of the generic
+/// corpse-and-rads path: GML `VaultStatue/Destroy_0` raises a
+/// `CrownGuardian` and zeroes its siblings, and `VenuzTV/Destroy_0`
+/// raises the YV boss. [`crate::enemies::tick_special_props`] owns both, so
+/// the generic prop-damage path leaves them alone.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpecialPropDeath {
+    VaultStatue,
+    VenuzTv,
+}
+
 #[derive(Component, Clone, Copy)]
 pub struct PropSprites {
     pub idle: &'static str,

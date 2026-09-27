@@ -1318,6 +1318,11 @@ pub fn spawn_prop_sim(
     if unbreakable {
         ec.insert(UnbreakableProp);
     }
+    // `VenuzTV/Destroy_0.gml` raises the YV boss, so its death is not the
+    // generic corpse-and-rads path.
+    if kind == PropKind::VenuzTV {
+        ec.insert(crate::comps_b::SpecialPropDeath::VenuzTv);
+    }
     // GML `image_speed = 0.4` on every destructible prop.
     if let Some(def) = catalog.def(idle) {
         ec.insert(SpriteAnim::with_image_speed(idle, def, PROP_IMAGE_SPEED));

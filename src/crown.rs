@@ -111,6 +111,7 @@ pub fn spawn_vault_statue(
             flip_x: flip,
         },
         VaultStatue,
+        crate::comps_b::SpecialPropDeath::VaultStatue,
         Pos(pos),
     ));
     // GML `VaultStatue/Create_0.gml:13` `image_speed = 0.4`.
