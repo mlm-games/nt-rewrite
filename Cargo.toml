@@ -5,15 +5,15 @@ edition = "2024"
 description = "Nuclear Throne recreation on repame + repose (no bevy)"
 
 [dependencies]
-# Engine (path deps while co-evolving; versions match repame workspace).
-repame-sim = { path = "../Repos/repame/crates/repame-sim", version = "0.3" }
-repame-shell = { path = "../Repos/repame/crates/repame-shell", version = "0.3" }
-repame-anim = { path = "../Repos/repame/crates/repame-anim", version = "0.3" }
-repame-sprite = { path = "../Repos/repame/crates/repame-sprite", version = "0.3" }
-repame-atlas = { path = "../Repos/repame/crates/repame-atlas", version = "0.3" }
-repame-fx = { path = "../Repos/repame/crates/repame-fx", version = "0.3" }
-repame-input = { path = "../Repos/repame/crates/repame-input", version = "0.3" }
-repame-audio = { path = "../Repos/repame/crates/repame-audio", version = "0.3" }
+# Engine; [patch.crates-io] below redirects these to the sibling checkouts.
+repame-sim = "0.3"
+repame-shell = "0.3"
+repame-anim = "0.3"
+repame-sprite = "0.3"
+repame-atlas = "0.3"
+repame-fx = "0.3"
+repame-input = "0.3"
+repame-audio = "0.3"
 # PNG decode for atlas uploads (repame ships no image dep; games decode
 # their own pixels per repame-atlas docs). Pinned to the cached 0.25 line.
 image = "0.25"
@@ -25,17 +25,17 @@ glam = "0.33"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ron = "0.12"
-game-utils = { path = "../Repos/game-utils/crates/game-utils", version = "0.4" }
+game-utils = "0.4"
 # Seeded RNG for sim decisions (same crate+version as the bevy build).
 rand = "0.10"
-repose-core = { path = "../Repos/repose/crates/repose-core", version = "0.31" }
-repose-ui = { path = "../Repos/repose/crates/repose-ui", version = "0.31" }
-repose-canvas = { path = "../Repos/repose/crates/repose-canvas", version = "0.31" }
-repose-render-wgpu = { path = "../Repos/repose/crates/repose-render-wgpu", version = "0.31" }
+repose-core = "0.31"
+repose-ui = "0.31"
+repose-canvas = "0.31"
+repose-render-wgpu = "0.31"
 # Direct dep for the in-crate vortex background pass (`vortex_pass.rs`
 # implements `repose_render_wgpu::WgpuCallback`; must unify with its 30).
 wgpu = "30"
-repose-text = { path = "../Repos/repose/crates/repose-text", version = "0.31" }
+repose-text = "0.31"
 anyhow = "1"
 log = "0.4"
 
@@ -45,7 +45,18 @@ ndk = "0.9"
 rlobkit-app-events = { version = "0.5", features = ["jni-bridge"] }
 
 [patch.crates-io]
+# Sibling checkouts win over the published crates above; their versions must
+# satisfy the requirements above.
+game-utils = { path = "../Repos/game-utils/crates/game-utils" }
 rlobkit-app-events = { path = "../Repos/rlobkit/rlobkit-app-events" }
+repame-anim = { path = "../Repos/repame/crates/repame-anim" }
+repame-atlas = { path = "../Repos/repame/crates/repame-atlas" }
+repame-audio = { path = "../Repos/repame/crates/repame-audio" }
+repame-fx = { path = "../Repos/repame/crates/repame-fx" }
+repame-input = { path = "../Repos/repame/crates/repame-input" }
+repame-shell = { path = "../Repos/repame/crates/repame-shell" }
+repame-sim = { path = "../Repos/repame/crates/repame-sim" }
+repame-sprite = { path = "../Repos/repame/crates/repame-sprite" }
 repose-core = { path = "../Repos/repose/crates/repose-core" }
 repose-ui = { path = "../Repos/repose/crates/repose-ui" }
 repose-canvas = { path = "../Repos/repose/crates/repose-canvas" }
@@ -95,7 +106,7 @@ target_sdk_version = 35
 
 [dev-dependencies]
 insta = "1.44.1"
-repame-input = { path = "../Repos/repame/crates/repame-input", version = "0.3" }
+repame-input = "0.3"
 # (empty: offscreen pixel proofs use the main `repose-render-wgpu` dep,
 # same pattern as repame-sprite's own batch tests).
 
