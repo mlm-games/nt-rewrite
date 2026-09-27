@@ -101,20 +101,33 @@ pub fn difficulty_multiplier(floor: u32) -> f32 {
 /// `/20` law like every other non-boss.
 pub fn spawn_hp(kind: EnemyKind, base_hp: i32, loops: u32) -> i32 {
     let l = loops as f32;
-    let hp = match kind {
-        EnemyKind::BigBandit | EnemyKind::BigBanditLoop => (100.0 * (1.0 + l / 3.0)).ceil(),
-        EnemyKind::BigDog | EnemyKind::BigDogLoop => (300.0 * (1.0 + l / 1.2)).ceil(),
-        EnemyKind::Throne => 1500.0 * (1.0 + l / 3.0),
-        EnemyKind::ThroneII => 600.0 * (1.0 + l / 3.0),
-        EnemyKind::Hyper => 550.0 * (1.0 + l / 3.0),
-        EnemyKind::Technomancer => 350.0 * (1.0 + l / 3.0),
-        EnemyKind::LilHunter | EnemyKind::LilHunterLoop => 140.0 * (1.0 + l / 3.0),
-        EnemyKind::FrogQueen => (490.0 * (1.0 + l / 3.0)).ceil(),
-        EnemyKind::Captain => (1100.0 * (1.0 + l / 3.0)).ceil(),
-        EnemyKind::ProtoStatue => 120.0,
-        _ => (base_hp as f32 * (1.0 + l / 20.0)).ceil(),
+    // GML writes each object's own `Create_0` expression first, then
+    // `enemy/Create_0:7` multiplies *every* enemy by `1 + loops / 20`.
+    // `ceil` only where the object's own line uses it; GML keeps `hp` a real
+    // otherwise.
+    let (hp, ceil) = match kind {
+        EnemyKind::BigBandit | EnemyKind::BigBanditLoop => (100.0 * (1.0 + l / 3.0), true),
+        EnemyKind::BigDog | EnemyKind::BigDogLoop => (300.0 * (1.0 + l / 1.2), true),
+        EnemyKind::Throne => (1500.0 * (1.0 + l / 3.0), false),
+        EnemyKind::ThroneII => (600.0 * (1.0 + l / 3.0), false),
+        // `HyperCrystal`: `550 * ((player_count / 2) + 0.5)` -> 550 solo.
+        EnemyKind::Hyper => (550.0 * (1.0 + l / 3.0), false),
+        // `TechnoMancer`: `350 * ((player_count / 2) + 0.5)` -> 350 solo.
+        EnemyKind::Technomancer => (350.0 * (1.0 + l / 3.0), false),
+        EnemyKind::LilHunter | EnemyKind::LilHunterLoop => (140.0 * (1.0 + l / 3.0), false),
+        EnemyKind::FrogQueen => (490.0 * (1.0 + l / 3.0), true),
+        // `Last`: `1100 * (1 + loops / 3)`.
+        EnemyKind::Captain => (1100.0 * (1.0 + l / 3.0), false),
+        // `ProtoStatue`: `120 * (1 + loops / 10)`.
+        EnemyKind::ProtoStatue => (120.0 * (1.0 + l / 10.0), false),
+        // `MeleeFake`'s parent is `prop`, not `enemy`, so it never picks up
+        // the universal `1 + loops / 20`.
+        EnemyKind::MeleeFake => return base_hp.max(1),
+        _ => (base_hp as f32, false),
     };
-    hp.round().max(1.0) as i32
+    let scaled = hp * (1.0 + l / 20.0);
+    let out = if ceil { scaled.ceil() } else { scaled };
+    out.round().max(1.0) as i32
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -289,24 +302,62 @@ fn spawn_enemy_impl(
     if kind == EnemyKind::ScrapBossMissile {
         ec.insert(ScrapBossMissileState::new(loops));
     }
+    // GML `Create_0` `alarm[1]`, in frames. `random(n)` yields 0..n-1.
     let attack_frames = match kind {
         EnemyKind::MaggotSpawn | EnemyKind::FiredMaggot => 0.0,
-        EnemyKind::Bandit | EnemyKind::SnowBandit => 30.0 + rng.random_range(0.0..90.0),
-        EnemyKind::Maggot => 10.0 + rng.random_range(0.0..10.0),
+        EnemyKind::Rat | EnemyKind::Bandit | EnemyKind::SnowBandit
+        | EnemyKind::JungleBandit => 30.0 + rng.random_range(0.0..90.0),
+        EnemyKind::FastRat | EnemyKind::Ratking => 1.0 + rng.random_range(0.0..90.0),
+        EnemyKind::RobotGuard => 80.0,
+        EnemyKind::Maggot | EnemyKind::RadMaggot | EnemyKind::FireBaller
+        | EnemyKind::SuperFireBaller => 10.0 + rng.random_range(0.0..10.0),
         EnemyKind::BigMaggot => 45.0 + rng.random_range(0.0..10.0),
         EnemyKind::JungleFly => 50.0 + rng.random_range(0.0..10.0),
         EnemyKind::Scorpion | EnemyKind::GoldScorpion => 30.0 + rng.random_range(0.0..90.0),
         EnemyKind::Sniper => 60.0 + rng.random_range(0.0..90.0),
-        EnemyKind::JungleBandit => 30.0 + rng.random_range(0.0..90.0),
-        EnemyKind::MeleeBandit => 90.0 + rng.random_range(0.0..90.0),
+        EnemyKind::MeleeBandit | EnemyKind::Assassin => 90.0 + rng.random_range(0.0..90.0),
         EnemyKind::Ballguy => 40.0 + rng.random_range(0.0..40.0),
         EnemyKind::Turret => 60.0 + rng.random_range(0.0..60.0),
         EnemyKind::SnowTank => 30.0 + rng.random_range(0.0..10.0),
         EnemyKind::GoldSnowtank => 120.0 + rng.random_range(0.0..10.0),
-        EnemyKind::LaserCrystal | EnemyKind::LightningCrystal | EnemyKind::InvLaserCrystal => {
-            50.0 + rng.random_range(0.0..90.0)
+        EnemyKind::LaserCrystal | EnemyKind::LightningCrystal => 50.0 + rng.random_range(0.0..90.0),
+        EnemyKind::InvLaserCrystal => 30.0 + rng.random_range(0.0..90.0),
+        EnemyKind::Guardian | EnemyKind::CrownGuardian => 40.0 + rng.random_range(0.0..10.0),
+        EnemyKind::DogGuardian => 120.0 + rng.random_range(0.0..10.0),
+        // `20 + random(10)` for the freaks and the ExploGuardian.
+        EnemyKind::Freak
+        | EnemyKind::ExploFreak
+        | EnemyKind::RhinoFreak
+        | EnemyKind::PopoFreak
+        | EnemyKind::ExploGuardian => 20.0 + rng.random_range(0.0..10.0),
+        // IDPD `30 + random(15)`; `EliteGrunt` is a fixed 25.
+        EnemyKind::IdpdElite => 25.0,
+        EnemyKind::IdpdGrunt
+        | EnemyKind::IdpdShield
+        | EnemyKind::IdpdInspector
+        | EnemyKind::EliteInspector
+        | EnemyKind::EliteShielder => 30.0 + rng.random_range(0.0..15.0),
+        // `30 + random(90)` covers Gator, BuffGator, Raven, Spider,
+        // InvSpider, BoneFish, Turtle, Molefish, Molesarge, Jock and
+        // Necromancer.
+        EnemyKind::Gator
+        | EnemyKind::BuffGator
+        | EnemyKind::Raven
+        | EnemyKind::Spider
+        | EnemyKind::InvSpider
+        | EnemyKind::BoneFish
+        | EnemyKind::Turtle
+        | EnemyKind::Molefish
+        | EnemyKind::Molesarge
+        | EnemyKind::Jock
+        | EnemyKind::Necromancer => 30.0 + rng.random_range(0.0..90.0),
+        EnemyKind::Crab => 50.0 + rng.random_range(0.0..90.0),
+        EnemyKind::Salamander => 60.0 + rng.random_range(0.0..90.0),
+        EnemyKind::Mimic | EnemyKind::SuperMimic | EnemyKind::WepMimic => {
+            90.0 + rng.random_range(0.0..150.0)
         }
-        EnemyKind::Guardian => 40.0 + rng.random_range(0.0..10.0),
+        EnemyKind::FrogEgg => 120.0,
+        EnemyKind::SuperFrog => 40.0 + rng.random_range(0.0..40.0),
         _ => def.attack_cooldown * 30.0 * rng.random_range(0.5..1.5),
     };
     let attack = if matches!(kind, EnemyKind::MaggotSpawn | EnemyKind::FiredMaggot) {
@@ -5550,24 +5601,38 @@ mod spawn_hp_tests {
         }
     }
 
+    /// Every boss expression is followed by `enemy/Create_0:7`'s universal
+    /// `*= 1 + loops / 20`, which the old port dropped for the kinds that
+    /// carry their own multiplier.
     #[test]
-    fn boss_third_law() {
-        assert_eq!(spawn_hp(EnemyKind::BigBandit, 100, 3), 200);
-        assert_eq!(spawn_hp(EnemyKind::FrogQueen, 490, 3), 980);
-        assert_eq!(spawn_hp(EnemyKind::Captain, 1100, 3), 2200);
-        assert_eq!(spawn_hp(EnemyKind::Throne, 1500, 3), 3000);
-        assert_eq!(spawn_hp(EnemyKind::LilHunter, 140, 3), 280);
+    fn boss_laws_include_the_universal_loop_term() {
+        // ceil(100 * 2) * 1.15
+        assert_eq!(spawn_hp(EnemyKind::BigBandit, 100, 3), 230);
+        // ceil(490 * 2) * 1.15
+        assert_eq!(spawn_hp(EnemyKind::FrogQueen, 490, 3), 1127);
+        // 1100 * 2 * 1.15
+        assert_eq!(spawn_hp(EnemyKind::Captain, 1100, 3), 2530);
+        // 1500 * 2 * 1.15
+        assert_eq!(spawn_hp(EnemyKind::Throne, 1500, 3), 3450);
+        // 140 * 2 * 1.15
+        assert_eq!(spawn_hp(EnemyKind::LilHunter, 140, 3), 322);
+        // 550 * 2 * 1.15
+        assert_eq!(spawn_hp(EnemyKind::Hyper, 550, 3), 1265);
+        // 350 * 2 * 1.15
+        assert_eq!(spawn_hp(EnemyKind::Technomancer, 350, 3), 805);
     }
 
     #[test]
     fn flat_and_default_laws() {
-        assert_eq!(spawn_hp(EnemyKind::ProtoStatue, 120, 5), 120);
-        assert_eq!(spawn_hp(EnemyKind::YvBoss, 700, 4), 841);
+        // ProtoStatue: 120 * (1 + 5/10) * (1 + 5/20)
+        assert_eq!(spawn_hp(EnemyKind::ProtoStatue, 120, 5), 225);
+        // 700 * (1 + 4/20)
+        assert_eq!(spawn_hp(EnemyKind::YvBoss, 700, 4), 840);
         assert_eq!(spawn_hp(EnemyKind::Scorpion, 16, 20), 32);
-        assert_eq!(
-            spawn_hp(EnemyKind::BigDog, 300, 6),
-            (300.0_f32 * (1.0 + 6.0 / 1.2)).ceil() as i32
-        );
+        // ScrapBoss: ceil(300 * 6) * 1.3
+        assert_eq!(spawn_hp(EnemyKind::BigDog, 300, 6), 2340);
+        // MeleeFake's parent is `prop`, so no loop scaling at all.
+        assert_eq!(spawn_hp(EnemyKind::MeleeFake, 8, 9), 8);
         assert_eq!(scarier_spawn_hp(EnemyKind::Assassin, 7, 1), 5);
     }
 }
