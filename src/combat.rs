@@ -16,17 +16,19 @@ use crate::comps_a::{
     ARENA_H, ARENA_W, BouncesLeft, ChainLightning, CurrentFrame, DamageSource, DiscFlight,
     FireCooldown, FlameShellSlowDeath, FlameTrail, FloorMask, GameCleanup, GrenadeFuse, Health,
     HitId, Hitbox, HitsAllTeams, Homing, Inventory, LastDamageTaken, LevelCleanup, LightningArc,
-    NextHurt, PendingWallBreak, PiercesLeft, PlasmaSize, Player, Projectile, ProjectileFade,
-    ProjectileFriction, ProjectileHitSet, ProjectileTyp, RaceState, RecycleGlandYield, Run,
-    SaveDirty, Score, ShellBonus, ShellWallBounce, SlashProjectile, SpawnGrace, SpawnHazardOnDeath,
-    SplitOnDeath, Sticky, Team, Toast, Velocity, WallCell, WallTile, boiling_veins_damage,
+    NextHurt, PendingWallBreak, PiercesLeft, PlasmaSize, Player, Projectile, ProjectileAccel,
+    ProjectileFade, ProjectileFriction, ProjectileHitSet, ProjectileTyp, RaceState,
+    RecycleGlandYield, Run, SaveDirty, Score, ShellBonus, ShellWallBounce, SlashProjectile,
+    SpawnGrace, SpawnHazardOnDeath, SplitOnDeath, Sticky, Team, Toast, Velocity, WallCell,
+    WallTile, boiling_veins_damage,
 };
 use crate::comps_b::{
     Beam, BigDogMissileState, ChestKind, Corpse, CorpseCollision, CustomExplosion, DeploysSentry,
     Dying, Enemy, EnemyBrain, ExplosionVisual, GmlImage, HazardCloud, HurtAnim,
-    LoopTransition, NativeDepth, NativeExplosionKind, Pickup, PickupLifetime, PlasmaBurst, Portal,
-    PortalPhase, PortalShock, PortalState, Prop, PropNestMarkers, PropSprites, RadChestContainer,
-    SecretEntrance, SentryTurret, Shield, SpawnsWeaponPickup, StaticFx, ThroneRoomState,
+    LoopTransition, NativeAngle, NativeDepth, NativeExplosionKind, Pickup, PickupLifetime,
+    PlasmaBurst, Portal, PortalPhase, PortalShock, PortalState, Prop, PropNestMarkers,
+    PropSprites, RadChestContainer, SecretEntrance, SentryTurret, Shield, SpawnsWeaponPickup,
+    StaticFx, ThroneRoomState, TrapFire,
 };
 use crate::data::{AreaId, CrownKind, EnemyKind, HazardKind, MutationId, RaceId, WeaponId};
 use crate::effects::{
@@ -50,7 +52,7 @@ use crate::savedata_part::{SaveData, check_kill_unlocks};
 use crate::secrets::SecretTriggers;
 use crate::spatial::{PLAYER_RADIUS, Pos};
 use crate::spawns::{
-    damage_destructible_prop, on_projectile_removed, spawn_explosion_with_source_radius,
+    damage_destructible_prop_ctx, on_projectile_removed, spawn_explosion_with_source_radius,
     spawn_hazard_cloud,
 };
 use crate::time::{GTimer, TimerMode};
@@ -1623,6 +1625,9 @@ pub fn move_projectiles(
             Without<Prop>,
             Without<SlashProjectile>,
             Without<BigDogMissileState>,
+            // Disjoint from the tangle lookup in `aux.p5()`, which reads
+            // `Pos` on `Tangle` bodies.
+            Without<crate::player_fire::Tangle>,
         ),
     >,
     mut aux: ParamSet<(
@@ -1631,6 +1636,8 @@ pub fn move_projectiles(
         Query<&ProjectileFade>,
         Query<&SpriteAnim>,
         Query<&mut ShellBonus>,
+        Query<(&Pos, &Hitbox), With<crate::player_fire::Tangle>>,
+        Query<(), With<TrapFire>>,
     )>,
     mut props: Query<
         (
@@ -1652,6 +1659,7 @@ pub fn move_projectiles(
     audio: Res<GameAudio>,
     mut cues: ResMut<Queue<AudioCue>>,
     decide: Res<crate::pickups::GunDecideCache>,
+    player_ctx: Query<(&Player, &Inventory, &Health), With<Player>>,
 ) {
     let dt = time.delta_secs;
     let gun_decide = decide.ctx.clone();
@@ -1725,6 +1733,10 @@ pub fn move_projectiles(
             continue;
         }
 
+        // GML `TrapFire/Collision_Tangle.gml:4-5` rewinds the jet, and
+        // `Collision_hitme.gml:1` makes it ignore props entirely.
+        let trap_fire = aux.p6().get(e).is_ok();
+        let prev = tpos.0;
         tpos.0 += vel.0 * dt;
         let pos = tpos.0;
         if split.is_some() && vel.0 == glam::Vec2::ZERO {
@@ -1779,6 +1791,21 @@ pub fn move_projectiles(
             continue;
         }
 
+        // GML `TrapFire/Collision_Tangle.gml:4-5`: `x = xprevious;
+        // y = yprevious`. The jet is inert for the rest of the step.
+        if trap_fire {
+            let tangled = {
+                let tangles = aux.p5();
+                tangles
+                    .iter()
+                    .any(|(tpos, body)| pos.distance(tpos.0) <= p.radius + body.radius)
+            };
+            if tangled {
+                tpos.0 = prev;
+                continue;
+            }
+        }
+
         let mut hit_normal: Option<glam::Vec2> = None;
         let mut hit_prop: Option<(Entity, glam::Vec2, bool, Option<PropDeathEffect>)> = None;
 
@@ -1786,13 +1813,17 @@ pub fn move_projectiles(
             hit_normal = Some(n);
         }
 
-        for (prop_e, prop, prop_pos, death, _, _) in props.iter() {
-            let center = prop_pos.0;
-            let half = prop.size * 0.5;
-            if let Some(n) = circle_aabb_normal(pos, p.radius, center, half) {
-                hit_normal = Some(n);
-                hit_prop = Some((prop_e, center, prop.destructible, death.copied()));
-                break;
+        // GML `TrapFire/Collision_hitme.gml:1` — the jet flies straight
+        // through props, so they neither take damage nor stop it.
+        if !trap_fire {
+            for (prop_e, prop, prop_pos, death, _, _) in props.iter() {
+                let center = prop_pos.0;
+                let half = prop.size * 0.5;
+                if let Some(n) = circle_aabb_normal(pos, p.radius, center, half) {
+                    hit_normal = Some(n);
+                    hit_prop = Some((prop_e, center, prop.destructible, death.copied()));
+                    break;
+                }
             }
         }
 
@@ -1806,7 +1837,7 @@ pub fn move_projectiles(
             if let Ok(mut ps) = aux.p1().get_mut(e) {
                 if let Some((prop_e, center, true, _)) = hit_prop {
                     let dmg = ((p.damage as f32 * ps.0).floor() as i32).max(1);
-                    damage_destructible_prop(
+                    damage_destructible_prop_ctx(
                         &mut commands,
                         &catalog,
                         &mut props,
@@ -1823,6 +1854,12 @@ pub fn move_projectiles(
                         p.source,
                         None,
                         run.loop_count,
+                        player_ctx.single().ok().map(|(pl, inv, hp)| crate::spawns::DropCtx {
+                            player: pl,
+                            inv,
+                            health: hp,
+                            decide: gun_decide.as_ref(),
+                        }),
                     );
                 }
                 ps.0 -= 0.1;
@@ -1871,7 +1908,7 @@ pub fn move_projectiles(
                         .and_then(|(_, _, _, _, _, nh)| nh)
                         .is_some_and(|nh| nh.0 > frame.0);
                     if !gated {
-                        damage_destructible_prop(
+                        damage_destructible_prop_ctx(
                             &mut commands,
                             &catalog,
                             &mut props,
@@ -1888,6 +1925,12 @@ pub fn move_projectiles(
                             p.source,
                             Some(frame.0 + 5),
                             run.loop_count,
+                            player_ctx.single().ok().map(|(pl, inv, hp)| crate::spawns::DropCtx {
+                                player: pl,
+                                inv,
+                                health: hp,
+                                decide: gun_decide.as_ref(),
+                            }),
                         );
                     }
                     audio.play_hit(&mut cues);
@@ -1935,7 +1978,7 @@ pub fn move_projectiles(
                         .get(prop_e)
                         .map(|(_, prop, _, _, _, _)| prop.hp)
                         .unwrap_or(0);
-                    damage_destructible_prop(
+                    damage_destructible_prop_ctx(
                         &mut commands,
                         &catalog,
                         &mut props,
@@ -1952,6 +1995,12 @@ pub fn move_projectiles(
                         p.source,
                         None,
                         run.loop_count,
+                        player_ctx.single().ok().map(|(pl, inv, hp)| crate::spawns::DropCtx {
+                            player: pl,
+                            inv,
+                            health: hp,
+                            decide: gun_decide.as_ref(),
+                        }),
                     );
                     if hp_before < ((p.damage as f32 * 0.5).ceil() as i32) {
                         continue;
@@ -2045,7 +2094,7 @@ pub fn move_projectiles(
                 {
                     dmg += b.bonus;
                 }
-                damage_destructible_prop(
+                damage_destructible_prop_ctx(
                     &mut commands,
                     &catalog,
                     &mut props,
@@ -2062,6 +2111,12 @@ pub fn move_projectiles(
                     p.source,
                     None,
                     run.loop_count,
+                    player_ctx.single().ok().map(|(pl, inv, hp)| crate::spawns::DropCtx {
+                        player: pl,
+                        inv,
+                        health: hp,
+                        decide: gun_decide.as_ref(),
+                    }),
                 );
             }
 
@@ -2353,6 +2408,7 @@ pub fn projectile_hits(
         ),
         Without<Projectile>,
     >,
+    trap_fires: Query<&TrapFire>,
 ) {
     let mut player_state = player_state.single_mut().ok();
 
@@ -2409,6 +2465,7 @@ pub fn projectile_hits(
         };
         let mut passthrough = false;
         let mut plasma_died = false;
+        let jet = trap_fires.get(proj_e).ok().copied();
 
         for (
             target_e,
@@ -2431,6 +2488,12 @@ pub fn projectile_hits(
                 continue;
             }
             if !missile_target && !hits_all && *target_team == *proj_team {
+                continue;
+            }
+
+            // GML `TrapFire/Collision_hitme.gml:1` — the jet skips `enemy`
+            // and `prop`, so it can only hurt the player and allies.
+            if jet.is_some() && *target_team != Team::Player {
                 continue;
             }
 
@@ -2688,6 +2751,17 @@ pub fn projectile_hits(
             retaliate_sharp_teeth(&mut commands, proj.damage, hit_pos, &frame, &mut targets);
         }
 
+        // GML `TrapFire/Collision_hitme.gml:2-7`: the flame hit never
+        // destroys the jet (it only ever dies on `Wall` or `Other_7`), and
+        // a hit the flame could not land — i-frame or shield — rewinds it
+        // in place unless it is the `sprFireLilHunter` death ring.
+        if let Some(jet) = jet {
+            if !damaged && !jet.lil_hunter {
+                proj_pos.0 -= proj_vel.0 * time.delta_secs;
+            }
+            continue;
+        }
+
         if damaged && !passthrough && !is_disc && !is_plasma {
             if let Some(target_e) = hit_target {
                 if let Some(ref mut set) = hit_set {
@@ -2919,24 +2993,75 @@ pub fn tick_beams(
 }
 
 /// Sentry turrets tick life, then fire player bullets at the nearest
-/// in-range enemy on interval. Render split: no sprite handle here;
+/// enemy in range on interval. Render split: no sprite handle here;
 /// the renderer keys art off the `Projectile` marker.
+///
+/// GML `SentryGun`: `Step_0.gml:1` destroys the body at `hp <= 0`
+/// (`Destroy_0.gml:1` drops `scrDrop(16, 0)`), `Create_0.gml:14` holds the
+/// first shot for `alarm[0] = 30` steps, and `Alarm_0.gml:18-29` keeps
+/// only the targets with a clear `collision_line` to the muzzle.
 pub fn tick_sentry_turrets(
     time: Res<SimTime>,
     mut commands: Commands,
+    catalog: Res<repame_anim::AnimCatalog>,
+    mask: Res<FloorMask>,
+    run: Res<Run>,
+    decide: Res<crate::pickups::GunDecideCache>,
+    player_q: Query<(&Player, &Inventory, &Health), With<Player>>,
     enemies: Query<&Pos, With<Enemy>>,
-    mut sentries: Query<(Entity, &Pos, &mut SentryTurret)>,
+    mut sentries: Query<
+        (
+            Entity,
+            &Pos,
+            &mut SentryTurret,
+            Option<&Health>,
+            Option<&mut NativeAngle>,
+        ),
+    >,
 ) {
-    for (entity, pos, mut sentry) in &mut sentries {
-        sentry.life.tick(time.delta_secs);
-        if sentry.life.just_finished() {
+    let steps = time.delta_secs * crate::SIM_HZ as f32;
+    for (entity, pos, mut sentry, health, mut gunangle) in &mut sentries {
+        if let Some(life) = sentry.life.as_mut() {
+            life.tick(time.delta_secs);
+            if life.just_finished() {
+                commands.entity(entity).despawn();
+                continue;
+            }
+        }
+
+        // GML `SentryGun/Step_0.gml:1`; the `Destroy_0` drop pays out
+        // before the deferred destroy lands.
+        if health.is_some_and(|h| h.hp <= 0) {
+            if let Ok((player, inv, hp)) = player_q.single() {
+                crate::pickups::maybe_spawn_drop(
+                    &mut commands,
+                    &catalog,
+                    pos.0,
+                    16,
+                    0,
+                    player,
+                    inv,
+                    hp,
+                    run.loop_count,
+                    decide.ctx.as_ref(),
+                );
+            }
             commands.entity(entity).despawn();
             continue;
         }
 
-        sentry.fire.tick(time.delta_secs);
-        if !sentry.fire.just_finished() {
-            continue;
+        // GML `SentryGun/Create_0.gml:14` `alarm[0] = 30`, then
+        // `Alarm_0.gml:1` re-arms at 5 for every shot after that.
+        if sentry.first_shot > 0.0 {
+            sentry.first_shot -= steps;
+            if sentry.first_shot > 0.0 {
+                continue;
+            }
+        } else {
+            sentry.fire.tick(time.delta_secs);
+            if !sentry.fire.just_finished() {
+                continue;
+            }
         }
 
         let pos = pos.0;
@@ -2945,6 +3070,11 @@ pub fn tick_sentry_turrets(
             let target = epos.0;
             let d2 = pos.distance_squared(target);
             if d2 > sentry.range * sentry.range {
+                continue;
+            }
+            // GML `SentryGun/Alarm_0.gml:19`: a `Wall` between the muzzle
+            // and the mark kills that `BECOMETARGET`.
+            if !has_line_of_sight(pos, target, &mask) {
                 continue;
             }
             if best.map(|(bd, _)| d2 < bd).unwrap_or(true) {
@@ -2956,7 +3086,14 @@ pub fn tick_sentry_turrets(
             continue;
         };
 
+        // GML `SentryGun/Alarm_0.gml:32,34` — `gunangle` first, then the
+        // round is spent, and the shot is still created on the alarm that
+        // empties the magazine (`ammo <= 0` only lands at :56).
         let dir = (target - pos).normalize_or_zero();
+        if let Some(angle) = gunangle.as_deref_mut() {
+            angle.0 = dir.y.atan2(dir.x);
+        }
+        sentry.ammo -= 1;
 
         commands.spawn((
             GameCleanup,
@@ -2973,7 +3110,38 @@ pub fn tick_sentry_turrets(
             Velocity(dir * sentry.projectile_speed),
             Pos(pos),
         ));
+
+        if sentry.ammo <= 0 {
+            commands.entity(entity).despawn();
+        }
     }
+}
+
+/// GML `collision_line(x1, y1, x2, y2, Wall, 1, 0)` sampled along the
+/// segment. Local twin of the private `enemies::has_line_of_sight`: same
+/// 8 px march, same "point AND its tile centre must be blocked" rule.
+fn has_line_of_sight(from: glam::Vec2, to: glam::Vec2, mask: &FloorMask) -> bool {
+    let dir = to - from;
+    let dist = dir.length();
+    if dist < 1.0 {
+        return true;
+    }
+    let steps = (dist / 8.0).ceil().max(4.0) as usize;
+    for i in 1..steps {
+        let t = i as f32 / steps as f32;
+        let p = from + dir * t;
+        let tile_check = glam::Vec2::new(
+            (p.x / 16.0).floor() * 16.0 + 8.0,
+            (p.y / 16.0).floor() * 16.0 + 8.0,
+        );
+        if !mask.is_walkable(p) && !mask.is_walkable(tile_check)
+            && p.x.abs() < ARENA_W / 2.0
+            && p.y.abs() < ARENA_H / 2.0
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// Expire spawn-grace markers (bevy `tick_spawn_grace` parity).
@@ -3028,6 +3196,183 @@ pub fn tick_projectile_friction(
 ) {
     for (mut vel, friction) in &mut q {
         crate::comps_a::apply_gml_friction(&mut vel.0, friction.0, time.delta_secs);
+    }
+}
+
+/// GML `Rocket/Step_0.gml:4-5` `motion_add_m(direction, accel, maxspeed)`
+/// for every [`ProjectileAccel`] body, once its `alarm[1]` has fired.
+/// GML runs the alarm after the Step event, so the first acceleration
+/// lands on the step *after* the arm completes.
+pub fn tick_projectile_accel(
+    time: Res<SimTime>,
+    mut q: Query<(&mut Velocity, &mut ProjectileAccel)>,
+) {
+    let frames = time.delta_secs * crate::SIM_HZ as f32;
+    for (mut vel, mut accel) in &mut q {
+        accel.arm.tick(time.delta_secs);
+        if !accel.arm.is_finished() || accel.arm.just_finished() {
+            continue;
+        }
+        let speed = vel.0.length();
+        let dir = if speed > 1e-6 {
+            vel.0 / speed
+        } else {
+            glam::Vec2::X
+        };
+        vel.0 += dir * (accel.rate * 30.0 * frames);
+        // GML `motion_add_m`: `if (speed > limit) speed = limit`, read
+        // AFTER the add.
+        let limit = accel.max * 30.0;
+        let grown = vel.0.length();
+        if grown > limit {
+            vel.0 = vel.0 / grown * limit;
+        }
+    }
+}
+
+/// GML `objects/<prop>/Collision_AmmoChest.gml` +
+/// `Collision_WeaponChest.gml`: a landing `AmmoChest` / `WeaponChest`
+/// destroys the prop outright. No `Destroy_0` runs, so there is no corpse,
+/// no drop and no explosion. Every such event in the project is a bare
+/// `instance_destroy()`, so one allow-list covers them all.
+fn chest_crushed_prop(idle: &str) -> bool {
+    matches!(
+        idle,
+        "images/sprNuclearPillar.png"    // Pillar
+            | "images/sprSewerPipe.png"   // Pipe
+            | "images/sprBarrel.png"      // Barrel
+            | "images/sprGoldBarrel.png"  // GoldBarrel (Barrel child)
+            | "images/sprCocoon.png"      // Cocoon
+            | "images/sprSnowMan.png"     // SnowMan
+            | "images/sprAnchor.png"      // Anchor
+            | "images/sprStreetLight.png" // StreetLight
+            | "images/sprCactus.png"
+            | "images/sprCactus2.png"
+            | "images/sprCactus3.png"
+            | "images/sprCactusB.png"
+            | "images/sprCactusB2.png"
+            | "images/sprCactusB3.png"
+            | "images/sprNightCactus.png"
+            | "images/sprNightCactus2.png"
+            | "images/sprNightCactus3.png"
+            | "images/sprBonePileIdle.png"
+            | "images/sprNightBonePileIdle.png"
+            | "images/sprOasisBarrel.png"
+            | "images/sprWaterPlant.png"
+            | "images/sprWaterPlant2.png"
+    )
+}
+
+const STREET_LIGHT: &str = "images/sprStreetLight.png";
+const CAR_IDLE: &str = "images/sprCarIdle.png";
+
+#[inline]
+fn masks_overlap(
+    a: glam::Vec2,
+    a_half: glam::Vec2,
+    b: glam::Vec2,
+    b_half: glam::Vec2,
+) -> bool {
+    let (a_half, b_half) = (a_half.abs(), b_half.abs());
+    (a.x - a_half.x < b.x + b_half.x)
+        && (b.x - b_half.x < a.x + a_half.x)
+        && (a.y - a_half.y < b.y + b_half.y)
+        && (b.y - b_half.y < a.y + a_half.y)
+}
+
+/// GML prop collision events, resolved on mask overlap: a landing chest
+/// shatters a prop, a `Car` wipes out a `StreetLight`
+/// (`StreetLight/Collision_Car.gml`), and two overlapping street lights
+/// collapse to one (`StreetLight/Collision_StreetLight.gml:4`).
+pub fn prop_chest_collisions(
+    mut commands: Commands,
+    catalog: Res<repame_anim::AnimCatalog>,
+    chests: Query<(&Pos, &Pickup)>,
+    props: Query<(Entity, &Pos, &Prop, &PropSprites), With<Prop>>,
+) {
+    // Only literal `AmmoChest` / `WeaponChest` instances carry the prop
+    // events; `AmmoChestMystery`, `IDPDChest`, `BigWeaponChest`,
+    // `RadChest` and `RogueChest` are siblings, not subclasses.
+    let landed: Vec<(glam::Vec2, glam::Vec2)> = chests
+        .iter()
+        .filter(|(_, pickup)| {
+            matches!(
+                pickup.kind,
+                crate::comps_b::PickupKind::Chest(ChestKind::Ammo)
+                    | crate::comps_b::PickupKind::Chest(ChestKind::Weapon)
+            )
+        })
+        .filter_map(|(pos, pickup)| {
+            crate::pickups::pickup_mask_half(&pickup.kind, false)
+                .map(|half| (pos.0, glam::Vec2::splat(half)))
+        })
+        .collect();
+
+    let mut dead: Vec<Entity> = Vec::new();
+    let mut breath: Vec<(Entity, glam::Vec2)> = Vec::new();
+
+    for (e, pos, prop, sprites) in &props {
+        let half = prop.size * 0.5;
+        if chest_crushed_prop(sprites.idle)
+            && landed
+                .iter()
+                .any(|(at, reach)| masks_overlap(*at, *reach, pos.0, half))
+        {
+            dead.push(e);
+            continue;
+        }
+
+        if sprites.idle != STREET_LIGHT {
+            continue;
+        }
+
+        // GML `StreetLight/Collision_Car.gml`.
+        if props
+            .iter()
+            .any(|(_, opos, oprop, osprites)| osprites.idle == CAR_IDLE
+                && masks_overlap(pos.0, half, opos.0, oprop.size * 0.5))
+        {
+            dead.push(e);
+            continue;
+        }
+
+        // GML `StreetLight/Collision_StreetLight.gml:4`:
+        // `if other.id > id instance_change(Breath, false)`.
+        for (other, opos, oprop, osprites) in &props {
+            if other == e
+                || osprites.idle != STREET_LIGHT
+                || !masks_overlap(pos.0, half, opos.0, oprop.size * 0.5)
+            {
+                continue;
+            }
+            if other > e {
+                breath.push((e, pos.0));
+            }
+        }
+    }
+
+    for (e, at) in breath {
+        if dead.contains(&e) {
+            continue;
+        }
+        commands.entity(e).despawn();
+        // GML `Breath`: the 6-frame strip runs at the inherited
+        // `image_speed = 0.4` (`prop/Create_0.gml:3`) and `Other_7`
+        // destroys it at the animation end.
+        let frames = catalog
+            .def("images/sprBreath.png")
+            .map(|def| def.frames)
+            .unwrap_or(6);
+        commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            GmlImage::animated("images/sprBreath.png", frames, 0.4, true),
+            NativeDepth(-1.0),
+            Pos(at),
+        ));
+    }
+    for e in dead {
+        commands.entity(e).despawn();
     }
 }
 

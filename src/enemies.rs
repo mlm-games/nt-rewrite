@@ -121,9 +121,9 @@ pub fn spawn_hp(kind: EnemyKind, base_hp: i32, loops: u32) -> i32 {
         EnemyKind::Captain => (1100.0 * (1.0 + l / 3.0), false),
         // `ProtoStatue`: `120 * (1 + loops / 10)`.
         EnemyKind::ProtoStatue => (120.0 * (1.0 + l / 10.0), false),
-        // `MeleeFake`'s parent is `prop`, not `enemy`, so it never picks up
-        // the universal `1 + loops / 20`.
-        EnemyKind::MeleeFake => return base_hp.max(1),
+        // `MeleeFake` and `IceFlower` are `prop`-parented, so they never pick
+        // up the universal `1 + loops / 20`.
+        EnemyKind::MeleeFake | EnemyKind::IceFlower => return base_hp.max(1),
         _ => (base_hp as f32, false),
     };
     let scaled = hp * (1.0 + l / 20.0);
@@ -1221,6 +1221,7 @@ pub fn enemy_ai(
                 | EnemyKind::EliteShielder
                 | EnemyKind::ScrapBossMissile
                 | EnemyKind::ProtoStatue
+                | EnemyKind::IceFlower
         ) {
             continue;
         }
@@ -5432,6 +5433,105 @@ fn fire_popo_rocket(
         Velocity(d * speed * 30.0),
         Pos(at),
     ));
+}
+
+/// GML `objects/IceFlower` — the only route into `area_jungle`. The port
+/// previously had no flower at all, so LAST WISH was spent on nothing.
+///
+/// `Create_0.gml:7-10` snaps the flower onto the nearest `Floor` and nudges
+/// it clear of geometry. `Player/Collision_IceFlower.gml:4-22` feeds it on an
+/// interact press (1 damage to the player, blood, `feed++`) and then runs the
+/// flower's own step on the spot, so the fourth feed opens the route in the
+/// same press. Lines 24-29 drag the player in at 1 px a step.
+pub fn tick_ice_flowers(
+    mut commands: Commands,
+    catalog: Res<repame_anim::AnimCatalog>,
+    mask: Res<FloorMask>,
+    input: Res<crate::input::NtInput>,
+    mut triggers: ResMut<crate::secrets::SecretTriggers>,
+    mut player_q: Query<
+        (&mut Player, &mut Pos, &mut Health),
+        (With<Player>, Without<Enemy>),
+    >,
+    mut flowers: Query<
+        (Entity, &mut Pos, &mut crate::progression::IceFlowerFeed),
+        (With<Enemy>, Without<Player>),
+    >,
+    mut enemy_shots: Query<(Entity, &Team), With<Projectile>>,
+    mut enemies: Query<(Entity, &mut Health), With<Enemy>>,
+    mut inited: Local<std::collections::HashSet<Entity>>,
+) {
+    if flowers.is_empty() {
+        return;
+    }
+    let mut rng = rand::rng();
+    inited.retain(|e| flowers.contains(*e));
+    let pressed = input.peek_interact_pressed();
+    let Ok((mut player, mut ppos, mut php)) = player_q.single_mut() else {
+        return;
+    };
+
+    for (entity, mut pos, mut feed) in &mut flowers {
+        if inited.insert(entity) {
+            // GML `Create_0.gml:7-10`: sit on the nearest floor tile, then
+            // push clear of anything solid.
+            let cell = mask.world_to_cell(pos.0);
+            let seated = mask.cell_center(cell);
+            let mut at = glam::Vec2::new(seated.x - 16.0, seated.y - 16.0);
+            mask.resolve_circle(&mut at, 18.0);
+            let away = rng.random_range(0.0..std::f32::consts::TAU);
+            pos.0 = at + glam::Vec2::from_angle(away) * 16.0;
+            mask.resolve_circle(&mut pos.0, 18.0);
+        }
+
+        let to_flower = pos.0 - ppos.0;
+        let dist = to_flower.length();
+
+        if pressed && dist < 40.0 {
+            // GML `Player/Collision_IceFlower.gml:6-19`, in draw order: one
+            // damage tick, the blood fan, then `feed++`.
+            php.hp -= 1;
+            let mut dir = rng.random_range(0.0..std::f32::consts::TAU);
+            for _ in 0..2 + rng.random_range(0..3) {
+                crate::environment::spawn_native_streak(
+                    &mut commands,
+                    false,
+                    pos.0,
+                    dir,
+                    5.0 * 30.0,
+                );
+                dir += (60.0 + rng.random_range(0.0..30.0_f32)).to_radians();
+            }
+            feed.0 += 1;
+        }
+
+        // GML `:24-29`: haul the player in one pixel a step, per axis, only
+        // where the destination is clear.
+        if dist > 0.0 {
+            let step = glam::Vec2::from_angle(to_flower.y.atan2(to_flower.x));
+            let nx = ppos.0 + glam::Vec2::new(step.x, 0.0);
+            if mask.is_walkable(nx) {
+                ppos.0 = nx;
+            }
+            let ny = ppos.0 + glam::Vec2::new(0.0, step.y);
+            if mask.is_walkable(ny) {
+                ppos.0 = ny;
+            }
+        }
+
+        if feed.0 >= 4 {
+            crate::progression::ice_flower_jungle(
+                &mut commands,
+                &catalog,
+                &mut triggers,
+                &mut player,
+                &mut enemy_shots,
+                &mut enemies,
+                entity,
+                pos.0,
+            );
+        }
+    }
 }
 
 /// GML `objects/Shielder` and `objects/Inspector` — the two non-rolling

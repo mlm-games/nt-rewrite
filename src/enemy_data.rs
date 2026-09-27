@@ -1578,7 +1578,9 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             projectile_speed: 240.0,
             projectile_spread: 0.0698,
             projectile_damage: 12,
-            projectile_radius: 4.0,
+            // `BigGuardianBullet`'s `sprBigGuardianBullet` is 32x32 with a
+            // 31x31 bbox, the same ball as `ThroneII`'s `LastBall` above.
+            projectile_radius: 8.0,
             projectile_lifetime: 2.8,
             projectile_color: [1.0, 0.9, 0.3, 1.0],
             projectile_size: 7.0,
@@ -1593,18 +1595,23 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             size: 36.0,
             color: [0.6, 0.85, 1.0, 1.0],
             sprite: "images/sprIceFlowerIdle.png",
-            score: 200,
+            // `IceFlower`'s parent is `prop` (`IceFlower.yy:17`), so it is
+            // never an `enemy`: `enemy/Destroy_0:1-3` never counts it and
+            // `prop/Destroy_0` awards nothing.
+            score: 0,
             touch_damage: 0,
             rad_drop: 0,
-            // `IceFlower` has no `Destroy_0` and no `scrDrop`: it is the
-            // "FEED" crystal, fed by weapon pickups (`Collision_WepPickup`).
+            // `prop/Create_0.gml:7` pins `raddrop = 0` and the object has no
+            // `Destroy_0`, so it never calls `scrDrop`.
             drop_chance: 0,
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
             shoot_range: 560.0,
-            // GML `IceFlower` has no `Alarm_*` and spawns no projectile: the
-            // `feed >= 4` portal is driven by `Collision_WepPickup`.
+            // `IceFlower` has no `Alarm_*` and spawns no projectile: the
+            // `feed >= 4` portal (`Step_0.gml:4-22`) rides the feed counter
+            // the player's `press_pick` bumps in
+            // `Player/Collision_IceFlower.gml:17`.
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,

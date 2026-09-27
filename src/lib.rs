@@ -172,6 +172,32 @@ pub fn ensure_nt_font() {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
 pub struct TickCount(pub u64);
 
+/// GML `GameCont`'s crib-trip room-start flags. `gocrib` is raised by a
+/// Venuz/Cuz ultra pick (`UltraIcon/Other_10.gml:12-13`) and consumed by
+/// the next Room Start (`GameCont/Other_5.gml:30-31`); `can_advance` is
+/// the `can_advance_stage` latch that makes that same Room Start leave
+/// the floor counter alone (`GameCont/Other_5.gml:49-52`);
+/// `fromcrib` records that the room being left is the crib
+/// (`GameCont/Other_5.gml:24,58-62`). `GenCont/Create_0.gml:48` reads
+/// `gocrib` to suppress the Patience mutation offer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
+pub struct CribTrip {
+    pub gocrib: bool,
+    pub fromcrib: bool,
+    pub can_advance: bool,
+}
+
+impl Default for CribTrip {
+    /// GML `GameCont/Create_0.gml:57,89-90`.
+    fn default() -> Self {
+        Self {
+            gocrib: false,
+            fromcrib: false,
+            can_advance: true,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SettingsSliderPointer {
     Mouse,
@@ -4473,6 +4499,7 @@ fn init_schedule_resources(world: &mut World) {
     world.insert_resource(Euphoria::default());
     world.insert_resource(OpenMind::default());
     world.insert_resource(HeavyHeart::default());
+    world.init_resource::<CribTrip>();
     world.init_resource::<crate::state::OverlayMenu>();
     world.init_resource::<crate::state::PendingUnpause>();
     world.init_resource::<crate::state::QuitRequested>();

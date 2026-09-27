@@ -331,6 +331,9 @@ pub fn build_sim_schedule() -> Schedule {
                     enemies::tick_ratking
                         .in_set(NtSimSet::Combat)
                         .run_if(gameplay_active),
+                    enemies::tick_ice_flowers
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
                 )
                     .chain(),
                 (
@@ -456,6 +459,11 @@ pub fn build_sim_schedule() -> Schedule {
                 combat::tick_projectile_friction
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
+                // After friction, before `move_projectiles`, so the new
+                // velocity is integrated the same step.
+                combat::tick_projectile_accel
+                    .in_set(NtSimSet::Combat)
+                    .run_if(gameplay_active),
                 combat::tick_grenade_fuse
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
@@ -499,6 +507,9 @@ pub fn build_sim_schedule() -> Schedule {
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
                 combat::projectile_hits
+                    .in_set(NtSimSet::Combat)
+                    .run_if(gameplay_active),
+                combat::prop_chest_collisions
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
                 combat::contact_damage

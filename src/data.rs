@@ -30,6 +30,10 @@ pub enum AreaId {
     CrownVault = 14,
     Campfire = 15,
     Loop = 16,
+    /// GML `area_crib 107` (`macros_general.gml:553`), reached only by a
+    /// Venuz/Cuz ultra. Appended so the route discriminants keep their
+    /// save identity.
+    Crib = 17,
 }
 
 impl Default for AreaId {

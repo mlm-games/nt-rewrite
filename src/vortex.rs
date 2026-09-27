@@ -104,6 +104,8 @@ pub fn gml_area_for_area(area: AreaId) -> u8 {
         AreaId::CursedCaves => 104,
         AreaId::Jungle => 105,
         AreaId::HQ => 106,
+        // GML `area_crib` (macros_general.gml:553).
+        AreaId::Crib => 107,
         AreaId::CrownVault => 100,
         AreaId::Loop => 1,
     }

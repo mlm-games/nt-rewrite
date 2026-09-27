@@ -14,11 +14,12 @@ use rand::RngExt;
 use repame_sim::SimTime;
 
 use crate::comps_a::{
-    CrownState, FloorStarted, GameCleanup, Health, Hitbox, Inventory, LevelCleanup, Player,
+    CrownState, FloorStarted, GameCleanup, Health, Hitbox, Inventory, LevelCleanup, NextHurt, Player,
     Projectile, Run, Team, Toast, Velocity,
 };
 use crate::comps_b::{
-    Ally, ChestKind, CrownObject, CrownPedestal, Enemy, Pickup, PickupKind, RadChestContainer, Shield,
+    Ally, ChestKind, CrownObject, CrownPedestal, Enemy, Pickup, PickupKind, Prop, PropHpTracker,
+    PropSprites, PropTier, RadChestContainer, Shield,
 };
 use crate::data::{AmmoKind, CrownKind, WeaponId, ammo_pickup_amount};
 use crate::enemy_data::enemy_def;
@@ -33,6 +34,115 @@ use crate::time::{GTimer, TimerMode};
 /// statue kill on.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct VaultStatue;
+
+/// GML `CrownPickup/Create_0.gml:39,48-49` `lengthdir_x/y(128, ang)`.
+pub const VAULT_STATUE_DIST: f32 = 128.0;
+
+/// GML `rng_choose(0, 0, 90, 180, 270)` (`CrownPickup/Create_0.gml:42,45`).
+/// `rng_choose` samples its argument list uniformly, so the repeated `0` is
+/// double-weighted: p(0) = 2/5, the rest 1/5 each.
+fn vault_statue_angle(rng: &mut impl RngExt) -> f32 {
+    match rng.random_range(0..5u32) {
+        0 | 1 => 0.0,
+        2 => 90.0,
+        3 => 180.0,
+        _ => 270.0,
+    }
+}
+
+/// GML `CrownPickup/Create_0.gml:37-50` verbatim: the guard-statue angles
+/// around the crown pedestal, in spawn order, in degrees.
+/// `crownvisits >= 3` -> 4 at 0/90/180/270 and no RNG draw at all; else
+/// `crownvisits > 1 || instance_exists(CrownObject)` -> 2 on distinct
+/// `rng_choose` angles (the `do..until` rejection loop draws at least once);
+/// else none. `crownvisits` is the port's `SecretTriggers::vaults_entered`,
+/// already incremented on entry like GML's room-start
+/// `GameCont/Other_4.gml:8`.
+pub fn vault_statue_angles(
+    crownvisits: u8,
+    crown_object: bool,
+    rng: &mut impl RngExt,
+) -> Vec<f32> {
+    if crownvisits >= 3 {
+        return vec![0.0, 90.0, 180.0, 270.0];
+    }
+    if crownvisits <= 1 && !crown_object {
+        return Vec::new();
+    }
+    let ang1 = vault_statue_angle(rng);
+    let mut ang2 = vault_statue_angle(rng);
+    while ang2 == ang1 {
+        ang2 = vault_statue_angle(rng);
+    }
+    vec![ang1, ang2]
+}
+
+/// GML `VaultStatue/Create_0.gml:1-16`: a 50 hp, `size = 2` `Prop`.
+/// `rad = 0` (`:3`) is not `raddrop` — `prop/Create_0.gml:7` already pins
+/// `raddrop = 0`, so the statue drops nothing and the `ProtoStatue`
+/// rad-charging branch never applies to it. Lines 18-51 stamp the statue's
+/// own floor tiles, which the port builds once in `setup::spawn_level`.
+pub fn spawn_vault_statue(
+    commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
+    pos: glam::Vec2,
+    rng: &mut impl RngExt,
+) -> Entity {
+    // GML `prop/Create_0.gml:13` `image_xscale = choose(1, -1)`.
+    let flip = rng.random_bool(0.5);
+    let idle = "images/sprVaultStatue.png";
+    let mut ec = commands.spawn((
+        GameCleanup,
+        LevelCleanup,
+        Prop {
+            // `sprVaultStatue` is 24x48 with a (4,8)-(19,39) bbox.
+            size: glam::Vec2::new(16.0, 32.0),
+            hp: 50,
+            destructible: true,
+            explosive: false,
+        },
+        PropTier(2),
+        PropHpTracker { last_hp: 50 },
+        NextHurt::default(),
+        PropSprites {
+            idle,
+            hurt: "images/sprVaultStatueHurt.png",
+            dead: "images/sprVaultStatueDead.png",
+            flip_x: flip,
+        },
+        VaultStatue,
+        Pos(pos),
+    ));
+    // GML `VaultStatue/Create_0.gml:13` `image_speed = 0.4`.
+    if let Some(def) = catalog.def(idle) {
+        ec.insert(crate::anim::SpriteAnim::with_image_speed(
+            idle,
+            def,
+            crate::setup::PROP_IMAGE_SPEED,
+        ));
+    }
+    ec.id()
+}
+
+/// GML `CrownPickup/Create_0.gml:37-50` at the pedestal: one statue per
+/// chosen angle, 128 px out, `ang1` before `ang2`.
+pub fn spawn_crown_vault_statues(
+    commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
+    pedestal: glam::Vec2,
+    crownvisits: u8,
+    crown_object: bool,
+    rng: &mut impl RngExt,
+) {
+    for deg in vault_statue_angles(crownvisits, crown_object, rng) {
+        spawn_vault_statue(
+            commands,
+            catalog,
+            pedestal + glam::Vec2::from_angle(deg.to_radians()) * VAULT_STATUE_DIST,
+            rng,
+        );
+    }
+}
 
 /// Apply a crown's spawn-time stats. Dependency-free (pure `Player` /
 /// `Health` / `Inventory` mutation) so `setup.rs` can call it later.
@@ -524,7 +634,8 @@ pub fn crown_port_to_gml(id: u8) -> u8 {
 
 /// Crown pedestal pickup: touch range applies the crown, resets crown
 /// state, uncurses, opens the type-3 vault portal when the pedestal is
-/// undefended, records the toast, and consumes the pedestal.
+/// undefended, zeroes every guard statue's hp, records the toast, and
+/// consumes the pedestal.
 /// Crown *unlocking* is not here: GML `scrCrownUnlock` only runs from
 /// `scrUnlocksWinOrLoop` (`scripts/scrUnlocks.gml:243-245`).
 pub fn tick_crown_pedestal(
@@ -542,7 +653,7 @@ pub fn tick_crown_pedestal(
         With<Player>,
     >,
     pedestals: Query<(Entity, &Pos, &CrownPedestal)>,
-    statues: Query<Entity, With<VaultStatue>>,
+    mut statues: Query<(Entity, &mut Prop), With<VaultStatue>>,
     crowns: Query<Entity, With<CrownObject>>,
     mut shots: Query<(Entity, &Team), With<Projectile>>,
 ) {
@@ -564,6 +675,13 @@ pub fn tick_crown_pedestal(
         // vault can be left without clearing it.
         if statues.is_empty() {
             crate::progression::spawn_portal(&mut commands, &catalog, &mut shots, pos.0, 3);
+        }
+
+        // GML `CrownPickup/Collision_Player:24` `with (VaultStatue) hp = 0`:
+        // taking the crown wakes the guard, and every statue's `Destroy_0`
+        // zeroes the next one, so N statues field N `CrownGuardian`s.
+        for (_, mut statue) in &mut statues {
+            statue.hp = 0;
         }
 
         toast.show(&format!(

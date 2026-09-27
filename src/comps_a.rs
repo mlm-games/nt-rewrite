@@ -786,6 +786,21 @@ impl DamageSource {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct ProjectileFriction(pub f32);
 
+/// GML `Rocket/Create_0.gml:12-15` + `Step_0.gml:4-5`: once `active`
+/// (set by `alarm[1]`) the body runs
+/// `motion_add_m(direction, accel, maxspeed)` every step — accelerate
+/// along the current heading, then clamp the total speed to `max`.
+/// `arm` is the `alarm[1]` countdown; it is `finished()` only after the
+/// alarm has actually fired, so acceleration starts on the next step.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct ProjectileAccel {
+    /// px/step added per step.
+    pub rate: f32,
+    /// px/step ceiling.
+    pub max: f32,
+    pub arm: Timer,
+}
+
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RecycleGlandYield(pub u8);
 

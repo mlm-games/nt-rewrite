@@ -877,7 +877,11 @@ pub fn spawn_trap_fire_with_image(
         .spawn((
             GameCleanup,
             LevelCleanup,
-            TrapFire,
+            // GML `TrapFire/Collision_hitme.gml:4` compares
+            // `sprite_index` against `sprFireLilHunter`.
+            TrapFire {
+                lil_hunter: path == "images/sprFireLilHunter.png",
+            },
             team,
             Projectile {
                 damage: 1,

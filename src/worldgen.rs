@@ -6,7 +6,8 @@
 //! `step_delta`, `rng_choose`, `turn_table`, `gml_area`, `gml_area_from_run`,
 //! `generation_goal`, `generation_goal_for_run`, `is_screen_end_wall`,
 //! `floor_cell_for_wall`, `wall_cell_at`, `generate_level`,
-//! `generate_palace_last`, `generate_campfire`, `generate_hq_last`,
+//! `generate_palace_last`, `generate_campfire`, `generate_crib`,
+//! `generate_hq_last`,
 //! `world_of`, `floor_in_world`, `boss_for_floor`,
 //! `boss_for_floor_and_loop`, `is_secret_area`.
 //!
@@ -57,6 +58,11 @@ pub struct LevelPlan {
     pub boss_count: u32,
 
     pub styleb: bool,
+
+    /// GML `GenCont`'s `lowx`/`lowy` after the max-y search at
+    /// `Alarm_2.gml:29-37` -- the crib's lower-slab anchor, in pixels.
+    /// Crib only; `scrPopChests` plants the Giant chest pairs from it.
+    pub crib_anchor: Option<Vec2>,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -116,6 +122,23 @@ pub enum PropKind {
     BigGenerator,
     BigGeneratorInactive,
     ThroneStatue,
+
+    /// GML `objects/VenuzTV`: `max_hp = 1000`, `size = 5`
+    /// (`VenuzTV/Create_0.gml:1-2`), the crib's destructible television.
+    VenuzTV,
+    /// GML `objects/VenuzCouch`: `max_hp = 1e10`, `size = 3`
+    /// (`VenuzCouch/Create_0.gml:1-2`). `Step_1` re-pins `hp = max_hp`
+    /// every step, so damage can never break it.
+    VenuzCouch,
+    /// GML `objects/VenuzCarpet`: no parent, no events, decoration only.
+    VenuzCarpet,
+    /// GML `objects/CarVenusFixed`: `max_hp = 25`, `size = 1`
+    /// (`CarVenusFixed/Create_0.gml:1,5`).
+    CarVenusFixed,
+    /// GML `objects/GiantWeaponChest` / `GiantAmmoChest`: no parent, no hp,
+    /// opened by `Collision_Player` (Crown Love picks the ammo variant).
+    GiantWeaponChest,
+    GiantAmmoChest,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -167,6 +190,7 @@ pub fn gml_area_from_run(run: &Run) -> i32 {
         AreaId::Jungle => 105,
         AreaId::Labs => 6,
         AreaId::HQ => 106,
+        AreaId::Crib => 107,
         AreaId::Palace | AreaId::Campfire => 7,
         _ => gml_area(run.floor),
     }
@@ -198,6 +222,9 @@ fn generation_goal_for_run(run: &Run) -> usize {
             }
             AreaId::CursedCaves => 110,
             AreaId::Jungle => 110,
+            // GML `scrAreaGetGenerationGoal:129` `if (area == area_crib)
+            // return 20`.
+            AreaId::Crib => 20,
             _ => 90,
         };
     }
@@ -215,6 +242,8 @@ fn generation_goal_for_run(run: &Run) -> usize {
     generation_goal(run.floor)
 }
 
+/// GML `GameCont/Other_5.gml:54` `_is_secret = (area >= 100)`, so the
+/// crib (107) is a secret area like every other 1xx room.
 pub fn is_secret_area(area: AreaId) -> bool {
     matches!(
         area,
@@ -226,6 +255,7 @@ pub fn is_secret_area(area: AreaId) -> bool {
             | AreaId::CrownVault
             | AreaId::HQ
             | AreaId::City
+            | AreaId::Crib
     )
 }
 
@@ -264,6 +294,11 @@ const RNG_ENEMY_CALL: u64 = 0xD6E8_FEB8_6659_FD93;
 const RNG_PROPS: u64 = 0xA076_1D64_78BD_642F;
 const RNG_CHEST: u64 = 0xE703_7ED1_A0B4_28DB;
 const RNG_PIZZA: u64 = 0x8EBC_6AF0_9C88_C6E3;
+/// GML draws the crib's `CarVenusFixed` roll from the default
+/// `random(5)` stream (`GenCont/Alarm_2.gml:95`) inside `Alarm_2`, one
+/// step before `Alarm_0` reseeds that stream for `scrPopulate`; the port
+/// gives it its own phase stream like every other phase.
+const RNG_CRIB: u64 = 0x8A5C_D1F0_3B77_E2A4;
 
 fn phase_rng(seed: u64, state: u64) -> StdRng {
     StdRng::seed_from_u64(seed ^ state)
@@ -384,6 +419,7 @@ impl Gen {
                 boss: None,
                 boss_count: 1,
                 styleb,
+                crib_anchor: None,
             },
         }
     }
@@ -914,12 +950,11 @@ fn turn_table(rng: &mut StdRng, area: i32) -> i32 {
 /// the same loop inline before walls go up (bounded 16; GML is unbounded
 /// per-frame but converges the same way).
 /// Skipped exactly where `scrAreaHasSafespawn` is false (campfire, crib,
-/// vault, palace/HQ finales; the port has no Crib area so that arm is
-/// vacuous).
+/// vault, palace/HQ finales).
 fn apply_safespawn_shift(plan: &mut LevelPlan, run: &Run) {
     let no_safe = matches!(
         run.area,
-        AreaId::Campfire | AreaId::Vault | AreaId::CrownVault
+        AreaId::Campfire | AreaId::Vault | AreaId::CrownVault | AreaId::Crib
     ) || (run.area == AreaId::Palace && ((run.floor.max(1) - 1) % 15) + 1 == 15)
         || (run.area == AreaId::HQ && run.floor_in_area >= 3);
     if no_safe {
@@ -987,6 +1022,9 @@ pub fn generate_level(run: &Run) -> LevelPlan {
     if area == 106 && run.floor_in_area >= 3 {
         return generate_hq_last(run);
     }
+    if run.area == AreaId::Crib {
+        return generate_crib(run);
+    }
     let goal = generation_goal_for_run(run);
 
     let mut genr = Gen::new(run, area, false);
@@ -1021,6 +1059,7 @@ fn generate_palace_last(run: &Run) -> LevelPlan {
         boss: None,
         boss_count: 1,
         styleb: false,
+        crib_anchor: None,
     };
     let mut seen = HashSet::new();
     // GML `FloorMaker/Step_0.gml:12-31`: 48 rows upward from the spawn tile,
@@ -1100,6 +1139,143 @@ fn generate_campfire(run: &Run) -> LevelPlan {
     plan
 }
 
+/// GML `objects/GenCont/Alarm_2.gml:28-105` verbatim. The crib is an
+/// ordinary area-107 maker run (`goal = 20`,
+/// `scrAreaGetGenerationGoal.gml:129`) plus the two hand-laid slabs and
+/// their props. GML's `FloorMaker/Step_0.gml:82-86` sets
+/// `GenCont.alarm[0] = 3` and `alarm[2] = 2` in the same step, so
+/// `Alarm_2` fires BEFORE `Alarm_0` -- the slab floors are in the cell
+/// list `mcr_floor_make_walls` and `scrPopulate` walk, so they are added
+/// before those two passes here.
+fn generate_crib(run: &Run) -> LevelPlan {
+    let mut genr = Gen::new(run, 107, false);
+    let initial = genr.create_maker(0, 0);
+    genr.run_makers(generation_goal_for_run(run), vec![initial]);
+    let (mut plan, styleb_cells) = genr.finish();
+
+    build_crib_rooms(&mut plan, run);
+
+    let floors = plan.floor_cells.clone();
+    build_walls(run, &floors, &mut plan);
+    let walls = plan.wall_cells.clone();
+    populate(run, &floors, &walls, &mut plan, &styleb_cells);
+
+    // GML `GenCont/Destroy_0.gml:126-139`: the crib keeps no enemy (and no
+    // chestprop but the two Giant kinds, which `apply_chest_permutations`
+    // already reduced to none). The `with Wall` half of `:127-129` is a
+    // no-op here: `build_walls` never stamps a wall whose owning 32px
+    // cell is floor, which is exactly `place_meeting(wall.x, wall.y,
+    // Floor)`.
+    plan.enemies.clear();
+    plan.population_events
+        .retain(|event| !matches!(event, PopulationEvent::Enemy { .. }));
+    plan
+}
+
+/// GML `GenCont/Alarm_2.gml:29-104`: the lower 11x7 slab with the TV,
+/// couch, two `MoneyPile`s and the carpet, then the upper 10x7 slab with
+/// its `CarVenusFixed` scatter. The Giant chest pairs (`:57-74`) need the
+/// live Open-Mind level and Crown Love, so they ride
+/// [`apply_chest_permutations`] off [`LevelPlan::crib_anchor`] -- GML
+/// creates them in this same alarm, before `scrPopulate` runs, and
+/// `scrPopChests` leaves them alone (they have no `chestprop` parent).
+fn build_crib_rooms(plan: &mut LevelPlan, run: &Run) {
+    let mut cells = plan.floor_cells.clone();
+    let mut seen: HashSet<(i32, i32)> = cells.iter().copied().collect();
+    let push_cell = |cells: &mut Vec<(i32, i32)>, seen: &mut HashSet<(i32, i32)>, c: (i32, i32)| {
+        if seen.insert(c) {
+            cells.push(c);
+        }
+    };
+
+    // GML :29-37 -- `lowx`/`lowy` settle on the LOWEST existing `Floor`.
+    // The test `y > other.lowy` is strict, so the FIRST of several equal
+    // rows keeps the anchor: scanning in reverse and taking `max_by_key`
+    // (which returns the LAST maximum) yields that first one.
+    let (bx, by) = cells
+        .iter()
+        .rev()
+        .max_by_key(|(_, cy)| *cy)
+        .copied()
+        .unwrap_or((0, 0));
+    let lowx = bx * TILE as i32;
+    let lowy = by * TILE as i32;
+    let low = Vec2::new(lowx as f32, lowy as f32);
+    plan.crib_anchor = Some(low);
+
+    // GML :39-50 -- 11 columns x 7 rows, starting one tile under `lowy`
+    // and running DOWN (+y). `Floor/Create_0.gml:1-4` destroys an
+    // overlapping stamp, so the dedupe is the same law.
+    let mut dix = -160i32;
+    for _ in 0..11 {
+        let mut diy = 0i32;
+        for _ in 0..7 {
+            push_cell(
+                &mut cells,
+                &mut seen,
+                ((lowx + dix) / TILE as i32, (lowy + 32 + diy) / TILE as i32),
+            );
+            diy += 32;
+        }
+        dix += 32;
+    }
+    plan.floor_cells = cells.clone();
+
+    // GML :52-55, :76 -- instance positions are pixel-exact, so they ride
+    // `plan.props` verbatim.
+    for (kind, at) in [
+        (PropKind::VenuzTV, (16.0f32, 248.0f32)),
+        (PropKind::VenuzCouch, (16.0, 104.0)),
+        (PropKind::MoneyPile, (-48.0, 104.0)),
+        (PropKind::MoneyPile, (80.0, 104.0)),
+        (PropKind::VenuzCarpet, (16.0, 104.0)),
+    ] {
+        plan.props
+            .push((kind, Vec2::new(low.x + at.0, low.y + at.1)));
+    }
+
+    // GML :78-86 -- now the HIGHEST `Floor`, searched over every instance
+    // INCLUDING the lower slab just laid. That slab sits strictly below
+    // every pre-existing floor, so the minimum is unchanged; the strict
+    // `y < other.lowy` makes the first of equal rows win, which is
+    // `min_by_key`'s tie rule.
+    let (ux, uy) = plan
+        .floor_cells
+        .iter()
+        .min_by_key(|(_, cy)| *cy)
+        .copied()
+        .unwrap_or((0, 0));
+    let upx = ux * TILE as i32;
+    let upy = uy * TILE as i32;
+
+    // GML :88-104 -- 10 columns x 7 rows running UP (-y) from `upy + 32`,
+    // each stamped floor rolling `random(5) < 1 || instance_number
+    // (CarVenusFixed) == 0` for a car past 96px from the spawn point. The
+    // `&&` short-circuits on the distance test, so the draw is only paid
+    // past 96px.
+    let mut rng = phase_rng(run.gen_seed, RNG_CRIB);
+    let mut cars = 0usize;
+    let mut dix = -160i32;
+    for _ in 0..10 {
+        let mut diy = 0i32;
+        for _ in 0..7 {
+            let cx = (upx + dix) / TILE as i32;
+            let cy = (upy + 32 + diy) / TILE as i32;
+            push_cell(&mut cells, &mut seen, (cx, cy));
+            let at = Vec2::new(cx as f32 * TILE + TILE * 0.5, cy as f32 * TILE + TILE * 0.5);
+            if at.distance(Vec2::splat(10016.0)) > 96.0
+                && (rng.random::<f32>() * 5.0 < 1.0 || cars == 0)
+            {
+                cars += 1;
+                plan.props.push((PropKind::CarVenusFixed, at));
+            }
+            diy -= 32;
+        }
+        dix += 32;
+    }
+    plan.floor_cells = cells;
+}
+
 fn generate_hq_last(run: &Run) -> LevelPlan {
     let mut plan = LevelPlan {
         floor_cells: Vec::new(),
@@ -1115,6 +1291,7 @@ fn generate_hq_last(run: &Run) -> LevelPlan {
         boss: None,
         boss_count: 1,
         styleb: true,
+        crib_anchor: None,
     };
     let mut seen = HashSet::new();
     let mut cells: Vec<(i32, i32)> = Vec::new();
@@ -1401,6 +1578,43 @@ pub fn apply_chest_permutations(plan: &mut LevelPlan, ctx: ChestPermuteCtx) -> C
         return out;
     }
 
+    // GML `scrPopChests.gml:19-23,65-69`: the crib sets `_tot_chests = 0`,
+    // so every Ammo/Weapon/Rad chest the area-107 maker stamped is
+    // destroyed. What survives is the `(1 + open_mind)` pair of Giant
+    // chests `GenCont/Alarm_2.gml:57-74` planted a step earlier -- Crown
+    // Love picks the ammo pair. `if (instance_exists(Player))` is always
+    // true: the crib is only ever entered through a portal.
+    if ctx.area == AreaId::Crib {
+        let mut events = base_events.clone();
+        plan.chests.clear();
+        if let Some(low) = plan.crib_anchor {
+            let kind = if ctx.crown_love {
+                PropKind::GiantAmmoChest
+            } else {
+                PropKind::GiantWeaponChest
+            };
+            let open_mind = u32::from(ctx.open_mind);
+            let mut dx = 90.0f32 + open_mind as f32 * 32.0;
+            let mut dy = 64.0f32;
+            for _ in 0..=open_mind {
+                for at in [
+                    Vec2::new(low.x + 16.0 - dx, low.y + dy),
+                    Vec2::new(low.x + 16.0 + dx, low.y + dy),
+                ] {
+                    plan.props.push((kind, at));
+                    events.push(PopulationEvent::Prop { kind, pos: at });
+                }
+                dy -= 28.0;
+                dx -= 48.0;
+            }
+        }
+        for (k, p) in customs {
+            plan.chests.push(ChestSpawn::Custom(k, p));
+        }
+        plan.population_events = events;
+        return out;
+    }
+
     // GML `GenCont/Alarm_0.gml:45-48`: the palace and HQ finales never call
     // `scrPopulate`, and every chest they own is destroyed on entry.
     let finale = (ctx.area == AreaId::Palace && ctx.subarea >= 3)
@@ -1515,7 +1729,8 @@ pub fn apply_chest_permutations(plan: &mut LevelPlan, ctx: ChestPermuteCtx) -> C
     }
 
     // Mimic rolls (GML order; BigWeapon needs nochest and no existing
-    // BigWeapon; the crib gate is all-true since random(3) < 3).
+    // BigWeapon; the crib returns above, its `random(3) < 3` gate at
+    // `scrPopChests.gml:162` being all-true).
     let sewers_gate = (ctx.area != AreaId::Desert && ctx.area != AreaId::Campfire) || ctx.loops > 0;
     let mut no_big_yet = !final_chests
         .iter()

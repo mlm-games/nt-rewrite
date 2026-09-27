@@ -30,7 +30,8 @@ use crate::comps_a::{
     Run, ScarierFace, Toast,
 };
 use crate::comps_b::{
-    Enemy, IdpdRaidState, IdpdShieldUnit, LoopTransition, PortalClear, RaidWave,
+    Enemy, GmlImage, IdpdRaidState, IdpdShieldUnit, LoopTransition, NativeMotion, NativeWallMotion,
+    PickupLifetime, PortalClear, RaidWave,
 };
 use crate::combat::{queue_enemy_spawn, queue_enemy_spawn_birth};
 use crate::data::{AreaId, EnemyKind};
@@ -489,6 +490,41 @@ pub fn tick_idpd_spawns(
             continue;
         }
         portal.alarm0 -= steps;
+        // GML `Step_0.gml:4-9`: while the portal wears the charge strip it
+        // sheds motes that converge on the player, each living for its own
+        // travel time. The strip covers exactly the `alarm0` window
+        // (`Create_0.gml:28` arms it and `Alarm_0` swaps the art on the
+        // same frame it opens the close strip).
+        if portal.alarm0 > 0.0 && portal.close <= 0.0 && portal.alarm1 <= 0.0 {
+            let at = pos.0
+                + glam::Vec2::new(popo.float(96.0) - 48.0, popo.float(96.0) - 48.0);
+            let to_player = player_pos - at;
+            let speed = 2.0 + popo.next_float();
+            let mut image = GmlImage::new("images/sprIDPDPortalCharge.png", 4, 0.0);
+            // GML `IDPDPortalCharge/Create_0.gml:1-2`: `image_index = random(4)`,
+            // `image_speed = 0` (a frozen frame, not a loop).
+            image.phase = popo.float(4.0);
+            commands.spawn((
+                GameCleanup,
+                LevelCleanup,
+                Pos(at),
+                NativeMotion {
+                    velocity: to_player.normalize_or_zero() * speed * 30.0,
+                    friction: 0.0,
+                    radius: 6.0,
+                    wall: NativeWallMotion::Stop,
+                    tick: 0,
+                },
+                // GML `Step_0.gml:7`: `alarm[0] = point_distance / speed + 1`.
+                PickupLifetime {
+                    timer: GTimer::from_seconds(
+                        to_player.length() / speed / 30.0 + 1.0 / 30.0,
+                        TimerMode::Once,
+                    ),
+                },
+                image,
+            ));
+        }
         if portal.alarm0 <= 0.0 {
             portal.alarm1 = 12.0;
             portal.close = 35.0;

@@ -503,6 +503,8 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
     world.init_resource::<Euphoria>();
     world.init_resource::<OpenMind>();
     world.init_resource::<HeavyHeart>();
+    // GML `GameCont/Create_0.gml:57,89-90`: the crib trip starts clean.
+    world.insert_resource(crate::CribTrip::default());
     // Menu/state-machine layer (menus tick before `handle_mutation_choice`
     // and must never panic on missing resources).
     world.init_resource::<crate::state::OverlayMenu>();
@@ -880,6 +882,14 @@ fn prop_candidates(kind: PropKind, styleb: bool) -> &'static [&'static str] {
         PropKind::BigGeneratorInactive => &["images/sprBigGeneratorInactive.png"],
         PropKind::ThroneStatue => &["images/sprThroneStatue.png"],
         PropKind::Trap => &["images/sprTrap.png"],
+        PropKind::VenuzTV => &["images/sprVenuzTV.png"],
+        PropKind::VenuzCouch => &["images/sprVenuzCouch.png"],
+        PropKind::VenuzCarpet => &["images/sprVenuzCarpet.png"],
+        // GML `CarVenusFixed/Create_0.gml:8-22`: `sprVenusCarFixed`, halved
+        // onto `sprVenuzCar2` in the crib only.
+        PropKind::CarVenusFixed => &["images/sprVenusCarFixed.png", "images/sprVenuzCar2.png"],
+        PropKind::GiantWeaponChest => &["images/sprGiantWepChest.png"],
+        PropKind::GiantAmmoChest => &["images/sprGiantAmmoChest.png"],
     }
 }
 
@@ -976,6 +986,20 @@ fn prop_stats(kind: PropKind, styleb: bool, loop_count: u32) -> PropStats {
         PropKind::ThroneStatue => s(16.0, 32.0, 5, 1000, None),
         // GML `Trap`: `sprTrap` is a 32x24 full-rect solid.
         PropKind::Trap => s(32.0, 24.0, 1, 1, None),
+        // GML `VenuzTV`: `max_hp = 1000`, `size = 5`; `sprVenuzTV` is a
+        // 240x96 auto-bbox.
+        PropKind::VenuzTV => s(240.0, 96.0, 5, 1000, None),
+        // GML `VenuzCouch`: `max_hp = 1e10` re-pinned every step
+        // (`Step_1.gml:1`), `size = 3`. The port's `Prop.hp` is `i32`, so
+        // the unbreakable pool is the i32 ceiling.
+        PropKind::VenuzCouch => s(98.0, 48.0, 3, i32::MAX, None),
+        // GML `VenuzCarpet` has no parent and no events: decoration.
+        PropKind::VenuzCarpet => s(164.0, 68.0, 1, 1, None),
+        // GML `CarVenusFixed`: `max_hp = 25`, `size = 1`.
+        PropKind::CarVenusFixed => s(32.0, 32.0, 1, 25, None),
+        // GML `GiantWeaponChest` / `GiantAmmoChest`: no parent, no hp, no
+        // break -- they are opened by `Collision_Player`.
+        PropKind::GiantWeaponChest | PropKind::GiantAmmoChest => s(64.0, 64.0, 1, 1, None),
     }
 }
 
@@ -1020,6 +1044,22 @@ fn prop_hurt_dead_paths(idle: &'static str) -> (&'static str, &'static str) {
         }
         "images/sprCarIdle.png" => ("images/sprCarHurt.png", "images/sprScorchmark.png"),
         "images/sprFrozenCar.png" => ("images/sprFrozenCarHurt.png", "images/sprScorchmark.png"),
+        // GML `CarVenusFixed/Create_0.gml:8-10`.
+        "images/sprVenusCarFixed.png" => (
+            "images/sprVenusCarFixedHurt.png",
+            "images/sprScorchmark.png",
+        ),
+        "images/sprVenuzCar2.png" => ("images/sprVenuzCar2Hurt.png", "images/sprScorchmark.png"),
+        // GML `VenuzTV/Create_0.gml:3-5`.
+        "images/sprVenuzTV.png" => (
+            "images/sprVenuzTVHurt.png",
+            "images/sprVenuzTVDead.png",
+        ),
+        // GML `VenuzCouch/Create_0.gml:3-5`.
+        "images/sprVenuzCouch.png" => (
+            "images/sprVenuzCouch.png",
+            "images/sprVenuzCouchDead.png",
+        ),
         "images/sprMine.png" | "images/sprMineIdle.png" => {
             ("images/sprMine.png", "images/sprMine.png")
         }
@@ -1142,7 +1182,9 @@ fn resolve_prop_art(
 /// the idle/hurt strips run at 12 fps regardless of the atlas `fps`.
 /// Functional kinds: `Trap` is a solid flamethrower emitter, `Torch`
 /// throbs, `ThroneStatue`/`BigGeneratorInactive` are `canbreak = 0`.
-/// `GroundDecal` records art only (non-solid).
+/// `GroundDecal` records art only (non-solid). Crib kinds: `VenuzCarpet`
+/// and the two Giant chests carry art only (no GML parent, so no
+/// solidity and no hp).
 pub fn spawn_prop_sim(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
@@ -1182,12 +1224,61 @@ pub fn spawn_prop_sim(
         );
     }
 
+    if kind == PropKind::VenuzCarpet {
+        // GML `VenuzCarpet` has no parent and no events: a decal, not a
+        // solid. `image_speed` is never set, so the strip sits on frame 0.
+        return Some(
+            commands
+                .spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    crate::comps_b::GroundDetail {
+                        path: "images/sprVenuzCarpet.png",
+                        frame: 0,
+                        flip_x: false,
+                    },
+                    Pos(pos),
+                ))
+                .id(),
+        );
+    }
+
+    if matches!(
+        kind,
+        PropKind::GiantWeaponChest | PropKind::GiantAmmoChest
+    ) {
+        // GML `GiantWeaponChest` / `GiantAmmoChest` declare no parent, so
+        // they are neither solid nor hp-carrying: they carry art only and
+        // are opened by `Collision_Player`. The render pass draws any
+        // `PropSprites` entity, so no `Prop` body is spawned here.
+        let idle = prop_idle_for(catalog, run, kind, pos, styleb);
+        return Some(
+            commands
+                .spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    PropSprites {
+                        idle,
+                        hurt: idle,
+                        dead: idle,
+                        flip_x: false,
+                    },
+                    Pos(pos),
+                ))
+                .id(),
+        );
+    }
+
     let stats = prop_stats(kind, styleb, run.loop_count);
     let idle = prop_idle_for(catalog, run, kind, pos, styleb);
     // GML `FloorMaker/Step_0.gml:33-49` mirrors the +x column's
     // `BigGeneratorInactive` (`image_xscale = -1`) to face the corridor.
     let flip = if matches!(kind, PropKind::SodaMachine) {
         // GML `SodaMachine/Create_0.gml:17` pins `image_xscale = 1`.
+        false
+    } else if matches!(kind, PropKind::VenuzTV | PropKind::VenuzCouch) {
+        // GML `VenuzTV/Create_0.gml:7` and `VenuzCouch/Create_0.gml:7` both
+        // re-pin `image_xscale = 1` over the prop default.
         false
     } else if kind == PropKind::BigGeneratorInactive {
         pos.x > 0.0
@@ -1527,8 +1618,8 @@ fn spawn_ground_details(
 
 /// GML `Detail/Create_0.gml:1` `asset_get_index("sprDetail" +
 /// string(GameCont.area))`; a missing strip destroys the instance, so
-/// `area_vault`(100), `area_mansion`(103), `area_jungle`(105) and
-/// `area_hq`(106) have no `Detail` at all.
+/// `area_vault`(100), `area_mansion`(103), `area_jungle`(105),
+/// `area_hq`(106) and `area_crib`(107) have no `Detail` at all.
 fn detail_strip_for_area(area: AreaId) -> Option<&'static str> {
     Some(match area {
         AreaId::Campfire => "images/sprDetail0.png",
@@ -1546,6 +1637,7 @@ fn detail_strip_for_area(area: AreaId) -> Option<&'static str> {
         | AreaId::CrownVault
         | AreaId::HQ
         | AreaId::Jungle
+        | AreaId::Crib
         | AreaId::Loop => {
             return None;
         }
@@ -2183,6 +2275,7 @@ pub fn setup_title_campfire(world: &mut World) {
         boss: None,
         boss_count: 1,
         styleb: false,
+        crib_anchor: None,
     };
     worldgen::build_walls(&camp_run, &floors, &mut plan);
     let floor_set: std::collections::HashSet<(i32, i32)> =

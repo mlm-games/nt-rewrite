@@ -359,8 +359,17 @@ pub struct HyperOrbitCrystal {
 
 #[derive(Component, Clone, Debug)]
 pub struct SentryTurret {
-    pub life: Timer,
+    /// GML has no generic lifetime — `spawn_sentry_turret` is the port's
+    /// weapon deployable and keeps one; the GML `SentryGun` body has
+    /// `None` and lives on `ammo` / `hp` alone.
+    pub life: Option<Timer>,
     pub fire: Timer,
+    /// GML `SentryGun/Create_0.gml:14` `alarm[0] = 30`: the opening
+    /// delay in steps, counted down before `fire` starts running.
+    pub first_shot: f32,
+    /// GML `SentryGun/Create_0.gml:7` `ammo = 24`, spent one per alarm
+    /// and re-checked at the end of `Alarm_0.gml:56`.
+    pub ammo: i32,
     pub range: f32,
     pub projectile_speed: f32,
     pub projectile_damage: i32,
@@ -843,10 +852,14 @@ pub struct LilHunterDie {
     pub ticks: u32,
 }
 
-/// GML `TrapFire` marker (`sprFireLilHunter` step-0 ring / death ring):
-/// short-lived fire left by LilHunter.
+/// GML `objects/TrapFire`: the short-lived fire jet. `lil_hunter` is the
+/// `sprite_index != sprFireLilHunter` gate on `Collision_hitme.gml:4` —
+/// only the LilHunterDie death ring flies through a body it cannot hurt,
+/// every other jet reverts in place.
 #[derive(Component, Clone, Copy, Debug, Default)]
-pub struct TrapFire;
+pub struct TrapFire {
+    pub lil_hunter: bool,
+}
 
 #[derive(Component)]
 pub struct PortalShock {

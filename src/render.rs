@@ -1715,6 +1715,9 @@ pub fn background_color(area: AreaId) -> [f32; 4] {
         // GML mansion/crib (#eef0f2) have no port area; City reuses the
         // city fill (GML has no city-secret fill; mansion white is closest).
         AreaId::City => hex(0xeef0f2),
+        // `scrArea.gml` has no `area_crib` arm, so GML defines no crib
+        // fill. It is Venuz's house interior, so it takes the mansion one.
+        AreaId::Crib => hex(0xeef0f2),
         AreaId::Loop => hex(0x6a7aaf),
     }
 }

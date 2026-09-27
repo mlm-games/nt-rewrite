@@ -341,8 +341,10 @@ pub fn spawn_sentry_turret(commands: &mut Commands, pos: glam::Vec2, spec: Deplo
         LevelCleanup,
         Team::Player,
         SentryTurret {
-            life: GTimer::from_seconds(spec.life, TimerMode::Once),
+            life: Some(GTimer::from_seconds(spec.life, TimerMode::Once)),
             fire: GTimer::from_seconds(spec.fire_interval, TimerMode::Repeating),
+            first_shot: 0.0,
+            ammo: i32::MAX,
             range: spec.range,
             projectile_speed: spec.projectile_speed,
             projectile_damage: spec.projectile_damage,
@@ -368,13 +370,15 @@ pub fn spawn_sentry_gun(
         LevelCleanup,
         team,
         SentryTurret {
-            // 24 rounds on the 5-frame cadence. GML's opening `alarm[0]
-            // = 30` cannot be expressed: `combat::tick_sentry_turrets`
-            // owns the fire timer and always starts it at one interval.
-            life: GTimer::from_seconds(24.0 * 5.0 / 30.0, TimerMode::Once),
+            // GML has no lifetime here: the body ends on `ammo <= 0`
+            // (`Alarm_0.gml:56`) or `hp <= 0` (`Step_0.gml:1`).
+            life: None,
             fire: GTimer::from_seconds(5.0 / 30.0, TimerMode::Repeating),
+            // `alarm[0] = 30` before the 5-step cadence takes over.
+            first_shot: 30.0,
+            ammo: 24,
             // GML has no range gate: the alarm fires at any enemy with a
-            // clear `collision_line`.
+            // clear `collision_line` (`Alarm_0.gml:19`).
             range: f32::INFINITY,
             projectile_speed: 16.0 * 30.0,
             projectile_damage: 3,
@@ -605,9 +609,24 @@ pub fn on_projectile_removed(
     }
 }
 
+/// GML `scripts/scrDrop/scrDrop.gml:7-9`: the roll is relative to
+/// `instance_nearest(x, y, Player)` and bails when there is none, so the
+/// player context is optional in the port. `decide` is the shared
+/// `scrDecideWep` cache (only read on the weapon branch).
+pub struct DropCtx<'a> {
+    pub player: &'a crate::comps_a::Player,
+    pub inv: &'a crate::comps_a::Inventory,
+    pub health: &'a crate::comps_a::Health,
+    pub decide: Option<&'a crate::decide_wep::DecideCtx>,
+}
+
 /// Damage a destructible prop; on death run its corpse/effect chain,
 /// trigger secrets, spawn ambushes/drops, and despawn. Signature
 /// adapted: audio cues queue instead of audio commands.
+///
+/// No `scrDrop` context: `Cocoon/Destroy_0.gml:2` then has no player to
+/// weigh against and drops nothing (GML's own `if (_player == noone)
+/// exit`).
 #[allow(clippy::too_many_arguments)]
 pub fn damage_destructible_prop(
     commands: &mut Commands,
@@ -636,6 +655,60 @@ pub fn damage_destructible_prop(
     source: Option<DamageSource>,
     nexthurt_window: Option<u64>,
     loops: u32,
+) {
+    damage_destructible_prop_ctx(
+        commands,
+        catalog,
+        props,
+        entrances,
+        nests,
+        rad_chests,
+        secrets,
+        audio,
+        cues,
+        particles_on,
+        prop_e,
+        center,
+        damage,
+        source,
+        nexthurt_window,
+        loops,
+        None,
+    );
+}
+
+/// [`damage_destructible_prop`] with the GML `scrDrop` player context, so
+/// props that drop (`Cocoon/Destroy_0.gml:2`) roll against real ammo
+/// need and can pay a `HealthChest`.
+#[allow(clippy::too_many_arguments)]
+pub fn damage_destructible_prop_ctx(
+    commands: &mut Commands,
+    catalog: &AnimCatalog,
+    props: &mut Query<
+        (
+            Entity,
+            &mut Prop,
+            &Pos,
+            Option<&PropDeathEffect>,
+            Option<&PropSprites>,
+            Option<&mut NextHurt>,
+        ),
+        With<Prop>,
+    >,
+    entrances: &Query<&SecretEntrance>,
+    nests: &Query<&PropNestMarkers, With<Prop>>,
+    rad_chests: &Query<&RadChestContainer>,
+    secrets: &mut SecretTriggers,
+    audio: &GameAudio,
+    cues: &mut Queue<AudioCue>,
+    particles_on: bool,
+    prop_e: Entity,
+    center: glam::Vec2,
+    damage: i32,
+    source: Option<DamageSource>,
+    nexthurt_window: Option<u64>,
+    loops: u32,
+    drop: Option<DropCtx<'_>>,
 ) {
     let mut dead = false;
     let mut legacy_explosive = false;
@@ -693,18 +766,23 @@ pub fn damage_destructible_prop(
     }
     if nest_flags.cocoon {
         let mut rng = rand::rng();
-        // GML `Cocoon/Destroy_0.gml` verbatim: `random(3) < 1` spawns a
-        // `Gator`, otherwise `scrDrop(30, 0)` — a 30% ammo drop.
+        // GML `Cocoon/Destroy_0.gml:1-2` verbatim: `random(3) < 1` spawns
+        // a `Gator`, otherwise `scrDrop(30, 0)` — a 30% drop that weighs
+        // the player's ammo need and can pay a `HealthChest`.
         if rng.random_range(0..3i32) < 1 {
             queue_enemy_spawn(&mut *commands, EnemyKind::Gator, center, 1.0, loops);
-        } else if rng.random_range(0.0..100.0) < 30.0 {
-            spawn_pickup(
+        } else if let Some(drop) = drop {
+            crate::pickups::maybe_spawn_drop(
                 commands,
                 catalog,
-                crate::comps_b::PickupKind::Ammo(crate::data::AmmoKind::None, 0),
                 center,
+                30,
+                0,
+                drop.player,
+                drop.inv,
+                drop.health,
                 loops,
-                false,
+                drop.decide,
             );
         }
     }

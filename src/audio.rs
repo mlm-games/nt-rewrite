@@ -618,12 +618,17 @@ pub enum MusicCue {
     Hq,
     City,
     Campfire,
+    /// GML `MusCont/Alarm_11.gml:30` `"mus" + string(area)` with
+    /// `area_crib = 107` -> `mus107`.
+    Crib,
 
     BossBigBandit,
     BossBigDog,
     BossLilHunter,
     BossThrone,
     BossThroneII,
+    /// GML `MusCont/Alarm_2.gml:16` `case area_crib: song = musBoss9`.
+    BossYvBoss,
     TitleTheme,
 }
 
@@ -643,6 +648,9 @@ pub enum AmbienceCue {
     HqSirens,
     CampfireCrackle,
     CityNoise,
+    /// GML `amb0b`, the `audio_exists` fallback at `MusCont/Alarm_11.gml:49`
+    /// for any area whose `amb<area>` asset is missing (the crib).
+    DefaultLoop,
 }
 
 /// Current area loop selection. The backend polls this resource: on a
@@ -731,6 +739,7 @@ pub fn music_for_area(area: AreaId) -> MusicCue {
         AreaId::HQ => MusicCue::Hq,
         AreaId::City => MusicCue::City,
         AreaId::Campfire => MusicCue::Campfire,
+        AreaId::Crib => MusicCue::Crib,
 
         AreaId::Loop => MusicCue::Desert,
     }
@@ -755,6 +764,10 @@ pub fn ambience_for_area(area: AreaId) -> AmbienceCue {
         AreaId::HQ => AmbienceCue::HqSirens,
         AreaId::City => AmbienceCue::CityNoise,
         AreaId::Campfire => AmbienceCue::CampfireCrackle,
+        // GML `MusCont/Alarm_11.gml:31` looks up `amb107`, which the pack
+        // does not ship, so `audio_exists` fails and the fallback at :49
+        // (`amb = amb0b`) is the crib bed.
+        AreaId::Crib => AmbienceCue::DefaultLoop,
 
         AreaId::Loop => AmbienceCue::DesertWind,
     }
@@ -767,6 +780,7 @@ pub fn boss_music_for_kind(kind: EnemyKind) -> Option<MusicCue> {
         EnemyKind::LilHunter | EnemyKind::LilHunterLoop => Some(MusicCue::BossLilHunter),
         EnemyKind::Throne => Some(MusicCue::BossThrone),
         EnemyKind::ThroneII => Some(MusicCue::BossThroneII),
+        EnemyKind::YvBoss => Some(MusicCue::BossYvBoss),
         _ => None,
     }
 }
@@ -884,6 +898,13 @@ pub fn music_candidates(cue: MusicCue) -> &'static [&'static str] {
             "audio/music/musCampfire.ogg",
             "sounds/music/campfire.ogg",
         ],
+        MusicCue::Crib => &[
+            "audio/mus107.ogg",
+            "audio/music/crib.ogg",
+            "audio/music/yv_crib.ogg",
+            "audio/music/musCrib.ogg",
+            "sounds/music/crib.ogg",
+        ],
         MusicCue::TitleTheme => &[
             "audio/musthemea.ogg",
             "audio/musThemeA.ogg",
@@ -935,6 +956,14 @@ pub fn music_candidates(cue: MusicCue) -> &'static [&'static str] {
             "audio/music/throne_ii.ogg",
             "audio/music/musThrone2.ogg",
             "sounds/music/boss_throne_ii.ogg",
+        ],
+        MusicCue::BossYvBoss => &[
+            "audio/musBoss9.ogg",
+            "audio/musboss9.ogg",
+            "audio/music/boss_yv_boss.ogg",
+            "audio/music/yv_boss.ogg",
+            "audio/music/musBossYV.ogg",
+            "sounds/music/boss_yv_boss.ogg",
         ],
     }
 }
@@ -1019,6 +1048,12 @@ pub fn ambience_candidates(cue: AmbienceCue) -> &'static [&'static str] {
             "audio/ambience/city_noise.ogg",
             "audio/ambient/city.ogg",
             "sounds/ambience/city_noise.ogg",
+        ],
+        AmbienceCue::DefaultLoop => &[
+            "audio/amb0b.ogg",
+            "audio/ambience/default_loop.ogg",
+            "audio/ambient/default.ogg",
+            "sounds/ambience/default_loop.ogg",
         ],
     }
 }

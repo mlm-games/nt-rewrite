@@ -1977,8 +1977,10 @@ pub struct Tangle {
 }
 
 /// `sprTangle` collision box is 47x33; the overlap test is a circle at
-/// half the shorter side.
-const TANGLE_RADIUS: f32 = 16.0;
+/// half the shorter side. GML gives `Tangle` a real mask (its sprite has
+/// no `spriteMaskId`), so `TrapFire/Collision_Tangle` can see it — the
+/// port carries the same circle as a [`Hitbox`].
+pub const TANGLE_RADIUS: f32 = 16.0;
 
 /// GML `scripts/scrPowers/scrPowers.gml:116-131` (Race.Plant) plus
 /// `scripts/scrControlAutoSnare/scrControlAutoSnare.gml`. The seed flies
@@ -2039,6 +2041,11 @@ fn plant_tangle(
         commands.spawn((
             LevelCleanup,
             Tangle { creator, team },
+            // GML `Tangle` inherits `Player`, so it carries a body: the
+            // mask `TrapFire/Collision_Tangle.gml` collides against.
+            Hitbox {
+                radius: TANGLE_RADIUS,
+            },
             GmlImage::new("images/sprTangle.png", 6, 0.4),
             NativeFlip(rng.random_bool(0.5)),
             NativeAngle(0.0),

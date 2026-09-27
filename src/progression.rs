@@ -309,6 +309,14 @@ pub struct DeferredFloorGen(pub bool);
 #[derive(Resource, Default, Clone, Copy, Debug)]
 pub struct IceFlowerSeed(pub bool);
 
+/// GML `IceFlower/Create_0.gml:23` `feed = 0`. The player's
+/// `press_pick` bumps it (`Player/Collision_IceFlower.gml:17`); at
+/// `feed >= 4` the flower opens the jungle (`IceFlower/Step_0.gml:4`).
+/// `IceFlower` is a `prop`, so this rides the enemy entity the port spawns
+/// for `EnemyKind::IceFlower`.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct IceFlowerFeed(pub u8);
+
 /// Floor-seed hash (bevy `derive_floor_seed` verbatim).
 fn derive_floor_seed(prev: u64, floor: u32, area: u8, loop_count: u32) -> u64 {
     let mut x = prev
@@ -1349,6 +1357,48 @@ pub fn spawn_portal(
     );
 }
 
+/// GML `IceFlower/Step_0.gml:4-22` verbatim: the `feed >= 4` payoff, the
+/// only way into `area_jungle`. `GameCont.area = area_jungle; subarea = 0`
+/// pre-loads the jungle and the room-end bump (`GameCont/Other_5:134`)
+/// then takes subarea to 1, the jungle's only floor; the port flips the
+/// area on the portal transit instead, exactly as it already does for
+/// `area_vault`, so the leg is queued here. `with (enemy) hp = 0` wipes
+/// the floor (deaths run the normal cascade), a plain `type = 1`
+/// `Portal` opens at the flower, `mut_last_wish` is refunded, then the
+/// flower dies.
+pub fn ice_flower_jungle(
+    commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
+    triggers: &mut crate::secrets::SecretTriggers,
+    player: &mut Player,
+    enemy_shots: &mut Query<(Entity, &Team), With<Projectile>>,
+    enemies: &mut Query<(Entity, &mut Health), With<Enemy>>,
+    flower: Entity,
+    flower_pos: glam::Vec2,
+) {
+    triggers.queue(SecretTarget::Jungle);
+
+    // `IceFlower` is a `prop`, so GML's `with (enemy)` never swept it.
+    for (e, mut health) in enemies.iter_mut() {
+        if e == flower {
+            continue;
+        }
+        health.hp = 0;
+    }
+
+    spawn_portal(commands, catalog, enemy_shots, flower_pos, 1);
+
+    // GML `IceFlower/Step_0:14-19`: the jungle secret eats the Last Wish
+    // and hands the skill point back, so the next pick is free.
+    if player.mutations.contains(&MutationId::LastWish) {
+        player.mutations.retain(|m| *m != MutationId::LastWish);
+        player.last_wish_used = false;
+        player.mutation_picks_owed = player.mutation_picks_owed.saturating_add(1);
+    }
+
+    commands.entity(flower).despawn();
+}
+
 /// Open the exit portal once the area is clear: clear stray enemy fire,
 /// spawn portal + shock + clear markers, juice, sting.
 pub fn portal_check(
@@ -1365,8 +1415,11 @@ pub fn portal_check(
     catalog: Res<repame_anim::AnimCatalog>,
     portals: Query<Entity, With<Portal>>,
     // GML `Corpse/Alarm_0:3`: the clear portal never spawns while a
-    // `CrownPickup` / `VaultStatue` / `CrownGuardian` lives.
+    // `CrownPickup` / `VaultStatue` / `CrownGuardian` lives. The pickup is
+    // the port's `CrownPedestal`, the guardian is an `Enemy` (gated above);
+    // the statue is a `Prop`, so it needs its own query.
     vault: Query<Entity, With<CrownPedestal>>,
+    vault_statues: Query<Entity, With<crate::crown::VaultStatue>>,
 ) {
     if run.game_over || run.portal_open {
         return;
@@ -1378,7 +1431,7 @@ pub fn portal_check(
     if !enemies.is_empty() {
         return;
     }
-    if !vault.is_empty() {
+    if !vault.is_empty() || !vault_statues.is_empty() {
         return;
     }
     if !portals.is_empty() {
