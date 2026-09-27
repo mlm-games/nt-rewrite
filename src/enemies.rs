@@ -1055,7 +1055,7 @@ pub fn enemy_ai(
     mut enemies: Query<
         (
             Entity,
-            &Enemy,
+            &mut Enemy,
             &mut EnemyBrain,
             &mut Velocity,
             &mut Pos,
@@ -1086,7 +1086,7 @@ pub fn enemy_ai(
         .collect();
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
 
-    for (entity, enemy, mut brain, mut vel, mut pos, boss, mut anim, hurt) in &mut enemies {
+    for (entity, mut enemy, mut brain, mut vel, mut pos, boss, mut anim, hurt) in &mut enemies {
         let epos = pos.0;
         let to_player = player_pos - epos;
         let dist = to_player.length();
@@ -1393,6 +1393,25 @@ pub fn enemy_ai(
 
         // InvSpider/InvLaserCrystal fade: visual-only, omitted.
 
+        // GML objects that raise and clear their own `meleedamage` in
+        // `Other_10`, and objects that override `Collision_Player` so contact
+        // never reaches `scr_hit`.
+        match enemy.kind {
+            // `Turtle/Other_10`: 4 only while `walk > 0`, else 0.
+            EnemyKind::Turtle => enemy.touch_damage = if brain.walk > 0.0 { 4 } else { 0 },
+            // `FiredMaggot` replaces `Collision_Player` outright, so its
+            // `meleedamage = 1` is dead code.
+            EnemyKind::FiredMaggot => enemy.touch_damage = 0,
+            // `ExploFreak/Collision_Wall`: it blows itself up on any wall
+            // contact while the player is within 96 px.
+            EnemyKind::ExploFreak if contact.is_some() && dist < 96.0 => {
+                enemy_cue(&mut cues, "snd_mele");
+                commands.entity(entity).despawn();
+                continue;
+            }
+            _ => {}
+        }
+
         separate(&positions, epos, &mut vel.0, enemy.kind, run.loop_count, current_frame);
 
         if enemy.kind == EnemyKind::Necromancer {
@@ -1524,7 +1543,7 @@ pub fn enemy_ai(
                             &mut commands,
                             &mut rng,
                             entity,
-                            enemy,
+                            &*enemy,
                             def,
                             epos,
                             gdir,
@@ -1551,7 +1570,7 @@ pub fn enemy_ai(
                             5,
                             3.0,
                             5.0,
-                            150.0,
+                            120.0,
                             true,
                         );
                     }
@@ -1650,7 +1669,7 @@ pub fn enemy_ai(
                                 def.projectile_damage,
                                 def.projectile_lifetime,
                                 def.projectile_radius,
-                                150.0,
+                                120.0,
                                 false,
                             );
                         }
@@ -1674,7 +1693,7 @@ pub fn enemy_ai(
                             &mut commands,
                             &mut rng,
                             entity,
-                            enemy,
+                            &*enemy,
                             def,
                             epos,
                             gdir,
@@ -1722,7 +1741,7 @@ pub fn enemy_ai(
                             2,
                             3.0,
                             4.0,
-                            150.0,
+                            120.0,
                             false,
                         );
                     }
@@ -1928,7 +1947,7 @@ pub fn enemy_ai(
                             5,
                             4.0,
                             6.0,
-                            150.0,
+                            120.0,
                             false,
                         );
                         show_enemy_fire(
@@ -2077,7 +2096,7 @@ pub fn enemy_ai(
                             &mut commands,
                             &mut rng,
                             entity,
-                            enemy,
+                            &*enemy,
                             def,
                             epos,
                             dir,
@@ -2106,7 +2125,7 @@ pub fn enemy_ai(
                             &mut commands,
                             &mut rng,
                             entity,
-                            enemy,
+                            &*enemy,
                             def,
                             epos,
                             dir,
@@ -2125,7 +2144,7 @@ pub fn enemy_ai(
                 }
             } else {
                 if brain.fire_alarm.just_finished() {
-                    fire_enemy_shot(&mut commands, &mut rng, entity, enemy, def, epos, dir);
+                    fire_enemy_shot(&mut commands, &mut rng, entity, &*enemy, def, epos, dir);
                     show_enemy_fire(
                         &mut commands,
                         &catalog,
@@ -2192,7 +2211,7 @@ pub fn tick_bandit(
                                 3,
                                 3.5,
                                 4.0,
-                                150.0,
+                                120.0,
                                 false,
                             );
                             commands.entity(bullet).insert((
@@ -2810,17 +2829,24 @@ pub fn tick_fired_maggot(
         set_gml_speed(&mut brain, &mut vel, 7.0);
         let epos = pos.0;
         let next = epos + vel.0 * dt;
+        // GML `FiredMaggot/Collision_Player` has no `instance_destroy`: the
+        // fired maggot keeps flying and injects a Maggot on *every* step it
+        // overlaps the player. `point_direction(other.x, other.y, x, y)` is
+        // evaluated inside the new Maggot's `with` scope, i.e. player -> maggot,
+        // so the spawn is thrown away from the player.
         if let Some((player_pos, true)) = player
             && next.distance(player_pos) <= 8.0 + enemy_def(enemy.kind).radius
         {
-            let angle = (player_pos - epos).y.atan2((player_pos - epos).x);
-            queue_conversion_maggot(&mut commands, next, angle, run.loop_count);
-            commands.entity(entity).despawn();
-            continue;
+            let away = (next - player_pos).y.atan2((next - player_pos).x);
+            queue_conversion_maggot(&mut commands, next, away, run.loop_count);
         }
+        // GML `FiredMaggot/Collision_Wall`: bounce, spawn the Maggot, then
+        // destroy the fired maggot. `other` is the Wall instance, so the
+        // spawn is thrown away from the wall's origin.
         if blocked_by_wall(&mask, next, enemy_def(enemy.kind).radius) {
-            let angle = brain.heading + std::f32::consts::PI;
-            queue_conversion_maggot(&mut commands, next, angle, run.loop_count);
+            let wall = nearest_floor_point(&mask, next);
+            let away = (next - wall).y.atan2((next - wall).x);
+            queue_conversion_maggot(&mut commands, next, away, run.loop_count);
             commands.entity(entity).despawn();
             continue;
         }
@@ -2930,7 +2956,7 @@ pub fn tick_scorpion(
                     2,
                     3.0,
                     4.0,
-                    150.0,
+                    120.0,
                     false,
                 );
                 commands.entity(bullet).insert((
@@ -3078,7 +3104,7 @@ pub fn tick_gold_scorpion(
                     2,
                     3.0,
                     4.0,
-                    150.0,
+                    120.0,
                     false,
                 );
                 let b2 = spawn_enemy_projectile(
@@ -3090,7 +3116,7 @@ pub fn tick_gold_scorpion(
                     2,
                     3.0,
                     4.0,
-                    150.0,
+                    120.0,
                     false,
                 );
                 commands.entity(b1).insert(ProjectileTyp(2));
@@ -3242,7 +3268,7 @@ pub fn tick_sniper(
                     3,
                     2.0,
                     3.5,
-                    150.0,
+                    120.0,
                     false,
                 );
                 commands.entity(bullet).insert((
@@ -3401,7 +3427,7 @@ pub fn tick_jungle_bandit(
                 1,
                 3.0,
                 3.5,
-                150.0,
+                120.0,
                 false,
             );
             commands.entity(bullet).insert((
@@ -3563,7 +3589,7 @@ pub fn tick_melee_bandit(
                     5,
                     0.4,
                     4.0,
-                    150.0,
+                    120.0,
                     false,
                 );
                 commands.entity(slash).insert(ProjectileTyp(0));
@@ -3887,7 +3913,7 @@ fn fire_enemy_shell(
         1,
         3.0,
         3.5,
-        150.0,
+        120.0,
         false,
     );
     commands.entity(e).insert((
@@ -3925,7 +3951,7 @@ fn fire_enemy_flak(
         0,
         3.0,
         6.0,
-        150.0,
+        120.0,
         false,
     );
     commands.entity(e).insert((
@@ -3967,12 +3993,12 @@ pub fn fire_enemy_bullet(
         commands,
         owner,
         enemy.kind,
-        pos + shot_dir * 20.0,
+        pos,
         shot_dir * speed,
         def.projectile_damage,
         def.projectile_lifetime,
         def.projectile_radius,
-        150.0,
+        120.0,
         explosive_kind(enemy.kind),
     );
     finish_enemy_bullet(&mut commands.entity(e), enemy.kind);
@@ -4007,7 +4033,7 @@ fn fire_guardian_volley(
             5,
             3.0,
             4.0,
-            150.0,
+            120.0,
             false,
         );
         finish_enemy_bullet(&mut commands.entity(e), kind);
@@ -4135,12 +4161,12 @@ pub fn fire_enemy_shot(
             commands,
             owner,
             enemy.kind,
-            pos + shot_dir * 20.0,
+            pos,
             shot_dir * speed,
             def.projectile_damage,
             def.projectile_lifetime,
             def.projectile_radius,
-            150.0,
+            120.0,
             explosive_kind(enemy.kind),
         );
         finish_enemy_bullet(&mut commands.entity(e), enemy.kind);

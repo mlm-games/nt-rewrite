@@ -165,7 +165,7 @@ pub fn contact_damage(
     mut enemies: Query<
         (
             &Pos,
-            &Enemy,
+            &mut Enemy,
             &mut EnemyBrain,
             &mut Health,
             &Hitbox,
@@ -187,7 +187,7 @@ pub fn contact_damage(
     let player_pos = player_pos.0;
     let mut took_damage = 0;
 
-    for (enemy_pos, enemy, mut brain, ehealth, enemy_hitbox, enemy_vel) in &mut enemies {
+    for (enemy_pos, enemy, mut brain, mut ehealth, enemy_hitbox, enemy_vel) in &mut enemies {
         if player_pos.distance(enemy_pos.0) >= PLAYER_RADIUS + enemy_hitbox.radius {
             continue;
         }
@@ -206,10 +206,27 @@ pub fn contact_damage(
             continue;
         }
 
+        // GML `Collision_Player` overrides that end in `hp = 0`: the contact
+        // destroys the enemy instead of hurting the player.
+        if matches!(
+            enemy.kind,
+            EnemyKind::ExploFreak
+                | EnemyKind::RadMaggot
+                | EnemyKind::SuperFrog
+                | EnemyKind::Ballguy
+        ) {
+            ehealth.hp = 0;
+            continue;
+        }
+
         if player.gamma_guts && ehealth.hp <= 6 {
             continue;
         }
 
+        // `brain.dash > 0` is the port's stand-in for the few objects that
+        // raise `meleedamage` mid-attack; the rest read their own
+        // `meleedamage`, which `enemy_ai` keeps current for the objects whose
+        // `Other_10` toggles it.
         let damage = if brain.dash > 0.0 {
             10
         } else {
