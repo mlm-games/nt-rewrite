@@ -1016,6 +1016,7 @@ pub fn enemy_ai(
                 | EnemyKind::Sniper
                 | EnemyKind::JungleBandit
                 | EnemyKind::MeleeBandit
+                | EnemyKind::Assassin
                 | EnemyKind::Ballguy
                 | EnemyKind::EliteInspector
                 | EnemyKind::EliteShielder
@@ -2128,10 +2129,16 @@ pub fn tick_bandit(
                             brain.gunangle = target_dir;
                         }
                     } else {
+                        // GML `Bandit/Alarm_1`: inside 48 px it uses
+                        // `point_direction(target.x, target.y, x, y)` (target ->
+                        // self), so the retreat runs *away* from the player.
+                        // `target_dir` is the opposite bearing.
                         set_gml_direction(
                             &mut brain,
                             &mut vel,
-                            target_dir + rng.random_range(-10.0_f32..10.0).to_radians(),
+                            target_dir
+                                + std::f32::consts::PI
+                                + rng.random_range(-10.0_f32..10.0).to_radians(),
                         );
                         set_gml_speed(&mut brain, &mut vel, 0.4);
                         brain.walk = 40.0 + rng.random_range(0.0..10.0);
@@ -3256,7 +3263,9 @@ pub fn tick_jungle_bandit(
                         set_gml_direction(
                             &mut brain,
                             &mut vel,
-                            target_dir + rng.random_range(-10.0_f32..10.0).to_radians(),
+                            target_dir
+                            + std::f32::consts::PI
+                            + rng.random_range(-10.0_f32..10.0).to_radians(),
                         );
                         set_gml_speed(&mut brain, &mut vel, 0.4);
                         brain.walk = 40.0 + rng.random_range(0.0..10.0);
@@ -3372,7 +3381,9 @@ pub fn tick_melee_bandit(
     let solids = prop_shapes(&props);
     let mut rng = rand::rng();
     for (entity, enemy, mut brain, mut vel, mut pos) in &mut enemies {
-        if enemy.kind != EnemyKind::MeleeBandit {
+        // GML `JungleAssassin` declares `MeleeBandit` as its parent object, so
+        // it inherits every one of MeleeBandit's events.
+        if !matches!(enemy.kind, EnemyKind::MeleeBandit | EnemyKind::Assassin) {
             continue;
         }
         let epos = pos.0;
@@ -3973,6 +3984,39 @@ pub fn finish_enemy_bullet(ec: &mut EntityCommands, kind: EnemyKind) {
     }
 }
 
+/// Per-pellet aim offsets and random spread for `fire_enemy_shot`, in radians.
+///
+/// GML spells most of these out per object rather than deriving them:
+/// `Molesarge/Alarm_1` fires at `gunangle + {0, -15, +15, -30, +30}` with no
+/// extra jitter, `SuperFireBaller/Alarm_1` uses `orandom(6)`, and
+/// `Molefish/Alarm_1` uses `random(4) - 2`. Everything else keeps the evenly
+/// spaced table fan and the table's spread.
+fn gml_fan(kind: EnemyKind, total: usize, table_spread: f32) -> ([f32; 8], f32) {
+    let mut offsets = [0.0f32; 8];
+    match kind {
+        EnemyKind::Molesarge => {
+            const D: [f32; 5] = [0.0, -15.0, 15.0, -30.0, 30.0];
+            for (i, o) in offsets.iter_mut().enumerate().take(5) {
+                *o = D[i].to_radians();
+            }
+            (offsets, 0.0)
+        }
+        EnemyKind::SuperFireBaller => {
+            for o in offsets.iter_mut().take(total) {
+                *o = 0.0;
+            }
+            (offsets, 6.0f32.to_radians())
+        }
+        EnemyKind::Molefish => (offsets, 2.0f32.to_radians()),
+        _ => {
+            for i in 0..offsets.len().min(total.max(1)) {
+                offsets[i] = (i as f32 - (total as f32 - 1.0) * 0.5) * table_spread;
+            }
+            (offsets, 0.06)
+        }
+    }
+}
+
 /// Fan volley: `bullets_per_shot` pellets around the aim with per-pellet
 /// jitter (SuperFireBaller's per-pellet speeds preserved).
 #[allow(clippy::too_many_arguments)]
@@ -3987,15 +4031,15 @@ pub fn fire_enemy_shot(
 ) {
     let base = dir.y.atan2(dir.x);
     let total = def.bullets_per_shot;
+    let (offsets, spread) = gml_fan(enemy.kind, total, def.fan_spread);
     for i in 0..total {
-        let offset = if total > 1 {
-            (i as f32 - (total as f32 - 1.0) * 0.5) * def.fan_spread
-        } else {
-            0.0
-        };
-        let angle = base + offset + rng.random_range(-0.06..0.06);
+        let offset = offsets.get(i).copied().unwrap_or(0.0);
+        let angle = base + offset + rng.random_range(-spread..spread);
         let shot_dir = glam::Vec2::new(angle.cos(), angle.sin());
-        let speed = if enemy.kind == EnemyKind::SuperFireBaller {
+        // `Molesarge/Alarm_1` re-rolls `10 + random(2)` per pellet.
+        let speed = if enemy.kind == EnemyKind::Molesarge {
+            rng.random_range(10.0..12.0) * crate::SIM_HZ as f32
+        } else if enemy.kind == EnemyKind::SuperFireBaller {
             [90.0, 120.0, 150.0][(i as usize).min(2)]
         } else {
             def.projectile_speed
