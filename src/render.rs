@@ -36,8 +36,8 @@ use repame_anim::{AnimCatalog, AnimDef, AtlasDesc, UvRect, frame_key};
 use repame_atlas::AtlasId;
 use repame_fx::{DamageNumber, Particle, particle_sprites};
 use repame_sprite::{
-    AtlasUpload, BatchDesc, Camera2d, SpriteBlend, SpriteInstance, WorldText, dp_to_world,
-    effective_fit, world_to_dp,
+    AtlasUpload, BatchDesc, Camera2d, FitMode, SpriteBlend, SpriteInstance, WorldText,
+    dp_to_world, effective_fit, world_to_dp,
 };
 
 use crate::anim::{PlayerAnim, SpriteAnim};
@@ -1650,6 +1650,9 @@ pub fn world_camera(center: Vec2, scale: f32) -> Camera2d {
         // No camera roll in the port (GML has none; trauma shake stays
         // translational through `GmlCamera`).
         roll: 0.0,
+        // GML's view shows exactly its view rect and pillarboxes, so the
+        // world rect is kept and bars land on the roomier axis.
+        fit: FitMode::Keep,
     }
 }
 

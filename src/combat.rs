@@ -94,10 +94,12 @@ impl HitFlash {
     }
 }
 
-/// Pure knockback law (game-utils `GameFeel::apply_knockback` parity):
-/// velocity is *set* to the directed force, not added.
+/// GML `motion_add(dir, amount)`: the impulse is *added* to the existing
+/// velocity, not written over it. `scr_hit` applies every knockback this way
+/// (`scr_projectile_hit`, `scr_damage_create`, `enemy/Collision_Player`), so a
+/// body already moving keeps its own motion.
 pub fn apply_knockback(velocity: &mut glam::Vec2, dir: glam::Vec2, force: f32) {
-    *velocity = dir.normalize_or_zero() * force;
+    *velocity += dir.normalize_or_zero() * force;
 }
 
 /// Gamma Guts aura: enemies within 60px of a guts carrier whose
@@ -186,10 +188,21 @@ pub fn contact_damage(
     let mut took_damage = 0;
 
     for (enemy_pos, enemy, mut brain, ehealth, enemy_hitbox, enemy_vel) in &mut enemies {
-        if !brain.melee.is_finished() {
+        if player_pos.distance(enemy_pos.0) >= PLAYER_RADIUS + enemy_hitbox.radius {
             continue;
         }
-        if player_pos.distance(enemy_pos.0) >= PLAYER_RADIUS + enemy_hitbox.radius {
+
+        // GML `enemy/Collision_Player` applies the `size <= 2` push-outside-the-
+        // melee-block part, so it runs for every overlapping enemy every step
+        // regardless of `meleedamage` or the melee cooldown.
+        if crate::enemy_data::gml_size(enemy.kind) <= 2
+            && let Some(mut evel) = enemy_vel
+        {
+            let push_enemy = (enemy_pos.0 - player_pos).normalize_or_zero();
+            apply_knockback(&mut evel.0, push_enemy, 30.0);
+        }
+
+        if !brain.melee.is_finished() {
             continue;
         }
 
@@ -216,13 +229,6 @@ pub fn contact_damage(
 
         let away = (player_pos - enemy_pos.0).normalize_or_zero();
         apply_knockback(&mut player_vel.0, away, 120.0);
-
-        if crate::enemy_data::gml_size(enemy.kind) <= 2
-            && let Some(mut evel) = enemy_vel
-        {
-            let push_enemy = (enemy_pos.0 - player_pos).normalize_or_zero();
-            apply_knockback(&mut evel.0, push_enemy, 30.0);
-        }
 
         HitFlash::apply(&mut commands, player_e, [1.0, 0.15, 0.1, 1.0], 0.18);
         trauma.add(0.35);
