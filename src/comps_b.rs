@@ -700,11 +700,33 @@ pub enum PickupKind {
     Rad(u32),
     Medkit(i32),
     Ammo(AmmoKind, i32),
+    /// GML `CursedPickup` (parent `AmmoPickup`): pays out ammo exactly
+    /// like an `AmmoPickup` on touch, but blinks for ~2 s spraying
+    /// `Curse` motes and then detonates.
+    CursedAmmo,
     Weapon(WeaponId),
     Chest(ChestKind),
     /// GML `Curse` mote (Robot's cursed-weapon eat spills 10; ambient,
     /// no pickup effect — collected by despawn).
     Curse,
+}
+
+/// GML `BigGenerator/Destroy_0.gml:33-35` fires
+/// `with (Nothing) hp = round(hp / 2)`. Routed through a marker so the
+/// drop system never holds `&mut Health` alongside the player's `&Health`.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct ThroneWeaken;
+
+/// GML `CursedPickup`: `blink = 30` with `Alarm_0` re-arming itself
+/// every 2 steps, so the detonation lands on `blink < 0` after 62 steps.
+/// `alarm` counts the re-arm; `sounded` gates the one-shot
+/// `Create_0` sting, which plays on the first tick instead of at spawn
+/// because the spawn helpers carry no audio queue.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct CursedAmmoBlink {
+    pub blink: i32,
+    pub alarm: f32,
+    pub sounded: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1131,6 +1153,7 @@ pub enum MoteStrip {
     Money,
     Raven,
     Curse,
+    PortalL,
 }
 
 #[derive(Component)]

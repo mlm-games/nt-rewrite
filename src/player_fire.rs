@@ -2312,9 +2312,17 @@ pub fn robot_eat_drops(
                 *slot = (*slot + ammo_pickup_amount(kind)).min(cap);
             } else {
                 let off = Vec2::new(rng.random_range(-12.0..12.0), rng.random_range(-12.0..12.0));
-                spawn_pickup(
+                // GML `scrPowers.gml:637,655` `__spawn_pickup(AmmoPickup,
+                // _auto_collect)` creates a real `AmmoPickup`, so
+                // `AmmoPickup/Create_0.gml:13-18`'s `CursedPickup`
+                // conversion applies — its gate is `instance_exists(Player)`,
+                // not `GenCont`. A conversion discards the type resolved
+                // here, exactly as GML re-rolls it in
+                // `AmmoPickup/Collision_Player`.
+                crate::pickups::maybe_cursed_ammo(
                     commands,
                     catalog,
+                    crate::pickups::count_cursed(inv),
                     PickupKind::Ammo(kind, ammo_pickup_amount(kind)),
                     pos + off,
                     0,
@@ -2334,8 +2342,9 @@ pub fn robot_eat_drops(
     {
         // GML Regurgitate roll (no life-crown gate on this branch).
         // `__spawn_pickup` creates at the caller's own `x, y` with no
-        // offset, and there is no `GenCont`, so no curse roll — but the
-        // area/ultra art variants still apply.
+        // offset, and it spawns CHESTS (`scrPowers.gml:639-648`), so no
+        // `CursedPickup` conversion is involved — but the area/ultra art
+        // variants still apply.
         let ctx = crate::pickups::ChestCtx {
             worldgen: false,
             area: run_area,

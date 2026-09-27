@@ -494,6 +494,12 @@ pub fn build_sim_schedule() -> Schedule {
                 environment::tick_ground_flames
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
+                environment::tick_prop_drops
+                    .in_set(NtSimSet::Combat)
+                    .run_if(gameplay_active),
+                environment::apply_throne_weaken
+                    .in_set(NtSimSet::Combat)
+                    .run_if(gameplay_active),
                 combat::tick_hazard_clouds
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
@@ -543,6 +549,9 @@ pub fn build_sim_schedule() -> Schedule {
                     .in_set(NtSimSet::Progression)
                     .run_if(gameplay_active),
                 pickups::tick_pickup_drag
+                    .in_set(NtSimSet::Progression)
+                    .run_if(gameplay_active),
+                pickups::tick_cursed_ammo
                     .in_set(NtSimSet::Progression)
                     .run_if(gameplay_active),
                 pickups::collect_pickups

@@ -387,7 +387,12 @@ impl GameAudio {
 
     /// GML `WeaponChest/Collision_Player.gml:26-34`: Oasis
     /// `sndOasisChest` / Curses `sndCursedChest` / else `sndWeaponChest`.
-    pub fn play_weapon_chest_open(&self, cues: &mut Queue<AudioCue>, underwater: bool, cursed: bool) {
+    pub fn play_weapon_chest_open(
+        &self,
+        cues: &mut Queue<AudioCue>,
+        underwater: bool,
+        cursed: bool,
+    ) {
         Self::cue(
             cues,
             if underwater {
@@ -437,8 +442,23 @@ impl GameAudio {
     }
 
     /// GML `CursedPickup/Create_0.gml:8` `snd_play_hit(sndCursedPickup, 0.2)`.
+    /// `snd_play_hit`'s 2nd arg is random PITCH, and `_gain` is
+    /// `UberCont.opt_sndvol` (1.0) — see `scripts/snd_play_hit`. The port's
+    /// 4th field is pitch jitter, so `0.2 * 0.5 = 0.1`.
     pub fn play_cursed_pickup(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndCursedPickup", 0.2, 0.0);
+        Self::cue(cues, "sndCursedPickup", 1.0, 0.1);
+    }
+
+    /// GML `CursedPickup/Alarm_0.gml:1-4`:
+    /// `snd_play(sndExplosionS)` + `snd_play(sndCursedPickupDisappear)`.
+    pub fn play_cursed_pickup_disappear(&self, cues: &mut Queue<AudioCue>) {
+        Self::cue(cues, "sndExplosionS", 1.0, 0.0);
+        Self::cue(cues, "sndCursedPickupDisappear", 1.0, 0.0);
+    }
+
+    /// GML `BigGenerator/Destroy_0.gml:34` `snd_play(sndNothingGenerators)`.
+    pub fn play_nothing_generators(&self, cues: &mut Queue<AudioCue>) {
+        Self::cue(cues, "sndNothingGenerators", 1.0, 0.0);
     }
 
     /// GML `Player/Collision_WepPickup.gml:14-27`: guitar /
@@ -1636,9 +1656,9 @@ pub fn ui_action_to_cue(action: &UiAction) -> Option<ReactiveCue> {
         | UiAction::CloseOverlay
         | UiAction::SaveSettings => Some(ReactiveCue::UiClick),
 
-        UiAction::SelectCharacter(_)
-        | UiAction::PickMutation(_)
-        | UiAction::SelectCrown(_) => Some(ReactiveCue::UiConfirm),
+        UiAction::SelectCharacter(_) | UiAction::PickMutation(_) | UiAction::SelectCrown(_) => {
+            Some(ReactiveCue::UiConfirm)
+        }
         // GML `SkillIcon` highlight law: landing on a card plays
         // `sndHover`, not a confirm. `SelectMutation` is the highlight
         // half of the two-step; only the commit (`PickMutation`) is a
@@ -1661,7 +1681,7 @@ pub fn ui_action_to_cue(action: &UiAction) -> Option<ReactiveCue> {
         | UiAction::ShowPauseConfirm(_)
         | UiAction::CancelPauseConfirm
         | UiAction::ConfirmPause(_)
-        |         UiAction::PlaySubmenu(_)
+        | UiAction::PlaySubmenu(_)
         | UiAction::ClosePlaySubmenu
         | UiAction::AdvanceCredits
         | UiAction::DismissUnlock

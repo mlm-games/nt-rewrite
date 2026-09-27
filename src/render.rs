@@ -966,6 +966,7 @@ pub fn pickup_art(kind: &PickupKind) -> Cow<'static, str> {
         PickupKind::Rad(_) => Cow::Borrowed("images/sprRad.png"),
         PickupKind::Medkit(_) => Cow::Borrowed("images/sprHP.png"),
         PickupKind::Ammo(..) => Cow::Borrowed("images/sprAmmo.png"),
+        PickupKind::CursedAmmo => Cow::Borrowed("images/sprCursedAmmo.png"),
         PickupKind::Curse => Cow::Borrowed("images/sprCurse.png"),
         PickupKind::Weapon(w) => {
             let meta = weapon_meta(w);

@@ -1109,7 +1109,7 @@ pub fn resolve_enemy_deaths(
                         crate::spatial::resolve_mask_circle(mask, &mut flame_pos, 14.0);
                     }
                     crate::spatial::clamp_to_arena(&mut flame_pos, 14.0);
-                    spawn_ground_flame(&mut commands, flame_pos, false);
+                    spawn_ground_flame(&mut commands, flame_pos, false, glam::Vec2::ZERO);
                 }
             }
             EnemyKind::GoldScorpion => {

@@ -25,6 +25,7 @@ use repame_fx::Trauma;
 use repame_sim::SimTime;
 
 use crate::audio::{AudioCue, GameAudio, QueuedReactiveCue, ReactiveCue};
+use crate::combat::{queue_enemy_spawn, queue_enemy_spawn_birth};
 use crate::comps_a::{
     ARENA_H, ARENA_W, FloorMask, GameCleanup, Health, HeavyHeart, Inventory, LevelCleanup, Player,
     Run, ScarierFace, Toast,
@@ -33,7 +34,6 @@ use crate::comps_b::{
     Enemy, GmlImage, IdpdRaidState, IdpdShieldUnit, LoopTransition, NativeMotion, NativeWallMotion,
     PickupLifetime, PortalClear, RaidWave,
 };
-use crate::combat::{queue_enemy_spawn, queue_enemy_spawn_birth};
 use crate::data::{AreaId, EnemyKind};
 use crate::decide_wep::WeaponDropsRng;
 use crate::effects::spawn_burst;
@@ -115,7 +115,11 @@ pub fn roll_idpd_table(
         return vec![EnemyKind::PopoFreak];
     }
     let mut rng = rand::rng();
-    let dir = roll_idpd_dir(&mut || rng.random::<f32>(), popolevel, loop_count == 0 && lil_hunter_alive);
+    let dir = roll_idpd_dir(
+        &mut || rng.random::<f32>(),
+        popolevel,
+        loop_count == 0 && lil_hunter_alive,
+    );
     let elite = idpd_elite_roll(loop_count, area);
     match dir {
         2 => vec![if elite {
@@ -271,43 +275,25 @@ pub const VAN_INERT_FRAMES: f32 = 35.0;
 /// `during_worldgen` is the port's stand-in for GML's
 /// `if instance_exists(GenCont) exit`: the generator is pure, so the
 /// caller states the phase.
-pub fn spawn_idpd_chest_raid(
+/// GML `IDPDChest/Destroy_0.gml:11-20`: `repeat 6 instance_create(x, y,
+/// IDPDSpawn)`. Each `IDPDSpawn/Create_0` bumps `GameCont.popolevel` and
+/// schedules its wave 52+ frames out, so this raises six PORTALS, never
+/// six grunts. `instance_number(IDPDSpawn)` is 1-based and counts every
+/// live portal, so a batch staggers 55, 58, 61, 64, 67, 70.
+fn idpd_portals(
     commands: &mut Commands,
     run: &mut Run,
     cues: &mut Queue<AudioCue>,
     live_portals: u32,
     pos: glam::Vec2,
-    during_worldgen: bool,
 ) -> u32 {
-    if during_worldgen {
-        return 0;
-    }
-    // GML `IDPDChest/Destroy_0.gml:4-5`: the `ChestOpen` swap and the
-    // `FXChestOpen` pop. The `OpenedChest` marker is the port's swap; the
-    // burst is the FX half.
-    commands.spawn((
-        GameCleanup,
-        LevelCleanup,
-        crate::comps_b::OpenedChest(crate::comps_b::ChestKind::Idpd),
-        Pos(pos),
-    ));
-    let mut rng = rand::rng();
-    spawn_burst(
-        commands,
-        &mut rng,
-        pos,
-        10,
-        [0.7, 0.9, 1.0, 1.0],
-        (60.0, 200.0),
-    );
-    // GML `IDPDChest/Destroy_0.gml:11-20` + `IDPDSpawn/Create_0.gml:35`
-    // (`snd_play(elite ? sndEliteIDPDPortalSpawn : sndIDPDPortalSpawn)`).
     let mut elites = 0;
-    for i in 0..6 {
-        let (_, elite) = spawn_idpd_spawn(commands, run, live_portals + i, pos);
+    for live in 0..6u32 {
+        let (_, elite) = spawn_idpd_spawn(commands, run, live_portals + live, pos);
         if elite {
             elites += 1;
         }
+        // GML `IDPDSpawn/Create_0.gml:35-36`
         cues.push(AudioCue {
             name: if elite {
                 "sndEliteIDPDPortalSpawn"
@@ -319,6 +305,20 @@ pub fn spawn_idpd_chest_raid(
         });
     }
     elites
+}
+
+/// The `Destroy_0` portal half alone. GML's
+/// `IDPDChest/Collision_Player` runs `instance_destroy()` at the end, so
+/// a chest opened by touch has already swapped itself to `OpenedChest`
+/// and popped `FXChestOpen` before reaching this.
+pub fn raise_idpd_portals(
+    commands: &mut Commands,
+    run: &mut Run,
+    cues: &mut Queue<AudioCue>,
+    live_portals: u32,
+    pos: glam::Vec2,
+) {
+    idpd_portals(commands, run, cues, live_portals, pos);
 }
 
 /// Wave picker from loop pressure + floor (bevy parity).
@@ -496,8 +496,7 @@ pub fn tick_idpd_spawns(
         // (`Create_0.gml:28` arms it and `Alarm_0` swaps the art on the
         // same frame it opens the close strip).
         if portal.alarm0 > 0.0 && portal.close <= 0.0 && portal.alarm1 <= 0.0 {
-            let at = pos.0
-                + glam::Vec2::new(popo.float(96.0) - 48.0, popo.float(96.0) - 48.0);
+            let at = pos.0 + glam::Vec2::new(popo.float(96.0) - 48.0, popo.float(96.0) - 48.0);
             let to_player = player_pos - at;
             let speed = 2.0 + popo.next_float();
             let mut image = GmlImage::new("images/sprIDPDPortalCharge.png", 4, 0.0);
@@ -545,7 +544,11 @@ pub fn tick_idpd_spawns(
             Pos(at),
         ));
         // GML `Alarm_1.gml:3-6`: deep loops skip the dir table entirely.
-        if run.loop_count.saturating_sub(u32::from(run.area == AreaId::Campfire)) >= 3 {
+        if run
+            .loop_count
+            .saturating_sub(u32::from(run.area == AreaId::Campfire))
+            >= 3
+        {
             let jitter = glam::Vec2::new(
                 rng.random_range(0.0..2.0) - 1.0,
                 rng.random_range(0.0..2.0) - 1.0,

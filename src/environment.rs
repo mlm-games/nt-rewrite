@@ -19,8 +19,9 @@ use crate::comps_a::{
 use crate::comps_b::{
     FxAngle, GmlImage, GroundPhysics, Mote, MoteScale, MoteStrip, NativeAngle, NativeDepth,
     NativeExplosionKind, NativeFlip, NativeLifetime, NativeMotion, NativeWallMotion, Portal, Prop,
-    PropSprites, TopSmall, TrapFire,
+    PropSprites, ThroneWeaken, TopSmall, TrapFire,
 };
+use crate::data::{CrownKind, EnemyKind};
 use crate::secrets::SecretTriggers;
 use crate::spatial::{Pos, move_bounce_solid};
 use crate::time::{GTimer, TimerMode};
@@ -108,6 +109,12 @@ pub struct GroundFlame {
     pub alarm: f32,
     pub big: bool,
     pub disappearing: bool,
+    /// GML `BigGenerator/Destroy_0.gml:17`
+    /// `move_contact_solid(random_angle, 8 + random(12))`, in px. GML's
+    /// `move_contact_solid` is a one-shot displacement that leaves `speed`
+    /// alone, and `GroundFlame` has no `Step_0` — so this is applied once
+    /// and cleared, not integrated per tick.
+    pub launch: glam::Vec2,
 }
 
 impl EnvironmentHazard {
@@ -328,10 +335,157 @@ pub struct PropDeathEffect {
     /// `orandom(J)` scatter per `GroundFlame` (GML passes 16 for barrels,
     /// 24 for cars).
     pub flame_jitter: f32,
+    /// GML `move_contact_solid(random_angle, lo + random(span))` on each
+    /// `GroundFlame`, in px. A ONE-SHOT displacement, not a velocity:
+    /// GML's `move_contact_solid` never touches `speed`, and
+    /// `GroundFlame` has no `Step_0` to re-drive it.
+    /// `BigGenerator/Destroy_0.gml:17` is `Some((8.0, 12.0))`.
+    pub flame_launch: Option<(f32, f32)>,
     /// GML `prop/Destroy_0.gml:12` `if (raddrop > 0) scrRadDrop(x, y, raddrop)`.
     pub rad_drop: u32,
+    /// GML `BigGenerator/Destroy_0.gml:31` calls `scrRadDrop` a SECOND
+    /// time after `event_inherited()` already ran the `:12` one. The
+    /// count is per call: `_high = 15` turns each overspill step into one
+    /// 10-rad `BigRad`, so 2x35 is 4 `BigRad` + 30 `Rad` while a single
+    /// 70 would be 6 + 10.
+    pub rad_drop_repeats: u8,
     pub dust_ring: u8,
+    /// GML `BigGenerator/Destroy_0.gml:27-28`: one `PortalL` per dust
+    /// mote, `random_range(bbox_left, bbox_right)` x
+    /// `random_range(bbox_top, bbox_bottom)` — sprite-relative and
+    /// asymmetric, since `sprBigGenerator` is 96x96 with origin 32.
+    pub portal_l_ring: u8,
+    pub bbox_min: glam::Vec2,
+    pub bbox_max: glam::Vec2,
+    /// GML `BigGenerator/Destroy_0.gml:8-13`:
+    /// `if scrCrownCheck(crwn_guns) scrDrop(0, 60) else repeat (2) scrDrop(100, 0)`.
+    pub drop: Option<PropDrop>,
+    /// GML `BigGenerator/Destroy_0.gml:33-35`
+    /// `if !GameCont.loops && instance_number(BigGenerator) <= 1`.
+    pub weaken_nothing: bool,
     pub feather_burst: Option<FeatherBurst>,
+}
+
+/// GML `scrDrop(_pickup_chance, _weapon_chance)`, kept as two
+/// `Option`s because `BigGenerator` picks which pair to call from the
+/// player's crown at death time.
+#[derive(Clone, Copy, Debug)]
+pub struct PropDrop {
+    pub guns_crown_weapon_chance: usize,
+    pub rolls: u8,
+    pub pickup_chance: usize,
+    pub weapon_chance: usize,
+}
+
+/// The live player state `scrDrop` reads, handed to
+/// [`tick_prop_drops`] instead of threaded through every prop-damage
+/// call site.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct PropDropPending {
+    pub spec: PropDrop,
+    pub pos: glam::Vec2,
+    /// GML `BigGenerator/Destroy_0.gml:33-35`: `!GameCont.loops &&
+    /// instance_number(BigGenerator) <= 1` plays `sndNothingGenerators`
+    /// and halves every live `Nothing`.
+    pub weaken_nothing: bool,
+}
+
+/// GML `BigGenerator/Destroy_0.gml:8-13`:
+/// `if scrCrownCheck(crwn_guns) scrDrop(0, 60) else repeat (2) scrDrop(100, 0)`.
+/// The Guns crown swaps the two guaranteed pickups for a single 60%
+/// weapon roll. Deferred one tick because `scrDrop` needs the live
+/// player, which no prop-damage call site carries.
+pub fn tick_prop_drops(
+    mut commands: Commands,
+    catalog: Res<repame_anim::AnimCatalog>,
+    pending: Query<(Entity, &PropDropPending)>,
+    generators: Query<&crate::comps_b::Prop, With<crate::comps_b::BigGenerator>>,
+    player_q: Query<(
+        &crate::comps_a::Player,
+        &crate::comps_a::Inventory,
+        &crate::comps_a::Health,
+    )>,
+    run: Res<crate::comps_a::Run>,
+    cache: Res<crate::pickups::GunDecideCache>,
+    audio: Res<crate::audio::GameAudio>,
+    mut cues: ResMut<crate::msg::Queue<crate::audio::AudioCue>>,
+) {
+    let decide = cache.ctx.as_ref();
+    let Ok((player, inv, health)) = player_q.single() else {
+        for (entity, _) in &pending {
+            commands.entity(entity).despawn();
+        }
+        return;
+    };
+    let chest_ctx = crate::pickups::ChestCtx {
+        crown: player.crown,
+        ..Default::default()
+    };
+    // GML `instance_number` counts the CALLING instance — proven in-repo by
+    // `Console/Create_0.gml:4`, which self-destructs when
+    // `instance_number(object_index) > 1`. So a `Destroy_0` sees itself and
+    // `<= 1` means "this is the last one": with 4 throne generators the
+    // halving fires once, on the final death.
+    //
+    // GML `BigGeneratorInactive` is a root object (`parentObjectId: null`),
+    // so `instance_number(BigGenerator)` skips it. The port shares one
+    // component across both kinds and flips `destructible` on conversion
+    // (`walls::handle_throne_room_props`), which is the discriminator.
+    let generators_left = generators.iter().filter(|prop| prop.destructible).count();
+    for (entity, drop) in &pending {
+        let (pickup_chance, weapon_chance, rolls) = if player.crown == CrownKind::Guns {
+            (0, drop.spec.guns_crown_weapon_chance, 1)
+        } else {
+            (
+                drop.spec.pickup_chance,
+                drop.spec.weapon_chance,
+                drop.spec.rolls,
+            )
+        };
+        for _ in 0..rolls {
+            crate::pickups::maybe_spawn_drop_ctx(
+                &mut commands,
+                &catalog,
+                drop.pos,
+                pickup_chance,
+                weapon_chance,
+                player,
+                inv,
+                health,
+                run.loop_count,
+                decide,
+                &chest_ctx,
+            );
+        }
+        if drop.weaken_nothing && run.loop_count == 0 && generators_left <= 1 {
+            audio.play_nothing_generators(&mut cues);
+            commands.spawn((GameCleanup, LevelCleanup, ThroneWeaken));
+        }
+        commands.entity(entity).despawn();
+    }
+}
+
+/// Consumes [`ThroneWeaken`]: GML
+/// `BigGenerator/Destroy_0.gml:35` `with (Nothing) hp = round(hp / 2)`.
+pub fn apply_throne_weaken(
+    mut commands: Commands,
+    marks: Query<Entity, With<ThroneWeaken>>,
+    mut thrones: Query<
+        (&mut Health, &crate::comps_b::Enemy),
+        Without<crate::comps_b::BigGenerator>,
+    >,
+) {
+    if marks.is_empty() {
+        return;
+    }
+    for mark in &marks {
+        commands.entity(mark).despawn();
+    }
+    for (mut throne, enemy) in &mut thrones {
+        if enemy.kind == EnemyKind::Throne {
+            throne.hp = (throne.hp as f32 / 2.0).round() as i32;
+        }
+    }
 }
 
 /// Visual-only petal/leaf/money scatter (GML `Feather` with a tinted
@@ -411,17 +565,33 @@ impl PropDeathEffect {
         }
     }
 
-    /// GML `BigGenerator/Destroy_0.gml:4-31` verbatim: THREE `Explosion`
-    /// at the exact position, 6 `GroundFlame`, the 10-mote 36-degree
-    /// dust ring, and `scrRadDrop(x, y, 35)`.
+    /// GML `BigGenerator/Destroy_0.gml:1-36` verbatim: `speed = 0`,
+    /// `event_inherited()` (Corpse + `snd_dead` + the `:12` rad drop),
+    /// THREE `Explosion` at the exact position, the crown-gated
+    /// `scrDrop`, 6 `GroundFlame` launched with
+    /// `move_contact_solid`, the 10-mote 36-degree dust ring interleaved
+    /// with 10 bbox-scattered `PortalL`, the SECOND `scrRadDrop`, and
+    /// the `Nothing` halving.
     pub fn big_generator() -> Self {
         Self {
             explosion: Self::blast(32.0, 5),
             blasts: 3,
             ground_flames: 6,
             flame_jitter: 16.0,
+            flame_launch: Some((8.0, 12.0)),
             rad_drop: 35,
+            rad_drop_repeats: 2,
             dust_ring: 10,
+            portal_l_ring: 10,
+            bbox_min: glam::Vec2::splat(-32.0),
+            bbox_max: glam::Vec2::splat(64.0),
+            drop: Some(PropDrop {
+                guns_crown_weapon_chance: 60,
+                rolls: 2,
+                pickup_chance: 100,
+                weapon_chance: 0,
+            }),
+            weaken_nothing: true,
             ..Default::default()
         }
     }
@@ -471,13 +641,7 @@ fn spawn_dust_ring(commands: &mut Commands, particles_on: bool, pos: glam::Vec2,
     let mut rng = rand::rng();
     let mut ang = rng.random_range(0.0..std::f32::consts::TAU);
     for _ in 0..count {
-        spawn_native_dust_mote(
-            commands,
-            true,
-            pos,
-            glam::Vec2::from_angle(ang),
-            3.0,
-        );
+        spawn_native_dust_mote(commands, true, pos, glam::Vec2::from_angle(ang), 3.0);
         ang += 36.0_f32.to_radians();
     }
 }
@@ -495,11 +659,7 @@ pub fn spawn_prop_corpse(
         // GML `Corpse/Create_0.gml:5` `image_speed = 0.4`; `Other_7.gml`
         // parks on the last frame. No `PickupLifetime`: `Corpse` has no
         // lifetime, so a wreck survives the whole floor.
-        ec.insert(SpriteAnim::oneshot_with_image_speed(
-            sprites.dead,
-            def,
-            0.4,
-        ));
+        ec.insert(SpriteAnim::oneshot_with_image_speed(sprites.dead, def, 0.4));
     }
 }
 
@@ -604,6 +764,18 @@ pub fn spawn_prop_death_effect(
         }
     }
 
+    if let Some(spec) = effect.drop {
+        commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            PropDropPending {
+                spec,
+                pos,
+                weaken_nothing: effect.weaken_nothing,
+            },
+        ));
+    }
+
     if effect.ground_flames > 0 {
         let jitter = effect.flame_jitter;
         let mut rng = rand::rng();
@@ -616,7 +788,14 @@ pub fn spawn_prop_death_effect(
             } else {
                 glam::Vec2::ZERO
             };
-            spawn_ground_flame(commands, pos + off, false);
+            let launch = effect
+                .flame_launch
+                .map(|(lo, span)| {
+                    let dist = lo + rng.random_range(0.0..span);
+                    glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU)) * dist
+                })
+                .unwrap_or(glam::Vec2::ZERO);
+            spawn_ground_flame(commands, pos + off, false, launch);
         }
     }
 
@@ -624,8 +803,23 @@ pub fn spawn_prop_death_effect(
         spawn_dust_ring(commands, particles_on, pos, effect.dust_ring);
     }
 
-    if effect.rad_drop > 0 {
-        crate::pickups::spawn_rad_burst(commands, catalog, pos, effect.rad_drop);
+    if effect.portal_l_ring > 0 {
+        let mut rng = rand::rng();
+        let (lo, hi) = (effect.bbox_min, effect.bbox_max);
+        for _ in 0..effect.portal_l_ring {
+            let at = pos
+                + glam::Vec2::new(
+                    rng.random_range(lo.x..hi.x),
+                    rng.random_range(lo.y..hi.y),
+                );
+            spawn_motes(commands, catalog, particles_on, at, MoteStrip::PortalL, 1);
+        }
+    }
+
+    for _ in 0..effect.rad_drop_repeats.max(1) {
+        if effect.rad_drop > 0 {
+            crate::pickups::spawn_rad_burst(commands, catalog, pos, effect.rad_drop);
+        }
     }
 
     if let Some(feather) = effect.feather_burst {
@@ -804,7 +998,12 @@ pub fn spawn_exploder_explo(
         .id()
 }
 
-pub fn spawn_ground_flame(commands: &mut Commands, pos: glam::Vec2, big: bool) -> Entity {
+pub fn spawn_ground_flame(
+    commands: &mut Commands,
+    pos: glam::Vec2,
+    big: bool,
+    launch: glam::Vec2,
+) -> Entity {
     let mut rng = rand::rng();
     let (base, _, frames) = if big {
         (
@@ -830,6 +1029,7 @@ pub fn spawn_ground_flame(commands: &mut Commands, pos: glam::Vec2, big: bool) -
                 alarm: 300.0 + rng.random_range(0.0..120.0),
                 big,
                 disappearing: false,
+                launch,
             },
             image,
             NativeFlip(rng.random_bool(0.5)),
@@ -1155,10 +1355,7 @@ fn step_fire_traps(
         if emit && trap.fire > 0 {
             let (dir, jets) = if trap.side {
                 (
-                    [
-                        glam::Vec2::new(-1.0, 0.0),
-                        glam::Vec2::new(1.0, 0.0),
-                    ],
+                    [glam::Vec2::new(-1.0, 0.0), glam::Vec2::new(1.0, 0.0)],
                     [
                         (glam::Vec2::new(-4.0, 8.0), glam::Vec2::new(-8.0, 0.0)),
                         (glam::Vec2::new(20.0, 8.0), glam::Vec2::new(24.0, 0.0)),
@@ -1166,10 +1363,7 @@ fn step_fire_traps(
                 )
             } else {
                 (
-                    [
-                        glam::Vec2::new(0.0, -1.0),
-                        glam::Vec2::new(0.0, 1.0),
-                    ],
+                    [glam::Vec2::new(0.0, -1.0), glam::Vec2::new(0.0, 1.0)],
                     [
                         (glam::Vec2::new(8.0, -4.0), glam::Vec2::new(0.0, -16.0)),
                         (glam::Vec2::new(8.0, 20.0), glam::Vec2::new(0.0, 16.0)),
@@ -1199,9 +1393,32 @@ fn step_fire_traps(
     }
 }
 
-pub fn tick_ground_flames(time: Res<SimTime>, mut q: Query<(&mut GroundFlame, &mut GmlImage)>) {
+pub fn tick_ground_flames(
+    time: Res<SimTime>,
+    mut sets: ParamSet<(
+        Query<(&mut GroundFlame, &mut GmlImage, &mut Pos), Without<crate::comps_a::WallTile>>,
+        Query<&Pos, With<crate::comps_a::WallTile>>,
+    )>,
+) {
     let steps = time.delta_secs * crate::SIM_HZ as f32;
-    for (mut flame, mut image) in &mut q {
+    // Only `Wall` instances are solid in GML, so the floor mask is not
+    // passed to `move_contact_solid` (matching `player_fire.rs`).
+    let wall_shapes: Vec<(glam::Vec2, glam::Vec2)> = sets
+        .p1()
+        .iter()
+        .map(|p| (p.0, glam::Vec2::splat(crate::worldgen::WALL_PX)))
+        .collect();
+    for (mut flame, mut image, mut pos) in &mut sets.p0() {
+        if flame.launch != glam::Vec2::ZERO {
+            crate::spatial::move_contact_solid(
+                &mut pos.0,
+                flame.launch,
+                0.0,
+                &wall_shapes,
+                None,
+            );
+            flame.launch = glam::Vec2::ZERO;
+        }
         if flame.disappearing {
             continue;
         }
@@ -1321,11 +1538,44 @@ pub fn spawn_motes(
                 0.3 + rng.random_range(0.0..0.1),
                 0,
             ),
+            // GML `PortalL/Create_0.gml`:
+            // `sprite_index = choose(sprPortalL1..5)`,
+            // `animation_speed = 0.3 + random(0.1)`. `scrFX` supplies
+            // the speed (3, px/step) and a random direction. `PortalL`
+            // has no parent object, so it keeps GameMaker's default
+            // `friction = 0.1`.
+            MoteStrip::PortalL => (
+                match rng.random_range(1..=5) {
+                    1 => "images/sprPortalL1.png",
+                    2 => "images/sprPortalL2.png",
+                    3 => "images/sprPortalL3.png",
+                    4 => "images/sprPortalL4.png",
+                    _ => "images/sprPortalL5.png",
+                },
+                5,
+                3.0,
+                3.0,
+                0.1,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                false,
+                None,
+                0.3 + rng.random_range(0.0..0.1),
+                0,
+            ),
             MoteStrip::Smoke => unreachable!(),
         };
         let a = rng.random_range(0.0..std::f32::consts::TAU);
         let dir = glam::Vec2::from_angle(a);
-        let mut vel = dir * rng.random_range(speed_lo..speed_hi) * 30.0;
+        let mut vel = if speed_hi > speed_lo {
+            dir * rng.random_range(speed_lo..speed_hi) * 30.0
+        } else {
+            // GML `scrFX` passes a fixed speed for some FX (`PortalL` is
+            // always 3). `random_range` asserts on an empty range.
+            dir * speed_lo * 30.0
+        };
         if matches!(strip, MoteStrip::Curse) {
             vel = glam::Vec2::new(
                 rng.random_range(-0.2..0.2) * 30.0,
@@ -1351,7 +1601,9 @@ pub fn spawn_motes(
             MoteStrip::Dust => rng.random_range(0.05..0.10),
             _ => grow,
         };
-        let mut image = if matches!(strip, MoteStrip::Curse) {
+        // `Curse` and `PortalL` both die at `animation_end`
+        // (`PortalL/Step_0.gml` `if (animation_end) instance_destroy()`).
+        let mut image = if matches!(strip, MoteStrip::Curse | MoteStrip::PortalL) {
             GmlImage::animated(path, frames, image_speed, true)
         } else {
             GmlImage::new(path, frames, image_speed)
@@ -1361,7 +1613,7 @@ pub fn spawn_motes(
         }
         let depth = match strip {
             MoteStrip::Leaf | MoteStrip::Money | MoteStrip::Raven => 1.0,
-            MoteStrip::Dust | MoteStrip::Smoke | MoteStrip::Curse => -1.0,
+            MoteStrip::Dust | MoteStrip::Smoke | MoteStrip::Curse | MoteStrip::PortalL => -1.0,
         };
         commands.spawn((
             GameCleanup,
@@ -1564,4 +1816,3 @@ pub fn tick_fog(
     }
     fog.scroll = fog_scroll_step(fog.scroll, time.delta_secs * 30.0);
 }
-

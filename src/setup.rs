@@ -37,16 +37,15 @@ use crate::comps_a::{
     SelectedCharacter, Team, Toast, Velocity, WallCell, WallTile,
 };
 use crate::comps_b::{
-    BigGenerator, ChestKind, CrownPedestal, Enemy, FloorTransition, GoldCar,
-    GroundDetail, LoopTransition, ManholeCover, PendingDelayedBoss, PortalClear, Prop,
-    PropHpTracker, PropNestMarkers, PropSprites, PropTier, ProtoStatue, RadChestContainer,
-    SecretEntrance, ThroneCarpet, ThroneStatueProp, UnbreakableProp,
+    BigGenerator, ChestKind, CrownPedestal, Enemy, FloorTransition, GoldCar, GroundDetail,
+    LoopTransition, ManholeCover, PendingDelayedBoss, PortalClear, Prop, PropHpTracker,
+    PropNestMarkers, PropSprites, PropTier, ProtoStatue, RadChestContainer, SecretEntrance,
+    ThroneCarpet, ThroneStatueProp, UnbreakableProp,
 };
 use crate::crown::{apply_crown_to_spawn, crown_name_for_toast};
 use crate::data::{
-    AmmoKind, AreaId, CrownKind, EnemyKind, RaceId, SecretTarget, SkinLetter,
-    UltraMutationId, WEAPON_REVOLVER, WeaponId, ammo_max, area_for_floor,
-    race_starter_weapon, resolve_start_weapon,
+    AmmoKind, AreaId, CrownKind, EnemyKind, RaceId, SecretTarget, SkinLetter, UltraMutationId,
+    WEAPON_REVOLVER, WeaponId, ammo_max, area_for_floor, race_starter_weapon, resolve_start_weapon,
 };
 use crate::enemies::{EnemySpawnContext, difficulty_multiplier, spawn_enemy_at};
 use crate::enemy_data::enemy_def;
@@ -547,14 +546,12 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
             .get_resource::<SaveData>()
             .is_some_and(|s| !s.tutorial_done && (s.settings.show_tutorial || s.total_runs == 0));
         // GML `PlayButton/Other_10` + `scrInit.gml:155`: `protowep` loads
-    // `etc.protowep` (default rusty revolver), so the prototype earned in
-    // one run carries into the next. `protocurse` is not persisted.
-    let protowep = world
-        .resource::<crate::savedata_part::SaveData>()
-        .protowep;
-    let mut run = world.resource_mut::<Run>();
-    run.protowep = protowep;
-    run.protocurse = false;
+        // `etc.protowep` (default rusty revolver), so the prototype earned in
+        // one run carries into the next. `protocurse` is not persisted.
+        let protowep = world.resource::<crate::savedata_part::SaveData>().protowep;
+        let mut run = world.resource_mut::<Run>();
+        run.protowep = protowep;
+        run.protocurse = false;
         run.floor = 1;
         run.world = 1;
         run.area = area_for_floor(1, 0);
@@ -960,9 +957,7 @@ fn prop_stats(kind: PropKind, styleb: bool, loop_count: u32) -> PropStats {
         PropKind::Tube => s(32.0, 32.0, 1, 2, None),
         PropKind::MutantTube => s(32.0, 32.0, 1, 24, None),
         PropKind::Pillar => s(32.0, 39.0, 1, 70, None),
-        PropKind::SmallGenerator => {
-            s(30.0, 32.0, 1, 40, Some(PropDeathEffect::small_generator()))
-        }
+        PropKind::SmallGenerator => s(30.0, 32.0, 1, 40, Some(PropDeathEffect::small_generator())),
         // `size = 2`, `shd48` shadow.
         PropKind::Anchor => s(40.0, 36.0, 2, 50, Some(PropDeathEffect::dust_ring())),
         PropKind::WaterPlant => s(10.0, 17.0, 1, 2, None),
@@ -1054,15 +1049,9 @@ fn prop_hurt_dead_paths(idle: &'static str) -> (&'static str, &'static str) {
         ),
         "images/sprVenuzCar2.png" => ("images/sprVenuzCar2Hurt.png", "images/sprScorchmark.png"),
         // GML `VenuzTV/Create_0.gml:3-5`.
-        "images/sprVenuzTV.png" => (
-            "images/sprVenuzTVHurt.png",
-            "images/sprVenuzTVDead.png",
-        ),
+        "images/sprVenuzTV.png" => ("images/sprVenuzTVHurt.png", "images/sprVenuzTVDead.png"),
         // GML `VenuzCouch/Create_0.gml:3-5`.
-        "images/sprVenuzCouch.png" => (
-            "images/sprVenuzCouch.png",
-            "images/sprVenuzCouchDead.png",
-        ),
+        "images/sprVenuzCouch.png" => ("images/sprVenuzCouch.png", "images/sprVenuzCouchDead.png"),
         "images/sprMine.png" | "images/sprMineIdle.png" => {
             ("images/sprMine.png", "images/sprMine.png")
         }
@@ -1246,10 +1235,7 @@ pub fn spawn_prop_sim(
         );
     }
 
-    if matches!(
-        kind,
-        PropKind::GiantWeaponChest | PropKind::GiantAmmoChest
-    ) {
+    if matches!(kind, PropKind::GiantWeaponChest | PropKind::GiantAmmoChest) {
         // GML `GiantWeaponChest` / `GiantAmmoChest` declare no parent, so
         // they are neither solid nor hp-carrying: they carry art only and
         // are opened by `Collision_Player`. The render pass draws any
@@ -1293,7 +1279,10 @@ pub fn spawn_prop_sim(
     // port's every weapon path gates on `Prop::destructible`, and
     // `ThroneStatue/Step_1.gml:4` re-pins `hp = 1000` every step, so
     // damage can never kill a statue.
-    let unbreakable = matches!(kind, PropKind::ThroneStatue | PropKind::BigGeneratorInactive);
+    let unbreakable = matches!(
+        kind,
+        PropKind::ThroneStatue | PropKind::BigGeneratorInactive
+    );
     let hp = stats.hp;
     let mut ec = commands.spawn((
         GameCleanup,
@@ -1421,17 +1410,9 @@ fn prop_idle_for(
         .filter(|p| catalog.def(p).is_some())
         .collect();
     if present.len() <= 1 {
-        return present
-            .first()
-            .copied()
-            .unwrap_or(candidates[0]);
+        return present.first().copied().unwrap_or(candidates[0]);
     }
-    present[prop_hash_pick(
-        run.gen_seed,
-        pos,
-        0x52,
-        present.len(),
-    )]
+    present[prop_hash_pick(run.gen_seed, pos, 0x52, present.len())]
 }
 
 /// Rad chest container: destructible prop + container marker; opening
@@ -1728,15 +1709,11 @@ pub fn spawn_level(
                 run.loop_count,
             );
         };
-        let furthest = plan
-            .props
-            .iter()
-            .map(|(_, at)| *at)
-            .max_by(|a, b| {
-                a.length_squared()
-                    .partial_cmp(&b.length_squared())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+        let furthest = plan.props.iter().map(|(_, at)| *at).max_by(|a, b| {
+            a.length_squared()
+                .partial_cmp(&b.length_squared())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         match furthest {
             Some(at) => spawn(at),
             None => {
@@ -1859,7 +1836,10 @@ pub fn spawn_level(
                             GameCleanup,
                             LevelCleanup,
                             PortalClear {
-                                timer: GTimer::from_seconds(5.0 / 30.0, crate::time::TimerMode::Once),
+                                timer: GTimer::from_seconds(
+                                    5.0 / 30.0,
+                                    crate::time::TimerMode::Once,
+                                ),
                                 scale: 1.0,
                             },
                             Pos(p),
@@ -1867,13 +1847,18 @@ pub fn spawn_level(
                     }
                     // GML `GenCont/Alarm_1.gml:78-88`: in the Cursed Caves
                     // a `BigWeaponChest` also becomes a `CursedBigChest`.
-                    ChestSpawn::Custom(ChestKind::BigWeapon, p) if run.area == AreaId::CursedCaves => {
+                    ChestSpawn::Custom(ChestKind::BigWeapon, p)
+                        if run.area == AreaId::CursedCaves =>
+                    {
                         spawn(ChestKind::CursedBig, p);
                         commands.spawn((
                             GameCleanup,
                             LevelCleanup,
                             PortalClear {
-                                timer: GTimer::from_seconds(5.0 / 30.0, crate::time::TimerMode::Once),
+                                timer: GTimer::from_seconds(
+                                    5.0 / 30.0,
+                                    crate::time::TimerMode::Once,
+                                ),
                                 scale: 1.0,
                             },
                             Pos(p),
@@ -1893,8 +1878,11 @@ pub fn spawn_level(
                         // `!irandom(40) && (area >= 4 || loops > 0)` is an
                         // `IDPDChest`, else `random(1) < 0.25` an
                         // `AmmoChestMystery`.
-                        let palace_finale =
-                            run.area == AreaId::Palace && run.floor_in_area >= crate::worldgen::gml_max_subarea(crate::worldgen::gml_area_from_run(run));
+                        let palace_finale = run.area == AreaId::Palace
+                            && run.floor_in_area
+                                >= crate::worldgen::gml_max_subarea(
+                                    crate::worldgen::gml_area_from_run(run),
+                                );
                         let mut kind = ChestKind::Ammo;
                         if !palace_finale {
                             let mut rng = rand::rng();
@@ -2076,14 +2064,14 @@ fn reset_menu_room_resources(world: &mut World) {
     world.insert_resource(Run::default());
     {
         // GML `PlayButton/Other_10` + `scrInit.gml:155`: `protowep` loads
-    // `etc.protowep` (default rusty revolver), so the prototype earned in
-    // one run carries into the next. `protocurse` is not persisted.
-    let protowep = world
-        .get_resource::<crate::savedata_part::SaveData>()
-        .map_or(crate::data::WeaponId(0), |s| s.protowep);
-    let mut run = world.resource_mut::<Run>();
-    run.protowep = protowep;
-    run.protocurse = false;
+        // `etc.protowep` (default rusty revolver), so the prototype earned in
+        // one run carries into the next. `protocurse` is not persisted.
+        let protowep = world
+            .get_resource::<crate::savedata_part::SaveData>()
+            .map_or(crate::data::WeaponId(0), |s| s.protowep);
+        let mut run = world.resource_mut::<Run>();
+        run.protowep = protowep;
+        run.protocurse = false;
         run.floor = 0;
         run.world = 0;
         run.area = crate::data::AreaId::Campfire;

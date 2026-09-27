@@ -1618,6 +1618,9 @@ pub(crate) struct ChestLootCtx {
     pub underwater: bool,
     /// Steroids Ambidextrous (`UltraSkill.Ambidextrous`).
     pub ambidextrous: bool,
+    /// `scrPlayerCountCursed` — gates `AmmoPickup/Create_0.gml:16`'s
+    /// `CursedPickup` conversion.
+    pub cursed_count: u32,
 }
 
 /// GML `prop/Destroy_0.gml:12` `if (raddrop > 0) scrRadDrop(x, y,
@@ -1682,16 +1685,14 @@ pub(crate) fn chest_loot(
                     commands,
                     catalog,
                     PickupKind::Weapon(weapon),
-                    pos
-                        + glam::Vec2::new(
-                            rng.random_range(-2.0..2.0),
-                            rng.random_range(-2.0..2.0),
-                        ),
+                    pos + glam::Vec2::new(rng.random_range(-2.0..2.0), rng.random_range(-2.0..2.0)),
                     0,
                     false,
                 );
                 // GML `scrWeaponPickupCreate(..., true)`.
-                commands.entity(e).insert(crate::comps_b::WepPickupAmmo(true));
+                commands
+                    .entity(e)
+                    .insert(crate::comps_b::WepPickupAmmo(true));
                 if ctx.curse {
                     commands.entity(e).insert(PickupCurse);
                 }
@@ -1716,7 +1717,9 @@ pub(crate) fn chest_loot(
                 0,
                 false,
             );
-            commands.entity(e).insert(crate::comps_b::WepPickupAmmo(true));
+            commands
+                .entity(e)
+                .insert(crate::comps_b::WepPickupAmmo(true));
             audio.play_gold_chest(cues);
         }
         // GML `BigWeaponChest/Collision_Player.gml:14-30`:
@@ -1726,11 +1729,8 @@ pub(crate) fn chest_loot(
             let count = if ctx.ambidextrous { 4 } else { 3 };
             let mut chain = crate::pickups::DropSeedChain::new(ctx.drop_seed);
             for _ in 0..count {
-                let at = pos
-                    + glam::Vec2::new(
-                        rng.random_range(-2.0..2.0),
-                        rng.random_range(-2.0..2.0),
-                    );
+                let at =
+                    pos + glam::Vec2::new(rng.random_range(-2.0..2.0), rng.random_range(-2.0..2.0));
                 let weapon = chain.roll(|r| {
                     crate::decide_wep::decide_wep_at(commands, r, &ctx.decide, at, 1, false)
                 });
@@ -1742,7 +1742,9 @@ pub(crate) fn chest_loot(
                     0,
                     false,
                 );
-                commands.entity(e).insert(crate::comps_b::WepPickupAmmo(true));
+                commands
+                    .entity(e)
+                    .insert(crate::comps_b::WepPickupAmmo(true));
                 toast.show(crate::weapon_runtime::weapon_id_name(weapon));
             }
             spawn_shock_portal_clear(commands, pos);
@@ -1757,11 +1759,8 @@ pub(crate) fn chest_loot(
             let count = if ctx.ambidextrous { 4 } else { 3 };
             let mut chain = crate::pickups::DropSeedChain::new(ctx.drop_seed);
             for _ in 0..count {
-                let at = pos
-                    + glam::Vec2::new(
-                        rng.random_range(-2.0..2.0),
-                        rng.random_range(-2.0..2.0),
-                    );
+                let at =
+                    pos + glam::Vec2::new(rng.random_range(-2.0..2.0), rng.random_range(-2.0..2.0));
                 let weapon = chain.roll(|r| {
                     crate::decide_wep::decide_wep_at(commands, r, &ctx.decide, at, 3, false)
                 });
@@ -1773,7 +1772,9 @@ pub(crate) fn chest_loot(
                     0,
                     false,
                 );
-                commands.entity(e).insert(crate::comps_b::WepPickupAmmo(true));
+                commands
+                    .entity(e)
+                    .insert(crate::comps_b::WepPickupAmmo(true));
                 commands.entity(e).insert(PickupCurse);
                 toast.show(crate::weapon_runtime::weapon_id_name(weapon));
             }
@@ -1787,16 +1788,16 @@ pub(crate) fn chest_loot(
         // `IDPDSpawn` portals.
         ChestKind::Idpd => {
             for _ in 0..8 {
-                crate::pickups::spawn_pickup(
+                crate::pickups::spawn_ammo_pickup(
                     commands,
                     catalog,
-                    PickupKind::Ammo(AmmoKind::None, 0),
+                    ctx.cursed_count,
                     player_pos,
                     run.loop_count,
                     false,
                 );
             }
-            crate::idpd::spawn_idpd_chest_raid(commands, run, cues, 0, pos, false);
+            crate::idpd::raise_idpd_portals(commands, run, cues, 0, pos);
             audio.play_ammo_chest_open(cues, ctx.underwater);
         }
         // No GML `Collision_PortalShock` reaches these; they keep the
@@ -1880,13 +1881,8 @@ pub fn tick_portal_shock(
     );
     let hp_num = crate::pickups::hppickup_num(&player);
     let second_stomach = player.mutations.contains(&MutationId::SecondStomach);
-    let decide = crate::pickups::decide_ctx_for(
-        &run,
-        &player,
-        race,
-        inv,
-        u32::from(race == RaceId::Robot),
-    );
+    let decide =
+        crate::pickups::decide_ctx_for(&run, &player, race, inv, u32::from(race == RaceId::Robot));
     let dt = time.delta_secs;
     for (shock_e, shock_pos, mut shock) in &mut shocks {
         shock.timer.tick(dt);
@@ -1969,6 +1965,7 @@ pub fn tick_portal_shock(
                 drop_seed: drop_seed.map_or(0, |s| s.0),
                 underwater,
                 ambidextrous,
+                cursed_count: crate::pickups::count_cursed(inv),
             };
             chest_loot(
                 &mut commands,
@@ -1990,10 +1987,10 @@ pub fn tick_portal_shock(
                 // instance_create(x, y, AmmoPickup)` + `sndChest`.
                 ChestKind::Ammo => {
                     for _ in 0..2 {
-                        crate::pickups::spawn_pickup(
+                        crate::pickups::spawn_ammo_pickup(
                             &mut commands,
                             &catalog,
-                            PickupKind::Ammo(AmmoKind::None, 0),
+                            ctx.cursed_count,
                             cpos,
                             run.loop_count,
                             hasted,
@@ -2005,10 +2002,10 @@ pub fn tick_portal_shock(
                 // same two pickups, but `sndAmmoChest`.
                 ChestKind::Mystery => {
                     for _ in 0..2 {
-                        crate::pickups::spawn_pickup(
+                        crate::pickups::spawn_ammo_pickup(
                             &mut commands,
                             &catalog,
-                            PickupKind::Ammo(AmmoKind::None, 0),
+                            ctx.cursed_count,
                             cpos,
                             run.loop_count,
                             hasted,
@@ -2410,8 +2407,9 @@ pub fn tick_portal_suck(
         } else {
             match &*state {
                 ProtoChestState::Pending => run.protowep,
-                ProtoChestState::Armed { weapon, .. }
-                | ProtoChestState::Carried { weapon, .. } => *weapon,
+                ProtoChestState::Armed { weapon, .. } | ProtoChestState::Carried { weapon, .. } => {
+                    *weapon
+                }
             }
         };
         let cursed = if opened.is_some() {
@@ -2419,8 +2417,9 @@ pub fn tick_portal_suck(
         } else {
             match &*state {
                 ProtoChestState::Pending => run.protocurse,
-                ProtoChestState::Armed { cursed, .. }
-                | ProtoChestState::Carried { cursed, .. } => *cursed,
+                ProtoChestState::Armed { cursed, .. } | ProtoChestState::Carried { cursed, .. } => {
+                    *cursed
+                }
             }
         };
         if weapon == crate::decide_wep::FROG_PISTOL {
