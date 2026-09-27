@@ -375,6 +375,8 @@ fn apply_secret_transition(
         return None;
     }
 
+    // GML `GameCont/Other_5:136` (Room End): `hard += hardmode ? 2 : 1`.
+    run.hard += if run.hardmode { 2 } else { 1 };
     run.floor += 1;
     run.loop_count = (run.floor - 1) / 15;
     let (world, floor_in_area) = route_coordinates(run.floor);
@@ -402,6 +404,7 @@ fn try_apply_loop_portal_transition(
     let next_loop = run.loop_count + 1;
     run.loop_count = next_loop;
     run.floor = next_loop * 15 + 1;
+    run.hard += if run.hardmode { 2 } else { 1 };
 
     let (world, floor_in_area) = route_coordinates(run.floor);
     let prev = run.gen_seed;

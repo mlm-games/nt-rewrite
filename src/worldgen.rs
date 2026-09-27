@@ -194,7 +194,7 @@ fn generation_goal_for_run(run: &Run) -> usize {
                     110
                 }
             }
-            AreaId::CursedCaves => 100,
+            AreaId::CursedCaves => 110,
             AreaId::Jungle => 110,
             _ => 90,
         };
@@ -309,7 +309,7 @@ fn turn_table(rng: &mut StdRng, area: i32) -> i32 {
 /// Skipped exactly where `scrAreaHasSafespawn` is false (campfire, crib,
 /// vault, palace/HQ finales; the port has no Crib area so that arm is
 /// vacuous).
-fn apply_safespawn_shift(plan: &mut LevelPlan, rng: &mut StdRng, run: &Run) {
+fn apply_safespawn_shift(plan: &mut LevelPlan, _rng: &mut StdRng, run: &Run) {
     let no_safe = matches!(
         run.area,
         AreaId::Campfire | AreaId::Vault | AreaId::CrownVault
@@ -320,7 +320,13 @@ fn apply_safespawn_shift(plan: &mut LevelPlan, rng: &mut StdRng, run: &Run) {
     }
     let safedis: f32 = if run.loop_count > 0 { 96.0 } else { 64.0 };
     let maxfloors = ((safedis / 32.0) * 2.5).ceil() as usize;
-    let (dx, dy) = match rng.random_range(0..4) {
+    // GML `GenCont/Create_0:33`: `safedir = choose(0, 90, 180, 270)`. That
+    // `choose` comes from the *default* RNG stream, which is seeded from
+    // `RNGStates.Generation` and re-seeded per `scrPopEnemies` call -- drawing
+    // it from the Generation stream itself shifted every later prop, enemy and
+    // bone draw in the level.
+    let mut safedir_rng = rand::rngs::StdRng::seed_from_u64(run.gen_seed ^ 0x5AFE_D1CE);
+    let (dx, dy) = match safedir_rng.random_range(0..4) {
         0 => (1, 0),
         1 => (0, 1),
         2 => (-1, 0),
@@ -1454,8 +1460,7 @@ fn is_boss_subarea_run(run: &Run) -> bool {
 // (the old `floor-1` form undercounted by exactly 1 past floor 1).
 // Hardmode starts at `hard = 13` (GML `GameCont/Create_0`).
 pub fn game_hard(run: &Run) -> f32 {
-    let loops = run.loop_count as f32;
-    (run.floor as f32 + loops * 16.0 + if run.hardmode { 13.0 } else { 0.0 }).max(1.0)
+    run.hard.max(1) as f32
 }
 
 // world.rs:874-1695, verbatim except `crate::game::areas::AreaId::X` becomes
@@ -1699,13 +1704,20 @@ fn populate(
         let (px, py) = cell_center_i(cx, cy);
         let dist_sq = px * px + py * py;
 
-        let unlikeliness = if run.area == AreaId::Jungle {
-            2.0
+        let unlikeliness: i32 = if run.area == AreaId::Jungle {
+            2
         } else if run.area == AreaId::Campfire {
-            7.0
+            7
         } else {
-            10.0
+            10
         };
+        // GML `scrPopProps:38`: `if (random(_unlikeliness) > 1) exit`. `random(n)`
+        // is an integer in 0..n-1, so the gate keeps 2 of n rolls, and it runs
+        // *before* the per-area `choose` chain -- so it must be drawn here,
+        // not after the kind.
+        if rng.random_range(0i32..unlikeliness) > 1 {
+            continue;
+        }
 
         let is_secret = is_secret_area(run.area);
         let kind = if is_secret {
@@ -1883,17 +1895,6 @@ fn populate(
                 _ => PropKind::GroundDecal,
             }
         };
-
-        let threshold = match kind {
-            PropKind::Cobweb | PropKind::IcePatch => 2.6,
-            PropKind::FireTrap => 1.35,
-            PropKind::Mine => 0.85,
-            _ => 1.0,
-        };
-
-        if rng.random::<f32>() * unlikeliness > threshold {
-            continue;
-        }
 
         let too_close = match kind {
             PropKind::Anchor => false,
@@ -2141,10 +2142,13 @@ fn scr_pop_enemies(
     if center.length_squared() < 160.0 * 160.0 || wall_blocked {
         return;
     }
+    // GML `scrPopEnemies:12`: `var _loop_rand = random(_loops)`. `random(n)` is
+    // an integer in 0..n-1, so `random(2) < _loop_rand` can only be true when
+    // `_loop_rand >= 1` -- i.e. never on loop 1, and never at 50% on loop 2.
     let loop_rand = if run.loop_count == 0 {
-        0.0
+        0
     } else {
-        rng.random_range(0.0..run.loop_count as f32)
+        rng.random_range(0i32..run.loop_count as i32)
     };
     if run.area == AreaId::Campfire {
         return;
@@ -2160,7 +2164,7 @@ fn scr_pop_enemies(
             if run.tutorial {
                 return;
             }
-            if rng.random::<f32>() * 2.0 < loop_rand {
+            if rng.random_range(0i32..2) < loop_rand {
                 spawn_pop_enemy(
                     enemies,
                     rng,
@@ -2220,7 +2224,7 @@ fn scr_pop_enemies(
             }
         }
         2 => {
-            if rng.random::<f32>() * 2.0 < loop_rand {
+            if rng.random_range(0i32..2) < loop_rand {
                 spawn_pop_enemy(
                     enemies,
                     rng,
@@ -2284,7 +2288,7 @@ fn scr_pop_enemies(
         }
         3 => {
             if rng.random::<f32>() * 5.0 < 4.0 && (!is_last || rng.random::<f32>() * 2.0 < 1.0) {
-                if rng.random::<f32>() * 2.0 < loop_rand {
+                if rng.random_range(0i32..2) < loop_rand {
                     spawn_pop_enemy(
                         enemies,
                         rng,
@@ -2338,7 +2342,7 @@ fn scr_pop_enemies(
             }
         }
         4 => {
-            if rng.random::<f32>() * 2.0 < loop_rand {
+            if rng.random_range(0i32..2) < loop_rand {
                 spawn_pop_enemy(
                     enemies,
                     rng,
@@ -2371,7 +2375,7 @@ fn scr_pop_enemies(
             }
         }
         5 => {
-            if rng.random::<f32>() * 2.0 < loop_rand {
+            if rng.random_range(0i32..2) < loop_rand {
                 spawn_pop_enemy(
                     enemies,
                     rng,
@@ -2405,7 +2409,7 @@ fn scr_pop_enemies(
             }
         }
         6 => {
-            if rng.random::<f32>() * 2.0 < loop_rand {
+            if rng.random_range(0i32..2) < loop_rand {
                 spawn_pop_enemy(
                     enemies,
                     rng,
@@ -2468,10 +2472,14 @@ fn scr_pop_enemies(
             }
         }
         7 => {
-            if is_last || rng.random::<f32>() * 2.0 > 1.0 {
+            // GML `scrPopEnemies:112`: `if (_is_last || random(2) > 1) break`.
+            // `random(2)` is an integer in 0..1, so `> 1` is never true and the
+            // only skip is the last palace subarea. A float compare fired on
+            // half the eligible floors.
+            if is_last {
                 return;
             }
-            if rng.random::<f32>() * 2.0 < loop_rand {
+            if rng.random_range(0i32..2) < loop_rand {
                 spawn_pop_enemy(
                     enemies,
                     rng,
@@ -2657,11 +2665,11 @@ fn cluster_kind(kind: EnemyKind) -> EnemyKind {
 }
 
 fn cluster_source_skips(kind: EnemyKind, loops: u32, rng: &mut StdRng) -> bool {
-    rng.random::<f32>() * 60.0 > loops as f32
-        || matches!(
-            kind,
-            EnemyKind::Mimic | EnemyKind::SuperMimic | EnemyKind::WepMimic | EnemyKind::MaggotSpawn
-        )
+    // GML `scrPopulate:288`: `if (random(60) > _loops) continue`. `random(60)`
+    // is an integer in 0..59, so the cluster runs on (loops + 1) of 60 rolls,
+    // not loops of 60.
+    rng.random_range(0i32..60) > loops as i32
+        || matches!(kind, EnemyKind::MaggotSpawn)
 }
 
 pub fn apply_loop_population_clusters(

@@ -234,6 +234,10 @@ pub struct Waypoint {
 #[derive(Resource)]
 pub struct Run {
     pub floor: u32,
+    /// GML `GameCont.hard`: starts at 0 (13 in hardmode) and gains
+    /// `hardmode ? 2 : 1` on every Room End, so it counts floors *completed*
+    /// rather than the floor index. Drives enemy density and the enemy cap.
+    pub hard: u32,
     pub world: u32,
     pub area: crate::data::AreaId,
     pub loop_count: u32,
@@ -290,6 +294,7 @@ impl Default for Run {
     fn default() -> Self {
         Self {
             floor: 1,
+            hard: 0,
             world: 1,
             area: crate::data::AreaId::Desert,
             loop_count: 0,
