@@ -757,6 +757,62 @@ fn gml_speed_cap(kind: EnemyKind) -> f32 {
     frames * crate::SIM_HZ as f32
 }
 
+/// GML `Other_10` walk law: `(motion_add(direction, impulse), speed cap)` in
+/// px/frame, read off each object's own step handler.
+fn gml_walk_law(kind: EnemyKind) -> (f32, f32) {
+    match kind {
+        EnemyKind::Gator
+        | EnemyKind::BuffGator
+        | EnemyKind::Bandit
+        | EnemyKind::SnowBandit
+        | EnemyKind::Jock
+        | EnemyKind::Raven
+        | EnemyKind::Rat
+        | EnemyKind::BigRat
+        | EnemyKind::Necromancer => (0.8, gml_speed_cap_frames(kind)),
+        EnemyKind::FastRat => (0.8, 4.5),
+        EnemyKind::Ratking => (0.5, 2.0),
+        EnemyKind::BoneFish | EnemyKind::Molefish | EnemyKind::Molesarge => {
+            (0.8, gml_speed_cap_frames(kind))
+        }
+        EnemyKind::Salamander => (2.0, 2.5),
+        EnemyKind::Crab => (1.5, 4.5),
+        EnemyKind::Spider | EnemyKind::InvSpider => (2.0, 5.0),
+        EnemyKind::MeleeBandit | EnemyKind::Assassin => (2.0, 3.0),
+        EnemyKind::Freak | EnemyKind::ExploFreak | EnemyKind::PopoFreak => {
+            (gml_walk_impulse(kind), gml_speed_cap_frames(kind))
+        }
+        EnemyKind::RhinoFreak => (0.8, 1.0),
+        EnemyKind::Turtle => (1.0, 5.0),
+        EnemyKind::Wolf => (1.0, 5.0),
+        EnemyKind::FireBaller | EnemyKind::SuperFireBaller | EnemyKind::SuperFrog => {
+            (0.6, gml_speed_cap_frames(kind))
+        }
+        EnemyKind::SnowTank | EnemyKind::GoldSnowtank => (0.6, 1.5),
+        EnemyKind::Guardian | EnemyKind::CrownGuardian => (0.6, 0.6),
+        EnemyKind::DogGuardian => (0.4, 2.0),
+        EnemyKind::ExploGuardian => (0.5, 2.5),
+        EnemyKind::LaserCrystal | EnemyKind::LightningCrystal | EnemyKind::InvLaserCrystal => {
+            (0.5, gml_speed_cap_frames(kind))
+        }
+        _ => (0.4, gml_speed_cap_frames(kind)),
+    }
+}
+
+/// GML `motion_add(direction, N)` from an object's step handler.
+fn gml_walk_impulse(kind: EnemyKind) -> f32 {
+    match kind {
+        EnemyKind::Freak | EnemyKind::PopoFreak => 0.55,
+        EnemyKind::ExploFreak => 0.6,
+        _ => 0.8,
+    }
+}
+
+/// [`gml_speed_cap`] without the px/s conversion.
+fn gml_speed_cap_frames(kind: EnemyKind) -> f32 {
+    gml_speed_cap(kind) / crate::SIM_HZ as f32
+}
+
 fn wall_probe_axis(
     pos: glam::Vec2,
     radius: f32,
@@ -1094,27 +1150,7 @@ pub fn enemy_ai(
         brain.fire_alarm.tick(dt);
 
         if brain.walk > 0.0 {
-            let (impulse_f, cap_f) = match enemy.kind {
-                EnemyKind::Rat | EnemyKind::Ratking => (0.8, 4.0),
-                EnemyKind::Gator
-                | EnemyKind::BuffGator
-                | EnemyKind::Jock
-                | EnemyKind::Molefish
-                | EnemyKind::Molesarge
-                | EnemyKind::BoneFish => (0.8, 3.0),
-                EnemyKind::Raven => (0.8, 3.5),
-                EnemyKind::Salamander => (2.0, 2.5),
-                EnemyKind::Freak | EnemyKind::ExploFreak => (0.55, 4.0),
-                EnemyKind::RhinoFreak => (0.8, 1.0),
-                EnemyKind::Crab => (1.5, 4.5),
-                EnemyKind::Turtle => (1.0, 5.0),
-                EnemyKind::FireBaller => (0.6, 2.0),
-                EnemyKind::SuperFireBaller => (0.6, 1.5),
-                EnemyKind::SnowTank | EnemyKind::GoldSnowtank => (0.6, 1.5),
-                EnemyKind::DogGuardian => (0.4, 2.0),
-                EnemyKind::Spider | EnemyKind::InvSpider => (2.0, 4.0),
-                _ => (0.4, 4.0),
-            };
+            let (impulse_f, cap_f) = gml_walk_law(enemy.kind);
             let walk_dir = if vel.0.length_squared() > 1.0 {
                 vel.0.normalize_or_zero()
             } else {
