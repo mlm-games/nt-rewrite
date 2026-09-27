@@ -313,6 +313,18 @@ pub fn build_sim_schedule() -> Schedule {
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
                 (
+                    enemies::tick_popo_rolls
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    enemies::tick_popo_gunners
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    enemies::tick_popo_shields
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                )
+                    .chain(),
+                (
                     enemies::tick_frog_eggs
                         .in_set(NtSimSet::Combat)
                         .run_if(gameplay_active),

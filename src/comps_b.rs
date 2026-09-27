@@ -438,6 +438,41 @@ pub struct EnemyBrain {
     pub maggot_spawn_charge_ticks: f32,
 
     pub maggot_spawn_facing: f32,
+
+    /// GML `freeze` (`Grunt`, `EliteGrunt`, `Shielder`, `Inspector`
+    /// `Create_0`). Gates the roll/grenade/burst arms behind
+    /// `freeze > 40`, which accrues only while the target is moving or
+    /// this object is damaged. The `+ 3` term is dead against a player:
+    /// `Player/Create_0:99` sets `can_shoot = true` and nothing ever
+    /// clears it, so `!target.can_shoot` is never true.
+    pub freeze: f32,
+
+    /// GML `roll`. `true` is mid-roll; `Grunt/Other_10` and
+    /// `EliteGrunt/Step_0` run the roll physics in that state.
+    pub roll: bool,
+
+    /// GML `angle`, the roll spin accumulator (`Grunt/Other_10`) or the
+    /// live roll heading (`EliteGrunt/Step_0`, in degrees).
+    pub roll_angle: f32,
+
+    /// GML `fuel` (`EliteGrunt`): roll duration, 100 frames, rearmed each
+    /// step while `!roll`.
+    pub fuel: f32,
+
+    /// GML `grenades`: remaining `PopoNade` lobs (Grunt 2, Inspector 4,
+    /// EliteGrunt 4).
+    pub grenades: u8,
+
+    /// GML `lastx, lasty` — the target's last seen position, which the
+    /// `PopoNade` lob is aimed at.
+    pub last_seen: glam::Vec2,
+
+    /// GML `right`, +/-1, via `scrRight(0)` (`hspeed > 0 ? 1 : -1`) or
+    /// `scrRight(1)` (gunangle east/west).
+    pub right: f32,
+
+    /// GML `control` (`Inspector`): the mind-control drag on the player.
+    pub control: bool,
 }
 
 pub const SCRAP_BOSS_MISSILE_HP: i32 = 22;
@@ -1417,6 +1452,18 @@ pub struct MomShot;
 /// Inspector's lob budget gate like `instance_number(PopoNade)`).
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct PopoNadeM;
+
+/// GML `PopoShield` (`Create_0`: `alarm[0] = 60`, `team = team_popo`,
+/// `creator`). A 60-frame bubble pinned to its `Shielder`
+/// (`Step_2`) that turns hostile `typ == 1` projectiles and eats `typ == 2`
+/// ones (`Collision_projectile`). `Other_7` charges the owner's
+/// `alarm[1] += 20` as it pops, and `Shielder/Alarm_2` refuses to fire
+/// while one is up.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct PopoShieldM {
+    pub creator: Entity,
+    pub frames: f32,
+}
 
 #[derive(Component, Clone, Copy, Debug)]
 pub struct SnowmanAmbush;
