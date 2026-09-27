@@ -45,8 +45,8 @@ use crate::audio::UiAction;
 use crate::combat::HitFlash;
 use crate::comps_a::{
     ARENA_H, ARENA_W, AimDir, FloorMask, GrenadeFuse, Health, HitId, Inventory, LightningArc,
-    PendingMutation, PendingUltra, Player, Projectile, RaceState, Run, SelectedCharacter,
-    SlashProjectile, TILE, Team, Velocity, WallCell, WallTile,
+    PendingMutation, PendingUltra, Player, Projectile, ProjectileFade, RaceState, Run,
+    SelectedCharacter, SlashProjectile, TILE, Team, Velocity, WallCell, WallTile,
 };
 use crate::comps_b::{
     Beam, BigDogMissileState, BossBrain, BossPhase, ChestArt, ChestKind, Corpse, Enemy, EnemyBrain,
@@ -1039,6 +1039,11 @@ fn projectile_art(
         Team::Enemy => "images/sprEnemyBullet1.png",
     }
 }
+
+/// GML `AllyBullet/Create_0.gml:7` (`spr_fade = sprAllyBulletHit`) is the
+/// only fade tag in the port that belongs to `AllyBullet`, so it stands in
+/// for the `AllyBullet.yy` spriteId `sprAllyBullet` body art.
+const ALLY_BULLET_FADE: &str = "images/sprAllyBulletHit.png";
 
 /// Bevy `sprite_from_projectile_path` frame law: 2-frame strips pin to
 /// the second cell; longer strips animate at 12 fps (`projectile_anim`).
@@ -2819,6 +2824,38 @@ pub fn world_instances_cached(
         }
     }
 
+    // IDPD spawn portal: GML `IDPDSpawn/Create_0.gml:26` runs the object
+    // strip at `image_speed = 0.4`, `Other_7.gml:1` swaps
+    // `sprIDPDPortalStart` -> `sprIDPDPortalCharge` on animation end and
+    // `Alarm_0.gml:2-3` parks `sprIDPDPortalClose` on frame 0. The sim
+    // exports only the close countdown, so that phase is exact (14 frames
+    // / 0.4 = the 35-step window it is armed with) and the open phase
+    // rides the charge strip — the 2-frame start window has no sim-side
+    // age to key off.
+    {
+        let now = pulse_now(world);
+        let mut q = world.query::<(&Pos, &crate::idpd::IdpdSpawnPortal)>();
+        for (pos, portal) in q.iter(world) {
+            let (path, frame) = if portal.close > 0.0 {
+                let frames = strip_frames(assets, "images/sprIDPDPortalClose.png").max(1);
+                let frame = ((35.0 - portal.close).max(0.0) * 0.4).floor() as i32;
+                (
+                    "images/sprIDPDPortalClose.png",
+                    frame.clamp(0, frames as i32 - 1),
+                )
+            } else {
+                let frames = strip_frames(assets, "images/sprIDPDPortalCharge.png").max(1);
+                (
+                    "images/sprIDPDPortalCharge.png",
+                    ((now * 12.0).floor() as i32).rem_euclid(frames as i32),
+                )
+            };
+            if let Some(s) = assets.sprite_for(path, frame, pos.0, false, 0.0, [1.0; 4]) {
+                out.push(s);
+            }
+        }
+    }
+
     // Enemies: live SpriteAnim wins (idle/walk/hurt/fire already switched
     // sim-side); headless spawns without one fall back to the def idle.
     // (nt-rewrite never attaches `EnemySprites`; bevy's walk/hurt strips
@@ -3050,6 +3087,15 @@ pub fn world_instances_cached(
             .query::<&WeaponVisual>()
             .iter(world)
             .map(|v| (v.owner, v.slot as usize, v.wkick, v.wep_angle))
+            .collect();
+        // GML `DogSpinAttack/Alarm_0.gml:7-12`: the sprite-less spin body
+        // rewrites its creator's strips to the Scrap-Boss spin set (and
+        // `Alarm_0.gml:46-53` restores them when the ammo runs out), so
+        // the creator swap IS the whole visual.
+        let spinning: HashSet<Entity> = world
+            .query::<&crate::player_fire::SpinAttack>()
+            .iter(world)
+            .map(|spin| spin.creator)
             .collect();
         let mut q = world.query::<(
             Entity,
@@ -3305,6 +3351,28 @@ pub fn world_instances_cached(
                 let wave = (0.5 + 0.5 * (blink_t * 24.0).sin()) as f32;
                 tint[3] *= 0.25 + 0.55 * wave;
             }
+            // GML `DogSpinAttack/Alarm_0.gml:8-10` (see `spinning` above):
+            // idle/walk -> `sprScrapBossFire`, hurt -> `sprScrapBossHurtSpin`.
+            // The creator keeps `image_speed = 0.4` (`Player/Create_0.gml:131`),
+            // so the swap plays at 12 fps.
+            let (path, frame): (&str, i32) = if spinning.contains(&entity) {
+                // Only take the spin-hurt strip when the player's own hurt
+                // path actually resolves; `play_hurt` falls back to `pa.idle`
+                // otherwise, and `path == pa.hurt` would never match, so a
+                // missing catalog entry would silently drop the hurt beat.
+                let spin_path = if path == pa.hurt && strip_frames(assets, pa.hurt) > 0 {
+                    "images/sprScrapBossHurtSpin.png"
+                } else {
+                    "images/sprScrapBossFire.png"
+                };
+                let frames = strip_frames(assets, spin_path).max(1);
+                (
+                    spin_path,
+                    ((blink_t * 12.0).floor() as i32).rem_euclid(frames as i32),
+                )
+            } else {
+                (path, frame)
+            };
             if let Some(s) = assets.sprite_for(path, frame, pos.0, flip, 0.0, tint) {
                 out.push(s);
             }
@@ -3366,6 +3434,7 @@ pub fn world_instances_cached(
             Option<&SlashProjectile>,
             Option<&GrenadeFuse>,
             Option<&crate::comps_a::ProjectileVisual>,
+            Option<&ProjectileFade>,
             Option<&GmlImage>,
             Option<&NativeScale>,
             Option<&NativeAngle>,
@@ -3380,6 +3449,7 @@ pub fn world_instances_cached(
             slash,
             fuse,
             visual,
+            fade,
             image,
             native_scale,
             native_angle,
@@ -3407,7 +3477,11 @@ pub fn world_instances_cached(
                 }
                 continue;
             }
-            let path = projectile_art(proj, team, slash, visual);
+            let path = if fade.is_some_and(|f| f.0 == ALLY_BULLET_FADE) {
+                "images/sprAllyBullet.png"
+            } else {
+                projectile_art(proj, team, slash, visual)
+            };
             let frame = projectile_frame(assets, path, &proj.life);
             let rotation = match slash {
                 Some(s) => s.dir.y.atan2(s.dir.x),
