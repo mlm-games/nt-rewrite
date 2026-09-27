@@ -2209,8 +2209,12 @@ pub fn enemy_ai(
                             );
                             brain.burst_left -= 1;
                             if brain.burst_left == 0 {
-                                brain.fire_alarm =
-                                    GTimer::from_seconds(def.attack_cooldown, TimerMode::Once);
+                                // GML re-arms as `base + random(N)`.
+                                brain.fire_alarm = GTimer::from_seconds(
+                                    def.attack_cooldown
+                                        + rng.random_range(0.0..def.attack_jitter / 30.0),
+                                    TimerMode::Once,
+                                );
                             }
                         }
                     } else {
@@ -2250,8 +2254,11 @@ pub fn enemy_ai(
                             anim.as_deref_mut(),
                             hurt.is_some(),
                         );
-                        brain.fire_alarm =
-                            GTimer::from_seconds(def.attack_cooldown, TimerMode::Once);
+                        // GML re-arms as `base + random(N)`.
+                        brain.fire_alarm = GTimer::from_seconds(
+                            def.attack_cooldown + rng.random_range(0.0..def.attack_jitter / 30.0),
+                            TimerMode::Once,
+                        );
                     }
                 }
             }
