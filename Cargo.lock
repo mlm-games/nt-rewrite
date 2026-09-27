@@ -1699,7 +1699,7 @@ dependencies = [
 
 [[package]]
 name = "game-utils"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "directories",
  "fluent-bundle",
@@ -4027,7 +4027,7 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "repame-anim"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "bevy_ecs",
  "repame-atlas",
@@ -4038,11 +4038,11 @@ dependencies = [
 
 [[package]]
 name = "repame-atlas"
-version = "0.2.2"
+version = "0.3.0"
 
 [[package]]
 name = "repame-audio"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "cpal",
@@ -4054,7 +4054,7 @@ dependencies = [
 
 [[package]]
 name = "repame-fx"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "bevy_ecs",
  "getrandom 0.4.3",
@@ -4071,7 +4071,7 @@ dependencies = [
 
 [[package]]
 name = "repame-input"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "bevy_ecs",
  "glam 0.33.6",
@@ -4082,7 +4082,7 @@ dependencies = [
 
 [[package]]
 name = "repame-shell"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "glam 0.33.6",
@@ -4102,7 +4102,7 @@ dependencies = [
 
 [[package]]
 name = "repame-sim"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "bevy_ecs",
  "glam 0.33.6",
@@ -4112,7 +4112,7 @@ dependencies = [
 
 [[package]]
 name = "repame-sprite"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -4128,7 +4128,7 @@ dependencies = [
 
 [[package]]
 name = "repame-view3d"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "bytemuck",
  "glam 0.33.6",
@@ -4144,7 +4144,7 @@ dependencies = [
 
 [[package]]
 name = "repose-app"
-version = "0.30.22"
+version = "0.31.0"
 dependencies = [
  "log",
  "repose-core",
@@ -4155,7 +4155,7 @@ dependencies = [
 
 [[package]]
 name = "repose-canvas"
-version = "0.30.22"
+version = "0.31.0"
 dependencies = [
  "lyon_path",
  "lyon_tessellation",
@@ -4165,7 +4165,7 @@ dependencies = [
 
 [[package]]
 name = "repose-core"
-version = "0.30.22"
+version = "0.31.0"
 dependencies = [
  "accesskit",
  "log",
@@ -4179,7 +4179,7 @@ dependencies = [
 
 [[package]]
 name = "repose-devtools"
-version = "0.30.22"
+version = "0.31.0"
 dependencies = [
  "repose-core",
  "web-time",
@@ -4188,7 +4188,7 @@ dependencies = [
 
 [[package]]
 name = "repose-macros"
-version = "0.30.22"
+version = "0.31.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4197,7 +4197,7 @@ dependencies = [
 
 [[package]]
 name = "repose-navigation"
-version = "0.30.22"
+version = "0.31.0"
 dependencies = [
  "log",
  "repose-core",
@@ -4208,7 +4208,7 @@ dependencies = [
 
 [[package]]
 name = "repose-platform"
-version = "0.30.22"
+version = "0.31.0"
 dependencies = [
  "accesskit",
  "accesskit_winit",
@@ -4240,7 +4240,7 @@ dependencies = [
 
 [[package]]
 name = "repose-render-wgpu"
-version = "0.30.22"
+version = "0.31.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -4258,7 +4258,7 @@ dependencies = [
 
 [[package]]
 name = "repose-text"
-version = "0.30.22"
+version = "0.31.0"
 dependencies = [
  "font-awl",
  "js-sys",
@@ -4275,7 +4275,7 @@ dependencies = [
 
 [[package]]
 name = "repose-tree"
-version = "0.30.22"
+version = "0.31.0"
 dependencies = [
  "log",
  "rapidhash",
@@ -4288,7 +4288,7 @@ dependencies = [
 
 [[package]]
 name = "repose-ui"
-version = "0.30.22"
+version = "0.31.0"
 dependencies = [
  "log",
  "repose-core",
@@ -6530,8 +6530,8 @@ dependencies = [
 
 [[patch.unused]]
 name = "repose-docking"
-version = "0.30.22"
+version = "0.31.0"
 
 [[patch.unused]]
 name = "repose-material"
-version = "0.30.22"
+version = "0.31.0"
