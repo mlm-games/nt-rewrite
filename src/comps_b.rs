@@ -473,6 +473,16 @@ pub struct EnemyBrain {
 
     /// GML `control` (`Inspector`): the mind-control drag on the player.
     pub control: bool,
+
+    /// GML `Ratking` `spawns`: rats vomited so far. Past 24 the king rolls
+    /// `random(4) < 3` to `instance_change(RatkingRage)`.
+    pub ratking_spawns: f32,
+
+    /// GML `instance_change(RatkingRage, false)` swaps the king's behaviour
+    /// without replacing the instance, so it is state rather than a kind.
+    /// The rage form charges (touch 4), breaks walls, and bursts five
+    /// `FastRat` plus five `AcidStreak` on death.
+    pub ratking_rage: bool,
 }
 
 pub const SCRAP_BOSS_MISSILE_HP: i32 = 22;

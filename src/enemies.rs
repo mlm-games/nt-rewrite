@@ -409,6 +409,8 @@ fn spawn_enemy_impl(
         last_seen: pos,
         right: if rng.random_bool(0.5) { 1.0 } else { -1.0 },
         control: false,
+        ratking_spawns: 0.0,
+        ratking_rage: false,
         gunangle: initial_gunangle,
         heading: initial_heading,
         rage: 0.0,
@@ -618,6 +620,8 @@ fn has_dedicated_tick(kind: EnemyKind) -> bool {
             | EnemyKind::IdpdElite
             | EnemyKind::IdpdShield
             | EnemyKind::IdpdInspector
+            | EnemyKind::Turret
+            | EnemyKind::Ratking
     )
 }
 
@@ -5757,6 +5761,326 @@ pub fn tick_popo_shields(
     }
 }
 
+/// GML `objects/Turret`. Bolted down (`Other_10` pins `x/y` to
+/// `xprevious/yprevious`) and dies if it is not standing on floor. `Alarm_1`
+/// arms a 10-round burst only on sight inside 160 px; `Alarm_3`, set to 1 at
+/// create, is the one-shot that carves every wall it is embedded in.
+///
+/// Register map: `brain.attack` = `alarm[1]`, `brain.burst_timer` =
+/// `alarm[2]`, `brain.ammo` = `ammo`, `brain.gunangle` = `gunangle`.
+pub fn tick_turrets(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mask: Res<FloorMask>,
+    mut cues: ResMut<Queue<AudioCue>>,
+    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
+    mut enemies: Query<
+        (Entity, &Enemy, &mut EnemyBrain, &mut Velocity, &Pos),
+        (With<Enemy>, Without<Prop>),
+    >,
+    walls: Query<(&Pos, &WallCell), (With<WallTile>, Without<Enemy>, Without<Player>)>,
+    mut inited: Local<std::collections::HashSet<Entity>>,
+) {
+    let Ok(player_pos) = player_q.single() else {
+        return;
+    };
+    let dt = time.delta_secs;
+    let mut rng = rand::rng();
+    inited.retain(|e| enemies.contains(*e));
+    let wall_snapshot: Vec<(glam::Vec2, (i32, i32))> = walls
+        .iter()
+        .map(|(p, c)| (p.0, (c.0, c.1)))
+        .collect();
+
+    for (entity, enemy, mut brain, mut vel, pos) in &mut enemies {
+        if enemy.kind != EnemyKind::Turret {
+            continue;
+        }
+        let epos = pos.0;
+        if !inited.contains(&entity) {
+            inited.insert(entity);
+            // GML `Create_0`: `ammo = 0`, `gunangle = random_angle`,
+            // `offset = 0`, `alarm[3] = 1`. `Alarm_3` destroys every wall
+            // the turret is embedded in, and it lands on this first step.
+            brain.ammo = 0;
+            brain.gunangle = rng.random_range(0.0..std::f32::consts::TAU);
+            crate::walls::queue_wall_breaks_in_radius(
+                &mut commands,
+                &wall_snapshot,
+                epos,
+                32.0,
+            );
+        }
+
+        // GML `Other_10`: pinned in place, and dies off-floor.
+        vel.0 = glam::Vec2::ZERO;
+        if !mask.is_walkable(epos) {
+            commands.entity(entity).despawn();
+            continue;
+        }
+
+        // GML `Alarm_2`: the burst itself.
+        brain.burst_timer.tick(dt);
+        if brain.burst_timer.just_finished() {
+            if brain.ammo > 0 {
+                brain.ammo -= 1;
+                brain.burst_timer = GTimer::from_seconds(3.0 / 30.0, TimerMode::Once);
+                let a = brain.gunangle + rng.random_range(-4.0..=4.0_f32).to_radians();
+                fire_popo_bullet(
+                    &mut commands,
+                    entity,
+                    enemy.kind,
+                    epos,
+                    a,
+                    8.0,
+                    0.0,
+                    0.0,
+                );
+                enemy_cue(&mut cues, "sndTurretFire");
+            } else {
+                // GML `Alarm_2:12-13`: back to idle and poll again soon.
+                brain.attack = GTimer::from_seconds(
+                    rng.random_range(10.0..=15.0) / 30.0,
+                    TimerMode::Once,
+                );
+            }
+        }
+
+        // GML `Alarm_1`.
+        brain.attack.tick(dt);
+        if !brain.attack.just_finished() {
+            continue;
+        }
+        let next = rng.random_range(50.0..=60.0);
+        let to_player = player_pos.0 - epos;
+        let dist = to_player.length();
+        if has_line_of_sight(epos, player_pos.0, &mask)
+            && rng.random_range(0.0..4.0) < 3.0
+            && dist < 160.0
+        {
+            brain.ammo = 10;
+            brain.burst_timer = GTimer::from_seconds(10.0 / 30.0, TimerMode::Once);
+            let offset = rng.random_range(-5.0..=5.0_f32);
+            brain.gunangle = to_player.y.atan2(to_player.x) + offset.to_radians();
+        }
+        brain.attack = GTimer::from_seconds(next / 30.0, TimerMode::Once);
+    }
+}
+
+/// GML `objects/MeleeFake`: a dormant `MeleeBandit` that wakes into its real
+/// self. Until then it does not move and does not attack -- the port had it
+/// chasing and hitting for 1.
+///
+/// GML `Step_0` wakes on any of: damaged (`hp < max_hp`), alone
+/// (`!instance_number(enemy)`), or the player within 64 px on a clear line
+/// with no `Portal` on the floor. `Destroy_0` runs the *real* object's
+/// create/destroy pair, so a fake that is killed while dormant still drops
+/// the real assassin's rads.
+pub fn tick_melee_fakes(
+    mut commands: Commands,
+    run: Res<Run>,
+    mask: Res<FloorMask>,
+    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
+    enemies: Query<&Pos, (With<Enemy>, Without<Player>)>,
+    fakes: Query<
+        (Entity, &Enemy, &Pos, &Health),
+        (With<Enemy>, Without<Player>, Without<Prop>),
+    >,
+    portals: Query<(), (With<crate::comps_b::Portal>, Without<Enemy>)>,
+) {
+    if fakes.is_empty() {
+        return;
+    }
+    let has_portal = !portals.is_empty();
+    let Ok(player_pos) = player_q.single() else {
+        return;
+    };
+    // GML `!instance_number(enemy)`: any other live enemy keeps it asleep.
+    let alive: Vec<glam::Vec2> = enemies.iter().map(|p| p.0).collect();
+
+    for (entity, enemy, pos, health) in &fakes {
+        if enemy.kind != EnemyKind::MeleeFake {
+            continue;
+        }
+        let wakes = health.hp < health.max
+            || alive.is_empty()
+            || (!has_portal
+                && pos.0.distance(player_pos.0) <= 64.0
+                && has_line_of_sight(pos.0, player_pos.0, &mask));
+        if !wakes {
+            continue;
+        }
+        queue_enemy_spawn(
+            &mut commands,
+            EnemyKind::MeleeBandit,
+            pos.0,
+            1.0,
+            run.loop_count,
+        );
+        commands.entity(entity).despawn();
+    }
+}
+
+/// GML `objects/Ratking`, and the `instance_change(RatkingRage, false)` it
+/// rolls into after vomiting more than 24 rats (`Alarm_2:14-19`). The rage
+/// form charges at touch 4, destroys the walls it hits
+/// (`Collision_Wall:4`), and bursts five `FastRat` plus five `AcidStreak`
+/// on death.
+///
+/// Register map: `brain.attack` = `alarm[1]`, `brain.burst_timer` =
+/// `alarm[2]`, `brain.ammo` = `ammo`, `brain.ratking_spawns` = `spawns`,
+/// `brain.ratking_rage` = the `instance_change`,
+/// `brain.mydir`-equivalent rides the local heading map.
+pub fn tick_ratking(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mask: Res<FloorMask>,
+    run: Res<Run>,
+    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
+    mut enemies: Query<
+        (
+            Entity,
+            &mut Enemy,
+            &mut EnemyBrain,
+            &mut Velocity,
+            &Pos,
+            &Health,
+        ),
+        (With<Enemy>, Without<Prop>),
+    >,
+    walls: Query<(&Pos, &WallCell), (With<WallTile>, Without<Enemy>, Without<Player>)>,
+    mut headings: Local<HashMap<Entity, glam::Vec2>>,
+) {
+    let Ok(player_pos) = player_q.single() else {
+        return;
+    };
+    let dt = time.delta_secs;
+    let frames = dt * crate::SIM_HZ as f32;
+    let mut rng = rand::rng();
+    headings.retain(|e, _| enemies.contains(*e));
+    let wall_snapshot: Vec<(glam::Vec2, (i32, i32))> =
+        walls.iter().map(|(p, c)| (p.0, (c.0, c.1))).collect();
+
+    for (entity, mut enemy, mut brain, mut vel, pos, _health) in &mut enemies {
+        if enemy.kind != EnemyKind::Ratking {
+            continue;
+        }
+        let epos = pos.0;
+        let to_player = player_pos.0 - epos;
+        let dist = to_player.length();
+        let aim = to_player.y.atan2(to_player.x);
+        let heading = headings
+            .entry(entity)
+            .or_insert_with(|| glam::Vec2::from_angle(aim))
+            .clone();
+
+        // ---- GML `Other_10` ----
+        if brain.walk > 0.0 {
+            let cap = if brain.ratking_rage { 6.0 } else { 2.0 };
+            gml_motion_add_clamp(&mut vel.0, heading, if brain.ratking_rage { 1.5 } else { 0.5 }, cap, dt);
+            brain.walk -= frames;
+            if brain.walk < 0.0 {
+                brain.walk = 0.0;
+            }
+        }
+        let cap = if brain.ratking_rage { 6.0 } else { 2.0 } * 30.0;
+        if vel.0.length() > cap {
+            vel.0 = vel.0.normalize() * cap;
+        }
+
+        // GML `Collision_Wall`: only the rage form breaks walls.
+        if brain.ratking_rage {
+            crate::walls::queue_wall_breaks_in_radius(
+                &mut commands,
+                &wall_snapshot,
+                epos,
+                crate::enemy_data::enemy_def(enemy.kind).radius,
+            );
+        }
+
+        // ---- GML `Alarm_2`: the rat stream ----
+        brain.burst_timer.tick(dt);
+        if brain.burst_timer.just_finished() {
+            if brain.ammo > 0 {
+                brain.ratking_spawns += 1.0;
+                brain.ammo -= 1;
+                brain.burst_timer = GTimer::from_seconds(6.0 / 30.0, TimerMode::Once);
+                let a = brain.gunangle + rng.random_range(-20.0..=20.0_f32).to_radians();
+                queue_enemy_spawn_birth(
+                    &mut commands,
+                    EnemyKind::FastRat,
+                    epos,
+                    1.0,
+                    run.loop_count,
+                    false,
+                    Some(glam::Vec2::from_angle(a) * rng.random_range(3.0..=4.0) * 30.0),
+                    false,
+                );
+            } else {
+                brain.attack =
+                    GTimer::from_seconds(rng.random_range(40.0..=50.0) / 30.0, TimerMode::Once);
+                if brain.ratking_spawns > 24.0 && rng.random_range(0.0..4.0) < 3.0 {
+                    brain.ratking_rage = true;
+                    brain.walk = 0.0;
+                    brain.attack = GTimer::from_seconds(30.0 / 30.0, TimerMode::Once);
+                }
+            }
+        }
+
+        // ---- GML `Alarm_1` ----
+        brain.attack.tick(dt);
+        if !brain.attack.just_finished() {
+            continue;
+        }
+        let mut next = rng.random_range(30.0..=40.0);
+        if brain.ratking_rage {
+            // GML `RatkingRage/Alarm_1:4-15`
+            if dist < 100.0 {
+                // GML `RatkingRage/Alarm_1:11` `meleedamage = 4`.
+                enemy.touch_damage = 4;
+                brain.walk = 40.0 + rng.random_range(0.0..10.0);
+                let d = glam::Vec2::from_angle(
+                    aim + rng.random_range(-10.0..=10.0_f32).to_radians(),
+                );
+                *headings.get_mut(&entity).unwrap() = d;
+                vel.0 = d * 0.4 * 30.0;
+                if player_pos.0.x < epos.x {
+                    brain.right = -1.0;
+                } else if player_pos.0.x > epos.x {
+                    brain.right = 1.0;
+                }
+            }
+        } else {
+            // GML `Ratking/Alarm_1:4-30`
+            next = rng.random_range(30.0..=40.0);
+            brain.walk = 10.0 + rng.random_range(0.0..10.0);
+            if has_line_of_sight(epos, player_pos.0, &mask) && rng.random_range(0.0..3.0) < 1.0 {
+                brain.ammo = [3.0, 4.0, 5.0][rng.random_range(0..3)] as u8;
+                brain.burst_timer = GTimer::from_seconds(1.0 / 30.0, TimerMode::Once);
+                brain.gunangle = aim;
+                next = rng.random_range(30.0..=35.0);
+                brain.walk = 40.0 + rng.random_range(0.0..10.0);
+            }
+            let away = aim + std::f32::consts::PI;
+            let mut d = away + rng.random_range(-40.0..=40.0_f32).to_radians();
+            vel.0 = glam::Vec2::ZERO;
+            if dist < 64.0 {
+                brain.walk = 40.0 + rng.random_range(0.0..10.0);
+                let flip: f32 = if rng.random_range(0.0..3.0) < 2.0 { 180.0 } else { 0.0 };
+                d = away + rng.random_range(-20.0..=20.0_f32).to_radians() + flip.to_radians();
+            }
+            set_heading(&mut headings, entity, d);
+            vel.0 = glam::Vec2::from_angle(d) * 0.4 * 30.0;
+            if player_pos.0.x < epos.x {
+                brain.right = -1.0;
+            } else if player_pos.0.x > epos.x {
+                brain.right = 1.0;
+            }
+        }
+        brain.attack = GTimer::from_seconds(next / 30.0, TimerMode::Once);
+    }
+}
+
 /// Verbatim `objects/EliteInspector` law (`Alarm_1`/`Alarm_2`/`Other_10`):
 /// freeze-gated control field that drags projectiles and pulls the
 /// player, close-range baton dash-slash (`EnemySlash` damage 8), and
@@ -5820,7 +6144,7 @@ pub fn tick_elite_inspectors(
             // `alarm[1] = 30 + random(15)`.
             brain.walk = 30.0;
             brain.ammo = 5;
-            brain.burst_left = 0;
+            brain.freeze = 0.0;
             brain.strafe_dir = 0.0;
             brain.slash_delay = 0.0;
             brain.gunangle = rng.random_range(0.0..std::f32::consts::TAU);
@@ -5833,15 +6157,15 @@ pub fn tick_elite_inspectors(
         let dist = to_player.length();
         let aim = to_player.y.atan2(to_player.x);
         let los = has_line_of_sight(epos, player_pos.0, &mask);
-        let freeze = brain.burst_left;
+        let freeze = brain.freeze;
 
-        // GML `Other_10`: freeze accrues while the target moves (or the
-        // inspector is damaged); +3 while the target can shoot (port:
-        // any living player counts as armed).
+        // GML `EliteInspector/Other_10:9-15`: `target.speed > 0 or
+        // hp < max_hp`. The sibling `if !target.can_shoot freeze += 3`
+        // is unreachable against a player -- `Player/Create_0:99` sets
+        // `can_shoot = true` and no site clears it.
         if player_speed_sq > 0.001 || health.hp < health.max {
-            brain.burst_left += 1;
+            brain.freeze += 1.0;
         }
-        brain.burst_left += 3;
 
         // Walk locomotion along the latched heading, capped at
         // 3.5 px/tick.
@@ -5911,7 +6235,7 @@ pub fn tick_elite_inspectors(
             if brain.strafe_dir == 1.0 && rng.random::<f32>() < 0.5 {
                 brain.strafe_dir = 0.0;
             }
-            if rng.random::<f32>() < 0.5 && freeze > 40 {
+            if rng.random::<f32>() < 0.5 && freeze > 40.0 {
                 brain.strafe_dir = 1.0;
                 let d = brain.attack.duration() + 10.0 / 30.0;
                 brain.attack = GTimer::from_seconds(d, TimerMode::Once);
@@ -5919,7 +6243,7 @@ pub fn tick_elite_inspectors(
             if los {
                 brain.gunangle = aim;
                 last_seen.insert(entity, player_pos.0);
-                if rng.random::<f32>() < 2.0 / 3.0 && freeze > 40 && dist < 64.0 {
+                if rng.random::<f32>() < 2.0 / 3.0 && freeze > 40.0 && dist < 64.0 {
                     // Telegraph the baton dash.
                     brain.slash_delay = 5.0;
                     let d = brain.attack.duration() + 5.0 / 30.0;
@@ -5949,7 +6273,7 @@ pub fn tick_elite_inspectors(
                 let self_seen_d = epos.distance(seen);
                 let gated = rng.random::<f32>() < 1.0 / (3.0 + nades_live as f32 * 3.0)
                     && brain.ammo > 0
-                    && freeze > 40
+                    && freeze > 40.0
                     && dist < 160.0
                     && seen_d < 160.0
                     && self_seen_d > 64.0;
@@ -6040,7 +6364,7 @@ pub fn tick_elite_shielders(
             // `alarm[1] = 30 + random(15)`.
             brain.walk = 30.0;
             brain.ammo = 0;
-            brain.burst_left = 20;
+            brain.freeze = 20.0;
             brain.slash_delay = 0.0;
             brain.gunangle = rng.random_range(0.0..std::f32::consts::TAU);
             brain.attack =
@@ -6052,13 +6376,13 @@ pub fn tick_elite_shielders(
         let dist = to_player.length();
         let aim = to_player.y.atan2(to_player.x);
         let los = has_line_of_sight(epos, player_pos.0, &mask);
-        let freeze = brain.burst_left;
+        let freeze = brain.freeze;
 
-        // GML `Other_10` freeze (target `can_shoot` reads true on players).
-        if player_v.0.length_squared() > 0.001 && health.hp < health.max {
-            brain.burst_left += 1;
+        // GML `EliteShielder/Other_0`: `target.speed > 0 or hp < max_hp`.
+        // The `!target.can_shoot` sibling is unreachable against a player.
+        if player_v.0.length_squared() > 0.001 || health.hp < health.max {
+            brain.freeze += 1.0;
         }
-        brain.burst_left += 3;
 
         let head = headings.get(&entity).copied().unwrap_or(glam::Vec2::X);
         if brain.walk > 0.0 {
@@ -6112,7 +6436,7 @@ pub fn tick_elite_shielders(
                 GTimer::from_seconds(rng.random_range(15.0..=20.0) / 30.0, TimerMode::Once);
             if los {
                 brain.gunangle = aim;
-                if rng.random::<f32>() < 3.0 / 4.0 && freeze > 40 && dist < 150.0 {
+                if rng.random::<f32>() < 3.0 / 4.0 && freeze > 40.0 && dist < 150.0 {
                     brain.ammo = 6;
                     brain.slash_delay = 5.0;
                     brain.attack = GTimer::from_seconds(20.0 / 30.0, TimerMode::Once);
@@ -6162,7 +6486,7 @@ pub fn tick_elite_shielders(
                     headings.insert(entity, head);
                     vel.0 = head * 12.0;
                     brain.walk = rng.random_range(10.0..=20.0);
-                    if freeze < 40 {
+                    if freeze < 40.0 {
                         let d = brain.attack.duration() + rng.random_range(0.0..=30.0) / 30.0;
                         brain.attack = GTimer::from_seconds(d, TimerMode::Once);
                     }
@@ -6173,7 +6497,7 @@ pub fn tick_elite_shielders(
                 brain.gunangle = head.y.atan2(head.x);
                 brain.walk = rng.random_range(20.0..=30.0);
                 vel.0 = head * 12.0;
-            } else if freeze > 40 && rng.random::<f32>() < 0.25 {
+            } else if freeze > 40.0 && rng.random::<f32>() < 0.25 {
                 let mut dest = epos;
                 for _ in 0..100 {
                     let a = rng.random_range(0.0..std::f32::consts::TAU);

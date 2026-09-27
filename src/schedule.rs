@@ -322,6 +322,15 @@ pub fn build_sim_schedule() -> Schedule {
                     enemies::tick_popo_shields
                         .in_set(NtSimSet::Combat)
                         .run_if(gameplay_active),
+                    enemies::tick_turrets
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    enemies::tick_melee_fakes
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    enemies::tick_ratking
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
                 )
                     .chain(),
                 (
