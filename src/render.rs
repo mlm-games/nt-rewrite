@@ -11306,6 +11306,35 @@ mod verbatim_ui_layers {
         assert!(v.iter().all(|s| s.z == Z_HUD));
     }
 
+    /// GML `BackCont/Draw_0:9-14` never draws a `scrShadows` emitter to the
+    /// frame: it stamps opaque black into the `shad` surface, then composites
+    /// that surface with `draw_set_alpha(0.4)` and
+    /// `gpu_set_fog(1, shadow_color, ...)`. So every shadow is the AREA's
+    /// shadow color at 40% alpha — the port used to draw them fully opaque
+    /// and untinted.
+    #[test]
+    fn shadows_composite_through_the_shad_surface() {
+        assert_eq!(SHADOW_ALPHA, 0.4);
+        // `scrAreaGetShadowColor` verbatim, including the campfire default.
+        for (area, hex) in [
+            (AreaId::Campfire, 0x000000u32),
+            (AreaId::Desert, 0x000000),
+            (AreaId::Sewers, 0x080d01),
+            (AreaId::CrystalCaves, 0x06020c),
+            (AreaId::FrozenCity, 0x0e1344),
+            (AreaId::Oasis, 0x012b43),
+            (AreaId::PizzaSewers, 0x090012),
+            (AreaId::City, 0x120014),
+            (AreaId::HQ, 0x00248c),
+        ] {
+            let c = shadow_color(area);
+            assert_eq!(c[3], SHADOW_ALPHA, "{area:?} alpha");
+            for ch in 0..3 {
+                let want = ((hex >> (16 - 8 * ch)) & 0xFF) as f32 / 255.0;
+                assert!((c[ch] - want).abs() < 1e-6, "{area:?} channel {ch}");
+            }
+        }
+    }
 }
 
 #[cfg(test)]
