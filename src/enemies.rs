@@ -890,6 +890,12 @@ fn gml_speed_cap(kind: EnemyKind) -> f32 {
         EnemyKind::Raven | EnemyKind::JungleBandit => 3.5,
         EnemyKind::Molefish | EnemyKind::Molesarge => 3.5,
         EnemyKind::Freak | EnemyKind::BoneFish | EnemyKind::Rat => 4.0,
+        // `BigRat` is the port's scaled `Rat`; `LilHunter/Other_10:7` caps at
+        // 4 and `RadMaggot/Other_10:5` at 2.5. Without these three the
+        // `separate` push could drive them to its 16 px/frame clamp.
+        EnemyKind::BigRat => 4.0,
+        EnemyKind::LilHunter | EnemyKind::LilHunterLoop => 4.0,
+        EnemyKind::RadMaggot => 2.5,
         // `PopoFreak/Other_10:9` caps at 4.5, not the 4 its siblings use.
         EnemyKind::PopoFreak | EnemyKind::FastRat => 4.5,
         EnemyKind::Crab => 4.5,
@@ -928,7 +934,12 @@ fn gml_walk_law(kind: EnemyKind) -> (f32, f32) {
         | EnemyKind::Raven
         | EnemyKind::Rat
         | EnemyKind::BigRat
-        | EnemyKind::Necromancer => (0.8, gml_speed_cap_frames(kind)),
+        | EnemyKind::Necromancer
+        // `LilHunter/Other_10:4` and `HostileHorror/Other_10:4` push at 0.8
+        // as well; both used to fall to the 0.4 default arm below.
+        | EnemyKind::LilHunter
+        | EnemyKind::LilHunterLoop
+        | EnemyKind::HostileHorror => (0.8, gml_speed_cap_frames(kind)),
         EnemyKind::FastRat => (0.8, 4.5),
         EnemyKind::Ratking => (0.5, 2.0),
         EnemyKind::BoneFish | EnemyKind::Molefish | EnemyKind::Molesarge => {
@@ -964,6 +975,10 @@ fn gml_constant_drift(kind: EnemyKind) -> Option<(f32, f32)> {
         EnemyKind::LaserCrystal => (0.5, 1.5),
         EnemyKind::LightningCrystal => (0.5, 1.8),
         EnemyKind::InvLaserCrystal => (0.5, 1.5),
+        // `RadMaggot/Other_10:3` has NO `walk` gate, and its `Alarm_1` never
+        // arms one (it only turns toward the target), so the walk law left it
+        // standing still.
+        EnemyKind::RadMaggot => (0.6, 2.5),
         EnemyKind::FireBaller => (0.6, 2.0),
         EnemyKind::SuperFireBaller => (0.6, 1.5),
         // `SuperFrog/Other_10:3,12`: 0.6 impulse every step then `speed = 2.5`.
@@ -984,15 +999,18 @@ fn gml_drift_stops_while_firing(kind: EnemyKind) -> bool {
 }
 
 /// GML objects that arm `walk` and never spend it, so the impulse runs every
-/// step until the alarm re-arms: `Freak/Other_10:7-9`, `ExploFreak/Other_10`,
-/// `PopoFreak/Other_10` and `RhinoFreak/Other_10:7-12` have no `walk -= 1`, and
+/// step until the alarm re-arms: `Freak/Other_10:5-7`, `ExploFreak/Other_10:6-8`
+/// and `RhinoFreak/Other_10:6-8` have no `walk -= 1`, and
 /// `ExploGuardian/Other_10` relies on `Alarm_1:3` re-arming `walk` instead.
+///
+/// `PopoFreak` is deliberately NOT here: `PopoFreak/Other_10:5` does
+/// `walk -= 1`. Leaving it on this list made every PopoFreak that had ever
+/// seen the player drift at its 4.5 px/frame cap forever.
 fn gml_walk_never_decrements(kind: EnemyKind) -> bool {
     matches!(
         kind,
         EnemyKind::Freak
             | EnemyKind::ExploFreak
-            | EnemyKind::PopoFreak
             | EnemyKind::RhinoFreak
             | EnemyKind::ExploGuardian
     )
@@ -2255,19 +2273,30 @@ pub fn enemy_ai(
                 let cap = if enemy.touch_damage != 0 { 8.0 } else { 3.0 };
                 cap_gml_speed(&mut brain, &mut vel, cap);
             } else if brain.walk > 0.0 {
-                let (impulse_f, _cap_f) = gml_walk_law(enemy.kind);
-                add_gml_motion(&mut brain, &mut vel, heading, impulse_f, dt);
+                let (impulse_f, cap_f) = gml_walk_law(enemy.kind);
+                // GML `PopoFreak/Other_10:7` pushes along `walkdir` while the
+                // hurt sprite is up, and along `direction` otherwise.
+                let impulse_angle = if enemy.kind == EnemyKind::PopoFreak && hurt.is_some() {
+                    brain.walkdir
+                } else {
+                    heading
+                };
+                add_gml_motion(&mut brain, &mut vel, impulse_angle, impulse_f, dt);
+                // The walk law's cap is `Other_10`'s own `if (speed > N) speed
+                // = N`, and it sits OUTSIDE the `walk` gate — dropping it let
+                // the `separate` push drive these to its 16 px/frame clamp.
+                cap_gml_speed(&mut brain, &mut vel, cap_f);
                 // GML `Spider/Other_10:12` caps at `maxspeed`, which
                 // `Spider/Alarm_1` holds at 3 and raises to 5 only on the
-                // close chase.
+                // close chase, so it overrides the walk law's flat 5.
                 if brain.maxspeed.is_finite() {
                     let cap_f = brain.maxspeed / crate::SIM_HZ as f32;
                     cap_gml_speed(&mut brain, &mut vel, cap_f);
                 }
-                // GML `Freak`, `ExploFreak`, `PopoFreak` and `RhinoFreak` never
-                // decrement `walk`, so their impulse runs every step for as long
-                // as the alarm keeps it armed. Counting it down halved their
-                // travel.
+                // GML `Freak/Other_10:5`, `ExploFreak/Other_10:6` and
+                // `RhinoFreak/Other_10:6` have no `walk -= 1`, so their
+                // impulse runs every step for as long as the alarm keeps
+                // `walk` armed.
                 if !gml_walk_never_decrements(enemy.kind) {
                     brain.walk -= dt * 30.0;
                     if brain.walk < 0.0 {
@@ -8254,5 +8283,112 @@ mod gml_volley_cadence_tests {
         }
         assert!(spent <= pool, "{spent} > {pool}");
         assert!(fired > 30, "the fan must widen past one bullet a step");
+    }
+}
+
+#[cfg(test)]
+mod gml_motion_cap_tests {
+    use super::*;
+
+    /// The walk law's `(impulse, cap)` pair must agree with GML for every
+    /// object that reaches it. `cap_f` was computed and thrown away for the
+    /// life of the port, so the `separate` push was free to drive these to its
+    /// 16 px/frame clamp instead of GML's own ceiling.
+    #[test]
+    fn walk_law_caps_match_gml_other_10() {
+        // (kind, GML `Other_10` `motion_add`, GML `if speed > N`)
+        let table = [
+            (EnemyKind::Rat, 0.8, 4.0),          // `Rat/Other_10:3-5,8`
+            (EnemyKind::BigRat, 0.8, 4.0),       // port-scaled `Rat`
+            (EnemyKind::FastRat, 0.8, 4.5),      // `FastRat/Other_10:3-5,8`
+            (EnemyKind::BoneFish, 0.8, 4.0),     // `BoneFish/Other_10:3-5,8`
+            (EnemyKind::Raven, 0.8, 3.5),        // `Raven/Other_10:3-5,7`
+            (EnemyKind::Freak, 0.55, 4.0),       // `Freak/Other_10:5-7,9`
+            (EnemyKind::ExploFreak, 0.6, 3.0),   // `ExploFreak/Other_10:6-8,10`
+            (EnemyKind::RhinoFreak, 0.8, 1.0),   // `RhinoFreak/Other_10:6-8,10`
+            (EnemyKind::PopoFreak, 0.55, 4.5),   // `PopoFreak/Other_10:5-9`
+            (EnemyKind::Crab, 1.5, 4.5),         // `Crab/Other_10:3-5,7`
+            (EnemyKind::Turtle, 1.0, 5.0),       // `Turtle/Other_10:3-8`
+            (EnemyKind::Salamander, 2.0, 2.5),   // `Salamander/Other_10:3-5,7`
+            (EnemyKind::Wolf, 1.0, 3.5),         // `Wolf/Other_10:3-5,16`
+            (EnemyKind::HostileHorror, 0.8, 4.5), // `HostileHorror/Other_10:3-5,8`
+            (EnemyKind::Spider, 2.0, 5.0),       // `Spider/Other_10:3-5,12` (maxspeed)
+            (EnemyKind::InvSpider, 2.0, 5.0),    // `InvSpider/Other_10:3-5,12`
+        ];
+        for (kind, impulse, cap) in table {
+            let (got_impulse, got_cap) = gml_walk_law(kind);
+            assert!(
+                (got_impulse - impulse).abs() < 1e-6,
+                "{kind:?} impulse {got_impulse} != {impulse}"
+            );
+            assert!(
+                (got_cap - cap).abs() < 1e-6,
+                "{kind:?} cap {got_cap} != {cap}"
+            );
+            // The shared per-kind cap must agree too, or the unconditional
+            // clamp at the end of `enemy_ai` fights the walk law.
+            assert!(
+                (gml_speed_cap_frames(kind) - cap).abs() < 1e-6,
+                "{kind:?} gml_speed_cap disagrees with its walk law"
+            );
+        }
+    }
+
+    /// GML `PopoFreak/Other_10:5` does `walk -= 1`. Treating it as a
+    /// never-decrementing object made every PopoFreak that had seen the player
+    /// drift at its 4.5 px/frame cap permanently.
+    #[test]
+    fn popo_freak_spends_its_walk() {
+        assert!(!gml_walk_never_decrements(EnemyKind::PopoFreak));
+        // `Freak`/`ExploFreak`/`RhinoFreak` genuinely have no `walk -= 1`.
+        for kind in [
+            EnemyKind::Freak,
+            EnemyKind::ExploFreak,
+            EnemyKind::RhinoFreak,
+        ] {
+            assert!(gml_walk_never_decrements(kind), "{kind:?}");
+        }
+    }
+
+    /// GML `RadMaggot/Other_10:3` applies `motion_add` with no `walk` gate, and
+    /// its `Alarm_1` never arms one — so it needs the constant-drift law, not
+    /// the walk law that gates on `walk > 0`.
+    #[test]
+    fn rad_maggot_drifts_without_a_walk_gate() {
+        assert_eq!(gml_constant_drift(EnemyKind::RadMaggot), Some((0.6, 2.5)));
+        assert_eq!(gml_constant_drift(EnemyKind::SuperFrog), Some((0.6, 2.5)));
+    }
+
+    /// Every kind the generic decide routes through must have a finite ceiling,
+    /// or enemy-vs-enemy separation can fling it across the room.
+    #[test]
+    fn every_routed_kind_has_a_speed_ceiling() {
+        for kind in [
+            EnemyKind::Freak,
+            EnemyKind::ExploFreak,
+            EnemyKind::RhinoFreak,
+            EnemyKind::PopoFreak,
+            EnemyKind::Rat,
+            EnemyKind::BigRat,
+            EnemyKind::FastRat,
+            EnemyKind::Wolf,
+            EnemyKind::Raven,
+            EnemyKind::Spider,
+            EnemyKind::InvSpider,
+            EnemyKind::Crab,
+            EnemyKind::Turtle,
+            EnemyKind::Salamander,
+            EnemyKind::BoneFish,
+            EnemyKind::RobotGuard,
+            EnemyKind::HostileHorror,
+            EnemyKind::RadMaggot,
+            EnemyKind::SuperFrog,
+            EnemyKind::LilHunter,
+        ] {
+            assert!(
+                gml_speed_cap(kind).is_finite(),
+                "{kind:?} has no speed ceiling"
+            );
+        }
     }
 }
