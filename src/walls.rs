@@ -39,17 +39,18 @@ use crate::msg::Queue;
 use crate::spatial::Pos;
 use crate::worldgen::WALL_PX;
 
-/// Floor cell owning a wall cell (bevy `world::floor_cell_for_wall`
-/// parity: walls are half-resolution, `div_euclid(2)` maps back).
-#[inline]
-pub fn floor_cell_for_wall(wx: i32, wy: i32) -> (i32, i32) {
-    (wx.div_euclid(2), wy.div_euclid(2))
-}
+pub use crate::comps_a::floor_cell_for_wall;
 
 /// Flush queued wall breaks: despawn the marker, then every wall that
 /// matches by cell or sits within `WALL_PX * 0.75` of the break point
-/// (one marker can break several walls, bevy parity). Broken walls open
-/// their owner floor cell, pop a dust burst, and add 0.06 trauma each.
+/// (one marker can break several walls, bevy parity).
+///
+/// GML `scrWallDestroy` destroys the wall and creates a 16x16 `FloorExplo` at
+/// its position — so the hole is one wall cell wide, and any sibling `Wall`s
+/// inside the same 32x32 `Floor` neighbour stay solid. `FloorExplo/Create_0:19-27`
+/// then re-closes the hole: for each of the 8 neighbours at +/-16 px it creates
+/// a new `Wall` wherever there is neither a `Floor` nor a `Wall`, which is what
+/// stops the wall ring from degrading when a break has no floor on the far side.
 pub fn apply_pending_wall_breaks(
     mut commands: Commands,
     mut mask: ResMut<FloorMask>,
@@ -57,12 +58,23 @@ pub fn apply_pending_wall_breaks(
     pending: Query<(Entity, &PendingWallBreak)>,
     walls: Query<(Entity, &WallCell, &Pos, Option<&WallVisuals>), With<WallTile>>,
 ) {
+    // `queue_wall_breaks_along_segment` stamps a marker every `WALL_PX * 0.5`
+    // along a charge, so the same wall is named many times per boss swing. Bevy
+    // despawns are deferred, so without this the wall is despawned, burst and
+    // shaken once per marker.
+    let mut handled: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
+    let mut resealed: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
+
     for (marker_e, brk) in &pending {
         commands.entity(marker_e).despawn();
 
+        let mut broken: Vec<((i32, i32), glam::Vec2)> = Vec::new();
         for (wall_e, cell, wpos, visuals) in &walls {
             let wpos = wpos.0;
             if (cell.0, cell.1) != brk.cell && wpos.distance(brk.pos) > WALL_PX * 0.75 {
+                continue;
+            }
+            if !handled.insert((cell.0, cell.1)) {
                 continue;
             }
 
@@ -74,10 +86,11 @@ pub fn apply_pending_wall_breaks(
             commands.entity(wall_e).despawn();
 
             if brk.spawn_floor {
-                mask.cells.insert(floor_cell_for_wall(cell.0, cell.1));
-                // Visual-only floor sprite entity omitted: the renderer
-                // draws floor from `FloorMask`, which now covers the cell.
+                // The 16x16 cell, not the 32x32 `Floor` that covers it: GML's
+                // `FloorExplo` mask is 16x16 (`mskFloorExplo.yy:74,89`).
+                mask.opened.insert((cell.0, cell.1));
             }
+            broken.push(((cell.0, cell.1), wpos));
 
             let mut rng = rand::rng();
             spawn_burst(
@@ -89,6 +102,53 @@ pub fn apply_pending_wall_breaks(
                 (40.0, 140.0),
             );
             trauma.add(0.06);
+        }
+
+        if !brk.spawn_floor {
+            continue;
+        }
+
+        for broken_cell in &broken {
+            let (cx, cy) = broken_cell.0;
+            // `FloorExplo/Create_0:19-27`: re-close a hole that has no floor on
+            // the far side, so the ring survives a break in the void.
+            for (dx, dy) in [
+                (-1, 0),
+                (1, 0),
+                (0, -1),
+                (0, 1),
+                (-1, -1),
+                (1, -1),
+                (1, 1),
+                (-1, 1),
+            ] {
+                let n = (cx + dx, cy + dy);
+                if mask.opened.contains(&n) || mask.cells.contains(&floor_cell_for_wall(n.0, n.1)) {
+                    continue;
+                }
+                if walls.iter().any(|(_, c, _, _)| (c.0, c.1) == n) {
+                    continue;
+                }
+                if broken.iter().any(|((bx, by), _)| (*bx, *by) == n) {
+                    continue;
+                }
+                if !resealed.insert(n) {
+                    continue;
+                }
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    WallTile,
+                    WallCell(n.0, n.1),
+                    Prop {
+                        size: glam::Vec2::splat(WALL_PX),
+                        hp: 9999,
+                        destructible: false,
+                        explosive: false,
+                    },
+                    Pos(crate::worldgen::wall_center(n.0, n.1)),
+                ));
+            }
         }
     }
 }

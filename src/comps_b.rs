@@ -333,18 +333,33 @@ impl LoopTransition {
     }
 }
 
+/// GML `WantBoss` — the marker that arms the Big Bandit. `WantBoss/Step_0`
+/// compares the **surviving** enemy count against `enemies` (captured in
+/// `WantBoss/Create_0` at generation time) scaled by `treshhold`, which is
+/// `0.98` normally and `0.9` on the area's last subarea, so the bandit arms
+/// once `0.02` / `0.10` of the floor's trash is dead.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct PendingDelayedBoss {
     pub kind: EnemyKind,
     pub initial_trash: u32,
+    /// Fraction of `initial_trash` that must be dead.
     pub kill_fraction: f32,
+    /// GML `WantBoss/Step_0:20-23`: off the last subarea the bandit only arms
+    /// once every chest is open (`!instance_exists(chestprop)` and a
+    /// `ChestOpen` exists), which is what turns 1-1/1-2 into the CanOasis
+    /// secret instead of a routine boss.
+    pub require_open_chests: bool,
+    /// GML `WantBoss/Step_0:16-17`: `alarm[0] = 120` (4 s) once the threshold
+    /// clears on the last subarea. Zero everywhere else — there the chest
+    /// condition sets `alarm[0] = 1` instead.
+    pub arm_delay: f32,
 
     pub from_wall: bool,
 }
 
 impl PendingDelayedBoss {
     pub fn kills_needed(&self) -> u32 {
-        (((self.initial_trash as f32) * self.kill_fraction).ceil() as u32).max(1)
+        (self.initial_trash as f32 * self.kill_fraction).ceil() as u32
     }
 }
 

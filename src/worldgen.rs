@@ -192,6 +192,10 @@ pub fn gml_area_from_run(run: &Run) -> i32 {
         AreaId::HQ => 106,
         AreaId::Crib => 107,
         AreaId::Palace | AreaId::Campfire => 7,
+        // GML's between-loop portal room borrows the Desert's tiles, the same
+        // mapping `vortex::SpiralKind::for_gml_area` uses. Spelled out so the
+        // wildcard below cannot quietly resolve the portal room to area 1.
+        AreaId::Loop => 1,
         _ => gml_area(run.floor),
     }
 }
@@ -2487,6 +2491,11 @@ fn populate(
 
 /// GML `scrPopulate.gml:319-377` plus the secret-area bosses at :347-377.
 fn boss_for_run(run: &Run, area: i32, is_last: bool) -> Option<EnemyKind> {
+    // The between-loop portal room maps to GML area 1 for its tiles but has no
+    // `scrPopulate` boss branch, and `WantBoss` is not placed there.
+    if run.area == AreaId::Loop {
+        return None;
+    }
     // GML :319-321 -- `WantBoss` sits outside the `_has_boss` gate, so the
     // Big Bandit guards every desert subarea.
     if area == 1 && !run.tutorial {
@@ -2539,19 +2548,19 @@ fn lil_hunter_kind(loop_count: u32) -> EnemyKind {
 /// GML `scrPopulate.gml:319-377`: Big Bandit on desert 1-1/1-2/1-3, Big Dog
 /// on scrapyards 5-3, Lil Hunter on city 9-3, Throne on 15-3 -- nothing on
 /// 2-1, 4-1, 6-1, 13-1 or 13-2.
-pub fn boss_for_floor_and_loop(floor: u32, loop_count: u32) -> EnemyKind {
+pub fn boss_for_floor_and_loop(floor: u32, loop_count: u32) -> Option<EnemyKind> {
     let rf = ((floor.max(1) - 1) % 15) + 1;
     match rf {
-        1..=3 => big_bandit_kind(loop_count),
-        7 => big_dog_kind(loop_count),
-        11 => lil_hunter_kind(loop_count),
-        15 => EnemyKind::Throne,
-        _ => EnemyKind::BigBandit,
+        1..=3 => Some(big_bandit_kind(loop_count)),
+        7 => Some(big_dog_kind(loop_count)),
+        11 => Some(lil_hunter_kind(loop_count)),
+        15 => Some(EnemyKind::Throne),
+        _ => None,
     }
 }
 
 #[allow(dead_code)]
-pub fn boss_for_floor(floor: u32) -> EnemyKind {
+pub fn boss_for_floor(floor: u32) -> Option<EnemyKind> {
     boss_for_floor_and_loop(floor, (floor.max(1) - 1) / 15)
 }
 
@@ -2583,9 +2592,9 @@ pub fn world_of(floor: u32) -> u32 {
     }
 }
 
-pub fn floor_cell_for_wall(wx: i32, wy: i32) -> (i32, i32) {
-    (wx.div_euclid(2), wy.div_euclid(2))
-}
+/// Re-export of [`crate::comps_a::floor_cell_for_wall`], which now backs both
+/// the 32x32 `FloorMask` and the 16x16 destroyed-wall layer.
+pub use crate::comps_a::floor_cell_for_wall;
 
 pub fn wall_cell_at(pos: Vec2) -> (i32, i32) {
     (

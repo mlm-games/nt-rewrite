@@ -749,15 +749,19 @@ fn cap_gml_speed(brain: &mut EnemyBrain, vel: &mut Velocity, cap_f: f32) {
     sync_heading(brain, vel);
 }
 
+/// GML `Other_10` shape shared by `Bandit`, `Scorpion`, `GoldScorpion`,
+/// `Sniper` and `JungleBandit`: the impulse is gated on `walk > 0` but the
+/// speed cap is **unconditional** (`if speed > N speed = N` sits outside the
+/// block). Gating the cap too let `separate` ratchet a stopped enemy up to
+/// the 16 px/frame separation clamp.
 #[inline]
 fn walk_step(brain: &mut EnemyBrain, vel: &mut Velocity, impulse_f: f32, cap_f: f32, dt: f32) {
-    if brain.walk <= 0.0 {
-        return;
+    if brain.walk > 0.0 {
+        let heading = brain.heading;
+        add_gml_motion(brain, vel, heading, impulse_f, dt);
+        brain.walk = (brain.walk - dt * 30.0).max(0.0);
     }
-    let angle = brain.heading;
-    add_gml_motion(brain, vel, angle, impulse_f, dt);
     cap_gml_speed(brain, vel, cap_f);
-    brain.walk = (brain.walk - dt * 30.0).max(0.0);
 }
 
 #[inline]
@@ -793,15 +797,47 @@ enum EnemyWallLaw {
     SlidePush,
 }
 
+/// GML per-object `Collision_Wall`. Only objects that do **not** override it
+/// inherit `enemy/Collision_Wall`'s `busycollisions` branch (save direction and
+/// speed, bounce, `motion_add(_dir, speed)`, restore `speed`, then slide each
+/// blocked axis by `friction`). Every object listed below overrides the event,
+/// so the restore and the friction slide are dead code for it.
 fn wall_law(kind: EnemyKind) -> EnemyWallLaw {
     match kind {
+        // `Maggot/Collision_Wall.gml:4-5`: slide, then push 1 px/frame off the
+        // wall it just touched.
+        EnemyKind::Maggot => EnemyWallLaw::SlidePush,
+        // `move_bounce_solid(false)` — slide, no bounce.
+        EnemyKind::Crab | EnemyKind::JungleFly => EnemyWallLaw::Slide,
+        // `move_bounce_solid(true)` and nothing else.
         EnemyKind::Ballguy
         | EnemyKind::BigMaggot
         | EnemyKind::Scorpion
         | EnemyKind::GoldScorpion
-        | EnemyKind::Sniper => EnemyWallLaw::PlainBounce,
-        EnemyKind::JungleFly => EnemyWallLaw::Slide,
-        EnemyKind::Maggot => EnemyWallLaw::SlidePush,
+        | EnemyKind::Sniper
+        | EnemyKind::CrownGuardian
+        | EnemyKind::DogGuardian
+        | EnemyKind::FireBaller
+        | EnemyKind::SuperFireBaller
+        | EnemyKind::FrogQueen
+        | EnemyKind::Guardian
+        | EnemyKind::OldGuardian
+        | EnemyKind::PalaceGuardian
+        | EnemyKind::InvLaserCrystal
+        | EnemyKind::LaserCrystal
+        | EnemyKind::LightningCrystal
+        | EnemyKind::InvSpider
+        | EnemyKind::Spider
+        | EnemyKind::Mimic
+        | EnemyKind::SuperMimic
+        | EnemyKind::WepMimic
+        | EnemyKind::RadMaggot
+        | EnemyKind::Ratking
+        | EnemyKind::Salamander
+        | EnemyKind::ScrapBossMissile
+        | EnemyKind::SuperFrog
+        | EnemyKind::Turtle
+        | EnemyKind::Wolf => EnemyWallLaw::PlainBounce,
         _ => EnemyWallLaw::Parent,
     }
 }
@@ -835,10 +871,21 @@ fn gml_speed_cap(kind: EnemyKind) -> f32 {
         EnemyKind::Necromancer => 3.0,
         EnemyKind::Raven | EnemyKind::JungleBandit => 3.5,
         EnemyKind::Molefish | EnemyKind::Molesarge => 3.5,
-        EnemyKind::Freak | EnemyKind::PopoFreak | EnemyKind::BoneFish | EnemyKind::Rat => 4.0,
-        EnemyKind::FastRat => 4.5,
+        EnemyKind::Freak | EnemyKind::BoneFish | EnemyKind::Rat => 4.0,
+        // `PopoFreak/Other_10:9` caps at 4.5, not the 4 its siblings use.
+        EnemyKind::PopoFreak | EnemyKind::FastRat => 4.5,
         EnemyKind::Crab => 4.5,
-        EnemyKind::Wolf => 5.0,
+        // `HostileHorror/Other_10:9` `if (speed > 4.5) speed = 4.5`.
+        EnemyKind::HostileHorror => 4.5,
+        // IDPD `Other_10`: `Grunt`/`EliteGrunt` 3, `Shielder`/`EliteShielder`
+        // 3.5, `Inspector` 3, `EliteInspector` 3.5.
+        EnemyKind::IdpdGrunt | EnemyKind::IdpdElite | EnemyKind::IdpdInspector => 3.0,
+        EnemyKind::IdpdShield => 3.5,
+        // The palace statue is GML's `Guardian`, whose `Step_0:10` caps at 0.6.
+        EnemyKind::PalaceGuardian => 0.6,
+        // GML caps these conditionally on `spr_fire` / `maxspeed`. `Wolf` is at
+        // its resting 3.5 here; the roll raises it to 5 via `Other_10:12-16`.
+        EnemyKind::Wolf => 3.5,
         EnemyKind::Turtle => 5.0,
         // `Spider`/`InvSpider` cap at `maxspeed`; the chase cap is applied by
         // the spider's own alarm, so 5 is the outer bound here.
@@ -877,19 +924,59 @@ fn gml_walk_law(kind: EnemyKind) -> (f32, f32) {
         }
         EnemyKind::RhinoFreak => (0.8, 1.0),
         EnemyKind::Turtle => (1.0, 5.0),
-        EnemyKind::Wolf => (1.0, 5.0),
-        EnemyKind::FireBaller | EnemyKind::SuperFireBaller | EnemyKind::SuperFrog => {
-            (0.6, gml_speed_cap_frames(kind))
-        }
-        EnemyKind::SnowTank | EnemyKind::GoldSnowtank => (0.6, 1.5),
-        EnemyKind::Guardian | EnemyKind::CrownGuardian => (0.6, 0.6),
-        EnemyKind::DogGuardian => (0.4, 2.0),
+        EnemyKind::Wolf => (1.0, 3.5),
         EnemyKind::ExploGuardian => (0.5, 2.5),
-        EnemyKind::LaserCrystal | EnemyKind::LightningCrystal | EnemyKind::InvLaserCrystal => {
-            (0.5, gml_speed_cap_frames(kind))
-        }
         _ => (0.4, gml_speed_cap_frames(kind)),
     }
+}
+
+/// GML objects whose `Other_10`/`Step_0` applies `motion_add` **every step**,
+/// with no `walk` gate at all, as `(impulse, cap)` in px/frame. These drift
+/// continuously and only change heading by bouncing, so they must not be
+/// routed through [`gml_walk_law`], which is gated on `walk > 0`.
+fn gml_constant_drift(kind: EnemyKind) -> Option<(f32, f32)> {
+    Some(match kind {
+        // `Guardian/Step_0:9-10`, `CrownGuardian/Step_0`.
+        EnemyKind::Guardian
+        | EnemyKind::OldGuardian
+        | EnemyKind::PalaceGuardian
+        | EnemyKind::CrownGuardian => (0.6, 0.6),
+        // `LaserCrystal/Other_10:2-3`, `LightningCrystal`, `InvLaserCrystal`.
+        EnemyKind::LaserCrystal => (0.5, 1.5),
+        EnemyKind::LightningCrystal => (0.5, 1.8),
+        EnemyKind::InvLaserCrystal => (0.5, 1.5),
+        EnemyKind::FireBaller => (0.6, 2.0),
+        EnemyKind::SuperFireBaller => (0.6, 1.5),
+        // `SuperFrog/Other_10:3,12`: 0.6 impulse every step then `speed = 2.5`.
+        EnemyKind::SuperFrog => (0.6, 2.5),
+        EnemyKind::SnowTank | EnemyKind::GoldSnowtank => (0.6, 1.5),
+        EnemyKind::DogGuardian => (0.4, 2.0),
+        _ => return None,
+    })
+}
+
+/// The laser crystals gate their drift on `sprite_index != spr_fire` rather
+/// than on the hurt sprite, so they stop drifting while charging.
+fn gml_drift_stops_while_firing(kind: EnemyKind) -> bool {
+    matches!(
+        kind,
+        EnemyKind::LaserCrystal | EnemyKind::LightningCrystal | EnemyKind::InvLaserCrystal
+    )
+}
+
+/// GML objects that arm `walk` and never spend it, so the impulse runs every
+/// step until the alarm re-arms: `Freak/Other_10:7-9`, `ExploFreak/Other_10`,
+/// `PopoFreak/Other_10` and `RhinoFreak/Other_10:7-12` have no `walk -= 1`, and
+/// `ExploGuardian/Other_10` relies on `Alarm_1:3` re-arming `walk` instead.
+fn gml_walk_never_decrements(kind: EnemyKind) -> bool {
+    matches!(
+        kind,
+        EnemyKind::Freak
+            | EnemyKind::ExploFreak
+            | EnemyKind::PopoFreak
+            | EnemyKind::RhinoFreak
+            | EnemyKind::ExploGuardian
+    )
 }
 
 /// GML `motion_add(direction, N)` from an object's step handler.
@@ -959,13 +1046,13 @@ fn integrate_verbatim(
     let saved_direction = vel.0.normalize_or_zero();
     let saved_speed = vel.0.length();
     let parent = matches!(law, EnemyWallLaw::Parent) && loops <= 3;
-    // Always reflect. GML's `move_bounce_solid(silent)` argument only
-    // suppresses the collision EVENT — `JungleFly` and `Maggot` pass
-    // `false` and still bounce. Passing `bounce = false` here made them
-    // slide along walls instead, and `Slide` became identical to
-    // `PlainBounce`. The laws differ only in the restore and the extra
-    // `motion_add` below.
-    let contact = move_bounce_solid(&mut pos.0, &mut vel.0, radius, dt, solids, Some(mask), true);
+    // GML's `move_bounce_solid(bounce)` argument is the *bounce* flag, not a
+    // "silent" event suppressor: `false` slides along the surface and kills
+    // the normal component, which is what `Maggot/Collision_Wall.gml:4` and
+    // `JungleFly/Collision_Wall.gml:4` ask for. Every other wall law passes
+    // `true`.
+    let bounce = matches!(law, EnemyWallLaw::Parent | EnemyWallLaw::PlainBounce);
+    let contact = move_bounce_solid(&mut pos.0, &mut vel.0, radius, dt, solids, Some(mask), bounce);
 
     if parent && contact.is_some() {
         let post_speed = vel.0.length();
@@ -1233,33 +1320,58 @@ pub fn enemy_ai(
             continue;
         }
 
-        let emplacement = matches!(
-            enemy.kind,
-            EnemyKind::Turret
-                | EnemyKind::Crystal
-                | EnemyKind::LaserCrystal
-                | EnemyKind::LightningCrystal
-                | EnemyKind::InvLaserCrystal
-        );
+        // Only `Turret/Other_10` (`speed = 0; x = xprevious`) and `Crystal` are
+        // true emplacements. The laser crystals drift, so pinning them froze
+        // them.
+        let emplacement = matches!(enemy.kind, EnemyKind::Turret | EnemyKind::Crystal);
 
-        brain.melee.tick(dt);
-        // GML steps every alarm on every instance each step, so the decide
-        // alarm and the fire alarm each tick exactly once per frame here and
-        // every block below only reads `just_finished()`.
-        brain.attack.tick(dt);
-        brain.fire_alarm.tick(dt);
+        // Kinds with a dedicated verbatim ticker own their `Other_10` and
+        // their alarm cadence. The generic timers/walk/decide ran as well, so
+        // their impulse was the sum of both (IDPD 0.8 + 0.4, Ratking 0.5 +
+        // 0.5), `walk` counted down twice per step, and every alarm fired
+        // twice. Their tickers apply the cap themselves, so skipping the
+        // generic cap here too is correct.
+        let owns_motion = has_dedicated_tick(enemy.kind);
 
-        if brain.walk > 0.0 {
-            let (impulse_f, cap_f) = gml_walk_law(enemy.kind);
-            let walk_dir = if vel.0.length_squared() > 1.0 {
-                vel.0.normalize_or_zero()
-            } else {
-                dir
-            };
-            gml_motion_add_clamp(&mut vel.0, walk_dir, impulse_f, cap_f, dt);
-            brain.walk -= dt * 30.0;
-            if brain.walk < 0.0 {
-                brain.walk = 0.0;
+        if !owns_motion {
+            brain.melee.tick(dt);
+            // GML steps every alarm on every instance each step, so the decide
+            // alarm and the fire alarm each tick exactly once per frame here and
+            // every block below only reads `just_finished()`.
+            brain.attack.tick(dt);
+            brain.fire_alarm.tick(dt);
+
+            // Objects whose GML `Other_10`/`Step_0` applies `motion_add` every
+            // step with no `walk` gate: they drift continuously and only ever
+            // change heading by bouncing. `Guardian/Step_0:9-10` caps at 0.6, so
+            // running them through the `walk` law pinned them whenever `walk`
+            // was 0.
+            let heading = brain.heading;
+            if let Some((impulse_f, cap_f)) = gml_constant_drift(enemy.kind) {
+                // `sprite_index != spr_hurt`, except the laser crystals which
+                // gate on `sprite_index != spr_fire` instead. `DogGuardian` also
+                // gates on `!leap`.
+                let charging = charge_state.contains_key(&entity);
+                if hurt.is_none()
+                    && brain.dash <= 0.0
+                    && !(charging && gml_drift_stops_while_firing(enemy.kind))
+                {
+                    add_gml_motion(&mut brain, &mut vel, heading, impulse_f, dt);
+                }
+                cap_gml_speed(&mut brain, &mut vel, cap_f);
+            } else if brain.walk > 0.0 {
+                let (impulse_f, cap_f) = gml_walk_law(enemy.kind);
+                add_gml_motion(&mut brain, &mut vel, heading, impulse_f, dt);
+                // GML `Freak`, `ExploFreak`, `PopoFreak` and `RhinoFreak` never
+                // decrement `walk`, so their impulse runs every step for as long
+                // as the alarm keeps it armed. Counting it down halved their
+                // travel.
+                if !gml_walk_never_decrements(enemy.kind) {
+                    brain.walk -= dt * 30.0;
+                    if brain.walk < 0.0 {
+                        brain.walk = 0.0;
+                    }
+                }
             }
         }
 
@@ -1277,7 +1389,8 @@ pub fn enemy_ai(
         {
             brain.dash = 0.42;
             brain.melee = GTimer::from_seconds(10.0, TimerMode::Once);
-            vel.0 = dir * 700.0;
+            // GML `DogGuardian/Other_10:24` sets `speed = 8` (8 px/frame).
+            vel.0 = dir * 8.0 * crate::SIM_HZ as f32;
         }
 
         if enemy.kind == EnemyKind::Raven && !was_dashing && brain.melee.is_finished() {
@@ -1310,16 +1423,10 @@ pub fn enemy_ai(
             brain.melee = GTimer::from_seconds(2.2, TimerMode::Once);
         }
 
-        if enemy.kind == EnemyKind::PalaceGuardian
-            && !was_dashing
-            && dist < 80.0
-            && dist > 24.0
-            && brain.melee.is_finished()
-        {
-            brain.dash = 0.18;
-            brain.melee = GTimer::from_seconds(0.9, TimerMode::Once);
-            vel.0 = dir * 540.0;
-        }
+        // GML `Guardian` has no lunge: `Step_0:9-10` applies
+        // `motion_add(direction, 0.6)` and caps at 0.6 px/frame every step. The
+        // port invented an 18 px/frame dash, 30x the object's ceiling, so the
+        // lunge is gone entirely.
         if brain.dash > 0.0 {
             brain.dash = (brain.dash - dt).max(0.0);
         }
@@ -1336,7 +1443,14 @@ pub fn enemy_ai(
             // `vel * dt` twice, and the second (swept) test started from
             // the unchecked first position — so a dash into a wall
             // resolved from inside geometry and fought the bounce.
-        } else if brain.speed > 0.0 {
+        } else {
+            // Not gated on live velocity. GML has no such rule: the decide
+            // alarm fires on its own schedule whatever `speed` happens to be,
+            // and "this object has no motion law" is a static property that
+            // `emplacement` already encodes (`Turret/Other_10` and
+            // `Technomancer/Other_10` both set `speed = 0`). Gating the alarm
+            // on a live `speed` swallowed the decide on any frame the enemy
+            // happened to be at rest, and its re-arm never came back.
             // Kinds with their own `Alarm_1` further down must not also run
             // the generic decide, or its re-arm starves their own decide.
             let owns_decide = matches!(
@@ -1360,7 +1474,7 @@ pub fn enemy_ai(
                     | EnemyKind::Guardian
                     | EnemyKind::ExploGuardian
             );
-            if !owns_decide && brain.attack.just_finished() {
+            if !owns_motion && !owns_decide && brain.attack.just_finished() {
                 let los = has_line_of_sight(epos, player_pos, &mask);
                 let base_ang = dir.y.atan2(dir.x);
 
@@ -1390,7 +1504,10 @@ pub fn enemy_ai(
                     | EnemyKind::Ratking
                     | EnemyKind::FastRat
                     | EnemyKind::BigRat => (0.8, 4.0, 10.0..16.0, 40.0..50.0, 10.0..25.0),
-                    EnemyKind::Wolf => (0.8, 4.0, 10.0..16.0, 20.0..30.0, 12.0..20.0),
+                    // GML `Wolf/Alarm_1:2-3`: `alarm[1] = 30 + random(20);
+                    // walk = alarm[1]` on every path, so the wolf always walks
+                    // 30-50 frames rather than the 10-16 the generic row used.
+                    EnemyKind::Wolf => (0.8, 3.5, 30.0..50.0, 30.0..50.0, 30.0..50.0),
                     EnemyKind::Assassin => (0.8, 4.0, 10.0..14.0, 20.0..28.0, 16.0..24.0),
                     EnemyKind::LightningCrystal => (0.5, 1.5, 10.0..14.0, 10.0..14.0, 10.0..20.0),
                     _ => (0.4, 4.0, 6.0..14.0, 18.0..28.0, 10.0..18.0),
@@ -1462,14 +1579,13 @@ pub fn enemy_ai(
             if vel.0.length() > cap {
                 vel.0 = vel.0.normalize() * cap;
             }
-        } else {
-            vel.0 = glam::Vec2::ZERO;
         }
 
-        // GML `enemy/Collision_Wall`: `move_bounce_solid(true)`, plus the
-        // `busycollisions` (loops <= 3) branch that restores the pre-bounce
-        // heading/speed and then slides each blocked axis off by `friction`.
+        // GML `enemy/Collision_Wall`, per object. Objects that override the
+        // event get only their own `move_bounce_solid` argument: no
+        // `busycollisions` restore, no `friction` axis slide.
         let solids = prop_shapes(&props);
+        let law = wall_law(enemy.kind);
         let saved_direction = vel.0.normalize_or_zero();
         let saved_speed = vel.0.length();
         let contact = move_bounce_solid(
@@ -1479,9 +1595,9 @@ pub fn enemy_ai(
             dt,
             &solids,
             Some(&mask),
-            true,
+            matches!(law, EnemyWallLaw::Parent | EnemyWallLaw::PlainBounce),
         );
-        if contact.is_some() && run.loop_count <= 3 {
+        if matches!(law, EnemyWallLaw::Parent) && contact.is_some() && run.loop_count <= 3 {
             let post_speed = vel.0.length();
             if saved_direction.length_squared() > 1e-8 {
                 vel.0 += saved_direction * post_speed;
@@ -1495,6 +1611,11 @@ pub fn enemy_ai(
                 vel.0.x = wall_probe_axis(pos.0, def.radius, vel.0.x, true, brain.friction, &solids, &mask);
                 vel.0.y = wall_probe_axis(pos.0, def.radius, vel.0.y, false, brain.friction, &solids, &mask);
             }
+        } else if matches!(law, EnemyWallLaw::SlidePush)
+            && let Some(contact) = contact
+        {
+            // `Maggot/Collision_Wall.gml:5`.
+            vel.0 += contact.normal * 30.0;
         }
 
         // InvSpider/InvLaserCrystal fade: visual-only, omitted.
@@ -1527,6 +1648,15 @@ pub fn enemy_ai(
             run.loop_count,
             current_frame,
         );
+
+        // GML keeps `direction`/`speed` as the authoritative pair: `motion_add`
+        // and `move_bounce_solid` leave `direction` pointing along the current
+        // velocity, which is what the next frame's `Other_10` reads. Without
+        // this the generic path's `brain.heading` stayed frozen at the spawn
+        // value, so every walk impulse went the same way for the enemy's whole
+        // life, and `brain.speed` stayed frozen too, which pinned the
+        // `brain.speed > 0` gate and the `vel = ZERO` fallback.
+        sync_heading(&mut brain, &vel);
 
         if enemy.kind == EnemyKind::Necromancer {
             if brain.attack.just_finished() {
@@ -1982,6 +2112,10 @@ pub fn enemy_ai(
             }
         }
 
+        // GML `Mimic`/`SuperMimic`/`WepMimic/Other_10` has **no** `motion_add`:
+        // the mimic never self-moves, it only spins in place pretending to be a
+        // weapon. The port lerped it toward the player at up to 2 px/frame, so
+        // every mimic in the level crept across the room.
         if matches!(
             enemy.kind,
             EnemyKind::Mimic | EnemyKind::SuperMimic | EnemyKind::WepMimic
@@ -1999,10 +2133,6 @@ pub fn enemy_ai(
                     (90.0 + rng.random_range(0.0..150.0)) / 30.0
                 };
                 brain.attack = GTimer::from_seconds(cd_secs, TimerMode::Once);
-            }
-            if dist < 200.0 {
-                let chase = dir * 60.0;
-                vel.0 = vel.0.lerp(chase, 0.1);
             }
         }
 
@@ -4421,11 +4551,12 @@ pub fn fire_enemy_shot(
     }
 }
 
-/// Flush a kill-gated boss spawn: once enough trash died, pop the boss
-/// out of a wall (or open floor), shake, toast, and hitstop (bevy
-/// parity, including the hardcoded "BIG BANDIT" toast).
+/// GML `WantBoss/Step_0` + `WantBoss/Alarm_0`: the Big Bandit's arming gate and
+/// wall breach. Once it arms, the bandit climbs out of a wall near the player,
+/// the wall breaks, and the screen shakes.
 #[allow(clippy::too_many_arguments)]
 pub fn tick_delayed_boss_spawns(
+    time: Res<SimTime>,
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
     run: Res<Run>,
@@ -4435,7 +4566,8 @@ pub fn tick_delayed_boss_spawns(
     mut trauma: ResMut<Trauma>,
     mut hitstop: ResMut<HitStop>,
     mut toast: ResMut<Toast>,
-    pending: Query<(Entity, &PendingDelayedBoss)>,
+    triggers: Res<crate::secrets::SecretTriggers>,
+    mut pending: Query<(Entity, &mut PendingDelayedBoss)>,
     enemies: Query<&Enemy, With<Enemy>>,
     player_q: Query<&Pos, With<Player>>,
     walls: Query<
@@ -4448,100 +4580,129 @@ pub fn tick_delayed_boss_spawns(
         With<crate::comps_a::WallTile>,
     >,
 ) {
-    let Ok((marker_e, pending_boss)) = pending.single() else {
-        return;
-    };
+    // GML `WantBoss/Step_0:4-7,39-41`: the marker gives up on a floor with no
+    // trash left, and on a non-final subarea once the floor is cleared.
+    let living = enemies.iter().filter(|e| !enemy_def(e.kind).boss).count() as u32;
+    let rad_maggots = enemies
+        .iter()
+        .filter(|e| e.kind == EnemyKind::RadMaggot)
+        .count() as u32;
 
-    let living_trash = enemies.iter().filter(|e| !enemy_def(e.kind).boss).count() as u32;
-    let killed = pending_boss.initial_trash.saturating_sub(living_trash);
-    if killed < pending_boss.kills_needed() {
-        return;
-    }
+    for (marker_e, mut pending_boss) in &mut pending {
+        if living == 0 {
+            commands.entity(marker_e).despawn();
+            continue;
+        }
 
-    let Ok(player_pos) = player_q.single() else {
-        return;
-    };
-    let player_pos = player_pos.0;
+        // GML `WantBoss/Step_0:15`: `instance_number(enemy) -
+        // instance_number(RadMaggot) > enemies * treshhold`. Unhatched rad
+        // maggots are excluded from the count.
+        let surviving = living.saturating_sub(rad_maggots);
+        let killed = pending_boss.initial_trash.saturating_sub(surviving);
+        if killed < pending_boss.kills_needed() {
+            continue;
+        }
 
-    let mut best_wall: Option<(glam::Vec2, (i32, i32))> = None;
-    let mut best_score = f32::MAX;
-    if pending_boss.from_wall {
-        for (_, cell, pos, screen_end) in &walls {
-            let p = pos.0;
-            let d = p.distance(player_pos);
-            if d < 120.0 || d > 260.0 {
-                continue;
-            }
-            let mut score = (d - 180.0).abs() + (p.y - player_pos.y).abs() * 0.25;
-            if screen_end.is_some() {
-                score -= 20.0;
-            }
-            if score < best_score {
-                best_score = score;
-                best_wall = Some((p, (cell.0, cell.1)));
+        // GML `WantBoss/Step_0:20-23`. `detect_oasis_eligibility` already
+        // evaluates exactly this: every chest open, none of the special chests
+        // left, and at most 2% of the floor's trash dead.
+        if pending_boss.require_open_chests && !triggers.oasis_chests_ready {
+            continue;
+        }
+
+        // GML `WantBoss/Step_0:16-17`: a 4 s beat before the breach.
+        if pending_boss.arm_delay > 0.0 {
+            pending_boss.arm_delay -= time.delta_secs;
+            continue;
+        }
+
+        let Ok(player_pos) = player_q.single() else {
+            continue;
+        };
+        let player_pos = player_pos.0;
+
+        let mut best_wall: Option<(glam::Vec2, (i32, i32))> = None;
+        let mut best_score = f32::MAX;
+        if pending_boss.from_wall {
+            for (_, cell, pos, screen_end) in &walls {
+                let p = pos.0;
+                let d = p.distance(player_pos);
+                if d < 120.0 || d > 260.0 {
+                    continue;
+                }
+                let mut score = (d - 180.0).abs() + (p.y - player_pos.y).abs() * 0.25;
+                if screen_end.is_some() {
+                    score -= 20.0;
+                }
+                if score < best_score {
+                    best_score = score;
+                    best_wall = Some((p, (cell.0, cell.1)));
+                }
             }
         }
-    }
 
-    let spawn_pos = if let Some((p, _)) = best_wall {
-        p
-    } else {
-        let mut rng = rand::rng();
-        let mut best = mask.random_floor_pos(&mut rng, 120.0);
-        for _ in 0..32 {
-            let ang = rng.random_range(0.0..std::f32::consts::TAU);
-            let cand =
-                player_pos + glam::Vec2::new(ang.cos(), ang.sin()) * rng.random_range(140.0..240.0);
-            if mask.is_walkable(cand) {
-                best = cand;
-                break;
+        let kind = pending_boss.kind;
+
+        let spawn_pos = if let Some((p, _)) = best_wall {
+            p
+        } else {
+            let mut rng = rand::rng();
+            let mut best = mask.random_floor_pos(&mut rng, 120.0);
+            for _ in 0..32 {
+                let ang = rng.random_range(0.0..std::f32::consts::TAU);
+                let cand = player_pos
+                    + glam::Vec2::new(ang.cos(), ang.sin()) * rng.random_range(140.0..240.0);
+                if mask.is_walkable(cand) {
+                    best = cand;
+                    break;
+                }
+            }
+            best
+        };
+
+        commands.entity(marker_e).despawn();
+        trauma.add(0.3);
+
+        if let Some((p, cell)) = best_wall {
+            for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1), (0, 0)] {
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    crate::comps_a::PendingWallBreak {
+                        cell: (cell.0 + dx, cell.1 + dy),
+                        pos: p,
+                        spawn_floor: true,
+                    },
+                ));
             }
         }
-        best
-    };
 
-    commands.entity(marker_e).despawn();
-    trauma.add(0.3);
+        spawn_enemy_at(
+            &mut commands,
+            &catalog,
+            kind,
+            spawn_pos,
+            difficulty_multiplier(run.floor),
+            false,
+            false,
+            run.loop_count,
+            EnemySpawnContext {
+                subarea: run.floor_in_area,
+                blood_crown: run.blood_crown,
+                scarier_face: scarier.0,
+                heavy_heart: heavy_heart.0,
+            },
+        );
 
-    if let Some((p, cell)) = best_wall {
-        for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1), (0, 0)] {
-            commands.spawn((
-                GameCleanup,
-                LevelCleanup,
-                crate::comps_a::PendingWallBreak {
-                    cell: (cell.0 + dx, cell.1 + dy),
-                    pos: p,
-                    spawn_floor: true,
-                },
-            ));
-        }
+        commands.spawn((
+            GameCleanup,
+            BossIntro {
+                timer: GTimer::from_seconds(1.1, TimerMode::Once),
+            },
+        ));
+        toast.show("BIG BANDIT");
+        hitstop.trigger(0.2, 0.15);
     }
-
-    spawn_enemy_at(
-        &mut commands,
-        &catalog,
-        pending_boss.kind,
-        spawn_pos,
-        difficulty_multiplier(run.floor),
-        false,
-        false,
-        run.loop_count,
-        EnemySpawnContext {
-            subarea: run.floor_in_area,
-            blood_crown: run.blood_crown,
-            scarier_face: scarier.0,
-            heavy_heart: heavy_heart.0,
-        },
-    );
-
-    commands.spawn((
-        GameCleanup,
-        BossIntro {
-            timer: GTimer::from_seconds(1.1, TimerMode::Once),
-        },
-    ));
-    toast.show("BIG BANDIT");
-    hitstop.trigger(0.2, 0.15);
 }
 
 pub fn tick_frog_eggs(

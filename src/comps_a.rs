@@ -73,16 +73,48 @@ pub fn gml_motion_add_clamp(vel: &mut Vec2, dir: Vec2, impulse_f: f32, cap_f: f3
 // Floor grid is 32 px tiles.
 pub const TILE: f32 = 32.0;
 
+/// GML's tile model is two objects at two resolutions: `Floor` is a 32x32
+/// non-solid tile and `Wall` is a 16x16 solid. `scrWallDestroy` destroys one
+/// `Wall` and drops a 16x16 `FloorExplo` in its place, so a hole punched in the
+/// wall ring is **one 16x16 cell** wide, and the sibling `Wall`s inside the same
+/// 32x32 `Floor` neighbour stay solid.
+///
+/// The port collapsed that into the 32x32 `cells` set, so a break opened a whole
+/// floor tile while the remaining 16x16 wall bodies still blocked it: the floor
+/// sprite appeared but the area was not walkable. `opened` restores the 16x16
+/// resolution for destroyed walls, so `cells` (32x32 floor) and `opened` (16x16
+/// destroyed wall) agree everywhere.
 #[derive(Resource, Default, Clone)]
 pub struct FloorMask {
     pub cells: std::collections::HashSet<(i32, i32)>,
+    /// 16x16 wall cells cleared by `scrWallDestroy`, in wall-grid coordinates
+    /// (see [`crate::worldgen::floor_cell_for_wall`] for the 32x32 mapping).
+    pub opened: std::collections::HashSet<(i32, i32)>,
     pub cols: i32,
     pub rows: i32,
+}
+
+/// Wall cell is 16x16, half a `Floor` tile.
+pub const WALL_TILE: f32 = 16.0;
+
+/// Floor cell owning a wall cell: walls are half-resolution, `div_euclid(2)`
+/// maps a 16x16 wall cell back to the 32x32 `Floor` that covers it.
+#[inline]
+pub fn floor_cell_for_wall(wx: i32, wy: i32) -> (i32, i32) {
+    (wx.div_euclid(2), wy.div_euclid(2))
 }
 
 impl FloorMask {
     pub fn world_to_cell(&self, p: Vec2) -> (i32, i32) {
         ((p.x / TILE).floor() as i32, (p.y / TILE).floor() as i32)
+    }
+
+    /// 16x16 wall-grid coordinates for a world point.
+    pub fn world_to_wall_cell(&self, p: Vec2) -> (i32, i32) {
+        (
+            (p.x / WALL_TILE).floor() as i32,
+            (p.y / WALL_TILE).floor() as i32,
+        )
     }
 
     pub fn cell_center(&self, c: (i32, i32)) -> Vec2 {
@@ -92,8 +124,16 @@ impl FloorMask {
         )
     }
 
+    /// Centre of a 16x16 wall cell.
+    pub fn wall_cell_center(&self, c: (i32, i32)) -> Vec2 {
+        Vec2::new(
+            c.0 as f32 * WALL_TILE + WALL_TILE * 0.5,
+            c.1 as f32 * WALL_TILE + WALL_TILE * 0.5,
+        )
+    }
+
     pub fn is_walkable(&self, p: Vec2) -> bool {
-        self.cells.contains(&self.world_to_cell(p))
+        self.cells.contains(&self.world_to_cell(p)) || self.opened.contains(&self.world_to_wall_cell(p))
     }
 
     /// Push-out from unwalkable cells. Port adaptation: the bevy build

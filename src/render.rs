@@ -2068,7 +2068,16 @@ fn static_world_key(world: &mut World, assets: &RenderAssets) -> Option<StaticWo
         for &(x, y) in &mask.cells {
             add_fingerprint(cell_fingerprint(x, y), &mut floor_sum, &mut floor_xor);
         }
-        (mask.cells.len(), floor_sum ^ floor_xor)
+        // A break adds a 16x16 `opened` cell, which changes the drawn floor
+        // without touching `cells`, so it has to be in the key.
+        for &(x, y) in &mask.opened {
+            add_fingerprint(
+                cell_fingerprint(x, y) ^ 0x9E37_79B9_7F4A_7C15,
+                &mut floor_sum,
+                &mut floor_xor,
+            );
+        }
+        (mask.cells.len() + mask.opened.len(), floor_sum ^ floor_xor)
     };
     let mut wall_sum = 0;
     let mut wall_xor = 0;
@@ -2229,6 +2238,50 @@ pub fn world_instances_cached(
                         out.push(s);
                     }
                 }
+            }
+        }
+        // GML `FloorExplo/Create_0:14-15`: the destroyed wall's cell becomes a
+        // 16x16 `sprFloor<area>Explo`, `image_index = choose(1, 2, 3, 4)`. The
+        // port draws floor from `FloorMask`, so the hole needs its own pass at
+        // the wall's 16x16 resolution.
+        let explo_png = match area {
+            AreaId::Oasis => "images/sprFloor101Explo.png",
+            AreaId::PizzaSewers => "images/sprFloor102Explo.png",
+            AreaId::City => "images/sprFloor103Explo.png",
+            AreaId::CursedCaves => "images/sprFloor104Explo.png",
+            AreaId::Jungle => "images/sprFloor105Explo.png",
+            AreaId::HQ => "images/sprFloor106Explo.png",
+            AreaId::Crib => "images/sprFloor107Explo.png",
+            AreaId::Vault | AreaId::CrownVault => "images/sprFloor100Explo.png",
+            AreaId::Campfire | AreaId::Loop => "images/sprFloor0Explo.png",
+            AreaId::Desert => "images/sprFloor1Explo.png",
+            AreaId::Sewers => "images/sprFloor2Explo.png",
+            AreaId::Scrapyards => "images/sprFloor3Explo.png",
+            AreaId::CrystalCaves => "images/sprFloor4Explo.png",
+            AreaId::FrozenCity => "images/sprFloor5Explo.png",
+            AreaId::Labs => "images/sprFloor6Explo.png",
+            AreaId::Palace => "images/sprFloor7Explo.png",
+        };
+        let explo_png = if has(explo_png) {
+            explo_png
+        } else {
+            floor_png
+        };
+        let explo_frames = strip_frames(assets, explo_png).max(1);
+        for &(wx, wy) in &mask.opened {
+            // GML `image_index = choose(1, 2, 3, 4)` on a 4-frame strip, which
+            // GameMaker wraps, so the drawn frame is `(1 + n) % 4`.
+            let h = (wx
+                .wrapping_mul(0x8da6b343u32 as i32)
+                .wrapping_add(wy.wrapping_mul(0xd8163841u32 as i32))
+                >> 7) as u32;
+            let frame = ((1 + h % 4) % explo_frames) as i32;
+            let top_left = Vec2::new(wx as f32 * 16.0, wy as f32 * 16.0);
+            if let Some(mut s) =
+                place_top_left(assets, explo_png, frame, top_left, [1.0; 4], GRID_OVERLAP)
+            {
+                s.z = Z_FLOOR;
+                out.push(s);
             }
         }
         let floor_end = out.len();

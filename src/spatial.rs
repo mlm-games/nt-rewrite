@@ -8,7 +8,7 @@
 use bevy_ecs::prelude::*;
 use glam::Vec2;
 
-use crate::comps_a::{ARENA_H, ARENA_W, FloorMask, TILE};
+use crate::comps_a::{ARENA_H, ARENA_W, FloorMask, TILE, WALL_TILE, floor_cell_for_wall};
 use crate::projectile_math::{
     bounce_velocity, circle_aabb_normal, circle_aabb_penetration, swept_circle_aabb,
 };
@@ -116,24 +116,34 @@ fn solid_shapes(
     if let Some(mask) = mask
         && !mask.cells.is_empty()
     {
-        let min = start.min(start + displacement) - Vec2::splat(radius + TILE);
-        let max = start.max(start + displacement) + Vec2::splat(radius + TILE);
-        let min_cell_x =
-            ((min.x / TILE).floor() as i32).max((-ARENA_W * 0.5 / TILE).floor() as i32);
-        let max_cell_x =
-            ((max.x / TILE).floor() as i32).min((ARENA_W * 0.5 / TILE).ceil() as i32 - 1);
-        let min_cell_y =
-            ((min.y / TILE).floor() as i32).max((-ARENA_H * 0.5 / TILE).floor() as i32);
-        let max_cell_y =
-            ((max.y / TILE).floor() as i32).min((ARENA_H * 0.5 / TILE).ceil() as i32 - 1);
-        for y in min_cell_y..=max_cell_y {
-            for x in min_cell_x..=max_cell_x {
-                if mask.cells.contains(&(x, y)) {
+        // GML has no 32x32 solid: `Floor` is a 32x32 non-solid tile and `Wall` is
+        // a 16x16 solid, so a destroyed wall opens exactly one 16x16 cell
+        // (`FloorExplo`) while its siblings stay solid. Building the obstacle
+        // grid at the wall's 16x16 resolution keeps `solid_shapes` in step with
+        // `FloorMask::is_walkable` instead of blocking a whole 32x32 floor tile
+        // that only one quadrant of actually lost its wall.
+        let reach = radius + TILE;
+        let min = start.min(start + displacement) - Vec2::splat(reach);
+        let max = start.max(start + displacement) + Vec2::splat(reach);
+        let min_x = ((min.x / WALL_TILE).floor() as i32)
+            .max(((-ARENA_W * 0.5) / WALL_TILE).floor() as i32);
+        let max_x =
+            ((max.x / WALL_TILE).floor() as i32).min((ARENA_W * 0.5 / WALL_TILE).ceil() as i32 - 1);
+        let min_y = ((min.y / WALL_TILE).floor() as i32)
+            .max(((-ARENA_H * 0.5) / WALL_TILE).floor() as i32);
+        let max_y =
+            ((max.y / WALL_TILE).floor() as i32).min((ARENA_H * 0.5 / WALL_TILE).ceil() as i32 - 1);
+        for y in min_y..=max_y {
+            for x in min_x..=max_x {
+                if mask.cells.contains(&floor_cell_for_wall(x, y)) || mask.opened.contains(&(x, y)) {
                     continue;
                 }
                 shapes.push(SolidAabb::from_center_size(
-                    Vec2::new(x as f32 * TILE + TILE * 0.5, y as f32 * TILE + TILE * 0.5),
-                    Vec2::splat(TILE),
+                    Vec2::new(
+                        x as f32 * WALL_TILE + WALL_TILE * 0.5,
+                        y as f32 * WALL_TILE + WALL_TILE * 0.5,
+                    ),
+                    Vec2::splat(WALL_TILE),
                 ));
             }
         }

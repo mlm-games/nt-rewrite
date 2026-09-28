@@ -63,6 +63,7 @@ use crate::worldgen::{self, ChestSpawn, LevelPlan, PopulationEvent, PropKind, is
 pub fn build_floor_mask(plan: &LevelPlan) -> FloorMask {
     FloorMask {
         cells: plan.floor_cells.iter().copied().collect(),
+        opened: Default::default(),
         cols: (ARENA_W / crate::comps_a::TILE) as i32,
         rows: (ARENA_H / crate::comps_a::TILE) as i32,
     }
@@ -1934,15 +1935,35 @@ pub fn spawn_level(
     if let Some(kind) = plan.boss {
         match kind {
             EnemyKind::BigBandit | EnemyKind::BigBanditLoop => {
+                // GML `WantBoss/Step_0:9-24`:
+                //   treshhold = subarea == maxsubarea ? 0.9 : 0.98
+                //   if (surviving - radMaggot) > enemies * treshhold:
+                //       if subarea == maxsubarea: alarm[0] = 120
+                //       if !losthope && !chestprop && ChestOpen && !RadChest
+                //          && !RadChestBig && !RadMaggotChest && !RogueChest:
+                //          CanOasis; alarm[0] = 1
+                // `enemies` is captured in `WantBoss/Create_0` with the whole
+                // floor still alive, so `surviving > initial * 0.9` already
+                // holds on the first step: treshhold is a *remaining* fraction
+                // and the bandit is a timed encounter, not a kill gate. The last
+                // desert subarea therefore breaches 4 s in; 1-1/1-2 breach
+                // immediately but only once every chest on the floor is open,
+                // which is what makes them the CanOasis secret. The port used
+                // `0.10 + i*0.02` killed with no chest gate, so it held the
+                // bandit back on 1-3 and fired it early everywhere else.
+                let is_last = run.floor_in_area
+                    >= crate::worldgen::gml_max_subarea(crate::worldgen::gml_area_from_run(run));
                 let n = plan.boss_count.max(1);
-                for i in 0..n {
+                for _ in 0..n {
                     commands.spawn((
                         GameCleanup,
                         LevelCleanup,
                         PendingDelayedBoss {
                             kind,
-                            initial_trash: (enemy_count as u32).max(1),
-                            kill_fraction: 0.10 + (i as f32) * 0.02,
+                            initial_trash: enemy_count as u32,
+                            kill_fraction: 0.0,
+                            require_open_chests: !is_last,
+                            arm_delay: if is_last { 120.0 / 30.0 } else { 0.0 },
                             from_wall: true,
                         },
                     ));
