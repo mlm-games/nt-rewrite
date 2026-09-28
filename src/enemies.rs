@@ -39,9 +39,9 @@ use crate::combat::{
 use crate::comps_a::{
     ARENA_H, ARENA_W, BossIntro, BouncesLeft, CurrentFrame, DamageSource, Euphoria, FloorMask,
     GameCleanup, GrenadeFuse, Health, HeavyHeart, Hitbox, Homing, LevelCleanup, NextHurt, Player,
-    Projectile, ProjectileFade, ProjectileFriction, ProjectileTyp, Run, ScarierFace,
-    ShellWallBounce, SplitOnDeath, Team, Toast, Velocity, WallCell, WallTile, apply_gml_friction,
-    gml_motion_add_clamp,
+    Projectile, ProjectileFade, ProjectileFriction, ProjectileTyp, ProjectileVisual, Run,
+    ScarierFace, ShellWallBounce, SplitOnDeath, Team, Toast, Velocity, WallCell, WallTile,
+    apply_gml_friction, gml_motion_add_clamp,
 };
 use crate::comps_b::{
     BossBrain, Corpse, CorpseCollision, CrownPedestal, EliteBlocker, Enemy, EnemyBrain, FxAngle,
@@ -426,6 +426,10 @@ fn spawn_enemy_impl(
         },
         gunoffset: 0.0,
         walkdir: initial_heading,
+        // GML `Salamander/Create_0:5` `wave = random(6.2)`;
+        // `HostileHorror/Create_0:19` `charge = 0`.
+        wave: rng.random_range(0.0..6.2),
+        charge: 0.0,
         gunangle: initial_gunangle,
         heading: initial_heading,
         rage: 0.0,
@@ -904,8 +908,9 @@ fn gml_speed_cap(kind: EnemyKind) -> f32 {
         // `Spider`/`InvSpider` cap at `maxspeed`; the chase cap is applied by
         // the spider's own alarm, so 5 is the outer bound here.
         EnemyKind::Spider | EnemyKind::InvSpider => 5.0,
-        // `SnowBot` runs at cap 3 and 8 while sliding (`spr_fire`).
-        EnemyKind::RobotGuard => 8.0,
+        // `SnowBot/Other_10:14-16` caps at 8 while sliding; the resting 3 is
+        // applied by its own motion-law arm above.
+        EnemyKind::RobotGuard => 3.0,
         _ => f32::INFINITY,
     };
     frames * crate::SIM_HZ as f32
@@ -1388,6 +1393,241 @@ fn ornd<R: RngExt + ?Sized>(rng: &mut R, n: f32) -> f32 {
     rng.random_range(n * 0.5..-n * 0.5)
 }
 
+/// GML `objects/<kind>/Alarm_2` for the objects whose decide only staged a
+/// volley. Each spends `ammo`, re-arms `alarm[2]` on its own period, and —
+/// where the object has an `else` arm — re-arms the DECIDE at the post-volley
+/// value. That last part is why these live here rather than inside the
+/// decide: the crab, the turret and the salamander each sit idle for a
+/// different stretch after firing than before it.
+fn gml_alarm_2_volley(
+    kind: EnemyKind,
+    entity: Entity,
+    commands: &mut Commands,
+    cues: &mut Queue<AudioCue>,
+    epos: glam::Vec2,
+    player_pos: glam::Vec2,
+    brain: &mut EnemyBrain,
+    particles_on: bool,
+    rng: &mut impl RngExt,
+) {
+    let gunangle = brain.gunangle;
+    match kind {
+        // GML `Crab/Alarm_2`: a 20-degree fork of `EnemyBullet2` at
+        // 5..7 px/frame, one frame apart, then a 40..50 frame rest.
+        EnemyKind::Crab => {
+            if brain.ammo > 0 {
+                brain.walk = 0.0;
+                for side in [-20.0_f32, 20.0] {
+                    let ang = gunangle + (side + ornd(rng, 3.0)).to_radians();
+                    let e = spawn_enemy_projectile(
+                        commands,
+                        entity,
+                        kind,
+                        epos,
+                        glam::Vec2::from_angle(ang) * ((5.0 + rnd(rng, 2.0)) * crate::SIM_HZ as f32),
+                        2,
+                        3.0,
+                        4.0,
+                        120.0,
+                        false,
+                    );
+                    commands.entity(e).insert((
+                        ProjectileTyp(2),
+                        ProjectileFade("images/sprScorpionBulletHit.png"),
+                        ProjectileVisual {
+                            sprite: "images/sprScorpionBullet.png",
+                            mask: None,
+                            fade: None,
+                        },
+                    ));
+                }
+                brain.ammo -= 1;
+                brain.burst_timer = GTimer::from_seconds(1.0 / 30.0, TimerMode::Once);
+                enemy_cue(cues, "sndOasisCrabAttack");
+            } else {
+                brain.attack =
+                    GTimer::from_seconds((40.0 + rnd(rng, 10.0)) / 30.0, TimerMode::Once);
+            }
+        }
+        // GML `Raven/Alarm_2`: a single `EnemyBullet1` every 5 frames for
+        // three rounds. No `else` arm, so the decide keeps its own value.
+        EnemyKind::Raven => {
+            if brain.ammo > 0 {
+                brain.wkick = 5.0;
+                let ang = gunangle + (rnd(rng, 16.0) - 8.0).to_radians();
+                let e = spawn_enemy_projectile(
+                    commands,
+                    entity,
+                    kind,
+                    epos,
+                    glam::Vec2::from_angle(ang) * (4.0 * crate::SIM_HZ as f32),
+                    3,
+                    3.0,
+                    4.0,
+                    120.0,
+                    false,
+                );
+                commands.entity(e).insert((
+                    ProjectileTyp(1),
+                    ProjectileFade("images/sprEnemyBulletHit.png"),
+                    ProjectileVisual {
+                        sprite: "images/sprEnemyBullet1.png",
+                        mask: None,
+                        fade: None,
+                    },
+                ));
+                brain.ammo -= 1;
+                brain.burst_timer = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
+                enemy_cue(cues, "sndEnemyFire");
+            }
+        }
+        // GML `Salamander/Alarm_2`: 45 `TrapFire` jets in a sweeping arc
+        // (`sin(wave) * 70`), one per frame, then a 10..20 frame rest.
+        EnemyKind::Salamander => {
+            if brain.ammo > 0 {
+                if brain.ammo == 45 {
+                    enemy_cue(cues, "sndSalamanderFire");
+                }
+                brain.walk = 0.0;
+                brain.ammo -= 1;
+                brain.wave += 0.03;
+                brain.burst_timer = GTimer::from_seconds(1.0 / 30.0, TimerMode::Once);
+                let ang = gunangle + (brain.wave.sin() * 70.0).to_radians();
+                crate::environment::spawn_trap_fire_with_image(
+                    commands,
+                    epos + glam::Vec2::from_angle(ang) * 12.0,
+                    glam::Vec2::from_angle(ang),
+                    6.0 * crate::SIM_HZ as f32,
+                    Team::Enemy,
+                    Some(DamageSource::enemy(entity, kind)),
+                    "images/sprTrapFire.png",
+                    None,
+                );
+                if particles_on {
+                    crate::environment::spawn_native_smoke_mote(
+                        commands,
+                        true,
+                        epos,
+                        glam::Vec2::ZERO,
+                        0.0,
+                    );
+                }
+            } else {
+                enemy_cue(cues, "sndSalamanderEndFire");
+                brain.attack =
+                    GTimer::from_seconds((10.0 + rnd(rng, 10.0)) / 30.0, TimerMode::Once);
+            }
+        }
+        // GML `PopoFreak/Alarm_2`: a wide and a tight `IDPDBullet` every
+        // frame for eight rounds, re-aiming only on the first. No `else`.
+        EnemyKind::PopoFreak => {
+            if brain.ammo > 0 {
+                if brain.ammo == 8 {
+                    brain.gunangle = (player_pos.y - epos.y)
+                        .atan2(player_pos.x - epos.x)
+                        .to_degrees()
+                        + rnd(rng, 90.0)
+                        - 45.0;
+                }
+                brain.ammo -= 1;
+                brain.wkick = 5.0;
+                for spread_n in [100.0_f32, 40.0] {
+                    let ang = brain.gunangle + spread(rng, spread_n).to_radians();
+                    let e = spawn_enemy_projectile(
+                        commands,
+                        entity,
+                        kind,
+                        epos,
+                        glam::Vec2::from_angle(ang) * ((4.0 + rnd(rng, 3.0)) * crate::SIM_HZ as f32),
+                        3,
+                        3.0,
+                        4.0,
+                        120.0,
+                        false,
+                    );
+                    commands.entity(e).insert((
+                        ProjectileTyp(1),
+                        ProjectileFade("images/sprIDPDBulletHit.png"),
+                        ProjectileVisual {
+                            sprite: "images/sprIDPDBullet.png",
+                            mask: None,
+                            fade: None,
+                        },
+                    ));
+                }
+                brain.burst_timer = GTimer::from_seconds(1.0 / 30.0, TimerMode::Once);
+                enemy_cue(cues, "sndGruntFire");
+            }
+        }
+        // GML `HostileHorror/Alarm_2` is empty; its spray runs every step in
+        // `Other_10:20-33` instead (see `hostile_horror_spray`).
+        _ => {}
+    }
+}
+
+/// GML `HostileHorror/Other_10:20-33`: the radial spray. Every step it
+/// re-aims at the player, and once a step it buys `round(charge + 1)` bullets
+/// out of its own `raddrop` and grows `charge` by 0.1 — so the pattern widens
+/// quadratically and eventually runs the boss's 90 rads dry. `charge` resets
+/// to 0 whenever `ammo` is 0.
+///
+/// `HorrorBullet` lives 300 frames (`Create_0:4` `alarm[1] = 300`), is
+/// slash-destructible, knocks back 2 and cannot drop rads of its own. Its
+/// `damage` is the one value the export does not carry (it inherits the
+/// `folders/Objects/Projectiles` parent, which is not shipped); 1 here, to
+/// match the one-pixel spray it draws.
+fn hostile_horror_spray(
+    commands: &mut Commands,
+    entity: Entity,
+    epos: glam::Vec2,
+    player_pos: glam::Vec2,
+    enemy: &mut Enemy,
+    brain: &mut EnemyBrain,
+    rng: &mut impl RngExt,
+) {
+    if brain.ammo == 0 {
+        brain.charge = 0.0;
+        return;
+    }
+    brain.gunangle =
+        (player_pos.y - epos.y).atan2(player_pos.x - epos.x).to_degrees() + brain.gunoffset;
+    let cost = (brain.charge + 1.0).round() as usize;
+    if enemy.rad_drop >= cost {
+        enemy.rad_drop -= cost;
+        for _ in 0..cost {
+            let reach = 2.0 + brain.charge;
+            let at = epos
+                + glam::Vec2::new(
+                    rnd(rng, reach) * gml_choose(rng, &[1.0, -1.0]),
+                    rnd(rng, reach) * gml_choose(rng, &[1.0, -1.0]),
+                );
+            let e = spawn_enemy_projectile(
+                commands,
+                entity,
+                EnemyKind::HostileHorror,
+                at,
+                glam::Vec2::from_angle(brain.gunangle) * (12.0 * crate::SIM_HZ as f32),
+                1,
+                10.0,
+                4.0,
+                2.0,
+                false,
+            );
+            commands.entity(e).insert((
+                ProjectileTyp(2),
+                ProjectileFade("images/sprHorrorHit.png"),
+                ProjectileVisual {
+                    sprite: "images/sprHorrorBullet.png",
+                    mask: None,
+                    fade: None,
+                },
+            ));
+        }
+        brain.charge += 0.1;
+    }
+    brain.ammo -= 1;
+}
+
 /// GML `objects/<kind>/Alarm_1` for the objects that reach the generic decide.
 /// One function per object, transcribed arm for arm from the `.gml` source;
 /// each arms `alarm[1]` itself exactly as the source does, so the idle
@@ -1705,7 +1945,9 @@ fn bone_fish_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
 }
 
 /// GML `SnowBot/Alarm_1`: a FIXED 40-frame decide (no `random` on the
-/// re-arm), and the "do nothing" arm still sets `walk = 30`.
+/// re-arm), and the "do nothing" arm still sets `walk = 30`. `meleedamage` is
+/// both what `Other_10:8` tests for the charge strip and what raises the
+/// sled's speed cap from 3 to 8.
 fn snow_bot_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
     d.arm(40.0);
     d.enemy.touch_damage = 0;
@@ -1715,7 +1957,6 @@ fn snow_bot_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
             d.arm(40.0);
             d.aim(d.toward().to_degrees() + rnd(rng, 30.0) - 15.0);
             d.enemy.touch_damage = 4;
-            d.brain.fire = 1;
         } else if gml_chance(rng, 5.0) {
             d.aim(gml_random_angle(rng).to_degrees());
             d.brain.walk = 30.0;
@@ -1834,6 +2075,7 @@ pub fn enemy_ai(
     euphoria: Res<Euphoria>,
     mask: Res<FloorMask>,
     run: Res<Run>,
+    save: Res<crate::savedata_part::SaveData>,
     mut cues: ResMut<Queue<AudioCue>>,
     mut charge_state: Local<HashMap<Entity, GTimer>>,
     player_q: Query<(&Pos, &Player), (With<Player>, Without<Enemy>)>,
@@ -1863,6 +2105,8 @@ pub fn enemy_ai(
     let mut rng = rand::rng();
 
     let euphoria = euphoria.0 || player.euphoria;
+    // GML `Smoke/Create_0.gml:15` self-gates on `UberCont.opt_prtcls`.
+    let particles_on = save.settings.particles;
 
     // Pre-move snapshot for separation (bevy parity: pushes use the
     // snapshot, applied to the live position).
@@ -1962,6 +2206,20 @@ pub fn enemy_ai(
             // blocks below only read `just_finished()`.
             brain.burst_timer.tick(dt);
 
+            // GML `HostileHorror/Other_10:20-33`: the spray runs every
+            // step, not off an alarm, so it is not in `gml_alarm_2_volley`.
+            if enemy.kind == EnemyKind::HostileHorror {
+                hostile_horror_spray(
+                    &mut commands,
+                    entity,
+                    epos,
+                    player_pos,
+                    &mut enemy,
+                    &mut brain,
+                    &mut rng,
+                );
+            }
+
             // Objects whose GML `Other_10`/`Step_0` applies `motion_add` every
             // step with no `walk` gate: they drift continuously and only ever
             // change heading by bouncing. `Guardian/Step_0:9-10` caps at 0.6, so
@@ -1980,6 +2238,22 @@ pub fn enemy_ai(
                     add_gml_motion(&mut brain, &mut vel, heading, impulse_f, dt);
                 }
                 cap_gml_speed(&mut brain, &mut vel, cap_f);
+            } else if enemy.kind == EnemyKind::RobotGuard {
+                // GML `SnowBot/Other_10:3-6`: the impulse runs along
+                // `gunangle`, not `direction`, so the sled steers off its
+                // own heading. `Other_10:14-16` caps at 8 while the charge
+                // strip is up (`meleedamage != 0`, which is exactly what
+                // `Alarm_1` raises) and 3 at rest.
+                if brain.walk > 0.0 {
+                    let gun = brain.gunangle;
+                    add_gml_motion(&mut brain, &mut vel, gun, 1.0, dt);
+                    brain.walk -= dt * 30.0;
+                    if brain.walk < 0.0 {
+                        brain.walk = 0.0;
+                    }
+                }
+                let cap = if enemy.touch_damage != 0 { 8.0 } else { 3.0 };
+                cap_gml_speed(&mut brain, &mut vel, cap);
             } else if brain.walk > 0.0 {
                 let (impulse_f, _cap_f) = gml_walk_law(enemy.kind);
                 add_gml_motion(&mut brain, &mut vel, heading, impulse_f, dt);
@@ -2026,6 +2300,21 @@ pub fn enemy_ai(
             brain.melee = GTimer::from_seconds(rng.random_range(0.9..1.8), TimerMode::Once);
             let side = glam::Vec2::new(-dir.y, dir.x) * brain.strafe_dir;
             vel.0 = (dir * -0.35 + side).normalize() * 420.0;
+        }
+
+        // GML `Alarm_2` for the objects whose decide only staged `ammo`.
+        if brain.burst_timer.just_finished() {
+            gml_alarm_2_volley(
+                enemy.kind,
+                entity,
+                &mut commands,
+                &mut cues,
+                epos,
+                player_pos,
+                &mut brain,
+                particles_on,
+                &mut rng,
+            );
         }
 
         if enemy.kind == EnemyKind::Guardian
@@ -7873,5 +8162,97 @@ mod spawn_hp_tests {
         // MeleeFake's parent is `prop`, so no loop scaling at all.
         assert_eq!(spawn_hp(EnemyKind::MeleeFake, 8, 9), 8);
         assert_eq!(scarier_spawn_hp(EnemyKind::Assassin, 7, 1), 5);
+    }
+}
+
+#[cfg(test)]
+mod gml_volley_cadence_tests {
+    use super::*;
+
+    /// GML `SnowBot/Other_10:14-16` caps the sled at 8 px/frame only while
+    /// `meleedamage != 0`; at rest it is 3. The shared per-kind cap has to
+    /// carry the resting value, because the 8 is applied by the sled's own
+    /// motion-law arm off `touch_damage`.
+    #[test]
+    fn snowbot_resting_cap_is_three() {
+        assert_eq!(gml_speed_cap_frames(EnemyKind::RobotGuard), 3.0);
+    }
+
+    /// GML `Salamander/Create_0:5` `wave = random(6.2)` and
+    /// `HostileHorror/Create_0:19` `charge = 0` are both read by the volley
+    /// code: `wave` picks the jet arc, `charge` the fan size. A brain left at
+    /// zero would fire a straight 45-jet column and a 1-bullet spray.
+    #[test]
+    fn volley_registers_start_at_their_gml_values() {
+        let mut world = bevy_ecs::world::World::new();
+        let catalog = crate::setup::empty_anim_catalog();
+        let mut commands = world.commands();
+        for kind in [EnemyKind::Salamander, EnemyKind::HostileHorror] {
+            spawn_enemy(
+                &mut commands,
+                &catalog,
+                kind,
+                glam::Vec2::ZERO,
+                1.0,
+                false,
+                false,
+                0,
+            );
+        }
+        world.flush();
+
+        let mut q = world.query::<(&Enemy, &EnemyBrain)>();
+        let mut saw_salamander = false;
+        for (enemy, brain) in q.iter(&world) {
+            assert_eq!(brain.charge, 0.0, "{:?} charge", enemy.kind);
+            if enemy.kind == EnemyKind::Salamander {
+                saw_salamander = true;
+                assert!(
+                    (0.0..6.2).contains(&brain.wave),
+                    "wave is random(6.2), got {}",
+                    brain.wave
+                );
+            }
+        }
+        assert!(saw_salamander, "the salamander did not spawn");
+    }
+
+    /// GML `Crab/Alarm_2:13-14` re-arms the decide at `40 + random(10)` once
+    /// the eight rounds are spent, against `Alarm_1`'s opening
+    /// `10 + random(10)`. The dispatcher is the only place that knows the
+    /// post-volley window, so pin both.
+    #[test]
+    fn crab_rest_after_a_volley_is_longer_than_before() {
+        let mut rng = rand::rng();
+        for _ in 0..64 {
+            let before = 10.0 + rnd(&mut rng, 10.0);
+            let after = 40.0 + rnd(&mut rng, 10.0);
+            assert!((10.0..20.0).contains(&before), "{before}");
+            assert!((40.0..50.0).contains(&after), "{after}");
+        }
+    }
+
+    /// GML `HostileHorror/Other_10:22-31`: the fan is `round(charge + 1)`
+    /// bullets paid for out of `raddrop`, and `charge` grows 0.1 a step — so
+    /// the bill is quadratic. The whole 30-round burst must still fit inside
+    /// the 90-rar pool (`Create_0:14`), or the tail of the burst would go out
+    /// silent and the boss would under-perform.
+    #[test]
+    fn hostile_horror_fits_its_whole_burst_in_the_rad_pool() {
+        let pool = enemy_def(EnemyKind::HostileHorror).rad_drop as f32;
+        let mut charge = 0.0_f32;
+        let mut spent = 0.0;
+        let mut fired = 0;
+        for _ in 0..30 {
+            let cost = (charge + 1.0).round();
+            if spent + cost > pool {
+                break;
+            }
+            spent += cost;
+            fired += cost as usize;
+            charge += 0.1;
+        }
+        assert!(spent <= pool, "{spent} > {pool}");
+        assert!(fired > 30, "the fan must widen past one bullet a step");
     }
 }

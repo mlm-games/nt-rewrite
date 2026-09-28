@@ -519,6 +519,16 @@ pub struct EnemyBrain {
     /// GML `walkdir` (`PopoFreak/Alarm_1`): the heading held while hurt,
     /// so the impulse keeps pushing even with the walk sprite swapped out.
     pub walkdir: f32,
+
+    /// GML `wave` (`Salamander/Create_0` `random(6.2)`, `Alarm_2:5`
+    /// `wave += 0.03`): the spray phase. Each `Alarm_2` launches one
+    /// `TrapFire` at `gunangle + sin(wave) * 70`, so the jets sweep.
+    pub wave: f32,
+
+    /// GML `charge` (`HostileHorror/Create_0` 0, `Other_10:20-31`
+    /// `charge += 0.1`): the radial spray's per-tick bullet count is
+    /// `round(charge + 1)`, paid for out of the enemy's `raddrop`.
+    pub charge: f32,
 }
 
 pub const SCRAP_BOSS_MISSILE_HP: i32 = 22;
