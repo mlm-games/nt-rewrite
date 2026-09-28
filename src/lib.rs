@@ -4486,6 +4486,7 @@ fn init_schedule_resources(world: &mut World) {
     world.insert_resource(Score::default());
     world.insert_resource(Run::default());
     world.insert_resource(FloorMask::default());
+    world.insert_resource(crate::comps_a::TopSmalls::default());
     world.insert_resource(SaveDirty::default());
     world.insert_resource(Toast::default());
     world.insert_resource(SelectedCharacter::default());

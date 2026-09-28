@@ -487,6 +487,7 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
     world.init_resource::<Score>();
     world.init_resource::<Run>();
     world.init_resource::<FloorMask>();
+    world.init_resource::<crate::comps_a::TopSmalls>();
     world.init_resource::<SaveDirty>();
     world.init_resource::<crate::input::NtInput>();
     world.init_resource::<crate::state::Paused>();
@@ -717,22 +718,25 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
     }
     let run = world.remove_resource::<Run>().unwrap_or_default();
     world.resource_scope(|world, mut mask: Mut<FloorMask>| {
-        world.resource_scope(|world, catalog: Mut<AnimCatalog>| {
-            let mut commands = world.commands();
-            spawn_level(
-                &mut commands,
-                &catalog,
-                &run,
-                false,
-                false,
-                CrownKind::None,
-                None,
-                &plan,
-                &mut mask,
-                0,
-                false,
-                false,
-            );
+        world.resource_scope(|world, mut tops: Mut<crate::comps_a::TopSmalls>| {
+            world.resource_scope(|world, catalog: Mut<AnimCatalog>| {
+                let mut commands = world.commands();
+                spawn_level(
+                    &mut commands,
+                    &catalog,
+                    &run,
+                    false,
+                    false,
+                    CrownKind::None,
+                    None,
+                    &plan,
+                    &mut mask,
+                    &mut tops,
+                    0,
+                    false,
+                    false,
+                );
+            })
         })
     });
     world.flush();
@@ -1688,6 +1692,7 @@ pub fn spawn_level(
     ultra: Option<UltraMutationId>,
     plan: &LevelPlan,
     mask: &mut FloorMask,
+    tops: &mut crate::comps_a::TopSmalls,
     // GML `GameCont.crownvisits` and `instance_exists(CrownObject)`, which
     // decide how many vault statues guard the pedestal.
     crownvisits: u8,
@@ -1731,6 +1736,10 @@ pub fn spawn_level(
     for &(wx, wy) in &plan.small_walls {
         wall_set.insert((wx as i32, wy as i32));
     }
+    // GML `GenCont/Alarm_0:50` + `call_after(5, ...)`: the `Top`/`TopSmall`
+    // ring is fixed for the whole level, so seed it from the level-start
+    // wall set before any break can extend it.
+    tops.seed(&floor_set, &wall_set);
     spawn_wall_tiles(&mut *commands, wall_set.into_iter().collect(), &floor_set);
 
     spawn_secret_entrances(commands, catalog, run, scarier_face, heavy_heart);
@@ -2068,7 +2077,9 @@ pub fn spawn_level(
 pub fn setup_logo_room(world: &mut World) {
     teardown_session_entities(world);
     world.init_resource::<FloorMask>();
+    world.init_resource::<crate::comps_a::TopSmalls>();
     (*world.resource_mut::<FloorMask>()) = FloorMask::default();
+    world.resource_mut::<crate::comps_a::TopSmalls>().clear();
     reset_menu_room_resources(world);
 }
 
@@ -2141,6 +2152,7 @@ fn reset_menu_room_resources(world: &mut World) {
 pub fn setup_title_campfire(world: &mut World) {
     teardown_session_entities(world);
     world.init_resource::<FloorMask>();
+    world.init_resource::<crate::comps_a::TopSmalls>();
     if world.get_resource::<AnimCatalog>().is_none() {
         world.insert_resource(empty_anim_catalog());
     }
@@ -2350,16 +2362,18 @@ pub fn setup_title_campfire(world: &mut World) {
     let floor_set: std::collections::HashSet<(i32, i32)> =
         plan.floor_cells.iter().copied().collect();
     world.resource_scope(|world, mut mask: Mut<FloorMask>| {
-        world.resource_scope(|world, catalog: Mut<AnimCatalog>| {
-            let mut commands = world.commands();
-            *mask = build_floor_mask(&plan);
-            spawn_wall_tiles(
-                &mut commands,
-                plan.wall_cells.into_iter().collect(),
-                &floor_set,
-            );
-            let mut commands = world.commands();
-            for at in cacti {
+        world.resource_scope(|world, mut tops: Mut<crate::comps_a::TopSmalls>| {
+            world.resource_scope(|world, catalog: Mut<AnimCatalog>| {
+                let mut commands = world.commands();
+                *mask = build_floor_mask(&plan);
+                tops.seed(&floor_set, &plan.wall_cells);
+                spawn_wall_tiles(
+                    &mut commands,
+                    plan.wall_cells.iter().copied().collect(),
+                    &floor_set,
+                );
+                let mut commands = world.commands();
+                for at in cacti {
                 spawn_prop_sim(
                     &mut commands,
                     &catalog,
@@ -2534,6 +2548,7 @@ pub fn setup_title_campfire(world: &mut World) {
                     Pos(at),
                 ));
             }
+            })
         })
     });
     world.flush();

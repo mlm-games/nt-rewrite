@@ -43,8 +43,8 @@ use crate::combat::{Explosion, queue_enemy_spawn, queue_enemy_spawn_no_kill};
 use crate::comps_a::{
     BossIntro, BouncesLeft, DamageSource, FloorMask, GameCleanup, Health, Hitbox, LevelCleanup,
     NextHurt, PendingWallBreak, Player, Projectile, ProjectileFade, ProjectileFriction,
-    ProjectileTyp, RaceState, Run, ShellWallBounce, Team, Toast, Velocity, WallCell, WallTile,
-    gml_motion_add_clamp,
+    ProjectileTyp, RaceState, Run, ShellWallBounce, Team, Toast, TopSmalls, Velocity, WallCell,
+    WallTile, gml_motion_add_clamp,
 };
 use crate::comps_b::{
     Beam, BigGenerator, BossBrain, BossPhase, CustomExplosion, Enemy, EnemyBrain, HitWarning,
@@ -561,6 +561,7 @@ pub fn boss_ai(
     wall_ids: Query<(Entity, &Pos), (With<WallTile>, Without<Enemy>)>,
     catalog: Res<repame_anim::AnimCatalog>,
     mask: Res<FloorMask>,
+    mut tops: ResMut<TopSmalls>,
 ) {
     let Ok((player_pos, player_vel, race_state)) = player_q.single() else {
         return;
@@ -703,22 +704,29 @@ pub fn boss_ai(
                 &wall_shapes,
                 def.radius,
             ),
-            EnemyKind::ThroneII => throne_ii_ai(
-                &mut commands,
-                &mut trauma,
-                &mut toast,
-                entity,
-                &mut boss,
-                &mut brain,
-                &mut vel,
-                &mut pos,
-                &health,
-                epos,
-                player_pos,
-                dt,
-                run.loop_count,
-                &wall_list,
-            ),
+            EnemyKind::ThroneII => {
+                // GML `Nothing2/Other_10:12-13` (and
+                // `Nothing2Appear/Other_7:3`):
+                // `with (TopSmall) instance_destroy()` wipes the whole Trans
+                // ring every step the second throne boss is live.
+                tops.clear();
+                throne_ii_ai(
+                    &mut commands,
+                    &mut trauma,
+                    &mut toast,
+                    entity,
+                    &mut boss,
+                    &mut brain,
+                    &mut vel,
+                    &mut pos,
+                    &health,
+                    epos,
+                    player_pos,
+                    dt,
+                    run.loop_count,
+                    &wall_list,
+                )
+            }
             EnemyKind::Hyper => hyper_ai(
                 &mut commands,
                 &mut trauma,

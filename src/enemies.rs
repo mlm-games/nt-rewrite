@@ -354,6 +354,11 @@ fn spawn_enemy_impl(
         | EnemyKind::Jock
         | EnemyKind::Necromancer => 30.0 + rng.random_range(0.0..90.0),
         EnemyKind::Crab => 50.0 + rng.random_range(0.0..90.0),
+        // `Wolf/Create_0:18` `60 + random(40)`, `HostileHorror/Create_0:16`
+        // `60 + random(10)`, `LilHunter/Create_0:22` `irandom_range(30, 120)`.
+        EnemyKind::Wolf => 60.0 + rng.random_range(0.0..40.0),
+        EnemyKind::HostileHorror => 60.0 + rng.random_range(0.0..10.0),
+        EnemyKind::LilHunter => rng.random_range(30.0..121.0),
         EnemyKind::Salamander => 60.0 + rng.random_range(0.0..90.0),
         EnemyKind::Mimic | EnemyKind::SuperMimic | EnemyKind::WepMimic => {
             90.0 + rng.random_range(0.0..150.0)
@@ -412,6 +417,15 @@ fn spawn_enemy_impl(
         control: false,
         ratking_spawns: 0.0,
         ratking_rage: false,
+        // GML `Spider/Create_0:19` `maxspeed = 3`; `Alarm_1` raises it to 5
+        // only on the close chase.
+        maxspeed: if matches!(kind, EnemyKind::Spider | EnemyKind::InvSpider) {
+            3.0
+        } else {
+            f32::INFINITY
+        },
+        gunoffset: 0.0,
+        walkdir: initial_heading,
         gunangle: initial_gunangle,
         heading: initial_heading,
         rage: 0.0,
@@ -1216,6 +1230,600 @@ fn queue_conversion_maggot(
     )
 }
 
+/// GML `random(n) < 1`: a 1-in-n roll.
+#[inline]
+fn gml_chance(rng: &mut (impl RngExt + ?Sized), n: f32) -> bool {
+    rng.random::<f32>() < 1.0 / n
+}
+
+/// GML `random(n) < k`: the literal form the source writes, e.g.
+/// `random(4) < 3` (three in four) or `random(3) < 2`.
+#[inline]
+fn gml_roll(rng: &mut (impl RngExt + ?Sized), n: f32, k: f32) -> bool {
+    rng.random_range(0.0..n) < k
+}
+
+/// GML `random_angle` (`random(360)`), radians.
+#[inline]
+fn gml_random_angle(rng: &mut (impl RngExt + ?Sized)) -> f32 {
+    rng.random_range(0.0..std::f32::consts::TAU)
+}
+
+/// GML `choose(a, b, c)`.
+#[inline]
+fn gml_choose(rng: &mut (impl RngExt + ?Sized), options: &[f32]) -> f32 {
+    options[rng.random_range(0..options.len())]
+}
+
+/// GML `point_direction(x1, y1, x2, y2)`, radians.
+#[inline]
+fn gml_point_direction(from: glam::Vec2, to: glam::Vec2) -> f32 {
+    (to.y - from.y).atan2(to.x - from.x)
+}
+
+/// Per-object GML `Alarm_1` state. Each field is one GML instance variable;
+/// the decide reads and writes them exactly as the `.gml` source does.
+struct GmlDecide<'a> {
+    kind: EnemyKind,
+    /// `x, y`.
+    pos: glam::Vec2,
+    /// `target.x, target.y`; GML's `scrTarget()` picks the nearest Player.
+    target: glam::Vec2,
+    /// `collision_line(x, y, target.x, target.y, Wall, 0, 0) < 0`.
+    sees: bool,
+    /// `point_distance(x, y, target.x, target.y)`.
+    dist: f32,
+    /// `hp`, `max_hp` (the Raven and HostileHorror hurt checks).
+    hp: f32,
+    max_hp: f32,
+    dt: f32,
+    /// `GameCont.loops` (the LilHunter bouncer cadence divides by it).
+    loops: u32,
+    enemy: &'a mut Enemy,
+    brain: &'a mut EnemyBrain,
+    vel: &'a mut Velocity,
+}
+
+impl GmlDecide<'_> {
+    /// GML `mcr_target_direction`: the bearing from self to target.
+    #[inline]
+    fn toward(&self) -> f32 {
+        (self.target.y - self.pos.y).atan2(self.target.x - self.pos.x)
+    }
+
+    /// GML `point_direction(target.x, target.y, x, y)`: the bearing from
+    /// TARGET to self. The reversed argument order is GML's own, and the
+    /// `Rat`/`Raven`/`HostileHorror` walks rely on it.
+    #[inline]
+    fn away(&self) -> f32 {
+        gml_point_direction(self.target, self.pos)
+    }
+
+    /// GML `alarm[1] = n` (frames; `random(k)` contributes 0..k-1).
+    #[inline]
+    fn arm(&mut self, frames: f32) {
+        self.brain.attack = GTimer::from_seconds(frames / 30.0, TimerMode::Once);
+    }
+
+    /// The live `alarm[1]`, in frames.
+    #[inline]
+    fn armed(&self) -> f32 {
+        self.brain.attack.duration() * 30.0
+    }
+
+    /// GML `alarm[1] += n`.
+    #[inline]
+    fn arm_add(&mut self, frames: f32) {
+        self.arm(self.armed() + frames);
+    }
+
+    /// GML `alarm[1] /= n`.
+    #[inline]
+    fn arm_div(&mut self, n: f32) {
+        self.arm(self.armed() / n);
+    }
+
+    /// GML `alarm[2] = n`.
+    #[inline]
+    fn arm2(&mut self, frames: f32) {
+        self.brain.burst_timer = GTimer::from_seconds(frames / 30.0, TimerMode::Once);
+    }
+
+    #[inline]
+    fn direction(&mut self, angle: f32) {
+        set_gml_direction(self.brain, self.vel, angle);
+    }
+
+    /// GML `speed = n` (px/frame).
+    #[inline]
+    fn speed(&mut self, px_per_frame: f32) {
+        set_gml_speed(self.brain, self.vel, px_per_frame);
+    }
+
+    /// GML `motion_add(angle, n)` (px/frame).
+    #[inline]
+    fn impulse(&mut self, angle: f32, px_per_frame: f32) {
+        add_gml_motion(self.brain, self.vel, angle, px_per_frame, self.dt);
+    }
+
+    /// GML `gunangle = <deg>`.
+    #[inline]
+    fn aim(&mut self, degrees: f32) {
+        self.brain.gunangle = degrees.to_radians();
+    }
+
+    /// GML `right = -1 / 1` off the target's side.
+    #[inline]
+    fn face_target_x(&mut self) {
+        if self.target.x < self.pos.x {
+            self.brain.right = -1.0;
+        } else if self.target.x > self.pos.x {
+            self.brain.right = 1.0;
+        }
+    }
+
+    /// GML `if (hspeed > 0) right = 1 else if (hspeed < 0) right = -1`.
+    #[inline]
+    fn face_hspeed(&mut self) {
+        self.brain.right = gml_right_from_hspeed(self.vel.0);
+    }
+}
+
+/// GML `random(n)`, in degrees.
+#[inline]
+fn rnd<R: RngExt + ?Sized>(rng: &mut R, n: f32) -> f32 {
+    rng.random_range(0.0..n)
+}
+
+/// GML `random(n) + half`, then negated: the `(random(80) - 40)` shape
+/// without a second draw, so a +/- spread costs one RNG value like GML.
+#[inline]
+fn spread<R: RngExt + ?Sized>(rng: &mut R, n: f32) -> f32 {
+    rnd(rng, n) - n * 0.5
+}
+
+/// GML `orandom(n)`: `+n/2 .. -n/2` degrees.
+#[inline]
+fn ornd<R: RngExt + ?Sized>(rng: &mut R, n: f32) -> f32 {
+    rng.random_range(n * 0.5..-n * 0.5)
+}
+
+/// GML `objects/<kind>/Alarm_1` for the objects that reach the generic decide.
+/// One function per object, transcribed arm for arm from the `.gml` source;
+/// each arms `alarm[1]` itself exactly as the source does, so the idle
+/// cadence matches.
+///
+/// Arms that only stage a volley (`ammo` + `alarm[2]`) still draw their rolls
+/// and still set the registers, so the decide's cadence is unchanged; the
+/// volley itself is only drawn by the objects whose `Alarm_2` the port models
+/// (the Wolf roll, below).
+#[allow(clippy::too_many_arguments)]
+fn gml_alarm_1_decide<R: RngExt + ?Sized>(
+    kind: EnemyKind,
+    loops: u32,
+    pos: glam::Vec2,
+    target: glam::Vec2,
+    mask: &FloorMask,
+    health: &Health,
+    enemy: &mut Enemy,
+    brain: &mut EnemyBrain,
+    vel: &mut Velocity,
+    dt: f32,
+    rng: &mut R,
+) {
+    let to_target = target - pos;
+    let mut d = GmlDecide {
+        kind,
+        pos,
+        target,
+        sees: has_line_of_sight(pos, target, mask),
+        dist: to_target.length(),
+        hp: health.hp as f32,
+        max_hp: health.max as f32,
+        dt,
+        loops,
+        enemy,
+        brain,
+        vel,
+    };
+
+    match kind {
+        // GML `Freak/Alarm_1`, `ExploFreak/Alarm_1` and
+        // `RhinoFreak/Alarm_1`: a fixed short cadence, `walk = 20` on sight,
+        // and no distance bands at all.
+        EnemyKind::Freak => freak_alarm_1(&mut d, 80.0, rng),
+        EnemyKind::ExploFreak | EnemyKind::RhinoFreak => freak_alarm_1(&mut d, 180.0, rng),
+        EnemyKind::PopoFreak => popo_freak_alarm_1(&mut d, rng),
+        EnemyKind::Rat | EnemyKind::BigRat | EnemyKind::FastRat => rat_alarm_1(&mut d, rng),
+        EnemyKind::Wolf => wolf_alarm_1(&mut d, rng),
+        EnemyKind::Raven => raven_alarm_1(&mut d, rng),
+        EnemyKind::Spider | EnemyKind::InvSpider => spider_alarm_1(&mut d, rng),
+        EnemyKind::Crab => crab_alarm_1(&mut d, rng),
+        EnemyKind::Turtle => turtle_alarm_1(&mut d, rng),
+        EnemyKind::Salamander => salamander_alarm_1(&mut d, rng),
+        EnemyKind::BoneFish => bone_fish_alarm_1(&mut d, rng),
+        EnemyKind::RobotGuard => snow_bot_alarm_1(&mut d, rng),
+        EnemyKind::HostileHorror => hostile_horror_alarm_1(&mut d, rng),
+        // GML `RadMaggot/Alarm_1` and `SuperFrog/Alarm_1` are the Maggot's
+        // decide: turn toward the target, or scatter.
+        EnemyKind::RadMaggot | EnemyKind::SuperFrog => maggot_alarm_1(&mut d, rng, 30.0, 20.0),
+        EnemyKind::LilHunter => lil_hunter_alarm_1(&mut d, rng),
+        // GML `objects/Crystal` has no `Alarm_1` at all, so nothing here is
+        // reachable for it; an unmodelled object parks its alarm instead of
+        // spinning on the default.
+        _ => gml_alarm_1_fallback(&mut d, rng),
+    }
+}
+
+/// Every kind above re-arms inside its own transcribe; this arm only exists
+/// so a kind added to the generic path without a transcription does not spin
+/// on `brain.attack`'s initial duration forever.
+fn gml_alarm_1_fallback(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+    d.arm(30.0 + rnd(rng, 20.0));
+}
+
+/// GML `Freak/Alarm_1:1-9` (impulse `random(80) - 40`) with
+/// `ExploFreak/Alarm_1:1-9` / `RhinoFreak/Alarm_1:1-9`
+/// (`random(180) - 90`) — identical but for that spread.
+fn freak_alarm_1(d: &mut GmlDecide<'_>, spread_n: f32, rng: &mut (impl RngExt + ?Sized)) {
+    d.arm(6.0 + rnd(rng, 5.0));
+    if d.sees {
+        d.brain.walk = 20.0;
+        d.impulse(d.toward() + spread(rng, spread_n).to_radians(), 1.5);
+    } else {
+        d.impulse(gml_random_angle(rng), 0.5);
+    }
+}
+
+/// GML `PopoFreak/Alarm_1`: `walk = 20` on sight, and the burst arm trades it
+/// for `walk = 6` plus 30 extra frames on the decide.
+fn popo_freak_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+    d.arm(15.0 + rnd(rng, 5.0));
+    if d.sees {
+        d.brain.walk = 20.0;
+        d.impulse(d.toward() + (rnd(rng, 90.0) - 45.0).to_radians(), 5.0);
+        if d.dist < 160.0 && d.dist > 64.0 && gml_chance(rng, 3.0) {
+            d.aim(d.toward().to_degrees() + rnd(rng, 90.0) - 45.0);
+            d.arm_add(30.0);
+            d.arm2(15.0);
+            d.brain.walk = 6.0;
+            d.brain.ammo = 8;
+        }
+    } else {
+        if gml_chance(rng, 4.0) {
+            d.brain.walk = 20.0;
+        }
+        d.impulse(gml_random_angle(rng), 3.0);
+    }
+    d.brain.walkdir = d.brain.heading;
+}
+
+/// GML `Rat/Alarm_1` (and `FastRat/Alarm_1`, which differs only in
+/// `random(20) - 10` for `orandom(10)`): `walk = 40 + random(10)` on ANY
+/// line of sight and `alarm[1] = walk`, so the rat's cadence IS its walk.
+fn rat_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+    d.arm(10.0 + rnd(rng, 30.0));
+    if d.sees {
+        let jitter = if d.kind == EnemyKind::FastRat {
+            rnd(rng, 20.0) - 10.0
+        } else {
+            ornd(rng, 10.0)
+        };
+        d.direction(d.toward() + jitter.to_radians());
+        d.speed(0.4);
+        d.brain.walk = 40.0 + rnd(rng, 10.0);
+        d.arm(d.brain.walk);
+    } else if gml_chance(rng, 5.0) {
+        d.impulse(gml_random_angle(rng), 0.4);
+        d.brain.walk = 10.0 + rnd(rng, 15.0);
+        d.arm(d.brain.walk + 10.0 + rnd(rng, 30.0));
+    }
+}
+
+/// GML `Wolf/Alarm_1:2-3`: `alarm[1] = 30 + random(20); walk = alarm[1]` on
+/// every path, so the wolf's walk length IS its decide period.
+fn wolf_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+    d.arm(30.0 + rnd(rng, 20.0));
+    d.brain.walk = d.armed();
+    if d.sees {
+        if gml_chance(rng, 2.0) {
+            d.direction(d.toward());
+            d.arm2(10.0);
+            d.arm(30.0);
+        } else {
+            d.direction(d.toward() + ornd(rng, 15.0).to_radians());
+            if gml_chance(rng, 4.0) {
+                d.speed(0.0);
+                d.brain.walk = 0.0;
+            }
+        }
+    } else {
+        if gml_chance(rng, 3.0) {
+            d.speed(0.0);
+            d.brain.walk = 0.0;
+        }
+        d.impulse(gml_random_angle(rng), 2.0);
+        d.impulse(d.toward(), 1.5);
+    }
+}
+
+/// GML `Raven/Alarm_1`: the close branch turns the bird AWAY from the target
+/// (`point_direction(target.x, target.y, x, y)`), the far branch walks.
+fn raven_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+    d.arm(20.0 + rnd(rng, 10.0));
+    if d.sees {
+        if d.dist > 64.0 {
+            if gml_chance(rng, 6.0) {
+                d.arm2(1.0);
+                d.brain.ammo = 3;
+                d.aim(d.toward().to_degrees());
+                d.arm(20.0 + rnd(rng, 5.0));
+            } else {
+                if gml_chance(rng, 4.0) {
+                    d.direction(d.toward() + (rnd(rng, 90.0) - 45.0).to_radians());
+                }
+                d.speed(0.4);
+                d.brain.walk = 20.0 + rnd(rng, 10.0);
+                d.aim(d.toward().to_degrees());
+            }
+        } else {
+            d.direction(d.away() + (rnd(rng, 20.0) - 10.0).to_radians());
+            d.speed(0.4);
+            d.brain.walk = 40.0 + rnd(rng, 10.0);
+            d.aim(d.toward().to_degrees());
+        }
+        d.face_target_x();
+    } else if gml_chance(rng, 3.0) {
+        d.impulse(gml_random_angle(rng), 0.4);
+        d.brain.walk = 20.0 + rnd(rng, 10.0);
+        d.arm(d.brain.walk + 10.0 + rnd(rng, 30.0));
+        d.aim(d.brain.heading.to_degrees());
+        d.face_hspeed();
+    } else if (d.hp < d.max_hp || gml_chance(rng, 50.0)) && gml_chance(rng, 2.0) {
+        // GML `scrRavenLift()` on self and the furthest raven; the port has
+        // no lift for the raven, so only the roll is spent.
+    }
+}
+
+/// GML `Spider/Alarm_1` and `InvSpider/Alarm_1` (identical): the chase needs
+/// sight AND `point_distance < 96`, and it is the only path that raises
+/// `maxspeed` from 3 to 5.
+fn spider_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+    d.arm(20.0 + rnd(rng, 10.0));
+    d.brain.maxspeed = 3.0;
+    if d.sees {
+        if d.dist < 96.0 {
+            d.brain.maxspeed = 5.0;
+            d.direction(d.toward() + (rnd(rng, 80.0) - 40.0).to_radians());
+            d.speed(0.4);
+            d.brain.walk = 15.0 + rnd(rng, 5.0);
+            d.arm(d.brain.walk + 5.0);
+        } else if gml_chance(rng, 2.0) {
+            d.impulse(gml_random_angle(rng), 0.4);
+            d.brain.walk = 10.0 + rnd(rng, 10.0);
+            d.arm(d.brain.walk + 10.0 + rnd(rng, 10.0));
+        }
+    } else if gml_chance(rng, 4.0) {
+        d.impulse(gml_random_angle(rng), 0.4);
+        d.brain.walk = 10.0 + rnd(rng, 10.0);
+        d.arm(d.brain.walk + 10.0 + rnd(rng, 10.0));
+    }
+}
+
+/// GML `Crab/Alarm_1`: the charge arm re-arms on a SHORTER period than the
+/// default, and the `walk = 50` arm on a longer one.
+fn crab_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+    d.arm(10.0 + rnd(rng, 10.0));
+    if d.sees {
+        if gml_chance(rng, 2.0) {
+            d.brain.ammo = 8;
+            d.arm2(2.0);
+            d.aim(d.toward().to_degrees() + rnd(rng, 40.0) - 20.0);
+            d.arm(10.0 + rnd(rng, 5.0));
+        } else if d.dist < 120.0 && gml_roll(rng, 4.0, 3.0) {
+            d.brain.walk = 50.0;
+            d.aim(d.toward().to_degrees() + rnd(rng, 20.0) - 10.0);
+            d.arm(50.0 + rnd(rng, 10.0));
+        } else {
+            d.direction(d.toward() + (rnd(rng, 160.0) - 80.0).to_radians());
+            d.aim(d.brain.heading.to_degrees());
+            d.speed(0.4);
+            d.brain.walk = 10.0 + rnd(rng, 10.0);
+        }
+        d.face_target_x();
+    } else if gml_chance(rng, 10.0) {
+        d.impulse(gml_random_angle(rng), 0.4);
+        d.aim(d.brain.heading.to_degrees());
+        d.brain.walk = 20.0 + rnd(rng, 10.0);
+        d.arm(d.brain.walk + 10.0 + rnd(rng, 30.0));
+        d.face_hspeed();
+    }
+}
+
+/// GML `Turtle/Alarm_1`: `walk = 0` first, then either `walk = 50` or
+/// `alarm[1] /= 2` — the turtle's long walk is bought with a doubled
+/// cadence, not a longer one. The else arm covers BOTH "no sight" and
+/// "too far", so a blocked turtle still turns and still rolls.
+fn turtle_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+    d.arm(50.0 + rnd(rng, 10.0));
+    d.brain.walk = 0.0;
+    if d.sees && d.dist < 320.0 {
+        d.direction(d.toward() + (rnd(rng, 60.0) - 30.0).to_radians());
+        if gml_roll(rng, 3.0, 2.0) {
+            d.brain.walk = 50.0;
+        } else {
+            d.arm_div(2.0);
+        }
+    } else {
+        d.direction(gml_random_angle(rng));
+        if gml_chance(rng, 4.0) {
+            d.brain.walk = 50.0;
+        } else {
+            d.arm_div(2.0);
+        }
+    }
+}
+
+/// GML `Salamander/Alarm_1`: `walk = 0` up front, and the walk arm ADDS 40
+/// frames to the decide rather than replacing it. The first arm is
+/// `!collision_line && random(2) < 1`, so a blocked salamander falls
+/// through to the same two arms a sighted one does.
+fn salamander_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+    d.arm(10.0 + rnd(rng, 10.0));
+    d.brain.walk = 0.0;
+    if d.sees && gml_chance(rng, 2.0) {
+        d.brain.ammo = 45;
+        d.arm2(5.0);
+        d.aim(d.toward().to_degrees() + rnd(rng, 40.0) - 20.0);
+    } else if gml_chance(rng, 20.0) {
+        d.brain.ammo = 45;
+        d.arm2(5.0);
+        d.aim(gml_random_angle(rng).to_degrees());
+    } else {
+        d.direction(d.toward() + (rnd(rng, 100.0) - 50.0).to_radians());
+        d.speed(0.4);
+        d.brain.walk = 40.0 + rnd(rng, 10.0);
+        d.arm_add(40.0);
+    }
+    d.face_target_x();
+}
+
+/// GML `BoneFish/Alarm_1`: `alarm[1] = 5` (a very fast decide) but every
+/// sight re-arms it to the full `walk`.
+fn bone_fish_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+    d.arm(5.0);
+    if d.sees {
+        d.direction(d.toward() + (rnd(rng, 20.0) - 10.0).to_radians());
+        d.speed(0.4);
+        d.brain.walk = 40.0 + rnd(rng, 10.0);
+        d.arm(d.brain.walk);
+    } else if gml_chance(rng, 5.0) {
+        d.impulse(gml_random_angle(rng), 0.4);
+        d.brain.walk = 10.0 + rnd(rng, 15.0);
+        d.arm(d.brain.walk + 10.0 + rnd(rng, 30.0));
+    }
+}
+
+/// GML `SnowBot/Alarm_1`: a FIXED 40-frame decide (no `random` on the
+/// re-arm), and the "do nothing" arm still sets `walk = 30`.
+fn snow_bot_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+    d.arm(40.0);
+    d.enemy.touch_damage = 0;
+    if d.sees {
+        if d.dist < 120.0 && gml_chance(rng, 4.0) {
+            d.brain.walk = 40.0;
+            d.arm(40.0);
+            d.aim(d.toward().to_degrees() + rnd(rng, 30.0) - 15.0);
+            d.enemy.touch_damage = 4;
+            d.brain.fire = 1;
+        } else if gml_chance(rng, 5.0) {
+            d.aim(gml_random_angle(rng).to_degrees());
+            d.brain.walk = 30.0;
+            d.face_hspeed();
+        }
+        d.face_target_x();
+    } else if gml_chance(rng, 5.0) {
+        d.aim(gml_random_angle(rng).to_degrees());
+        d.brain.walk = 30.0;
+        d.face_hspeed();
+    }
+}
+
+/// GML `HostileHorror/Alarm_1`: the guard is `!collision_line ||
+/// random(6) < 1`, so a blocked horror acts anyway a sixth of the time.
+/// The spray arm's chance scales with distance (`random(2 +
+/// point_distance / 100)`, the argument floored), and the walk arm picks a
+/// side with `choose(1, -1)`.
+fn hostile_horror_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+    d.arm(10.0 + rnd(rng, 10.0));
+    if !d.sees && !gml_chance(rng, 6.0) {
+        // GML's `else if random(4) < 1` arm.
+        if gml_chance(rng, 4.0) {
+            d.impulse(gml_random_angle(rng), 0.4);
+            d.brain.walk = 20.0 + rnd(rng, 10.0);
+            d.face_hspeed();
+        }
+        return;
+    }
+    if d.dist > 48.0 || (gml_chance(rng, 8.0) && enemy_def(d.kind).rad_drop > 0) {
+        if gml_chance(rng, 2.0 + (d.dist / 100.0).floor()) {
+            d.brain.ammo = 30;
+            d.aim(d.toward().to_degrees());
+            d.brain.gunoffset = rnd(rng, 20.0) - 10.0;
+        } else if gml_roll(rng, 4.0, 3.0) {
+            let side = gml_choose(rng, &[1.0, -1.0]);
+            d.direction(d.toward() + ((40.0 + rnd(rng, 60.0)) * side).to_radians());
+            d.speed(0.4);
+            d.brain.walk = 20.0 + rnd(rng, 10.0);
+            d.aim(d.toward().to_degrees());
+        }
+    } else {
+        d.direction(d.toward());
+        d.speed(0.4);
+        d.brain.walk = 20.0 + rnd(rng, 10.0);
+        d.aim(d.toward().to_degrees());
+    }
+    d.face_target_x();
+}
+
+/// GML `Maggot/Alarm_1` / `RadMaggot/Alarm_1` / `SuperFrog/Alarm_1`: turn on
+/// sight, otherwise scatter. The maggot's own ticker uses the same shape.
+fn maggot_alarm_1(
+    d: &mut GmlDecide<'_>,
+    rng: &mut (impl RngExt + ?Sized),
+    base: f32,
+    spread: f32,
+) {
+    d.arm(base + rnd(rng, spread));
+    if d.sees {
+        d.direction(d.toward() + (rnd(rng, 20.0) - 10.0).to_radians());
+    } else {
+        d.impulse(gml_random_angle(rng), 0.5);
+    }
+}
+
+/// GML `LilHunter/Alarm_1`. The lift arm and the IDPD-summon arm are feature
+/// gaps in the port, but every timing arm is transcribed: the blocked arm
+/// DIVIDES the decide by three (`alarm[1] /= 3`), the bouncer arm divides by
+/// `1 + loops * 2` (floored at 1), and the last line is GML's own
+/// `if (instance_exists(target) && walk > 0) motion_add(mcr_target_direction, 0.3)`.
+fn lil_hunter_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+    d.arm(20.0 + rnd(rng, 6.0));
+    if d.sees {
+        if gml_roll(rng, 4.0, 3.0) {
+            if d.dist < 140.0 {
+                d.aim(d.toward().to_degrees() + spread(rng, 50.0));
+                d.brain.wkick = 8.0;
+                d.arm((d.armed() / (1.0 + d.loops as f32 * 2.0)).max(1.0));
+                d.direction(d.away() + (rnd(rng, 20.0) - 10.0).to_radians());
+                d.speed(0.4);
+                d.brain.walk = 20.0;
+                d.aim(d.toward().to_degrees());
+            } else {
+                d.aim(d.toward().to_degrees() + (rnd(rng, 30.0) - 15.0).to_radians());
+                d.brain.wkick = 8.0;
+                d.arm(5.0 + rnd(rng, 6.0));
+            }
+        } else {
+            d.direction(d.away() + (rnd(rng, 20.0) - 10.0).to_radians());
+            d.speed(0.4);
+            d.brain.walk = 8.0 + rnd(rng, 4.0);
+            d.arm(d.brain.walk);
+            d.aim(d.toward().to_degrees());
+        }
+        d.face_target_x();
+    } else if gml_chance(rng, 10.0) {
+        d.impulse(gml_random_angle(rng), 0.4);
+        d.brain.walk = 8.0 + rnd(rng, 4.0);
+        d.arm(d.brain.walk + 10.0 + rnd(rng, 30.0));
+        d.aim(d.brain.heading.to_degrees());
+        d.face_hspeed();
+    }
+    if d.brain.walk > 0.0 {
+        d.impulse(d.toward(), 0.3);
+    }
+}
+
 /// table-driven fire, per bevy `enemy_ai` top to bottom (bosses `continue`
 /// before their first timer tick — boss brains live elsewhere).
 #[allow(clippy::too_many_arguments)]
@@ -1227,8 +1835,6 @@ pub fn enemy_ai(
     mask: Res<FloorMask>,
     run: Res<Run>,
     mut cues: ResMut<Queue<AudioCue>>,
-    mut ratking_cd: Local<HashMap<Entity, GTimer>>,
-    mut wolf_roll: Local<HashMap<Entity, GTimer>>,
     mut charge_state: Local<HashMap<Entity, GTimer>>,
     player_q: Query<(&Pos, &Player), (With<Player>, Without<Enemy>)>,
     mut enemies: Query<
@@ -1238,6 +1844,7 @@ pub fn enemy_ai(
             &mut EnemyBrain,
             &mut Velocity,
             &mut Pos,
+            &Health,
             Option<&BossBrain>,
             Option<&mut SpriteAnim>,
             Option<&HurtAnim>,
@@ -1261,7 +1868,7 @@ pub fn enemy_ai(
     // snapshot, applied to the live position).
     let positions: Vec<(Entity, glam::Vec2, i32, f32)> = enemies
         .iter()
-        .map(|(e, enemy, _, _, pos, _, _, _)| {
+        .map(|(e, enemy, _, _, pos, _, _, _, _)| {
             (
                 e,
                 pos.0,
@@ -1272,7 +1879,9 @@ pub fn enemy_ai(
         .collect();
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
 
-    for (entity, mut enemy, mut brain, mut vel, mut pos, boss, mut anim, hurt) in &mut enemies {
+    for (entity, mut enemy, mut brain, mut vel, mut pos, health, boss, mut anim, hurt) in
+        &mut enemies
+    {
         let epos = pos.0;
         let to_player = player_pos - epos;
         let dist = to_player.length();
@@ -1315,15 +1924,24 @@ pub fn enemy_ai(
                 | EnemyKind::EliteShielder
                 | EnemyKind::ScrapBossMissile
                 | EnemyKind::ProtoStatue
+                | EnemyKind::MeleeFake
+                | EnemyKind::Ratking
+                | EnemyKind::Turret
                 | EnemyKind::IceFlower
         ) {
             continue;
         }
 
-        // Only `Turret/Other_10` (`speed = 0; x = xprevious`) and `Crystal` are
-        // true emplacements. The laser crystals drift, so pinning them froze
-        // them.
-        let emplacement = matches!(enemy.kind, EnemyKind::Turret | EnemyKind::Crystal);
+        // GML `objects/Crystal` has no `Alarm_1` and no `Other_10`, so it is
+        // a stationary hazard: it must not run a decide at all.
+        if enemy.kind == EnemyKind::Crystal {
+            vel.0 = glam::Vec2::ZERO;
+            continue;
+        }
+
+        // Only `Turret/Other_10` (`speed = 0; x = xprevious`) is a true
+        // emplacement. The laser crystals drift, so pinning them froze them.
+        let emplacement = enemy.kind == EnemyKind::Turret;
 
         // Kinds with a dedicated verbatim ticker own their `Other_10` and
         // their alarm cadence. The generic timers/walk/decide ran as well, so
@@ -1340,6 +1958,9 @@ pub fn enemy_ai(
             // every block below only reads `just_finished()`.
             brain.attack.tick(dt);
             brain.fire_alarm.tick(dt);
+            // GML steps every alarm every step; the decide and the fire
+            // blocks below only read `just_finished()`.
+            brain.burst_timer.tick(dt);
 
             // Objects whose GML `Other_10`/`Step_0` applies `motion_add` every
             // step with no `walk` gate: they drift continuously and only ever
@@ -1360,8 +1981,15 @@ pub fn enemy_ai(
                 }
                 cap_gml_speed(&mut brain, &mut vel, cap_f);
             } else if brain.walk > 0.0 {
-                let (impulse_f, cap_f) = gml_walk_law(enemy.kind);
+                let (impulse_f, _cap_f) = gml_walk_law(enemy.kind);
                 add_gml_motion(&mut brain, &mut vel, heading, impulse_f, dt);
+                // GML `Spider/Other_10:12` caps at `maxspeed`, which
+                // `Spider/Alarm_1` holds at 3 and raises to 5 only on the
+                // close chase.
+                if brain.maxspeed.is_finite() {
+                    let cap_f = brain.maxspeed / crate::SIM_HZ as f32;
+                    cap_gml_speed(&mut brain, &mut vel, cap_f);
+                }
                 // GML `Freak`, `ExploFreak`, `PopoFreak` and `RhinoFreak` never
                 // decrement `walk`, so their impulse runs every step for as long
                 // as the alarm keeps it armed. Counting it down halved their
@@ -1475,104 +2103,19 @@ pub fn enemy_ai(
                     | EnemyKind::ExploGuardian
             );
             if !owns_motion && !owns_decide && brain.attack.just_finished() {
-                let los = has_line_of_sight(epos, player_pos, &mask);
-                let base_ang = dir.y.atan2(dir.x);
-
-                let (impulse, _cap, far_walk, close_walk, wander_walk) = match enemy.kind {
-                    EnemyKind::Gator | EnemyKind::BuffGator => {
-                        (0.8, 3.0, 10.0..14.0, 40.0..50.0, 20.0..30.0)
-                    }
-                    EnemyKind::Freak | EnemyKind::ExploFreak => {
-                        (0.55, 4.0, 18.0..22.0, 12.0..18.0, 10.0..16.0)
-                    }
-                    EnemyKind::RhinoFreak => (0.8, 1.0, 18.0..22.0, 12.0..18.0, 10.0..16.0),
-                    EnemyKind::Spider | EnemyKind::InvSpider => {
-                        (2.0, 5.0, 15.0..20.0, 10.0..14.0, 10.0..20.0)
-                    }
-                    EnemyKind::Crab => (1.5, 4.5, 8.0..14.0, 50.0..60.0, 20.0..30.0),
-                    EnemyKind::Turtle => (1.0, 5.0, 40.0..60.0, 40.0..60.0, 40.0..60.0),
-                    EnemyKind::Salamander => (2.0, 2.5, 40.0..50.0, 20.0..30.0, 10.0..20.0),
-                    EnemyKind::FireBaller | EnemyKind::SuperFireBaller => {
-                        (0.6, 2.0, 8.0..12.0, 10.0..14.0, 10.0..16.0)
-                    }
-                    EnemyKind::Jock => (0.8, 3.0, 10.0..14.0, 40.0..50.0, 20.0..30.0),
-                    EnemyKind::Molefish | EnemyKind::Molesarge => {
-                        (0.8, 3.5, 10.0..14.0, 20.0..30.0, 20.0..30.0)
-                    }
-                    EnemyKind::Raven => (0.8, 3.5, 20.0..30.0, 40.0..50.0, 20.0..30.0),
-                    EnemyKind::Rat
-                    | EnemyKind::Ratking
-                    | EnemyKind::FastRat
-                    | EnemyKind::BigRat => (0.8, 4.0, 10.0..16.0, 40.0..50.0, 10.0..25.0),
-                    // GML `Wolf/Alarm_1:2-3`: `alarm[1] = 30 + random(20);
-                    // walk = alarm[1]` on every path, so the wolf always walks
-                    // 30-50 frames rather than the 10-16 the generic row used.
-                    EnemyKind::Wolf => (0.8, 3.5, 30.0..50.0, 30.0..50.0, 30.0..50.0),
-                    EnemyKind::Assassin => (0.8, 4.0, 10.0..14.0, 20.0..28.0, 16.0..24.0),
-                    EnemyKind::LightningCrystal => (0.5, 1.5, 10.0..14.0, 10.0..14.0, 10.0..20.0),
-                    _ => (0.4, 4.0, 6.0..14.0, 18.0..28.0, 10.0..18.0),
-                };
-
-                if los {
-                    if dist > 80.0 {
-                        if rng.random::<f32>() < 0.35 {
-                            brain.walk = 0.0;
-                            vel.0 *= 0.5;
-                        } else {
-                            let ang = base_ang + rng.random_range(-45_f32..45.0).to_radians();
-                            let wdir = glam::Vec2::new(ang.cos(), ang.sin());
-                            vel.0 = wdir * (impulse * 30.0);
-                            brain.walk = rng.random_range(far_walk);
-                            brain.gunangle = base_ang;
-                        }
-                    } else if dist < 44.0 {
-                        let away = -dir;
-                        let ang =
-                            away.y.atan2(away.x) + rng.random_range(-15_f32..15.0).to_radians();
-                        let wdir = glam::Vec2::new(ang.cos(), ang.sin());
-                        vel.0 = wdir * (impulse * 30.0);
-                        brain.walk = rng.random_range(close_walk);
-                        brain.gunangle = base_ang;
-                    } else {
-                        let ang = base_ang + rng.random_range(-90_f32..90.0).to_radians();
-                        let wdir = glam::Vec2::new(ang.cos(), ang.sin());
-                        vel.0 = wdir * (impulse * 30.0);
-                        brain.walk = rng.random_range(6.0..10.0);
-                    }
-
-                    let attack_secs = match enemy.kind {
-                        EnemyKind::Rat
-                        | EnemyKind::FastRat
-                        | EnemyKind::BigRat
-                        | EnemyKind::Ratking => rng.random_range(10.0..40.0) / 30.0,
-                        EnemyKind::Freak | EnemyKind::ExploFreak => {
-                            rng.random_range(6.0..11.0) / 30.0
-                        }
-                        EnemyKind::RhinoFreak | EnemyKind::DogGuardian | EnemyKind::Turtle => {
-                            rng.random_range(6.0..11.0) / 30.0
-                        }
-                        EnemyKind::Spider | EnemyKind::InvSpider => {
-                            rng.random_range(20.0..30.0) / 30.0
-                        }
-                        EnemyKind::Crab => rng.random_range(10.0..20.0) / 30.0,
-                        EnemyKind::Salamander => rng.random_range(10.0..60.0) / 30.0,
-                        EnemyKind::Assassin | EnemyKind::Wolf => rng.random_range(6.0..11.0) / 30.0,
-                        _ => rng.random_range(0.35..0.75),
-                    };
-                    brain.attack = GTimer::from_seconds(attack_secs, TimerMode::Once);
-                } else if rng.random::<f32>() < 0.4 {
-                    let ang = rng.random_range(0.0..std::f32::consts::TAU);
-                    let wdir = glam::Vec2::new(ang.cos(), ang.sin());
-                    vel.0 = wdir * (impulse * 30.0);
-                    brain.walk = rng.random_range(wander_walk);
-                    brain.attack = GTimer::from_seconds(
-                        (brain.walk + 10.0 + rng.random_range(0.0..18.0)) / 30.0,
-                        TimerMode::Once,
-                    );
-                } else {
-                    brain.attack =
-                        GTimer::from_seconds(rng.random_range(0.3..0.6), TimerMode::Once);
-                }
+                gml_alarm_1_decide(
+                    enemy.kind,
+                    run.loop_count,
+                    epos,
+                    player_pos,
+                    &mask,
+                    health,
+                    &mut enemy,
+                    &mut brain,
+                    &mut vel,
+                    dt,
+                    &mut rng,
+                );
             }
 
             let cap = gml_speed_cap(enemy.kind);
@@ -1684,50 +2227,6 @@ pub fn enemy_ai(
                     let ang = rng.random_range(0.0..std::f32::consts::TAU);
                     let p = epos + glam::Vec2::new(ang.cos(), ang.sin()) * 40.0;
                     queue_enemy_spawn(&mut commands, EnemyKind::Freak, p, 1.0, run.loop_count);
-                }
-            }
-        }
-
-        if enemy.kind == EnemyKind::Ratking {
-            let cd = ratking_cd
-                .entry(entity)
-                .or_insert_with(|| GTimer::from_seconds(1.0, TimerMode::Once));
-            if brain.burst_left > 0 {
-                brain.burst_timer.tick(dt);
-                if brain.burst_timer.just_finished() {
-                    let spread = rng.random_range(-20_f32..20.0).to_radians();
-                    let base = dir.y.atan2(dir.x);
-                    let ang = base + spread;
-                    let off = glam::Vec2::new(ang.cos(), ang.sin()) * 12.0;
-                    queue_enemy_spawn(
-                        &mut commands,
-                        EnemyKind::FastRat,
-                        epos + off,
-                        1.0,
-                        run.loop_count,
-                    );
-                    brain.burst_left = brain.burst_left.saturating_sub(1);
-                    if brain.burst_left > 0 {
-                        brain.burst_timer = GTimer::from_seconds(6.0 / 30.0, TimerMode::Once);
-                    }
-                }
-            } else {
-                cd.tick(dt);
-                if cd.just_finished() {
-                    let los = has_line_of_sight(epos, player_pos, &mask);
-                    if los && rng.random::<f32>() < 0.34 {
-                        brain.burst_left = rng.random_range(3..=5);
-                        brain.burst_timer = GTimer::from_seconds(6.0 / 30.0, TimerMode::Once);
-                        *cd = GTimer::from_seconds(
-                            (30.0 + rng.random_range(0.0..5.0)) / 30.0,
-                            TimerMode::Once,
-                        );
-                    } else {
-                        *cd = GTimer::from_seconds(
-                            (30.0 + rng.random_range(0.0..10.0)) / 30.0,
-                            TimerMode::Once,
-                        );
-                    }
                 }
             }
         }
@@ -1964,44 +2463,37 @@ pub fn enemy_ai(
             }
         }
 
+        // GML `Wolf/Alarm_2`: the roll is three `EnemyBullet1` along
+        // `direction` (+/-20) and it zeroes `walk`. `Alarm_1` is what arms
+        // it (`alarm[2] = 10; alarm[1] = 30`), so this reads that register
+        // instead of rolling a second, unsynchronised chance.
         if enemy.kind == EnemyKind::Wolf {
-            let cd = wolf_roll
-                .entry(entity)
-                .or_insert_with(|| GTimer::from_seconds(1.5, TimerMode::Once));
-            cd.tick(dt);
-            if cd.just_finished() {
-                let los = has_line_of_sight(epos, player_pos, &mask);
-                if los && rng.random::<f32>() < 0.5 {
-                    let base = dir.y.atan2(dir.x);
-                    for off in [0.0_f32, 20.0, -20.0] {
-                        let ang = base + off.to_radians();
-                        let sdir = glam::Vec2::new(ang.cos(), ang.sin());
-                        spawn_enemy_projectile(
-                            &mut commands,
-                            entity,
-                            enemy.kind,
-                            epos + sdir * 20.0,
-                            sdir * 120.0,
-                            2,
-                            3.0,
-                            4.0,
-                            120.0,
-                            false,
-                        );
-                    }
-                    show_enemy_fire(
+            if brain.burst_timer.just_finished() {
+                for off in [0.0_f32, 20.0, -20.0] {
+                    let ang = brain.heading + off.to_radians();
+                    let sdir = glam::Vec2::new(ang.cos(), ang.sin());
+                    spawn_enemy_projectile(
                         &mut commands,
-                        &catalog,
                         entity,
-                        def.sprite,
-                        anim.as_deref_mut(),
-                        hurt.is_some(),
+                        enemy.kind,
+                        epos + sdir * 20.0,
+                        sdir * 120.0,
+                        2,
+                        3.0,
+                        4.0,
+                        120.0,
+                        false,
                     );
                 }
-                *cd = GTimer::from_seconds(
-                    (30.0 + rng.random_range(0.0..20.0)) / 30.0,
-                    TimerMode::Once,
+                show_enemy_fire(
+                    &mut commands,
+                    &catalog,
+                    entity,
+                    def.sprite,
+                    anim.as_deref_mut(),
+                    hurt.is_some(),
                 );
+                brain.walk = 0.0;
             }
         }
 

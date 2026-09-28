@@ -104,6 +104,103 @@ pub fn floor_cell_for_wall(wx: i32, wy: i32) -> (i32, i32) {
     (wx.div_euclid(2), wy.div_euclid(2))
 }
 
+/// Live GML `TopSmall` instances, in 16x16 wall-grid coordinates.
+///
+/// GML creates them once: every `Floor` spawns 8 `Top`s at its 32px
+/// neighbours (`mcr_floor_create_tops`, `GenCont/Alarm_0:50` plus the
+/// `call_after(5, ...)` second pass) and each `Top` splits into 4
+/// `TopSmall`s (`Top/Create_0:11-14`). `TopSmall/Create_0:1-4` kills the
+/// ones meeting a `Wall` or a `Floor` **at that instant** — nothing ever
+/// re-evaluates them, so a destroyed wall does NOT grow its Trans tile
+/// back. The only later growth is `FloorExplo/Create_0:43-50`, which
+/// spawns 8 more `Top`s per broken wall.
+///
+/// Modelled as accumulated state (not a live recompute) so the renderer
+/// draws exactly the instances GML has at that moment.
+#[derive(Resource, Default, Clone)]
+pub struct TopSmalls {
+    pub cells: std::collections::HashSet<(i32, i32)>,
+}
+
+/// GML `mcr_floor_create_tops` + `Top/Create_0:11-14` over the whole floor:
+/// every 16px cell in the 96x96 box around a `Floor` (minus the floor's
+/// own 2x2) that meets neither a `Wall` nor a `Floor`.
+pub fn gml_top_small_ring(
+    floor: &std::collections::HashSet<(i32, i32)>,
+    walls: &std::collections::HashSet<(i32, i32)>,
+) -> std::collections::HashSet<(i32, i32)> {
+    let mut out = std::collections::HashSet::new();
+    let mut sorted: Vec<(i32, i32)> = floor.iter().copied().collect();
+    sorted.sort_unstable();
+    for (cx, cy) in sorted {
+        for (dx, dy) in [
+            (-1, 0),
+            (1, 0),
+            (0, 1),
+            (0, -1),
+            (-1, 1),
+            (1, -1),
+            (-1, -1),
+            (1, 1),
+        ] {
+            let tx = cx * 2 + dx * 2;
+            let ty = cy * 2 + dy * 2;
+            for (sx, sy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let cell = (tx + sx, ty + sy);
+                if walls.contains(&cell) || floor.contains(&floor_cell_for_wall(cell.0, cell.1)) {
+                    continue;
+                }
+                out.insert(cell);
+            }
+        }
+    }
+    out
+}
+
+impl TopSmalls {
+    /// Level start: the worldgen ring, minus any `Wall`/`Floor` present then.
+    pub fn seed(
+        &mut self,
+        floor: &std::collections::HashSet<(i32, i32)>,
+        walls: &std::collections::HashSet<(i32, i32)>,
+    ) {
+        self.cells = gml_top_small_ring(floor, walls);
+    }
+
+    /// GML `FloorExplo/Create_0:43-50`: the 8 `Top`s the explosion spawns
+    /// cover a 6x6 block of 16px cells centred on the broken wall, MINUS the
+    /// centre 2x2 — `instance_create(x, y, Top)` is absent from that list,
+    /// so the hole itself never regains a Trans tile. `walls` must be the
+    /// post-break set (broken walls removed, re-seal walls added), because
+    /// `TopSmall/Create_0` tests the live instances.
+    pub fn spawn_around_break(
+        &mut self,
+        at: (i32, i32),
+        floor: &std::collections::HashSet<(i32, i32)>,
+        walls: &std::collections::HashSet<(i32, i32)>,
+    ) {
+        for dx in -2i32..=3 {
+            for dy in -2i32..=3 {
+                if (dx == 0 || dx == 1) && (dy == 0 || dy == 1) {
+                    continue;
+                }
+                let cell = (at.0 + dx, at.1 + dy);
+                if walls.contains(&cell) || floor.contains(&floor_cell_for_wall(cell.0, cell.1)) {
+                    continue;
+                }
+                self.cells.insert(cell);
+            }
+        }
+    }
+
+    /// GML `Nothing2/Other_10:12-13` and `Nothing2Appear/Other_7:3`:
+    /// `with (TopSmall) instance_destroy()` wipes the whole ring when the
+    /// second throne boss phases in.
+    pub fn clear(&mut self) {
+        self.cells.clear();
+    }
+}
+
 impl FloorMask {
     pub fn world_to_cell(&self, p: Vec2) -> (i32, i32) {
         ((p.x / TILE).floor() as i32, (p.y / TILE).floor() as i32)
@@ -1037,4 +1134,137 @@ pub struct LightningArc {
     /// explicitly, so they live on the marker.
     pub len: f32,
     pub angle: f32,
+}
+
+#[cfg(test)]
+mod gml_top_small_tests {
+    use super::*;
+
+    /// GML `mcr_floor_make_walls` around a lone `Floor` at 16px cell
+    /// `(0,0)`: the 12 candidates that `!position_meeting(..., Floor)`
+    /// leaves standing (the four at `(+16,y)` / `(x,+16)` fall inside the
+    /// floor itself).
+    fn ring_walls() -> std::collections::HashSet<(i32, i32)> {
+        [
+            (-1, -1),
+            (0, -1),
+            (1, -1),
+            (2, -1),
+            (2, 0),
+            (2, 1),
+            (-1, 0),
+            (-1, 1),
+            (-1, 2),
+            (0, 2),
+            (1, 2),
+            (2, 2),
+        ]
+        .into_iter()
+        .collect()
+    }
+
+    /// GML `mcr_floor_create_tops` + `Top/Create_0:11-14` on a lone `Floor`:
+    /// 8 Tops at +-32px (2 cells) x 4 TopSmalls each, minus the floor's own
+    /// 2x2, minus wall contacts.
+    #[test]
+    fn ring_skips_the_floor_itself_and_walls() {
+        let floor = std::collections::HashSet::from([(0, 0)]);
+        let ring = gml_top_small_ring(&floor, &std::collections::HashSet::new());
+        for c in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            assert!(!ring.contains(&c), "floor itself {c:?}");
+        }
+        for (dx, dy) in [
+            (-1i32, -1i32),
+            (1, -1),
+            (-1, 1),
+            (1, 1),
+            (-1, 0),
+            (1, 0),
+            (0, -1),
+            (0, 1),
+        ] {
+            for (sx, sy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                assert!(ring.contains(&(2 * dx + sx, 2 * dy + sy)), "Top {dx},{dy}");
+            }
+        }
+        let mut walls = std::collections::HashSet::new();
+        walls.insert((-2, 0));
+        assert!(!gml_top_small_ring(&floor, &walls).contains(&(-2, 0)));
+    }
+
+    /// GML `FloorExplo/Create_0:43-50` spawns 8 `Top`s, NOT `Top(x, y)`, so
+    /// the blown cell and its east/south neighbours never get a Trans tile
+    /// (the "destroyed area shows the wall art" bug).
+    #[test]
+    fn break_leaves_the_hole_bare() {
+        let floor = std::collections::HashSet::from([(0, 0)]);
+        let at = (-1, 0);
+        let mut tops = TopSmalls::default();
+        tops.seed(&floor, &ring_walls());
+        assert!(!tops.cells.contains(&at), "hole starts walled off");
+
+        // `FloorExplo/Create_0:19-27` re-seals first: the four open cells
+        // around the hole that meet neither a `Floor` nor a `Wall`.
+        let mut after = ring_walls();
+        after.remove(&at);
+        after.extend([(-2, 0), (-2, -1), (-2, 1), (0, 1)]);
+
+        tops.spawn_around_break(at, &floor, &after);
+        for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            assert!(
+                !tops.cells.contains(&(at.0 + dx, at.1 + dy)),
+                "centre 2x2 {dx},{dy} must stay bare"
+            );
+        }
+        // The rest of the 6x6 block lands wherever the ring is open.
+        for dx in -2i32..=3 {
+            for dy in -2i32..=3 {
+                if (dx == 0 || dx == 1) && (dy == 0 || dy == 1) {
+                    continue;
+                }
+                let cell = (at.0 + dx, at.1 + dy);
+                if after.contains(&cell)
+                    || floor.contains(&floor_cell_for_wall(cell.0, cell.1))
+                {
+                    continue;
+                }
+                assert!(tops.cells.contains(&cell), "missing {dx},{dy}");
+            }
+        }
+    }
+
+    /// GML `TopSmall/Create_0:1-4` tests the live instances, so the block a
+    /// break adds depends on the wall set as it stands after the re-seal —
+    /// and on nothing else, since GML never deletes a `TopSmall`.
+    #[test]
+    fn break_respects_the_live_wall_set() {
+        let floor = std::collections::HashSet::from([(0, 0)]);
+        // `(0,-1)` sits inside this break's 6x6 block but outside its centre
+        // 2x2, so whether it grows a tile is decided purely by the wall set.
+        let mut tops = TopSmalls::default();
+        tops.seed(&floor, &ring_walls());
+        assert!(!tops.cells.contains(&(0, -1)), "standing wall has no tile");
+
+        tops.spawn_around_break((-1, 0), &floor, &ring_walls());
+        assert!(
+            !tops.cells.contains(&(0, -1)),
+            "still a wall after the break"
+        );
+
+        let mut cleared = ring_walls();
+        cleared.remove(&(0, -1));
+        tops.spawn_around_break((-1, 0), &floor, &cleared);
+        assert!(tops.cells.contains(&(0, -1)), "now open, tile lands");
+    }
+
+    /// GML `Nothing2/Other_10:12-13` wipes the ring.
+    #[test]
+    fn throne_ii_wipes_the_ring() {
+        let floor = std::collections::HashSet::from([(0, 0)]);
+        let mut tops = TopSmalls::default();
+        tops.seed(&floor, &std::collections::HashSet::new());
+        assert!(!tops.cells.is_empty());
+        tops.clear();
+        assert!(tops.cells.is_empty());
+    }
 }

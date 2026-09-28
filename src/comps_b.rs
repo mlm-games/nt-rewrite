@@ -507,6 +507,18 @@ pub struct EnemyBrain {
     /// The rage form charges (touch 4), breaks walls, and bursts five
     /// `FastRat` plus five `AcidStreak` on death.
     pub ratking_rage: bool,
+
+    /// GML `maxspeed` (`Spider/Create_0:19` and `Spider/Alarm_1`), the
+    /// spider's per-tick speed ceiling in px/frame: 3 at rest, 5 chasing.
+    pub maxspeed: f32,
+
+    /// GML `gunoffset` (`HostileHorror/Alarm_1:13`): a +-10 degree bias
+    /// added to `gunangle` on every step of a running spray.
+    pub gunoffset: f32,
+
+    /// GML `walkdir` (`PopoFreak/Alarm_1`): the heading held while hurt,
+    /// so the impulse keeps pushing even with the walk sprite swapped out.
+    pub walkdir: f32,
 }
 
 pub const SCRAP_BOSS_MISSILE_HP: i32 = 22;

@@ -46,7 +46,7 @@ use crate::combat::HitFlash;
 use crate::comps_a::{
     ARENA_H, ARENA_W, AimDir, FloorMask, GrenadeFuse, Health, HitId, Inventory, LightningArc,
     PendingMutation, PendingUltra, Player, Projectile, ProjectileFade, RaceState, Run,
-    SelectedCharacter, SlashProjectile, TILE, Team, Velocity, WallCell, WallTile,
+    SelectedCharacter, SlashProjectile, TILE, Team, TopSmalls, Velocity, WallCell, WallTile,
 };
 use crate::comps_b::{
     Beam, BigDogMissileState, BossBrain, BossPhase, ChestArt, ChestKind, Corpse, Enemy, EnemyBrain,
@@ -1195,74 +1195,23 @@ fn wall_out_part(
     })
 }
 
-/// GML `Top`/`TopSmall` chain verbatim: each floor spawns 8 Tops at the 8
-/// 32px neighbors (`mcr_floor_create_tops`); each Top splits into 4
-/// `TopSmall`s at `(x, y)`, `(x+16, y)`, `(x, y+16)`, `(x+16, y+16)`
-/// (`Top/Create_0:11-14`), drawn from the Trans strip at `y - 8`
-/// (`SubTopCont/Draw_0:22-24`).
-///
-/// `TopSmall/Create_0:1-4` kills anything whose position meets a `Wall` or a
-/// `Floor`, so a survivor sits on a cell with neither. Only the wall's own
-/// cell is tested: `mskWall` is 16x16 and `Wall` inherits its box from the
-/// sprite, so `position_meeting` sees the same 16px cell the art occupies.
-///
-/// Do NOT widen that test to the north-west 2x2 neighbourhood. `Wall/Create_0`
-/// does assign `l = 0, r = 0, w = 24, h = 24` (legacy GM bbox vars), which
-/// would make the box 24x24 and trim the ring one cell east and south — but
-/// that reading is unverifiable (the shipped manual documents `bbox_left` as
-/// read-only and has no `l`/`r`/`w`/`h`), and it is visibly wrong: it halves
-/// the surviving ring (244 -> 123 cells on one level) and leaves 58 walls
-/// with no `TopSmall` to the south, so `scrShadows` fires an extra detached
-/// drop shadow for each — the "second wall" hanging in the open beside the
-/// real one. Measured both ways on the same level: 277 shadow emitters under
-/// the 24x24 reading vs 219 under 16x16.
+/// GML `Top`/`TopSmall` chain, sorted for a stable draw order.
 ///
 /// GML draws every `TopSmall` with sub-image `-1`, i.e. the strip's last frame
 /// (`SubTopCont/Draw_0:22`); the `image_index = irandom(image_number)` roll in
-/// `TopSmall/Create_0:7` is never read. Returns the 16px Trans cells with that
-/// one frame.
-fn trans_cells(
-    cells: &HashSet<(i32, i32)>,
-    wall_set: &HashSet<(i32, i32)>,
-    trans_frames: u32,
-) -> Vec<((i32, i32), i32)> {
-    let mut seen: HashSet<(i32, i32)> = HashSet::new();
-    let mut out = Vec::new();
-    let mut sorted: Vec<(i32, i32)> = cells.iter().copied().collect();
+/// `TopSmall/Create_0:7` is never read.
+///
+/// The cell set is [`crate::comps_a::TopSmalls`] — GML's live instances,
+/// accumulated at level start and extended per break, NOT a recompute. A
+/// destroyed wall therefore does not grow its Trans tile back.
+fn trans_cells(cells: &TopSmalls, trans_frames: u32) -> Vec<((i32, i32), i32)> {
+    let frame = trans_frames as i32 - 1;
+    let mut sorted: Vec<(i32, i32)> = cells.cells.iter().copied().collect();
     sorted.sort_unstable();
-    for (cx, cy) in sorted {
-        let fx = cx as f32 * TILE;
-        let fy = cy as f32 * TILE;
-        for (ox, oy) in [
-            (-32.0, 0.0),
-            (32.0, 0.0),
-            (0.0, 32.0),
-            (0.0, -32.0),
-            (-32.0, 32.0),
-            (32.0, 32.0),
-            (-32.0, -32.0),
-            (32.0, -32.0),
-        ] {
-            let tx = fx + ox;
-            let ty = fy + oy;
-            for (sx, sy) in [(0.0, 0.0), (16.0, 0.0), (0.0, 16.0), (16.0, 16.0)] {
-                let wx = ((tx + sx) / 16.0).floor() as i32;
-                let wy = ((ty + sy) / 16.0).floor() as i32;
-                if wall_set.contains(&(wx, wy)) {
-                    continue;
-                }
-                if cells.contains(&(wx.div_euclid(2), wy.div_euclid(2))) {
-                    continue;
-                }
-                if !seen.insert((wx, wy)) {
-                    continue;
-                }
-                out.push(((wx, wy), trans_frames as i32 - 1));
-            }
-        }
-    }
-    out.sort_unstable_by_key(|((wx, wy), _)| (*wy, *wx));
-    out
+    sorted
+        .into_iter()
+        .map(|c| (c, frame))
+        .collect()
 }
 
 /// sRGB channel -> linear light (exact transfer function). GPU tints
@@ -1723,6 +1672,50 @@ pub fn background_color(area: AreaId) -> [f32; 4] {
     }
 }
 
+/// GML `BackCont/Draw_0:11` draws the `shad` surface at `draw_set_alpha(0.4)`
+/// with `gpu_set_fog(1, shadow_color, depth, depth+1)`: the fog REPLACES the
+/// black silhouette already in the surface, and the 0.4 alpha is the surface
+/// composite. Every blob therefore lands on screen as `shadow_color` at 40%
+/// alpha, not as opaque black.
+pub const SHADOW_ALPHA: f32 = 0.4;
+
+/// GML `scrAreaGetShadowColor` verbatim (GameMaker `#rrggbb` -> sRGB
+/// 0..1; custom resource-pack colors are shell-side and fall through here).
+/// Fed to [`SHADOW_ALPHA`] over every `scrShadows` emitter.
+pub fn shadow_color(area: AreaId) -> [f32; 4] {
+    fn hex(hex: u32) -> [f32; 4] {
+        [
+            ((hex >> 16) & 0xFF) as f32 / 255.0,
+            ((hex >> 8) & 0xFF) as f32 / 255.0,
+            (hex & 0xFF) as f32 / 255.0,
+            SHADOW_ALPHA,
+        ]
+    }
+    match area {
+        AreaId::Campfire => hex(0x000000),
+        AreaId::Desert => hex(0x000000),
+        AreaId::Sewers => hex(0x080d01),
+        AreaId::Scrapyards => hex(0x000000),
+        AreaId::CrystalCaves => hex(0x06020c),
+        AreaId::FrozenCity => hex(0x0e1344),
+        AreaId::Labs => hex(0x000000),
+        AreaId::Palace => hex(0x0d0101),
+        AreaId::Vault | AreaId::CrownVault => hex(0x00030e),
+        AreaId::Oasis => hex(0x012b43),
+        AreaId::PizzaSewers => hex(0x090012),
+        // GML `area_mansion` is 103, which the port names `AreaId::City` (its
+        // `sprFloor103*` art confirms the id).
+        AreaId::City => hex(0x120014),
+        AreaId::CursedCaves => hex(0x420000),
+        AreaId::Jungle => hex(0x140001),
+        AreaId::HQ => hex(0x00248c),
+        AreaId::Crib => hex(0x120014),
+        // `scrArea.gml` has no `area_crib` arm beyond the two above, so the
+        // campfire default carries.
+        AreaId::Loop => hex(0x6a7aaf),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // View-space atmosphere: area fog + sideart chrome.
 // ---------------------------------------------------------------------------
@@ -2024,6 +2017,7 @@ struct StaticWorldKey {
     wall_cells: usize,
     wall_hash: u64,
     active_wall_hash: u64,
+    top_small_hash: u64,
 }
 
 #[derive(Clone, Default)]
@@ -2101,6 +2095,20 @@ fn static_world_key(world: &mut World, assets: &RenderAssets) -> Option<StaticWo
             &mut active_xor,
         );
     }
+    // A break extends the `TopSmall` ring (`FloorExplo/Create_0:43-50`) and
+    // the second throne boss wipes it, so the drawn Trans cells are not a
+    // function of the floor/wall sets alone.
+    let (top_small_sum, top_small_xor) = match world.get_resource::<TopSmalls>() {
+        Some(tops) => {
+            let mut sum = 0;
+            let mut xor = 0;
+            for cell in &tops.cells {
+                add_fingerprint(cell_fingerprint(cell.0, cell.1), &mut sum, &mut xor);
+            }
+            (sum, xor)
+        }
+        None => (0, 0),
+    };
     Some(StaticWorldKey {
         floor,
         area,
@@ -2111,6 +2119,7 @@ fn static_world_key(world: &mut World, assets: &RenderAssets) -> Option<StaticWo
         wall_cells: wall_count,
         wall_hash: wall_sum ^ wall_xor,
         active_wall_hash: active_sum ^ active_xor,
+        top_small_hash: top_small_sum ^ top_small_xor,
     })
 }
 
@@ -2298,7 +2307,6 @@ pub fn world_instances_cached(
             .copied()
             .collect();
         walls.sort_by_key(|c| (c.0, c.1));
-        let wall_set: HashSet<(i32, i32)> = walls.iter().map(|c| (c.0, c.1)).collect();
         let solid_wall_set: HashSet<(i32, i32)> = world
             .query::<&WallCell>()
             .iter(world)
@@ -2362,14 +2370,12 @@ pub fn world_instances_cached(
                 }
             }
         }
-        // Trans skirting: the GML `Top`/`TopSmall` chain leaves a full
-        // second ring past the walls (8 Tops per floor, 4 TopSmalls each,
-        // minus wall/floor contact, deduped). Drawn from the Trans strip
-        // at `y - 8`.
+        // Trans skirting: the live GML `TopSmall` instances (see
+        // [`TopSmalls`]) — the worldgen ring, extended one step out per
+        // broken wall by `FloorExplo`. Drawn from the Trans strip at `y - 8`.
         let trans_cells: Vec<((i32, i32), i32)> = if has(wall_trans_png) {
             trans_cells(
-                &cells,
-                &wall_set,
+                &world.get_resource::<TopSmalls>().cloned().unwrap_or_default(),
                 strip_frames(assets, wall_trans_png),
             )
         } else {
@@ -2393,6 +2399,7 @@ pub fn world_instances_cached(
         // sprite flipped under each wall with no `TopSmall` at
         // `(x, y + 16)`).
         if has(wall_out_png) {
+            let shadow_tint = shadow_color(area);
             for cell in walls.iter().rev() {
                 let (wx, wy) = (cell.0, cell.1);
                 if trans_set.contains(&(wx, wy + 1)) {
@@ -2406,10 +2413,11 @@ pub fn world_instances_cached(
                     false,
                     true,
                     0.0,
-                    // GML `scrShadows.gml:29` verbatim: the wall
-                    // `outspr` is `draw_sprite_ext`ed with `c_black`
-                    // at alpha 1, mirrored on Y.
-                    [0.0, 0.0, 0.0, 1.0],
+                    // GML `scrShadows.gml:29` draws the wall `outspr` flipped
+                    // into the `shad` surface with `c_black` at alpha 1; the
+                    // surface itself is fogged to `shadow_color` at 0.4 by
+                    // `BackCont/Draw_0:11-12`.
+                    shadow_tint,
                 ) {
                     s.z = Z_SHADOW;
                     wall_shadows.push(s);
@@ -8100,18 +8108,9 @@ fn push_shadow(
     assets: &RenderAssets,
     pos: Vec2,
     spec: ShadowSpec,
+    tint: [f32; 4],
 ) {
-    if let Some(s) = assets.sprite_for(
-        spec.path,
-        0,
-        pos + spec.offset,
-        false,
-        0.0,
-        // GML `scrShadows` composites the `shd*` strips with a plain
-        // `draw_sprite` onto a transparent surface: no tint, no alpha.
-        // The strips are already opaque black silhouettes in the atlas.
-        [1.0, 1.0, 1.0, 1.0],
-    ) {
+    if let Some(s) = assets.sprite_for(spec.path, 0, pos + spec.offset, false, 0.0, tint) {
         out.push(s);
     }
 }
@@ -8121,6 +8120,7 @@ fn push_pickup_shadow(
     assets: &RenderAssets,
     pos: Vec2,
     kind: PickupKind,
+    tint: [f32; 4],
 ) {
     // `BigWeaponChest` is covered by both `with chestprop` and its own arm.
     if matches!(kind, PickupKind::Chest(ChestKind::BigWeapon)) {
@@ -8129,17 +8129,19 @@ fn push_pickup_shadow(
             assets,
             pos,
             ShadowSpec::new("images/shd32.png", 0.0, -1.0),
+            tint,
         );
         push_shadow(
             out,
             assets,
             pos,
             ShadowSpec::new("images/shd32.png", 0.0, 0.0),
+            tint,
         );
         return;
     }
     if let Some(spec) = pickup_shadow(kind) {
-        push_shadow(out, assets, pos, spec);
+        push_shadow(out, assets, pos, spec, tint);
     }
 }
 
@@ -8147,12 +8149,21 @@ fn push_pickup_shadow(
 /// composited under the actors by `BackCont/Draw_0`). The per-object
 /// `spr_shadow` values and offsets are resolved from the modeled kind;
 /// missing strips simply produce no shadow.
+///
+/// Every emitter is tinted with [`shadow_color`] at [`SHADOW_ALPHA`]
+/// because GML never draws these to the frame directly: `scrShadows`
+/// stamps opaque black into the `shad` surface and `BackCont/Draw_0`
+/// fogs that surface to the area color at 0.4 alpha.
 pub fn shadow_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInstance> {
     let mut out = Vec::new();
+    let tint = world
+        .get_resource::<Run>()
+        .map(|run| shadow_color(run.area))
+        .unwrap_or([0.0, 0.0, 0.0, SHADOW_ALPHA]);
     let mut q = world.query::<(&Pos, &Enemy)>();
     for (pos, enemy) in q.iter(world) {
         if let Some(spec) = enemy_shadow(enemy.kind) {
-            push_shadow(&mut out, assets, pos.0, spec);
+            push_shadow(&mut out, assets, pos.0, spec, tint);
         }
     }
     let mut q = world.query::<(&Pos, &Player, Option<&RaceState>)>();
@@ -8162,11 +8173,11 @@ pub fn shadow_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIns
         } else {
             ShadowSpec::new("images/shd24.png", 0.0, 0.0)
         };
-        push_shadow(&mut out, assets, pos.0, spec);
+        push_shadow(&mut out, assets, pos.0, spec, tint);
     }
     let mut q = world.query::<(&Pos, &Pickup)>();
     for (pos, pickup) in q.iter(world) {
-        push_pickup_shadow(&mut out, assets, pos.0, pickup.kind);
+        push_pickup_shadow(&mut out, assets, pos.0, pickup.kind, tint);
     }
     // GML `ProtoChest/Collision_Player.gml:5` only swaps `sprite_index` on
     // the live chest, so `scrShadows`' `with chestprop` arm keeps drawing
@@ -8181,6 +8192,7 @@ pub fn shadow_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIns
                     assets,
                     pos.0,
                     ShadowSpec::new("images/shd24.png", 0.0, -1.0),
+                    tint,
                 );
             }
         }
@@ -8190,7 +8202,7 @@ pub fn shadow_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIns
         (Without<WallTile>, Without<InvisiWall>),
     >();
     for (pos, _, sprites) in q.iter(world) {
-        push_shadow(&mut out, assets, pos.0, prop_shadow(sprites));
+        push_shadow(&mut out, assets, pos.0, prop_shadow(sprites), tint);
     }
     // Title campers (`CampChar` uses shd24; BigDog overrides it to shd96).
     let mut q = world.query::<(&Pos, &TitleCampChar)>();
@@ -8200,7 +8212,7 @@ pub fn shadow_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIns
         } else {
             ShadowSpec::new("images/shd24.png", 0.0, 0.0)
         };
-        push_shadow(&mut out, assets, pos.0, spec);
+        push_shadow(&mut out, assets, pos.0, spec, tint);
     }
     // Campfire, LogMenu, and TV are GML `prop` descendants.
     let mut q = world.query::<(&Pos, &TitleCampfire)>();
@@ -8210,6 +8222,7 @@ pub fn shadow_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIns
             assets,
             pos.0,
             ShadowSpec::new("images/shd24.png", 0.0, 0.0),
+            tint,
         );
     }
     let mut q = world.query::<(&Pos, &TitleLogMenu)>();
@@ -8219,6 +8232,7 @@ pub fn shadow_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIns
             assets,
             pos.0,
             ShadowSpec::new("images/shd24.png", 0.0, 0.0),
+            tint,
         );
     }
     let mut q = world.query::<(&Pos, &TitleTv)>();
@@ -8228,6 +8242,7 @@ pub fn shadow_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIns
             assets,
             pos.0,
             ShadowSpec::new("images/shd24.png", 0.0, 0.0),
+            tint,
         );
     }
     out

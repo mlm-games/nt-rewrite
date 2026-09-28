@@ -26,7 +26,7 @@ use repame_fx::Trauma;
 use crate::combat::queue_enemy_spawn;
 use crate::comps_a::{
     ARENA_H, ARENA_W, FloorMask, FloorStarted, GameCleanup, HammerheadBudget, Health, LevelCleanup,
-    PendingWallBreak, Player, Run, Toast, WallCell, WallTile, WallVisuals,
+    PendingWallBreak, Player, Run, Toast, TopSmalls, WallCell, WallTile, WallVisuals,
 };
 use crate::comps_b::{
     BigGenerator, BossBrain, Enemy, Prop, PropSprites, ThroneCarpet, ThroneRoomState,
@@ -54,6 +54,7 @@ pub use crate::comps_a::floor_cell_for_wall;
 pub fn apply_pending_wall_breaks(
     mut commands: Commands,
     mut mask: ResMut<FloorMask>,
+    mut tops: ResMut<TopSmalls>,
     mut trauma: ResMut<Trauma>,
     pending: Query<(Entity, &PendingWallBreak)>,
     walls: Query<(Entity, &WallCell, &Pos, Option<&WallVisuals>), With<WallTile>>,
@@ -64,6 +65,11 @@ pub fn apply_pending_wall_breaks(
     // shaken once per marker.
     let mut handled: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
     let mut resealed: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
+    // GML `FloorExplo/Create_0:19-27` runs before its `Top` spawns, so the new
+    // `TopSmall`s test the re-sealed ring: track the post-break wall set here
+    // rather than the deferred entity view.
+    let mut live_walls: std::collections::HashSet<(i32, i32)> =
+        walls.iter().map(|(_, cell, _, _)| (cell.0, cell.1)).collect();
 
     for (marker_e, brk) in &pending {
         commands.entity(marker_e).despawn();
@@ -84,6 +90,7 @@ pub fn apply_pending_wall_breaks(
                 }
             }
             commands.entity(wall_e).despawn();
+            live_walls.remove(&(cell.0, cell.1));
 
             if brk.spawn_floor {
                 // The 16x16 cell, not the 32x32 `Floor` that covers it: GML's
@@ -126,7 +133,7 @@ pub fn apply_pending_wall_breaks(
                 if mask.opened.contains(&n) || mask.cells.contains(&floor_cell_for_wall(n.0, n.1)) {
                     continue;
                 }
-                if walls.iter().any(|(_, c, _, _)| (c.0, c.1) == n) {
+                if live_walls.contains(&n) {
                     continue;
                 }
                 if broken.iter().any(|((bx, by), _)| (*bx, *by) == n) {
@@ -135,6 +142,7 @@ pub fn apply_pending_wall_breaks(
                 if !resealed.insert(n) {
                     continue;
                 }
+                live_walls.insert(n);
                 commands.spawn((
                     GameCleanup,
                     LevelCleanup,
@@ -149,6 +157,14 @@ pub fn apply_pending_wall_breaks(
                     Pos(crate::worldgen::wall_center(n.0, n.1)),
                 ));
             }
+        }
+
+        // `FloorExplo/Create_0:43-50`: the explosion's own `Top`s extend the
+        // Trans ring one step out, and deliberately leave the hole itself
+        // bare. Runs after the re-seal so `TopSmall/Create_0`'s `Wall` test
+        // sees the new ring, like GML's event order.
+        for broken_cell in &broken {
+            tops.spawn_around_break(broken_cell.0, &mask.cells, &live_walls);
         }
     }
 }
