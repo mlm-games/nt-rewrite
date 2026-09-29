@@ -922,6 +922,33 @@ fn gml_speed_cap(kind: EnemyKind) -> f32 {
     frames * crate::SIM_HZ as f32
 }
 
+/// GML per-object speed FLOOR, from the `if (speed < N) speed = N` lines that
+/// sit next to several of the caps. A `0.0` floor means no floor of its own.
+///
+/// Applied after the cap, because GML writes the two lines in that order.
+fn gml_speed_floor(kind: EnemyKind) -> f32 {
+    match kind {
+        // `LilHunter/Other_10:9` and `JungleFly/Other_10:8` both keep the
+        // hunter at 1 px/frame even when it is standing still, so it visibly
+        // slides rather than freezing.
+        EnemyKind::LilHunter | EnemyKind::LilHunterLoop | EnemyKind::JungleFly => 1.0,
+        _ => 0.0,
+    }
+}
+
+/// `Other_10`'s `if (speed > cap) speed = cap` followed by its
+/// `if (speed < floor) speed = floor`, in source order.
+fn gml_clamp_speed(brain: &mut EnemyBrain, vel: &mut Velocity, kind: EnemyKind, cap_f: f32) {
+    cap_gml_speed(brain, vel, cap_f);
+    let floor_f = gml_speed_floor(kind);
+    if floor_f > 0.0 {
+        let floor = floor_f * crate::SIM_HZ as f32;
+        if vel.0.length() < floor {
+            set_gml_speed(brain, vel, floor_f);
+        }
+    }
+}
+
 /// GML `Other_10` walk law: `(motion_add(direction, impulse), speed cap)` in
 /// px/frame, read off each object's own step handler.
 fn gml_walk_law(kind: EnemyKind) -> (f32, f32) {
@@ -1078,8 +1105,15 @@ fn integrate_verbatim(
     frame: u64,
     law: EnemyWallLaw,
 ) {
-    // GML `friction` is only read by `enemy/Collision_Wall`'s slide loop;
-    // `enemy` is a non-physics object so no built-in drag runs per step.
+    // GML `enemy/Create_0.gml` sets `friction = 0.4` on every enemy. GMS2
+    // applies `friction` to `hspeed`/`vspeed` once per step for any object
+    // using built-in movement, `physicsObject: false` or not, so it is a
+    // per-step decay and not merely the wall-slide input. Running the walk
+    // law's `motion_add` with no decay left every enemy ratcheting up to its
+    // `Other_10` cap and then gliding at that cap indefinitely after `walk`
+    // expired, which is what made them move far more often and far faster
+    // than GML. GML's order is step code, then friction, then the move.
+    apply_gml_friction(&mut vel.0, brain.friction, dt);
     let saved_direction = vel.0.normalize_or_zero();
     let saved_speed = vel.0.length();
     let parent = matches!(law, EnemyWallLaw::Parent) && loops <= 3;
@@ -2255,7 +2289,7 @@ pub fn enemy_ai(
                 {
                     add_gml_motion(&mut brain, &mut vel, heading, impulse_f, dt);
                 }
-                cap_gml_speed(&mut brain, &mut vel, cap_f);
+                gml_clamp_speed(&mut brain, &mut vel, enemy.kind, cap_f);
             } else if enemy.kind == EnemyKind::RobotGuard {
                 // GML `SnowBot/Other_10:3-6`: the impulse runs along
                 // `gunangle`, not `direction`, so the sled steers off its
@@ -2271,7 +2305,7 @@ pub fn enemy_ai(
                     }
                 }
                 let cap = if enemy.touch_damage != 0 { 8.0 } else { 3.0 };
-                cap_gml_speed(&mut brain, &mut vel, cap);
+                gml_clamp_speed(&mut brain, &mut vel, enemy.kind, cap);
             } else if brain.walk > 0.0 {
                 let (impulse_f, cap_f) = gml_walk_law(enemy.kind);
                 // GML `PopoFreak/Other_10:7` pushes along `walkdir` while the
@@ -2285,13 +2319,13 @@ pub fn enemy_ai(
                 // The walk law's cap is `Other_10`'s own `if (speed > N) speed
                 // = N`, and it sits OUTSIDE the `walk` gate — dropping it let
                 // the `separate` push drive these to its 16 px/frame clamp.
-                cap_gml_speed(&mut brain, &mut vel, cap_f);
+                gml_clamp_speed(&mut brain, &mut vel, enemy.kind, cap_f);
                 // GML `Spider/Other_10:12` caps at `maxspeed`, which
                 // `Spider/Alarm_1` holds at 3 and raises to 5 only on the
                 // close chase, so it overrides the walk law's flat 5.
                 if brain.maxspeed.is_finite() {
                     let cap_f = brain.maxspeed / crate::SIM_HZ as f32;
-                    cap_gml_speed(&mut brain, &mut vel, cap_f);
+                    gml_clamp_speed(&mut brain, &mut vel, enemy.kind, cap_f);
                 }
                 // GML `Freak/Other_10:5`, `ExploFreak/Other_10:6` and
                 // `RhinoFreak/Other_10:6` have no `walk -= 1`, so their
@@ -2441,6 +2475,10 @@ pub fn enemy_ai(
                 vel.0 = vel.0.normalize() * cap;
             }
         }
+
+        // GML `enemy/Create_0.gml` `friction = 0.4`, applied per step between
+        // the step code above and the move below. See `integrate_verbatim`.
+        apply_gml_friction(&mut vel.0, brain.friction, dt);
 
         // GML `enemy/Collision_Wall`, per object. Objects that override the
         // event get only their own `move_bounce_solid` argument: no
@@ -5784,6 +5822,9 @@ pub fn tick_scrap_missiles(
         } else if let Some(target) = player_pos {
             vel.0 = (target - pos.0).normalize_or_zero() * 60.0;
         }
+        // `ScrapBossMissile/Other_10.gml` ends with `speed = 2`, then GML
+        // applies `enemy/Create_0.gml`'s `friction = 0.4` before the move.
+        apply_gml_friction(&mut vel.0, 0.4, dt);
 
         let wall = move_bounce_solid(
             &mut pos.0,
@@ -6471,7 +6512,7 @@ fn fire_popo_bullet(
 ) {
     let a = gunangle + spread_deg.to_radians();
     let d = glam::Vec2::from_angle(a);
-    spawn_enemy_projectile(
+    let e = spawn_enemy_projectile(
         commands,
         owner,
         kind,
@@ -6483,6 +6524,14 @@ fn fire_popo_bullet(
         120.0,
         false,
     );
+    // GML `EnemyBullet1/Create_0.gml:4` `spr_fade = sprEnemyBulletHit`, which
+    // the shared spawner leaves off. The Turret's `Alarm_2` is the one caller
+    // that fires that object.
+    if kind == EnemyKind::Turret {
+        commands
+            .entity(e)
+            .insert(ProjectileFade("images/sprEnemyBulletHit.png"));
+    }
 }
 
 /// GML `PopoNade` (inherits `Grenade`): `friction = 0`, `typ = 1`,
@@ -7627,6 +7676,12 @@ pub fn tick_elite_inspectors(
             }
         }
 
+        // GML `enemy/Create_0.gml` `friction = 0.4`, inherited by
+        // `EliteInspector` (its `Create_0` sets no friction of its own).
+        // Applied after the step code and before the move, like every other
+        // enemy path. Without it the `Other_10` `motion_add` ratcheted the
+        // inspector to its 3.5 px/frame cap and held it there.
+        apply_gml_friction(&mut vel.0, 0.4, dt);
         pos.0 += vel.0 * dt;
         clamp_to_arena(&mut pos.0, 10.0);
     }
@@ -7842,6 +7897,9 @@ pub fn tick_elite_shielders(
             }
         }
 
+        // As for `EliteInspector`: `EliteShielder/Create_0` sets no friction
+        // of its own, so it inherits `enemy/Create_0.gml`'s 0.4.
+        apply_gml_friction(&mut vel.0, 0.4, dt);
         pos.0 += vel.0 * dt;
         clamp_to_arena(&mut pos.0, 11.0);
     }
