@@ -48,7 +48,7 @@ use rand::RngExt;
 use repame_fx::Trauma;
 use repame_sim::SimTime;
 
-use crate::audio::AudioCue;
+use crate::audio::{AudioCue, MainVol};
 use crate::combat::Explosion;
 use crate::comps_a::{
     AbilityHazard, AimDir, BouncesLeft, ChainLightning, CurrentFrame, DamageSource, DiscFlight,
@@ -486,6 +486,7 @@ pub struct FireFx<'a> {
     /// Strip catalog (bevy `AssetCatalog`): slash life reads the fired
     /// strip's frame count, never a constant.
     pub catalog: &'a repame_anim::AnimCatalog,
+    pub mainvol: &'a mut MainVol,
 }
 
 /// One gun's shot: shooter, muzzle origin, aim, and resolved def.
@@ -508,7 +509,7 @@ pub struct GunShot {
 /// intents. `Transform` -> [`Pos`]; pulses drained every tick.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn player_fire(
-    time: Res<SimTime>,
+    mut time_and_save: ParamSet<(Res<SimTime>, Res<SaveData>)>,
     mut input: ResMut<NtInput>,
     mut commands: Commands,
     mut trauma: ResMut<Trauma>,
@@ -516,8 +517,8 @@ pub fn player_fire(
     mut cues: ResMut<Queue<AudioCue>>,
     mut rumble_q: ResMut<Queue<RumbleRequest>>,
     mut toast: ResMut<Toast>,
+    mut mainvol: ResMut<MainVol>,
     mut run: ResMut<Run>,
-    save: Res<SaveData>,
     mut player_q: Query<
         (
             Entity,
@@ -549,9 +550,9 @@ pub fn player_fire(
     };
 
     let is_steroids = race_state.race == RaceId::Steroids;
-    let shake_scale: f32 = save.settings.screenshake.clamp(0.0, 2.0);
+    let shake_scale: f32 = time_and_save.p1().settings.screenshake.clamp(0.0, 2.0);
 
-    let dt = time.delta_secs;
+    let dt = time_and_save.p0().delta_secs;
 
     let primary_id = inv.weapons[inv.current];
     let primary_def = weapon_runtime_def(primary_id);
@@ -602,6 +603,7 @@ pub fn player_fire(
         shake_scale,
         underwater: matches!(run.area, AreaId::Oasis),
         catalog: &catalog,
+        mainvol: &mut mainvol,
     };
     let origin = pos.0;
     let aim_v = aim.0;
@@ -959,16 +961,19 @@ fn weapon_fire_cues(fx: &mut FireFx, id: WeaponId, burst: bool, player: &Player,
     let electric = melee_projectile_spec(meta.wep_name).electric_guitar;
 
     let mut out: Vec<AudioCue> = Vec::new();
+    let duck = std::cell::Cell::new(0.0f32);
     let gun = |out: &mut Vec<AudioCue>, stem: &'static str, variance: f32| {
         let stem = if underwater && stem != "sndOasisMelee" {
             "sndOasisShoot"
         } else {
             stem
         };
+        duck.set(0.3);
         fire_cue_push(out, stem, 1.0, variance);
     };
     let big = |out: &mut Vec<AudioCue>, stem: &'static str, variance: f32| {
         let stem = if underwater { "sndOasisShoot" } else { stem };
+        duck.set(0.33);
         fire_cue_push(out, stem, 1.0, variance);
     };
     let play = |out: &mut Vec<AudioCue>, stem: &'static str| fire_cue_push(out, stem, 1.0, 0.0);
@@ -1323,6 +1328,9 @@ fn weapon_fire_cues(fx: &mut FireFx, id: WeaponId, burst: bool, player: &Player,
 
     for c in out {
         cue(fx.cues, c.name, c.volume, c.variance);
+    }
+    if duck.get() > 0.0 {
+        fx.mainvol.duck(duck.get());
     }
 }
 

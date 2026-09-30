@@ -69,6 +69,45 @@ impl AudioChannels {
     }
 }
 
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct MainVol {
+    value: f32,
+    fired: bool,
+}
+
+impl Default for MainVol {
+    fn default() -> Self {
+        Self {
+            value: 1.0,
+            fired: false,
+        }
+    }
+}
+
+impl MainVol {
+    pub fn duck(&mut self, gain: f32) {
+        self.value = gain;
+        self.fired = true;
+    }
+
+    pub fn step(&mut self, dt_secs: f32) -> f32 {
+        if !self.fired {
+            self.value = 1.0 - (1.0 - self.value) * 0.6f32.powf(dt_secs * 30.0);
+            if 1.0 - self.value < 1e-4 {
+                self.value = 1.0;
+            }
+        }
+        self.fired = false;
+        self.value
+    }
+}
+
+pub fn step_mainvol(world: &mut World, dt_secs: f32) -> f32 {
+    world
+        .get_resource_mut::<MainVol>()
+        .map_or(1.0, |mut mv| mv.step(dt_secs))
+}
+
 /// Sound bank handle (asset paths resolve platform-side).
 #[derive(Resource, Debug, Default)]
 pub struct GameAudio;
@@ -352,6 +391,10 @@ pub enum AmbienceCue {
     None,
     /// GML `Menu/Create_0.gml:96` char-select bed `amb0`.
     Menu,
+    /// GML `Logo/Alarm_0.gml:8` boot-logo bed `sndLogoLoop`
+    /// (`snd_play_ambience`, looped until `Logo/Destroy_0.gml:1`
+    /// `snd_stop(sndLogoLoop)` — the Splash -> MainMenu handoff).
+    LogoLoop,
     /// GML `MusCont/Alarm_11.gml:49,55` `amb0b` — the `audio_exists`
     /// fallback for any area whose `amb<area>` asset is missing (the
     /// crib) and the campfire special case.
@@ -549,12 +592,14 @@ pub fn music_path(cue: MusicCue) -> Option<&'static str> {
 
 /// GML `MusCont` stem law: `"amb" + string(area)` at
 /// `Alarm_11.gml:31` (`amb0b` fallback at :49, campfire at :55, HQ at
-/// :67), plus `Menu/Create_0.gml:96` and `Alarm_5.gml:5`; `None` is
-/// the BigDog-race `amb = -1` at `Alarm_11.gml:11`.
+/// :67), plus `Menu/Create_0.gml:96`, `Alarm_5.gml:5` and
+/// `Logo/Alarm_0.gml:8`; `None` is the BigDog-race `amb = -1` at
+/// `Alarm_11.gml:11`.
 pub fn ambience_path(cue: AmbienceCue) -> Option<&'static str> {
     match cue {
         AmbienceCue::None => None,
         AmbienceCue::Menu => Some("amb0"),
+        AmbienceCue::LogoLoop => Some("sndLogoLoop"),
         AmbienceCue::Rest => Some("amb0b"),
         AmbienceCue::ThroneII => Some("amb0c"),
         AmbienceCue::Desert => Some("amb1"),
@@ -635,10 +680,14 @@ pub fn update_amb_filter(
 /// theme (A→B timer at `Create_0.gml:10-12`, char-select ambience at
 /// `Menu/Create_0.gml:96`), Loading previews the area, InGame runs the
 /// `Alarm_11` area bed under the boss-death jingle / boss-dead /
-/// big-dog / campfire priority.
+/// big-dog / campfire priority. The splash gun-reel finale runs
+/// `Logo/Alarm_0.gml:8` `sndLogoLoop` on the same ambience slot; the
+/// Splash -> MainMenu handoff (`Logo/Destroy_0.gml:1` `snd_stop`) is
+/// the want dropping back to `None`.
 pub fn sync_area_audio(
     time: Res<SimTime>,
     app_state: Res<AppState>,
+    splash: Option<Res<crate::state::SplashState>>,
     run: Res<Run>,
     transition: Res<LoopTransition>,
     floor: Res<FloorTransition>,
@@ -727,7 +776,17 @@ pub fn sync_area_audio(
             } else {
                 MusicCue::TitleThemeB
             };
-            let ambience = if *app_state == AppState::Title {
+            // GML `Logo/Alarm_0.gml:8`: the loop starts on the seventh
+            // gun step; leaving `Splash` re-evaluates this to `None`,
+            // which the backend stops (`Logo/Destroy_0.gml:1`
+            // `snd_stop(sndLogoLoop)`).
+            let logo_loop = *app_state == AppState::Splash
+                && splash
+                    .as_ref()
+                    .is_some_and(|s| s.guns as usize >= crate::state::SPLASH_GUN_STEPS.len());
+            let ambience = if logo_loop {
+                Some(AmbienceCue::LogoLoop)
+            } else if *app_state == AppState::Title {
                 Some(AmbienceCue::Menu)
             } else {
                 None
@@ -822,6 +881,7 @@ pub fn init_area_audio_resources(world: &mut World) {
     world.init_resource::<AreaAudioState>();
     world.init_resource::<AmbFilter>();
     world.init_resource::<Queue<AudioCue>>();
+    world.init_resource::<MainVol>();
 }
 
 // --- Menu action enum (bevy `menus::UiAction` mirror) ---

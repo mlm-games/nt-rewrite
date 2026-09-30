@@ -515,6 +515,7 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
     world.init_resource::<crate::state::menus::MenuState>();
     world.init_resource::<crate::state::menus::MenuEdge>();
     world.init_resource::<crate::audio::AudioChannels>();
+    world.init_resource::<crate::audio::MainVol>();
     world.init_resource::<Queue<crate::audio::UiBridgeAction>>();
     // A retry never runs the menu-room teardown, so the run start
     // re-arms the alarm[11]-style audio sequence itself (GML

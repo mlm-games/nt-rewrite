@@ -1192,7 +1192,7 @@ impl App {
                     },
                     // GML `snd_play(_sound, 0.9 + random(0.2), 1)`.
                     volume: 1.0,
-                    variance: 0.0,
+                    variance: 0.2,
                 });
             }
         }
@@ -2086,6 +2086,11 @@ impl App {
                 .get_resource::<MenuState>()
                 .and_then(|menu| menu.pause_confirm)
                 .is_some();
+            let pad_back_submenu = self
+                .sim
+                .world
+                .get_resource::<MenuState>()
+                .is_some_and(|menu| menu.play_submenu);
             // Resolved before the `NtInput` borrow below (it reads `cam`
             // and the cached viewport, not the world).
             let frame = self.gml_frame();
@@ -2112,6 +2117,15 @@ impl App {
             let pads = self.staging.borrow_mut().take_pads();
             self.pad_live = self.staging.borrow().pad_live;
             if pads.iter().any(|pad| pad.east_pressed) {
+                // GML `BackButton/Step_0:22`: `gp_face2` is one of the
+                // four triggers feeding the single back event (with Esc,
+                // Backspace and the keyboard RMB), so it travels the same
+                // law the port's RMB back already takes — `SettingsBack`
+                // on options, `CloseOverlay` on `Credits`/`DrawStats`
+                // (`BackButton/Other_10`), resume off the pause screen,
+                // and the `PlayButton` list closes (`Other_10`'s
+                // `instance_exists(PlayButton)` branch) while the main
+                // menu itself owns no BackButton.
                 match overlay {
                     OverlayMenu::Settings => self.menu_actions.push(UiAction::SettingsBack),
                     OverlayMenu::Pause => {
@@ -2121,6 +2135,12 @@ impl App {
                             UiAction::Resume
                         };
                         self.menu_actions.push(action);
+                    }
+                    OverlayMenu::Credits | OverlayMenu::Stats => {
+                        self.menu_actions.push(UiAction::CloseOverlay);
+                    }
+                    OverlayMenu::None if pad_back_submenu => {
+                        self.menu_actions.push(UiAction::ClosePlaySubmenu);
                     }
                     _ => {}
                 }
@@ -2616,17 +2636,13 @@ impl App {
 
     /// GUI-space cursor for the menu hover sync: the polled
     /// window-physical px mapped into the GML view. `None` until the
-    /// first mouse move, or while touch/gamepad owns the device (GML
-    /// `mouse_active` / `!is_gamepad()` guards — a gamepad-driven frame
-    /// must not clear mouse hover, and touch has no cursor).
+    /// first mouse move, or while a touch holds the device (GML
+    /// `mouse_ui_hovered` is a bare collision test: the pointer keeps
+    /// driving `pointed_item` under the GAMEPAD switch too — only
+    /// `MainMenuButton`'s hover flag is `!is_gamepad()`-gated — and
+    /// touch has no cursor).
     fn menu_gui_point(&self) -> Option<[f32; 2]> {
-        let gamepad = self
-            .sim
-            .world
-            .get_resource::<crate::savedata_part::SaveData>()
-            .is_some_and(|s| s.settings.gamepad_enabled)
-            && self.pad_live;
-        if gamepad || !self.staging.borrow().touch_active.is_empty() {
+        if !self.staging.borrow().touch_active.is_empty() {
             return None;
         }
         let px = self.polled_pointer_px?;
@@ -2849,8 +2865,9 @@ impl App {
                     }
                 }
             }
-            // GML `MenuOptions/Other_10`: while `mouse_active` the pointed
-            // row owns `pointed_item` by `point_in_rectangle`; keyboard
+            // GML `MenuOptions/Other_10`: while `mouse_active` an
+            // available row owns `pointed_item` by `point_in_rectangle`
+            // (`Other_10.gml:597` gates on `_opt.available`); keyboard
             // arrows clear `mouse_active` and own it instead.
             MenuOverlay::Settings => {
                 let page = self
@@ -2870,11 +2887,12 @@ impl App {
                     menu.settings_back_hover = back_hover;
                 }
                 let rows = crate::render::settings_hot_rows(page, vw);
-                if let Some((idx, _)) = rows
-                    .iter()
-                    .enumerate()
-                    .find(|(_, r)| (gy - r.gy).abs() <= 7.0 && (gx - r.cx).abs() <= r.hw)
-                {
+                let hit = rows.iter().enumerate().find(|(_, r)| {
+                    (gy - r.gy).abs() <= 7.0
+                        && (gx - r.cx).abs() <= r.hw
+                        && crate::render::settings_row_available(&self.sim.world, page, r)
+                });
+                if let Some((idx, _)) = hit {
                     let cur = self
                         .sim
                         .world
@@ -3124,17 +3142,17 @@ impl App {
         // GML `UberCont/Step_0:175-183` cursor law, computed from the
         // post-tick sim state: keyboard mode hides the OS cursor (the
         // game draws its own crosshair at the live cursor position),
-        // menus/mouse mode shows it. Touch-driven (no keyboard, no
-        // pad) always shows it — fingers need no cursor and the GML
+        // mouse mode shows it. The GML branch reads raw `opt_keyboard`
+        // — the `opt_gamepad` switch never restores the pointer. Touch
+        // frames always show it — fingers need no cursor and the GML
         // `opt_keyboard` branch draws nothing on touch either.
         let keyboard_mode = {
-            let gamepad = self
+            let keyboard = self
                 .sim
                 .world
                 .get_resource::<crate::savedata_part::SaveData>()
-                .is_some_and(|s| s.settings.gamepad_enabled)
-                && self.pad_live;
-            !gamepad && self.staging.borrow().touch_active.is_empty()
+                .is_some_and(|s| s.settings.keyboard_enabled);
+            keyboard && self.staging.borrow().touch_active.is_empty()
         };
         let overlay_now = self
             .sim
@@ -3629,33 +3647,25 @@ impl App {
                     s.extend(menu);
                 }
             }
-            // Hardware cursor (GML `UberCont/Draw_75` verbatim): in
-            // keyboard mode the OS cursor carries `sprCrosshair[opt_crosshair]`
-            // (`opt_cursorcol`, alpha 1) — composited by the OS, so it sits
-            // above every sprite and UI layer with zero frame lag, on EVERY
-            // screen (gameplay included; the lerped `TopCont` crosshair is the
-            // gamepad-mode counterpart and replaces this there — never
-            // both, else a double cursor). GML gates only on
+            // Hardware cursor (GML `UberCont/Draw_75` verbatim): while
+            // the OS pointer is hidden the game hands it
+            // `sprCrosshair[opt_crosshair]` (`opt_cursorcol`, alpha 1) —
+            // composited by the OS, so it sits above every sprite and UI
+            // layer with zero frame lag, on EVERY screen (gameplay
+            // included). GML gates only on
             // `window_get_cursor() == cr_none` + `scrCanDrawCursor()`
-            // (`show_crosshair`, desktop/keyboard, no spawner); the
-            // port's `keyboard_mode` (gamepad off, no touch) carries
-            // the cursor-hidden half. No per-screen kind list:
-            // the old 5-kind gate left keyboard gameplay cursorless.
-            // Skipped while paused/an overlay owns the pointer (those
-            // show the OS cursor) and on touch input (no cursor at all).
-            // Keyboard-driven local (`opt_keyboard && !opt_gamepad`,
-            // the same `keyboard_local` law as `crosshair_sprites`):
-            // gamepad mode draws the lerped crosshair instead. The pixels
-            // decode once per (frame, tint) into `cursor_img`; the runner
-            // caches the OS handle by content hash.
-            let keyboard_local = self
-                .sim
-                .world
-                .get_resource::<crate::savedata_part::SaveData>()
-                .map(|s| !s.settings.gamepad_enabled)
-                .unwrap_or(true);
-            let menu_crosshair =
-                keyboard_mode && keyboard_local && !paused && overlay == OverlayMenu::None;
+            // (`show_crosshair`, desktop/keyboard, no spawner): the
+            // `opt_gamepad` switch never withdraws it, so with both
+            // switches on the raw crosshair draws alongside the lerped
+            // `TopCont` one. The port's `keyboard_mode` (raw
+            // `keyboard_enabled`, no touch) carries the cursor-hidden
+            // half. No per-screen kind list: the old 5-kind gate left
+            // keyboard gameplay cursorless. Skipped while paused/an
+            // overlay owns the pointer (those show the OS cursor) and on
+            // touch input (no cursor at all). The pixels decode once per
+            // (frame, tint) into `cursor_img`; the runner caches the OS
+            // handle by content hash.
+            let menu_crosshair = keyboard_mode && !paused && overlay == OverlayMenu::None;
             cursor_req = if menu_crosshair {
                 let frame = self
                     .sim

@@ -83,9 +83,10 @@ impl AudioHost {
             .get_resource::<crate::audio::AudioChannels>()
             .copied()
             .unwrap_or_default();
+        let mainvol = crate::audio::step_mainvol(&mut app.sim.world, dt_secs);
         self.sync_channels(
             channels.master,
-            channels.sfx,
+            channels.sfx * mainvol,
             channels.ui,
             music_volume,
             ambience_volume,

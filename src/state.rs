@@ -25,11 +25,13 @@
 //!   the shell can gate it once transitions exist.
 //! - Asset-gated loading progress (`AssetsLoading` + `AssetServer`) is
 //!   headless-complete (progress = 1.0); only the 1.2 s floor remains.
-//! - Splash logo gunfire SFX/shake/sprites are render; the headless
-//!   `SplashState` keeps mode + timer + gun count. The press path is
-//!   bevy-verbatim (mode 4 leaves only on press); the timed auto-advance
-//!   additionally requires [`SplashAutoAdvance`], so unattended boots
-//!   reach the menu without changing attended UX.
+//! - Splash shake/sprites are render; `SplashState` keeps mode + timer +
+//!   gun count and `tick_splash` emits the splash cues (GML
+//!   `Vlambeer/Create_0` `sndVlambeer` boot sting, `Vlambeer/Alarm_0`
+//!   `sndRestart`, `Logo/Alarm_0` gun steps). The press path is
+//!   bevy-verbatim (mode 4 leaves only on press); the timed
+//!   auto-advance additionally requires [`SplashAutoAdvance`], so
+//!   unattended boots reach the menu without changing attended UX.
 //! - `QuitApp` has no window service headless: it sets `QuitRequested`,
 //!   which the shell polls.
 //! - Locale/i18n (`LocaleResources`) is shell-side; language gating uses
@@ -215,7 +217,8 @@ pub fn tick_tutorial(world: &mut World, dt: f32) {
 }
 
 /// Boot-intro state (bevy `BootState` mode/timer half in
-/// `game/ui_art.rs`; entities/sprites/audio deferred to render).
+/// `game/ui_art.rs`; entities/sprites deferred to render, splash cues
+/// emitted by [`tick_splash`]).
 #[derive(Debug, Clone, Resource)]
 pub struct SplashState {
     pub mode: u8,
@@ -508,6 +511,14 @@ pub fn goto_state(world: &mut World, next: AppState) {
         }
         AppState::Splash => {
             world.insert_resource(SplashState::default());
+            world.init_resource::<crate::msg::Queue<crate::audio::AudioCue>>();
+            world
+                .resource_mut::<crate::msg::Queue<crate::audio::AudioCue>>()
+                .push(crate::audio::AudioCue {
+                    name: "sndVlambeer",
+                    volume: 1.0,
+                    variance: 0.0,
+                });
         }
         _ => {}
     }
@@ -582,6 +593,18 @@ pub fn reset_pause_state(world: &mut World) {
 /// opt-in logo-hold auto-advance for unattended boots). `pressed` = any
 /// key/mouse edge this tick (bevy: any just-pressed key or mouse
 /// button). Only runs in `Splash`; finishing enters `MainMenu`.
+///
+/// Emits the GML splash cues per event: `sndVlambeer` once when the
+/// reel is created (`Vlambeer/Create_0:139` — the fresh-boot `else`
+/// branch; the quit-to-menu and continue-run branches `exit` before
+/// it), `sndRestart` on each of the three `Vlambeer/Alarm_0:13`
+/// `mode++` advances (timer- or press-triggered alike — `Draw_0.gml:5-6`
+/// just performs the same alarm; the mode 3 -> 4 arm creates the logo
+/// and plays none), `sndMachinegun` per gun-step increment 1..=6
+/// (`Logo/Alarm_0:18`), and the `Logo/Alarm_0:8-12` finale `sndShovel` +
+/// `sndMeatExplo` + `sndExplosion` on increment 7. The finale's
+/// `sndLogoLoop` half is a looping ambience track
+/// (`audio::AmbienceCue::LogoLoop`).
 pub fn tick_splash(world: &mut World, dt: f32, pressed: bool) {
     if world
         .get_resource::<AppState>()
@@ -591,16 +614,31 @@ pub fn tick_splash(world: &mut World, dt: f32, pressed: bool) {
     {
         return;
     }
+    let fresh = world.get_resource::<SplashState>().is_none();
     world.init_resource::<SplashState>();
     let auto = world
         .get_resource::<SplashAutoAdvance>()
         .is_some_and(|a| a.0);
+    let mut cues: Vec<crate::audio::AudioCue> = Vec::new();
+    let mut cue = |name: &'static str| {
+        cues.push(crate::audio::AudioCue {
+            name,
+            volume: 1.0,
+            variance: 0.0,
+        })
+    };
+    if fresh {
+        cue("sndVlambeer");
+    }
     let done = {
         let mut splash = world.resource_mut::<SplashState>();
         if splash.mode < 4 {
             splash.t += dt;
             let advance = pressed || splash.t >= SPLASH_MODE_SECS[splash.mode as usize];
             if advance {
+                if splash.mode < 3 {
+                    cue("sndRestart");
+                }
                 splash.mode += 1;
                 splash.t = 0.0;
                 splash.guns = 0;
@@ -612,6 +650,13 @@ pub fn tick_splash(world: &mut World, dt: f32, pressed: bool) {
                 && splash.t >= SPLASH_GUN_STEPS[splash.guns as usize]
             {
                 splash.guns += 1;
+                if (splash.guns as usize) < SPLASH_GUN_STEPS.len() {
+                    cue("sndMachinegun");
+                } else {
+                    cue("sndShovel");
+                    cue("sndMeatExplo");
+                    cue("sndExplosion");
+                }
             }
             if pressed {
                 if splash.guns == 0 {
@@ -631,6 +676,13 @@ pub fn tick_splash(world: &mut World, dt: f32, pressed: bool) {
             }
         }
     };
+    if !cues.is_empty() {
+        world.init_resource::<crate::msg::Queue<crate::audio::AudioCue>>();
+        let mut q = world.resource_mut::<crate::msg::Queue<crate::audio::AudioCue>>();
+        for c in cues {
+            q.push(c);
+        }
+    }
     if done {
         goto_state(world, AppState::MainMenu);
     }

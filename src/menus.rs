@@ -2096,20 +2096,18 @@ fn tick_settings_nav(world: &mut World, nav_v: i8, nav_h: i8, confirm: bool) {
         .get_resource::<MenuState>()
         .map(|m| m.settings_page)
         .unwrap_or(0);
-    // GML `Other_20.gml:806` parity: hide-joysticks has no row while
-    // stick regions are on. The nav skips the hidden index so arrows
-    // never land on an undrawn row.
-    let hidden: Option<usize> = (page == 16
-        && world
-            .get_resource::<SaveData>()
-            .is_some_and(|s| s.settings.stick_regions))
-    .then(|| {
-        crate::render::settings_hot_rows(page, 320.0)
-            .iter()
-            .position(|r| matches!(r.op, crate::render::SettingHotOp::Toggle("hidden_sticks")))
-    })
-    .flatten();
-    let n = crate::render::settings_hot_rows(page, 320.0).len();
+    // GML `Other_20.gml:806` + `scrOptionsMenu.gml:184-190` parity:
+    // hide-joysticks has no row while stick regions are on, and the
+    // GAMEPAD switch takes the walk rows off the REMAP list. The nav
+    // skips those undrawn rows so arrows never land on one.
+    let rows = crate::render::settings_hot_rows(page, 320.0);
+    let hidden: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| !crate::render::settings_row_available(world, page, r))
+        .map(|(i, _)| i)
+        .collect();
+    let n = rows.len();
     if n == 0 {
         return;
     }
@@ -2117,7 +2115,7 @@ fn tick_settings_nav(world: &mut World, nav_v: i8, nav_h: i8, confirm: bool) {
         let mut next = cur;
         for _ in 0..n {
             next = (next as i16 + dv).rem_euclid(n as i16) as usize;
-            if Some(next) != hidden {
+            if !hidden.contains(&next) {
                 break;
             }
         }
@@ -2147,9 +2145,9 @@ fn tick_settings_nav(world: &mut World, nav_v: i8, nav_h: i8, confirm: bool) {
     }
     // Re-clamp after page jumps (cursor resets to the GML unselected
     // sentinel on drill, but a language set keeps the page with new
-    // length). A cursor parked on the regions-hidden row steps off it.
+    // length). A cursor parked on an undrawn row steps off it.
     cursor = cursor.min(n - 1);
-    if Some(cursor) == hidden {
+    if hidden.contains(&cursor) {
         cursor = step(cursor, 1);
         if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
             menu.settings_cursor = cursor;

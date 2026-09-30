@@ -4676,6 +4676,9 @@ pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
 
 const GUI_CREAM: [u8; 4] = [238, 239, 225, 255];
 const GUI_GRAY: [u8; 4] = [125, 131, 141, 255];
+/// GML `c_menudark` (#3b3e43): rows whose `condition` reports them
+/// unavailable (`MenuOptions/Other_10.gml:663`), and the `@d` tag.
+const GUI_MENUDARK: [u8; 4] = [59, 62, 67, 255];
 const GUI_MID: [u8; 4] = [153, 153, 153, 255];
 /// GML `c_uidark` (#333333): unavailable menu entries, dry ammo text.
 const GUI_UIDARK: [u8; 4] = [51, 51, 51, 255];
@@ -5008,6 +5011,146 @@ fn settings_slider_part(
 
 fn settings_option_button(text: impl Into<String>, cx: f32, y: f32) -> MenuGuiText {
     gui_center(text, cx, y, GUI_MID)
+}
+
+/// GML `gamepad_types` → `gamepad_icon_small` strip
+/// (`scripts/scrOptionsUpdate/scrOptionsUpdate.gml:149-163`).
+fn gamepad_icon_strip(gamepad_type: u8) -> &'static str {
+    match gamepad_type % 4 {
+        0 => "images/sprXBONESmall.png",
+        1 => "images/sprPS4Small.png",
+        2 => "images/sprSwitchSmall.png",
+        _ => "images/sprSteamDeckSmall.png",
+    }
+}
+
+/// GML `gamepad_button_to_image` (`scripts/draw_gamepad_button/
+/// draw_gamepad_button.gml:12-37`): pad button → `gamepad_icon_*`
+/// subimage. GML's `-1` return (unbound, keyboard/mouse or axis row)
+/// makes `draw_gamepad_button` draw nothing, mirrored here as `None`.
+fn gamepad_glyph_frame(entry: &repame_input::KeymapEntry) -> Option<i32> {
+    use repose_core::input::GamepadButton;
+    let repame_input::KeymapEntry::Pad(button) = entry else {
+        return None;
+    };
+    let frame = match *button {
+        GamepadButton::South => 0,
+        GamepadButton::East => 1,
+        GamepadButton::West => 2,
+        GamepadButton::North => 3,
+        GamepadButton::LeftShoulder => 4,
+        GamepadButton::RightShoulder => 5,
+        GamepadButton::LeftStick => 8,
+        GamepadButton::RightStick => 9,
+        GamepadButton::DPadUp => 11,
+        GamepadButton::DPadDown => 12,
+        GamepadButton::DPadLeft => 13,
+        GamepadButton::DPadRight => 14,
+        GamepadButton::Start => 15,
+        GamepadButton::Select => 16,
+    };
+    Some(frame)
+}
+
+/// One `draw_gamepad_button(...)` glyph: the strip origin lands on
+/// `(gx, gy)` exactly like GML `draw_sprite` (every `gamepad_icon_*`
+/// strip is 24x24 with a centered origin, so the glyph centers there).
+#[allow(clippy::too_many_arguments)]
+fn push_gamepad_glyph(
+    out: &mut Vec<SpriteInstance>,
+    assets: &RenderAssets,
+    gamepad_type: u8,
+    frame: i32,
+    gx: f32,
+    gy: f32,
+    view: [f32; 4],
+    gm: HudGuiMap,
+    tint: [f32; 4],
+) {
+    if let Some(s) = assets.sprite_for(
+        gamepad_icon_strip(gamepad_type),
+        frame,
+        hud_gui_to_world(gm, view, gx, gy),
+        false,
+        0.0,
+        tint,
+    ) {
+        out.push(s);
+    }
+}
+
+/// GML `UberCont/Draw_75:1-16` CONFIRM prompt: right-aligned `@sCONFIRM`
+/// at `(gui_w - 8, gui_h - 40)` plus the `gp_face1` glyph, drawn while
+/// `opt_gamepad` and a MainMenuButton / PlayButton / MenuOptions instance
+/// is live — the port's `MainMenu` overlay (list + play submenu) and
+/// `Settings`. Char select (`Title`) and `Stats` stay out: clicking PLAY
+/// or OPTIONS destroys `MainMenuButton` (`MainMenuButton/Other_10.gml:12,
+/// 86`) and STATS destroys it too, so GML only keeps the prompt while the
+/// `PlayButton`/`MenuOptions` replacement is up.
+const CONFIRM_GY: f32 = 200.0;
+/// GML `font_get_string_width("CONFIRM")` at the 7px Silkscreen body
+/// size: advances .75 + .75 + .875 + .625 + .375 + .75 + .875 = 5.0 em.
+/// The port has no text-measure API, so the width is a constant.
+const CONFIRM_TEXT_W: f32 = 35.0;
+
+/// The live GAMEPAD style strip (`Some(gamepad_type)`) — GML
+/// `is_gamepad()` is the sticky `KeyCont.gamepad` switch
+/// (`InputHandling.gml:224`), never per-frame pad activity.
+fn gamepad_style(world: &World) -> Option<u8> {
+    world
+        .get_resource::<crate::savedata_part::SaveData>()
+        .filter(|s| s.settings.gamepad_enabled)
+        .map(|s| s.settings.gamepad_type)
+}
+
+fn gamepad_ui_on(world: &World) -> bool {
+    gamepad_style(world).is_some()
+}
+
+fn push_confirm_text(out: &mut Vec<MenuGuiText>, world: &World, vw: f32) {
+    if !gamepad_ui_on(world) {
+        return;
+    }
+    out.push(MenuGuiText {
+        text: "CONFIRM".to_string(),
+        gx: vw - 8.0,
+        gy: CONFIRM_GY,
+        color: GUI_GRAY,
+        px: 7.0,
+        centered: false,
+        middle_y: true,
+        right: true,
+        bold: false,
+    });
+}
+
+/// The `gp_face1` half of the CONFIRM prompt: `dx - 9 -
+/// font_get_string_width(str)` from GML `Draw_75:11`.
+fn push_confirm_glyph(
+    out: &mut Vec<SpriteInstance>,
+    assets: &RenderAssets,
+    world: &World,
+    vw: f32,
+    view: [f32; 4],
+    gm: HudGuiMap,
+) {
+    let Some(save) = world.get_resource::<crate::savedata_part::SaveData>() else {
+        return;
+    };
+    if !save.settings.gamepad_enabled {
+        return;
+    }
+    push_gamepad_glyph(
+        out,
+        assets,
+        save.settings.gamepad_type,
+        0,
+        vw - 9.0 - CONFIRM_TEXT_W - 8.0,
+        CONFIRM_GY,
+        view,
+        gm,
+        [1.0; 4],
+    );
 }
 
 fn push_gameover_text(out: &mut Vec<MenuGuiText>, text: MenuGuiText) {
@@ -5422,7 +5565,17 @@ pub fn unlock_popup_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
 /// left-anchored rows keep literal x.
 pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -> Vec<MenuGuiText> {
     let cx = vw * 0.5;
-    match kind {
+    // GML `UberCont/Draw_75:1-16`: `opt_gamepad` plus a live
+    // MainMenuButton / PlayButton / MenuOptions draws the CONFIRM
+    // prompt — in the port that is the MainMenu list (MainMenuButton),
+    // its play submenu (PlayButton) and Settings (MenuOptions). Char
+    // select and Stats destroy MainMenuButton without a replacement,
+    // and the Co-op menu creates no PlayButton, so they stay out.
+    let confirm = matches!(
+        kind,
+        crate::MenuOverlay::MainMenu | crate::MenuOverlay::Settings
+    );
+    let mut out = match kind {
         // Boot reel captions (GML `Vlambeer/Draw_0` verbatim, expanded to
         // one row per visual line: `gui_text_layer` renders each row
         // `.single_line()`, so embedded `\n`/`#` would never break —
@@ -6487,7 +6640,11 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 })
                 .collect()
         }
+    };
+    if confirm {
+        push_confirm_text(&mut out, world, vw);
     }
+    out
 }
 
 /// Settings toggle row: label left (cream) + ON/OFF value (gray).
@@ -6706,9 +6863,10 @@ pub fn settings_hot_rows(page: u8, vw: f32) -> Vec<SettingHotRow> {
             // (`controls_stickregions`), HIDE JOYSTICKS
             // (`controls_hiddensticks`, hidden while regions are on —
             // the repositioning sticks never sit at home). The
-            // regions-on gate lives in the text layer (which owns the
-            // world borrow); the hot rows keep every row so keyboard
-            // nav and mouse hit-testing agree on indices.
+            // regions-on gate lives in the text layer plus
+            // `settings_row_available` (hover, click, splat, nav); the
+            // hot rows keep every row so every consumer agrees on
+            // indices.
             vec![
                 tog(48.0, SettingHotOp::Toggle("keyboard_enabled")),
                 tog(66.0, SettingHotOp::Toggle("stick_regions")),
@@ -6731,6 +6889,47 @@ pub fn settings_hot_rows(page: u8, vw: f32) -> Vec<SettingHotRow> {
             rows
         }
         _ => vec![],
+    }
+}
+
+/// GML `condition`/`available` for one settings row
+/// (`scrOptionsMenu.gml:184-190` + `MenuOptions/Other_10.gml:589-597`):
+/// `false` marks the row unavailable — it stops taking clicks, hover and
+/// keyboard nav, and keybind rows drop out of the list entirely
+/// (`_opt.visible = _opt.available`).
+pub fn settings_row_available(world: &World, page: u8, row: &SettingHotRow) -> bool {
+    let settings = world
+        .get_resource::<crate::savedata_part::SaveData>()
+        .map(|s| &s.settings);
+    match page {
+        16 => {
+            !matches!(row.op, SettingHotOp::Toggle("hidden_sticks"))
+                || !world
+                    .get_resource::<crate::savedata_part::SaveData>()
+                    .is_some_and(|s| s.settings.stick_regions)
+        }
+        4 => match row.op {
+            // GML `Other_20.gml:527-531`: GAMEPAD STYLE carries
+            // `condition = is_gamepad()`, the sticky `opt_gamepad`
+            // setting.
+            SettingHotOp::Cycle("gamepad_type") => settings.is_some_and(|s| s.gamepad_enabled),
+            // GML `Other_20.gml:555-559`: SPLIT AIM & FIRE carries
+            // `condition = !opt_aimbot` (FULL AUTOAIM off).
+            SettingHotOp::Toggle("split_fire") => !settings.is_some_and(|s| s.auto_aim),
+            _ => true,
+        },
+        // GML `Other_20.gml:690`: the walk rows carry
+        // `condition_keyboard = is_keyboard() && !is_gamepad()`
+        // (`KeyCont.keyboard = opt_keyboard && !opt_gamepad`,
+        // `InputHandling.gml:225`), so the GAMEPAD switch takes them
+        // off the REMAP list.
+        13 => {
+            !matches!(
+                row.op,
+                SettingHotOp::Remap("north" | "south" | "west" | "east")
+            ) || settings.is_some_and(|s| s.keyboard_enabled && !s.gamepad_enabled)
+        }
+        _ => true,
     }
 }
 
@@ -6816,10 +7015,11 @@ pub fn settings_click_action(
     let rows = settings_hot_rows(page, vw);
     // Tight vertical band (rows sit 14px apart on dense pages).
     const HH: f32 = 7.0;
-    let (idx, row) = rows
-        .iter()
-        .enumerate()
-        .find(|(_, r)| (gy - r.gy).abs() <= HH && (gx - r.cx).abs() <= r.hw)?;
+    let (idx, row) = rows.iter().enumerate().find(|(_, r)| {
+        (gy - r.gy).abs() <= HH
+            && (gx - r.cx).abs() <= r.hw
+            && settings_row_available(world, page, r)
+    })?;
     let dir = match row.op {
         SettingHotOp::Cycle(_) => {
             if gx >= row.cx { 1 } else { -1 }
@@ -6992,36 +7192,53 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
         }
         4 => {
             // GML `Controls` category verbatim (`Other_20.gml:520`):
-            // GAMEPAD, GAMEPAD STYLE (XBOX ONE for XBONE), the
+            // GAMEPAD, GAMEPAD STYLE (XBOX ONE for XBONE, dimmed to
+            // `c_menudark` while the switch is off —
+            // `Other_20.gml:527-531` + `Other_10.gml:663`), the
             // mobile-only AIM ASSIST / FULL AUTOAIM / VOLUME CONTROLS /
             // SPLIT AIM & FIRE / FIXED SIGHT / SIZE SCALE rows (shown
-            // here; desktop shells ignore them), REMAP CONTROLS (with
-            // the `(GAMEPAD)`/`(KEYBOARD)` suffix the port cannot know),
+            // here; desktop shells ignore them), REMAP CONTROLS with
+            // GML's `(GAMEPAD)` suffix while the switch is on
+            // (`Other_20.gml:569-581`; the `(KEYBOARD)` branch needs
+            // `is_keyboard() && !is_desktop`, never true here),
             // CHARACTER PREFERENCES + EXPERIMENTAL OPTIONS (mobile-only
             // in GML). Names use the GML loc defaults.
             out.push(gui_button("CONTROLS", cx, 24.0, GUI_MID));
             let mut y = 48.0;
             push_toggle(&mut out, "GAMEPAD", y, s.gamepad_enabled);
             y += 14.0;
-            out.push(gui_body("GAMEPAD STYLE", 80.0, y, GUI_CREAM));
+            let (style_name, style_value) = if s.gamepad_enabled {
+                (GUI_CREAM, GUI_GRAY)
+            } else {
+                (GUI_MENUDARK, GUI_MENUDARK)
+            };
+            out.push(gui_body("GAMEPAD STYLE", 80.0, y, style_name));
             let names = ["XBOX ONE", "PS4", "Switch", "SteamDeck"];
             out.push(gui_body(
                 format!("< {} >", names[(s.gamepad_type as usize) % names.len()]),
                 200.0,
                 y,
-                GUI_GRAY,
+                style_value,
             ));
             y += 14.0;
-            for (label, on) in [
-                ("AIM ASSIST", s.aim_assist),
-                ("FULL AUTOAIM", s.auto_aim),
-                ("VOLUME CONTROLS", s.volume_controls),
-                ("SPLIT AIM & FIRE", s.split_fire),
-                ("FIXED SIGHT", s.fixed_sight),
-                ("HIDDEN STICKS", s.hidden_sticks),
-                ("STICK REGIONS", s.stick_regions),
+            for (label, on, dim) in [
+                ("AIM ASSIST", s.aim_assist, false),
+                ("FULL AUTOAIM", s.auto_aim, false),
+                ("VOLUME CONTROLS", s.volume_controls, false),
+                ("SPLIT AIM & FIRE", s.split_fire, s.auto_aim),
+                ("FIXED SIGHT", s.fixed_sight, false),
+                ("HIDDEN STICKS", s.hidden_sticks, false),
+                ("STICK REGIONS", s.stick_regions, false),
             ] {
-                push_toggle(&mut out, label, y, on);
+                // Unavailable rows draw in `c_menudark`
+                // (`Other_10.gml:663`), never vanish.
+                let (name, value) = if dim {
+                    (GUI_MENUDARK, GUI_MENUDARK)
+                } else {
+                    (GUI_CREAM, GUI_GRAY)
+                };
+                out.push(gui_body(label, 80.0, y, name));
+                out.push(gui_body(if on { "ON" } else { "OFF" }, 200.0, y, value));
                 y += 14.0;
             }
             out.push(gui_body("SIZE SCALE", 80.0, y, GUI_CREAM));
@@ -7032,7 +7249,15 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
                 GUI_GRAY,
             ));
             y += 14.0;
-            out.push(settings_option_button("REMAP CONTROLS", cx, y));
+            out.push(settings_option_button(
+                if s.gamepad_enabled {
+                    "REMAP CONTROLS (GAMEPAD)"
+                } else {
+                    "REMAP CONTROLS"
+                },
+                cx,
+                y,
+            ));
             y += 16.0;
             out.push(settings_option_button("CHARACTER PREFERENCES", cx, y));
             y += 16.0;
@@ -7099,16 +7324,34 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             let capturing = world
                 .get_resource::<crate::keymap::InputMapState>()
                 .and_then(|s| s.session.capture.clone());
+            // GML `Other_10.gml:779-793,832-843`: the value column reads
+            // `keymap_get` (`Key[key][opt_gamepad]`, `scrOptionsKeymaps:
+            // 111`) — the pad side while the GAMEPAD switch is on — and
+            // swaps the text for its `draw_gamepad_button` glyph; the
+            // walk rows leave the list entirely
+            // (`_opt.visible = _opt.available`, `scrOptionsMenu.gml:189`).
+            let gamepad_ui = gamepad_ui_on(world);
+            let rows = settings_hot_rows(13, vw);
             let mut y = 56.0;
-            for action in crate::keymap::NtAction::ALL {
-                let entry = keymap.active(&action, false);
-                let text = if capturing.as_ref().is_some_and(|c| c.action == action) {
-                    "PRESS KEY...".to_string()
-                } else {
-                    repame_input::encode_keymap_entry(&entry)
-                };
-                out.push(gui_body(action.label(), 80.0, y, GUI_CREAM));
-                out.push(gui_body(text, 200.0, y, GUI_GRAY));
+            for (i, action) in crate::keymap::NtAction::ALL.iter().enumerate() {
+                let available = rows
+                    .get(i)
+                    .is_none_or(|row| settings_row_available(world, 13, row));
+                if available {
+                    let entry = keymap.active(action, gamepad_ui);
+                    let armed = capturing.as_ref().is_some_and(|c| c.action == *action);
+                    let text = if armed {
+                        "PRESS KEY...".to_string()
+                    } else if gamepad_ui {
+                        String::new()
+                    } else {
+                        repame_input::encode_keymap_entry(&entry)
+                    };
+                    out.push(gui_body(action.label(), 80.0, y, GUI_CREAM));
+                    if !text.is_empty() {
+                        out.push(gui_body(text, 200.0, y, GUI_GRAY));
+                    }
+                }
                 y += 16.0;
             }
             out.push(settings_option_button("DEFAULT PRESET", cx, 196.0));
@@ -10082,6 +10325,7 @@ pub fn menu_sprites(
                     out.push(s);
                 }
             }
+            push_confirm_glyph(&mut out, assets, world, vw, view, gm);
         }
         crate::MenuOverlay::Title => {
             let menu = world.get_resource::<MenuState>().cloned();
@@ -10511,6 +10755,11 @@ pub fn menu_sprites(
             let half = (step as i32 / 2) as f32;
             let xoff = if n >= 10 { -12.0 } else { 0.0 };
             let icon_y = 240.0 - 21.0;
+            let gamepad_ui = gamepad_ui_on(world);
+            let gamepad_type = world
+                .get_resource::<crate::savedata_part::SaveData>()
+                .map(|s| s.settings.gamepad_type)
+                .unwrap_or(0);
             for i in 0..n {
                 let (path, frame, mul) = if is_ultra {
                     let choice = world
@@ -10556,18 +10805,37 @@ pub fn menu_sprites(
                 } else {
                     [0.5, 0.5, 0.5, 1.0]
                 };
+                let card_x = cx + xoff - (n as f32 - 1.0) * half + i as f32 * step;
                 if let Some(s) = assets.sprite_scaled_rotated(
                     path,
                     frame,
-                    gui_to_world(
-                        cx + xoff - (n as f32 - 1.0) * half + i as f32 * step,
-                        card_y,
-                    ),
+                    gui_to_world(card_x, card_y),
                     mul * gm.s,
                     0.0,
                     tint,
                 ) {
                     out.push(s);
+                }
+                if gamepad_ui && selected == Some(i) {
+                    // GML `UberCont/Draw_0:115-120`: a selected
+                    // SkillIcon / CrownIcon / UltraIcon takes the
+                    // `gp_face1` badge on its `bbox_right, bbox_top`
+                    // corner.
+                    let (w, h) = assets
+                        .native_size(path)
+                        .map(|size| (size.x, size.y))
+                        .unwrap_or((24.0, 32.0));
+                    push_gamepad_glyph(
+                        &mut out,
+                        assets,
+                        gamepad_type,
+                        0,
+                        card_x + w * 0.5 * mul,
+                        card_y - h * 0.5 * mul,
+                        view,
+                        gm,
+                        [1.0; 4],
+                    );
                 }
             }
         }
@@ -10589,6 +10857,7 @@ pub fn menu_sprites(
                 .is_some_and(|m| m.settings_splat > 0.0 && m.settings_cursor != usize::MAX)
                 && let Some(row) = settings_hot_rows(page, vw).get(cursor)
                 && !matches!(row.op, SettingHotOp::Back)
+                && settings_row_available(world, page, row)
             {
                 if let Some(s) = assets.sprite_for(
                     "images/sprMainMenuSplat.png",
@@ -10677,18 +10946,98 @@ pub fn menu_sprites(
                 _ => {}
             }
             let back_hover = menu.as_ref().is_some_and(|m| m.settings_back_hover);
+            let back_x = if cfg!(target_os = "android") {
+                24.0
+            } else {
+                16.0
+            };
             push_shadowed_sprite(
                 &mut out,
                 assets,
                 "images/sprBackButton.png",
                 if back_hover { 1 } else { 0 },
-                if cfg!(target_os = "android") { 24.0 } else { 16.0 },
+                back_x,
                 20.0,
                 view,
                 gm,
                 false,
                 if back_hover { [1.0; 4] } else { [0.7, 0.7, 0.7, 1.0] },
             );
+            let gamepad_ui = gamepad_ui_on(world);
+            if gamepad_ui {
+                // GML `BackButton/Draw_64:22-27`: the `gp_face2` badge
+                // sits on the back button's `(_x + 16, _y)` and dims
+                // with it while unhovered.
+                push_gamepad_glyph(
+                    &mut out,
+                    assets,
+                    settings.gamepad_type,
+                    1,
+                    back_x + 16.0,
+                    20.0,
+                    view,
+                    gm,
+                    if back_hover {
+                        [1.0; 4]
+                    } else {
+                        [0.7, 0.7, 0.7, 1.0]
+                    },
+                );
+            }
+            push_confirm_glyph(&mut out, assets, world, vw, view, gm);
+            if page == 4 && gamepad_ui && cursor == 1 {
+                // GML `Other_20.gml:532-538`: the selected GAMEPAD STYLE
+                // row sprouts four `gamepad_icon_small` previews at
+                // `(gui_w / 2 - 32) + i * 16, startdrawy - 16` — the
+                // list top here is the GAMEPAD row at y 48.
+                for i in 0..4 {
+                    push_gamepad_glyph(
+                        &mut out,
+                        assets,
+                        settings.gamepad_type,
+                        i,
+                        cx - 32.0 + i as f32 * 16.0,
+                        32.0,
+                        view,
+                        gm,
+                        [1.0; 4],
+                    );
+                }
+            }
+            if page == 13 && gamepad_ui {
+                let keymap = world
+                    .get_resource::<crate::keymap::InputMapState>()
+                    .map(|s| s.session.map.clone())
+                    .unwrap_or_else(crate::keymap::default_keymap);
+                let capturing = world
+                    .get_resource::<crate::keymap::InputMapState>()
+                    .and_then(|s| s.session.capture.clone());
+                let rows = settings_hot_rows(13, vw);
+                for (i, action) in crate::keymap::NtAction::ALL.iter().enumerate() {
+                    if capturing.as_ref().is_some_and(|c| c.action == *action) {
+                        continue;
+                    }
+                    let Some(row) = rows.get(i) else {
+                        continue;
+                    };
+                    if !settings_row_available(world, 13, row) {
+                        continue;
+                    }
+                    if let Some(frame) = gamepad_glyph_frame(&keymap.active(action, true)) {
+                        push_gamepad_glyph(
+                            &mut out,
+                            assets,
+                            settings.gamepad_type,
+                            frame,
+                            cx + 32.0,
+                            row.gy,
+                            view,
+                            gm,
+                            [1.0; 4],
+                        );
+                    }
+                }
+            }
         }
         crate::MenuOverlay::Pause => {
             let cx = vw * 0.5;
@@ -11002,6 +11351,43 @@ pub fn spiral_figures(
 /// Damage numbers ride [`fx_texts`] instead: [`SpriteInstance`] cannot
 /// carry text, so [`DamageNumber`] comps resolve to [`WorldText`] for
 /// the repose text overlay.
+/// GML `draw_pickup_button` sprite half (`draw_gamepad_button.gml:43-101`):
+/// the `sprEPickup` pill at `(x, y - 7)`, plus the `pick` pad glyph at
+/// `(x, y - 15)` while the GAMEPAD switch is on.
+fn push_pickup_prompt(
+    out: &mut Vec<SpriteInstance>,
+    assets: &RenderAssets,
+    at: Vec2,
+    frame: i32,
+    style: Option<u8>,
+    glyph: Option<i32>,
+) {
+    if let Some(mut s) = assets.sprite_for(
+        crate::hud::PICKUP_BUTTON_ART,
+        frame,
+        at + Vec2::new(0.0, -7.0),
+        false,
+        0.0,
+        [1.0; 4],
+    ) {
+        s.z = Z_FX;
+        out.push(s);
+    }
+    if let (Some(style), Some(glyph)) = (style, glyph)
+        && let Some(mut s) = assets.sprite_for(
+            gamepad_icon_strip(style),
+            glyph,
+            at + Vec2::new(0.0, -15.0),
+            false,
+            0.0,
+            [1.0; 4],
+        )
+    {
+        s.z = Z_FX;
+        out.push(s);
+    }
+}
+
 pub fn fx_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInstance> {
     let mut out = Vec::new();
 
@@ -11018,20 +11404,26 @@ pub fn fx_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInsta
     // a full magazine is icon frame 0.
     {
         if let Some(label) = world.get_resource::<crate::pickups::WeaponLabel>() {
+            // GML `draw_pickup_button.gml:49-56`: under the GAMEPAD
+            // switch the pill flips to `sprEPickup` frame 1 and takes
+            // the `pick` pad glyph at `(_x, _y - 8)` of the shifted pill.
+            let style = gamepad_style(world);
+            let pad_pick = style.and_then(|_| {
+                let entry = world
+                    .get_resource::<crate::keymap::InputMapState>()
+                    .map(|s| s.session.map.active(&crate::keymap::NtAction::Pick, true))
+                    .unwrap_or(repame_input::KeymapEntry::None);
+                gamepad_glyph_frame(&entry)
+            });
+            let (frame, glyph) = if style.is_some() {
+                (1, pad_pick)
+            } else {
+                (label.button_frame as i32, None)
+            };
             if let Some(target) = label.target.filter(|_| !label.text.is_empty())
                 && let Some(at) = world.get::<Pos>(target).map(|p| p.0)
             {
-                if let Some(mut s) = assets.sprite_for(
-                    crate::hud::PICKUP_BUTTON_ART,
-                    label.button_frame as i32,
-                    at + Vec2::new(0.0, -7.0),
-                    false,
-                    0.0,
-                    [1.0; 4],
-                ) {
-                    s.z = Z_FX;
-                    out.push(s);
-                }
+                push_pickup_prompt(&mut out, assets, at, frame, style, glyph);
                 if let Some((bg, icon)) = label.ammo_gauge {
                     let at = at + Vec2::new(7.0, -14.0);
                     if let Some(mut s) = assets.sprite_for(bg, 2, at, false, 0.0, [1.0; 4]) {
@@ -11052,17 +11444,7 @@ pub fn fx_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInsta
                 let Some(at) = world.get::<Pos>(*entity).map(|p| p.0) else {
                     continue;
                 };
-                if let Some(mut s) = assets.sprite_for(
-                    crate::hud::PICKUP_BUTTON_ART,
-                    label.button_frame as i32,
-                    at + Vec2::new(0.0, -7.0),
-                    false,
-                    0.0,
-                    [1.0; 4],
-                ) {
-                    s.z = Z_FX;
-                    out.push(s);
-                }
+                push_pickup_prompt(&mut out, assets, at, frame, style, glyph);
             }
         }
     }
