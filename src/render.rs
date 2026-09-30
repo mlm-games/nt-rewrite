@@ -44,9 +44,10 @@ use crate::anim::{PlayerAnim, SpriteAnim};
 use crate::audio::UiAction;
 use crate::combat::HitFlash;
 use crate::comps_a::{
-    ARENA_H, ARENA_W, AimDir, FloorMask, GrenadeFuse, Health, HitId, Inventory, LightningArc,
-    PendingMutation, PendingUltra, Player, Projectile, ProjectileFade, RaceState, Run,
-    SelectedCharacter, SlashProjectile, TILE, Team, TopSmalls, Velocity, WallCell, WallTile,
+    ARENA_H, ARENA_W, AimDir, DogGuardianLeap, DogGuardianPose, FloorMask, GrenadeFuse, Health,
+    HitId, Inventory, LightningArc, PendingMutation, PendingUltra, Player, Projectile,
+    ProjectileFade, RaceState, Run, SelectedCharacter, SlashProjectile, TILE, Team, TopSmalls,
+    Velocity, WallCell, WallTile,
 };
 use crate::comps_b::{
     Beam, BigDogMissileState, BossBrain, BossPhase, ChestArt, ChestKind, Corpse, Enemy, EnemyBrain,
@@ -57,7 +58,7 @@ use crate::comps_b::{
     PickupLifetime, Portal, PortalClear, PortalShock, PortalStrike, Prop, PropSprites, Shield,
     CrownObject, InvisiWall,
     StaticFx, SwingFx, Telekinesis, ThroneCarpet, ThroneSit, TitleCampChar, TitleCampfire,
-    TitleLogMenu, TitleTv, ToxicGasState, WeaponVisual, YvCouch,
+    TitleLogMenu, TitleTv, ToxicGasState, WeaponVisual, YungCuz, YvCouch,
 };
 use crate::data::{
     AreaId, CrownKind, EnemyKind, HazardKind, MutationId, RaceId, UltraMutationId, WeaponId,
@@ -161,46 +162,6 @@ impl RenderAssets {
             AtlasDesc {
                 size: ATLAS_SIZE,
                 max_pages: ATLAS_PAGES,
-                padding: 0,
-            },
-        )
-    }
-
-    /// Tiny load for headless tests: packs only `names` (stems or full
-    /// `images/…` paths) into a small multi-page atlas.
-    pub fn load_subset(assets_dir: &Path, names: &[&str]) -> anyhow::Result<Self> {
-        Self::load_subset_sized(assets_dir, names, 512, 2)
-    }
-
-    /// Sized subset load for headless tests whose strips exceed the
-    /// tiny page (fog tiles, multi-frame portraits).
-    pub fn load_subset_sized(
-        assets_dir: &Path,
-        names: &[&str],
-        size: u32,
-        max_pages: u32,
-    ) -> anyhow::Result<Self> {
-        let text = crate::render::read_asset_catalog(assets_dir)?;
-        let raw: BTreeMap<String, AnimDef> = ron::from_str(&text)?;
-        let want: std::collections::HashSet<String> = names
-            .iter()
-            .map(|n| repame_anim::stem(n).to_string())
-            .collect();
-        let filtered: BTreeMap<String, AnimDef> = raw
-            .into_iter()
-            .filter(|(k, _)| want.contains(repame_anim::stem(k)))
-            .collect();
-        anyhow::ensure!(
-            filtered.len() == want.len(),
-            "subset strips missing from anims.ron: want {want:?}, kept {}",
-            filtered.len()
-        );
-        Self::build(
-            &ron::ser::to_string(&filtered)?,
-            assets_dir,
-            AtlasDesc {
-                size,
-                max_pages,
                 padding: 0,
             },
         )
@@ -1442,12 +1403,6 @@ pub const CAM_KNOCK_DECAY: f32 = 0.4;
 /// world px tall). Kept for save-compat/harness use.
 pub const CAM_ZOOM_SPEED: f32 = 0.08;
 
-/// Frame-rate-independent lerp factor:
-/// Godot-style per-physics-frame `lerp(a, b, weight)` at 60 tps.
-pub fn framed_lerp(weight: f32, dt: f32) -> f32 {
-    1.0 - (1.0 - weight).powf((dt * 60.0).max(0.0))
-}
-
 /// Rate-adjusted GML step factor: GML steps at 30 tps, so a per-step
 /// `k` becomes `1 - (1-k)^(dt*30)` per rendered frame (exactly `k` at
 /// 30 fps).
@@ -1662,13 +1617,13 @@ pub fn background_color(area: AreaId) -> [f32; 4] {
         AreaId::CursedCaves => hex(0xff9c23),
         AreaId::Jungle => hex(0x2a900c),
         AreaId::HQ => hex(0xf5fafb),
-        // GML mansion/crib (#eef0f2) have no port area; City reuses the
-        // city fill (GML has no city-secret fill; mansion white is closest).
+        // GML mansion is #eef0f2 (`scrArea.gml:81`); area 103 is what the
+        // port names `AreaId::City`.
         AreaId::City => hex(0xeef0f2),
-        // `scrArea.gml` has no `area_crib` arm, so GML defines no crib
-        // fill. It is Venuz's house interior, so it takes the mansion one.
+        // GML `area_crib` returns the same #eef0f2 (`scrArea.gml:85`).
         AreaId::Crib => hex(0xeef0f2),
-        AreaId::Loop => hex(0x6a7aaf),
+        // `AreaId::Loop` rides GML area 1 (desert, `scrArea.gml:71`).
+        AreaId::Loop => hex(0xaf8f6a),
     }
 }
 
@@ -1710,9 +1665,9 @@ pub fn shadow_color(area: AreaId) -> [f32; 4] {
         AreaId::Jungle => hex(0x140001),
         AreaId::HQ => hex(0x00248c),
         AreaId::Crib => hex(0x120014),
-        // `scrArea.gml` has no `area_crib` arm beyond the two above, so the
-        // campfire default carries.
-        AreaId::Loop => hex(0x6a7aaf),
+        // `AreaId::Loop` rides GML area 1 (desert), whose shadow is
+        // `c_black` (`scrArea.gml:105`; function default `:122`).
+        AreaId::Loop => hex(0x000000),
     }
 }
 
@@ -1763,23 +1718,10 @@ impl GmlFrame {
         ]
     }
 
-    /// True when a dp point is inside the pillarboxed area.
-    pub fn contains_dp(&self, dp: [f32; 2]) -> bool {
-        dp[0] >= self.box_dp[0]
-            && dp[1] >= self.box_dp[1]
-            && dp[0] <= self.box_dp[0] + self.box_dp[2]
-            && dp[1] <= self.box_dp[1] + self.box_dp[3]
-    }
-
     /// GUI width in px (the GML `view_width` every right-anchored row
     /// and touch home is measured against).
     pub fn gui_width(&self) -> f32 {
         self.view[2]
-    }
-
-    /// GUI height in px (the GML `view_height`).
-    pub fn gui_height(&self) -> f32 {
-        self.view[3]
     }
 }
 
@@ -2249,10 +2191,11 @@ pub fn world_instances_cached(
                 }
             }
         }
-        // GML `FloorExplo/Create_0:14-15`: the destroyed wall's cell becomes a
-        // 16x16 `sprFloor<area>Explo`, `image_index = choose(1, 2, 3, 4)`. The
-        // port draws floor from `FloorMask`, so the hole needs its own pass at
-        // the wall's 16x16 resolution.
+        // GML `FloorExplo/Create_0:12,15`: the destroyed wall's cell becomes a
+        // 16x16 `sprFloor<area>Explo` (`_area = GameCont.area`),
+        // `image_index = choose(1, 2, 3, 4)`. The port draws floor from
+        // `FloorMask`, so the hole needs its own pass at the wall's 16x16
+        // resolution.
         let explo_png = match area {
             AreaId::Oasis => "images/sprFloor101Explo.png",
             AreaId::PizzaSewers => "images/sprFloor102Explo.png",
@@ -2262,8 +2205,8 @@ pub fn world_instances_cached(
             AreaId::HQ => "images/sprFloor106Explo.png",
             AreaId::Crib => "images/sprFloor107Explo.png",
             AreaId::Vault | AreaId::CrownVault => "images/sprFloor100Explo.png",
-            AreaId::Campfire | AreaId::Loop => "images/sprFloor0Explo.png",
-            AreaId::Desert => "images/sprFloor1Explo.png",
+            AreaId::Campfire => "images/sprFloor0Explo.png",
+            AreaId::Loop | AreaId::Desert => "images/sprFloor1Explo.png",
             AreaId::Sewers => "images/sprFloor2Explo.png",
             AreaId::Scrapyards => "images/sprFloor3Explo.png",
             AreaId::CrystalCaves => "images/sprFloor4Explo.png",
@@ -2534,7 +2477,7 @@ pub fn world_instances_cached(
         }
     }
 
-    // Campfire YV couch (GML `YungVenuzCouch`: idle
+    // Campfire/crib YV couch sitter (GML `YungVenuzCouch`: idle
     // `sprYVBossGamingIdle`, airhorn one-shot
     // `sprYVBossGamingAirhorn`; frame is the sim `image_index`).
     // Missing art skips the couch, like other optional strips.
@@ -2545,6 +2488,17 @@ pub fn world_instances_cached(
             let frames = strip_frames(assets, path).max(1);
             let frame = (couch.frame.floor() as i32).clamp(0, frames as i32 - 1);
             if let Some(s) = assets.sprite_for(path, frame, pos.0, false, 0.0, [1.0; 4]) {
+                out.push(s);
+            }
+        }
+    }
+    {
+        let mut q = world.query::<(&Pos, &YungCuz)>();
+        for (pos, cuz) in q.iter(world) {
+            let path = cuz.sprite_path();
+            let frames = strip_frames(assets, path).max(1);
+            let frame = (cuz.frame.floor() as i32).clamp(0, frames as i32 - 1);
+            if let Some(s) = assets.sprite_for(path, frame, pos.0, cuz.flipped, 0.0, [1.0; 4]) {
                 out.push(s);
             }
         }
@@ -2969,8 +2923,9 @@ pub fn world_instances_cached(
             Option<&EnemyBrain>,
             Option<&HurtAnim>,
             Option<&MaggotSpawnCharge>,
+            Option<&DogGuardianLeap>,
         )>();
-        for (pos, enemy, _vel, _aim, _anim, _flash, brain, _hurt, _charge) in q.iter(world) {
+        for (pos, enemy, _vel, _aim, _anim, _flash, brain, _hurt, _charge, _leap) in q.iter(world) {
             if enemy.kind != EnemyKind::Sniper {
                 continue;
             }
@@ -2991,7 +2946,7 @@ pub fn world_instances_cached(
             }
         }
         // Guns behind.
-        for (pos, enemy, vel, aim, _anim, _flash, brain, _hurt, _charge) in q.iter(world) {
+        for (pos, enemy, vel, aim, _anim, _flash, brain, _hurt, _charge, _leap) in q.iter(world) {
             let Some(gun_path) = enemy_gun_art(enemy.kind) else {
                 continue;
             };
@@ -3017,8 +2972,8 @@ pub fn world_instances_cached(
             }
         }
         // Bodies.
-        for (pos, enemy, vel, aim, anim, flash, brain, hurt, charge) in q.iter(world) {
-            let (path, frame) = if hurt.is_none()
+        for (pos, enemy, vel, aim, anim, flash, brain, hurt, charge, leap) in q.iter(world) {
+            let (mut path, mut frame) = if hurt.is_none()
                 && let Some(charge) = charge
             {
                 (charge.image.path, charge.image.frame())
@@ -3028,6 +2983,33 @@ pub fn world_instances_cached(
                     None => (crate::enemy_data::enemy_def(enemy.kind).sprite, 0),
                 }
             };
+            let mut at = pos.0;
+            let mut tint = flash_tint(flash);
+            if let Some(leap) = leap {
+                match leap.pose {
+                    DogGuardianPose::Ground => {}
+                    DogGuardianPose::Airborne => {
+                        path = if leap.zspeed < 0.0 {
+                            "images/sprDogGuardianJumpUp.png"
+                        } else {
+                            "images/sprDogGuardianLand.png"
+                        };
+                        frame = 0;
+                        at.y -= leap.z;
+                        tint = [1.0, 1.0, 1.0, 1.0];
+                    }
+                    pose if hurt.is_none() => {
+                        path = if pose == DogGuardianPose::Charge {
+                            "images/sprDogGuardianCharge.png"
+                        } else {
+                            "images/sprDogGuardianLand.png"
+                        };
+                        let frames = strip_frames(assets, path).max(1);
+                        frame = frame.rem_euclid(frames as i32);
+                    }
+                    _ => {}
+                }
+            }
             let flip = if enemy.kind == EnemyKind::MaggotSpawn {
                 charge
                     .map(|c| c.facing < 0.0)
@@ -3037,12 +3019,12 @@ pub fn world_instances_cached(
                 vel.map(|v| v.0.x < 0.0).unwrap_or(false)
                     || aim.map(|a| a.0.x < 0.0).unwrap_or(false)
             };
-            if let Some(s) = assets.sprite_for(path, frame, pos.0, flip, 0.0, flash_tint(flash)) {
+            if let Some(s) = assets.sprite_for(path, frame, at, flip, 0.0, tint) {
                 out.push(s);
             }
         }
         // Guns in front.
-        for (pos, enemy, vel, aim, _anim, _flash, brain, _hurt, _charge) in q.iter(world) {
+        for (pos, enemy, vel, aim, _anim, _flash, brain, _hurt, _charge, _leap) in q.iter(world) {
             let Some(gun_path) = enemy_gun_art(enemy.kind) else {
                 continue;
             };
@@ -4568,31 +4550,70 @@ pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
     let show_hud = world
         .get_resource::<crate::savedata_part::SaveData>()
         .is_none_or(|s| s.settings.show_hud);
-    if !show_hud {
-        return Vec::new();
-    }
     let player_alive = world.query::<&Player>().iter(world).next().is_some();
     // GML `scrDrawMiscHUD:68` draws held icons when GameOver exists.
     let game_over = crate::state::menus::game_over_visible(world);
-    if !player_alive && !game_over {
-        return Vec::new();
-    }
     let vw = gml_view_size(canvas_dp)[0];
     let cx = vw * 0.5;
-    let mut items: Vec<MenuGuiText> = hud_gui_texts(world)
-        .into_iter()
-        .map(|t| MenuGuiText {
-            text: t.text,
-            gx: if t.right { vw - 2.0 } else { t.gx },
-            gy: t.gy,
-            color: t.color,
+    let mut items: Vec<MenuGuiText> = Vec::new();
+    // GML `scrDrawPlayerHUD.gml:378-403`, the `is_touch` block: while a
+    // prompt overlaps the player, `_prompt_text` is re-drawn above the
+    // `ButtonAct` home (`x = view_width/2`, `y = 48`, `rad = 25`,
+    // `Create_0`) at `max(_height, y - rad * 0.5 - _height - 12)` — the
+    // fntM1 line measures 8 (`font_string_measure:65` fixed line
+    // height), so gy = 15.5 — top-anchored and centered on the home
+    // (`draw_align(fa_center, fa_top)` at `scrDrawPlayerHUD:13`; the
+    // second call from `scrDrawMobileControls:239` re-draws the same
+    // string — the port draws the centered copy once). `is_touch` =
+    // `!(opt_keyboard || opt_gamepad)` (`input::gml_input_device`, same
+    // law as `touch_sprites`). "PICK UP" is
+    // `loc("R:HUD:PickUpAction", "PICK UP")` (no lang.csv row, so the
+    // default stands) for the nearest weapon; each `prop_prompts` hit
+    // stacks its own text on the same anchor, in GML's
+    // `[WepPickup, CarVenusFixed, IceFlower, Van]` order. This rides
+    // the mobile-controls path (`TopCont/Draw_64:23` gates on
+    // `drawcontrols`, not `opt_hud`), so it ignores `show_hud` like
+    // `hud_texts` and `touch_sprites` do.
+    let (keyboard, gamepad) =
+        crate::input::gml_input_device(world.get_resource::<crate::savedata_part::SaveData>());
+    if player_alive && !keyboard && !gamepad {
+        let act_row = |text: String| MenuGuiText {
+            text,
+            gx: cx,
+            gy: 15.5,
+            color: [255, 255, 255, 255],
             px: 7.0,
-            centered: t.centered,
-            middle_y: t.middle_y,
-            right: t.right,
+            centered: true,
+            middle_y: false,
+            right: false,
             bold: false,
-        })
-        .collect();
+        };
+        if let Some(label) = world.get_resource::<crate::pickups::WeaponLabel>() {
+            if label.target.is_some() {
+                items.push(act_row("PICK UP".to_string()));
+            }
+            for (_, text) in label.prop_prompts.iter() {
+                items.push(act_row((*text).to_string()));
+            }
+        }
+    }
+    if !show_hud {
+        return gui_texts_dp(canvas_dp, items);
+    }
+    if !player_alive && !game_over {
+        return gui_texts_dp(canvas_dp, items);
+    }
+    items.extend(hud_gui_texts(world).into_iter().map(|t| MenuGuiText {
+        text: t.text,
+        gx: if t.right { vw - 2.0 } else { t.gx },
+        gy: t.gy,
+        color: t.color,
+        px: 7.0,
+        centered: t.centered,
+        middle_y: t.middle_y,
+        right: t.right,
+        bold: false,
+    }));
     let hud: HudState = sync_hud_state(world);
     // GML `SkillText` verbatim: `scrLevelUpScreenSubmit` spawns at
     // `_ypos = view_yview + view_height - textheight - 76` (= 156 for
@@ -9835,7 +9856,11 @@ pub fn touch_sprites(
     //   local; this draws the resting state.
     // - `ButtonAct`: `sprMobileControlCorners` at the act home, only
     //   while the pickup prompt is lit (GML `alpha > 0`, see
-    //   [`crate::state::ActButton`]) and over its `37/255` black disc.
+    //   [`crate::state::ActButton`]). GML additionally fills its
+    //   `37/255` black disc (`scrDrawMobileControls:221-223`), which
+    //   the port does not draw; the 1.6x corner re-draw at
+    //   `scrDrawPlayerHUD.gml:391-394` is a no-op in GML itself
+    //   (`ButtonAct` never gets a `sprite_index`).
     // - splitfire `ButtonAttack`: corners sprite + double crosshair at
     //   the button home.
     // Button homes mirror the sampler (`ButtonAct` w/2,48;
@@ -10981,51 +11006,63 @@ pub fn fx_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInsta
     let mut out = Vec::new();
 
     // GML `scrDrawInteractionHUD` (`scripts/scrDrawPlayerHUD/
-    // scrDrawPlayerHUD.gml:339-370`) + `draw_pickup_button`
+    // scrDrawPlayerHUD.gml:339-376`) + `draw_pickup_button`
     // (`scripts/draw_gamepad_button/draw_gamepad_button.gml:43-101`).
-    // The weapon NAME line rides the text pass; the two sprite parts
-    // ride this one: the `sprEPickup` "E" pill at `(x, y-7)` (drawn at
-    // full opacity with `_offset = 7`), and `scrDrawTypeAmmo`'s
+    // The prompt TEXT lines ride the text pass; the sprite parts ride
+    // this one: the `sprEPickup` "E" pill at `(x, y-7)` (drawn at
+    // full opacity with `_offset = 7`, once per `prop_prompts` hit as
+    // well, since GML runs `draw_pickup_button` before the
+    // weapon/prop branch at `:355`), and `scrDrawTypeAmmo`'s
     // background/icon pair at `(x + 7, y - 14)` with the background on
     // subimage 2 and the icon at `_frames - ceil(_frames * fill)`, so
     // a full magazine is icon frame 0.
     {
-        let Some(label) = world.get_resource::<crate::pickups::WeaponLabel>() else {
-            return out;
-        };
-        let Some(target) = label.target else {
-            return out;
-        };
-        if label.text.is_empty() {
-            return out;
-        }
-        let Some(at) = world.get::<Pos>(target).map(|p| p.0) else {
-            return out;
-        };
-        if let Some(mut s) = assets.sprite_for(
-            crate::hud::PICKUP_BUTTON_ART,
-            label.button_frame as i32,
-            at + Vec2::new(0.0, -7.0),
-            false,
-            0.0,
-            [1.0; 4],
-        ) {
-            s.z = Z_FX;
-            out.push(s);
-        }
-        if let Some((bg, icon)) = label.ammo_gauge {
-            let at = at + Vec2::new(7.0, -14.0);
-            if let Some(mut s) = assets.sprite_for(bg, 2, at, false, 0.0, [1.0; 4]) {
-                s.z = Z_FX;
-                out.push(s);
+        if let Some(label) = world.get_resource::<crate::pickups::WeaponLabel>() {
+            if let Some(target) = label.target.filter(|_| !label.text.is_empty())
+                && let Some(at) = world.get::<Pos>(target).map(|p| p.0)
+            {
+                if let Some(mut s) = assets.sprite_for(
+                    crate::hud::PICKUP_BUTTON_ART,
+                    label.button_frame as i32,
+                    at + Vec2::new(0.0, -7.0),
+                    false,
+                    0.0,
+                    [1.0; 4],
+                ) {
+                    s.z = Z_FX;
+                    out.push(s);
+                }
+                if let Some((bg, icon)) = label.ammo_gauge {
+                    let at = at + Vec2::new(7.0, -14.0);
+                    if let Some(mut s) = assets.sprite_for(bg, 2, at, false, 0.0, [1.0; 4]) {
+                        s.z = Z_FX;
+                        out.push(s);
+                    }
+                    let frames = strip_frames(assets, icon);
+                    let full = frames.saturating_sub(1);
+                    let idx = (full as f32 * label.ammo_fill).ceil();
+                    let frame = (full as f32 - idx).round().clamp(0.0, full as f32) as i32;
+                    if let Some(mut s) = assets.sprite_for(icon, frame, at, false, 0.0, [1.0; 4]) {
+                        s.z = Z_FX;
+                        out.push(s);
+                    }
+                }
             }
-            let frames = strip_frames(assets, icon);
-            let full = frames.saturating_sub(1);
-            let idx = (full as f32 * label.ammo_fill).ceil();
-            let frame = (full as f32 - idx).round().clamp(0.0, full as f32) as i32;
-            if let Some(mut s) = assets.sprite_for(icon, frame, at, false, 0.0, [1.0; 4]) {
-                s.z = Z_FX;
-                out.push(s);
+            for (entity, _) in label.prop_prompts.iter() {
+                let Some(at) = world.get::<Pos>(*entity).map(|p| p.0) else {
+                    continue;
+                };
+                if let Some(mut s) = assets.sprite_for(
+                    crate::hud::PICKUP_BUTTON_ART,
+                    label.button_frame as i32,
+                    at + Vec2::new(0.0, -7.0),
+                    false,
+                    0.0,
+                    [1.0; 4],
+                ) {
+                    s.z = Z_FX;
+                    out.push(s);
+                }
             }
         }
     }
@@ -11195,12 +11232,19 @@ pub fn hud_texts(world: &mut World) -> Vec<(String, [f32; 2])> {
     // GML draws at `(floor(x - view_xview), floor(y - view_yview) - 31)`
     // = room pos - 31 px, i.e. world `[gun.x, gun.y - 31]`. (The ammo
     // gauge + touch `ButtonAct` ring ride the deferred sprite pass.)
+    // The `Prompt{Object}` prop lines (`:371-376`) ride the same law
+    // at each `prop_prompts` hit.
     if let Some(label) = world.get_resource::<crate::pickups::WeaponLabel>() {
         if let Some(target) = label.target {
             if let Some(gun) = world.get::<Pos>(target) {
                 if !label.text.is_empty() {
                     out.push((label.text.clone(), [gun.0.x, gun.0.y - 31.0]));
                 }
+            }
+        }
+        for (entity, text) in label.prop_prompts.iter() {
+            if let Some(at) = world.get::<Pos>(*entity) {
+                out.push((text.to_string(), [at.0.x, at.0.y - 31.0]));
             }
         }
     }

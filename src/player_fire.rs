@@ -997,6 +997,7 @@ fn spawn_pellets(commands: &mut Commands, fx: &mut FireFx, shot: &GunShot, playe
     }
 
     if let Some(spin) = archetype.spin {
+        cue(fx.cues, "sndBigDogSpin", 0.6, 0.05);
         spawn_dog_spin_attack(
             commands,
             shot.pos,
@@ -1081,7 +1082,6 @@ fn spawn_dog_spin_attack(
 fn tick_dog_spin_attacks(
     time: Res<SimTime>,
     commands: &mut Commands,
-    cues: &mut Queue<AudioCue>,
     spins: &mut Query<(Entity, &mut SpinAttack, &mut Pos), (With<SpinAttack>, Without<Player>)>,
     creators: &Query<&Pos, With<Player>>,
 ) {
@@ -1115,7 +1115,6 @@ fn tick_dog_spin_attacks(
         spin.direction += 4.0_f32.to_radians() * spin.turn;
         spin.ammo -= 1;
         if spin.ammo <= 0 {
-            cue(cues, "sndScrapBossSpinEnd", 0.6, 0.05);
             commands.entity(e).despawn();
             continue;
         }
@@ -1923,7 +1922,6 @@ pub fn hammerhead_chew(
 pub fn move_swing_fx(
     time: Res<SimTime>,
     mut commands: Commands,
-    mut cues: ResMut<Queue<AudioCue>>,
     mut q: Query<(Entity, &mut SwingFx)>,
     mut spins: Query<(Entity, &mut SpinAttack, &mut Pos), (With<SpinAttack>, Without<Player>)>,
     creators: Query<&Pos, With<Player>>,
@@ -1934,7 +1932,7 @@ pub fn move_swing_fx(
             commands.entity(e).despawn();
         }
     }
-    tick_dog_spin_attacks(time, &mut commands, &mut cues, &mut spins, &creators);
+    tick_dog_spin_attacks(time, &mut commands, &mut spins, &creators);
 }
 
 /// GML Cuz `spr_cry` swap lifetime: retire the marker headlessly.

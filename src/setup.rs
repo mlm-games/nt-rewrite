@@ -74,7 +74,8 @@ pub fn build_floor_mask(plan: &LevelPlan) -> FloorMask {
 /// Loadout-driven spawns go through `spawn_player_loaded`.
 /// Tag is `GameCleanup` only (bevy parity): the player survives portal
 /// floor swaps (`tick_portal_suck` despawns `LevelCleanup`) and dies
-/// with the run (`teardown_game` despawns `GameCleanup`).
+/// with the run (`teardown_session_entities` despawns every session
+/// entity).
 pub fn spawn_player(commands: &mut Commands, pos: glam::Vec2) -> Entity {
     commands
         .spawn((
@@ -716,7 +717,11 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
     if world.get_resource::<AnimCatalog>().is_none() {
         world.insert_resource(empty_anim_catalog());
     }
-    let run = world.remove_resource::<Run>().unwrap_or_default();
+    let live_portals = {
+        let mut portals = world.query::<&crate::idpd::IdpdSpawnPortal>();
+        portals.iter(world).count() as u32
+    };
+    let mut run = world.remove_resource::<Run>().unwrap_or_default();
     world.resource_scope(|world, mut mask: Mut<FloorMask>| {
         world.resource_scope(|world, mut tops: Mut<crate::comps_a::TopSmalls>| {
             world.resource_scope(|world, catalog: Mut<AnimCatalog>| {
@@ -724,12 +729,13 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
                 spawn_level(
                     &mut commands,
                     &catalog,
-                    &run,
+                    &mut run,
                     false,
                     false,
                     CrownKind::None,
                     None,
                     &plan,
+                    live_portals,
                     &mut mask,
                     &mut tops,
                     0,
@@ -1386,7 +1392,11 @@ pub fn spawn_prop_sim(
         }
         _ => {}
     }
-    Some(ec.id())
+    let entity = ec.id();
+    if kind == PropKind::VenuzCouch {
+        crate::loop_transition::spawn_yv_couch(commands, pos);
+    }
+    Some(entity)
 }
 
 /// GML `objects/prop/Create_0.gml:3` `image_speed = 0.4`, frames per
@@ -1685,12 +1695,13 @@ fn spawn_wall_tiles(
 pub fn spawn_level(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
-    run: &Run,
+    run: &mut Run,
     scarier_face: bool,
     heavy_heart: bool,
     crown: CrownKind,
     ultra: Option<UltraMutationId>,
     plan: &LevelPlan,
+    live_portals: u32,
     mask: &mut FloorMask,
     tops: &mut crate::comps_a::TopSmalls,
     // GML `GameCont.crownvisits` and `instance_exists(CrownObject)`, which
@@ -1702,33 +1713,6 @@ pub fn spawn_level(
     ice_flower: bool,
 ) {
     *mask = build_floor_mask(plan);
-
-    if ice_flower && run.area == AreaId::FrozenCity && run.floor_in_area == 1 {
-        // `instance_change(IceFlower, 1)` on the furthest prop, else a
-        // fresh flower in place of a random enemy.
-        let mut spawn = |at: glam::Vec2| {
-            crate::combat::queue_enemy_spawn(
-                commands,
-                crate::data::EnemyKind::IceFlower,
-                at,
-                1.0,
-                run.loop_count,
-            );
-        };
-        let furthest = plan.props.iter().map(|(_, at)| *at).max_by(|a, b| {
-            a.length_squared()
-                .partial_cmp(&b.length_squared())
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        match furthest {
-            Some(at) => spawn(at),
-            None => {
-                if let Some((_, at)) = plan.enemies.first().copied() {
-                    spawn(at);
-                }
-            }
-        }
-    }
 
     let floor_set: std::collections::HashSet<(i32, i32)> =
         plan.floor_cells.iter().copied().collect();
@@ -1803,6 +1787,50 @@ pub fn spawn_level(
         run.area,
         &mut cluster_rng,
     );
+
+    if ice_flower && run.area == AreaId::FrozenCity && run.floor_in_area == 1 {
+        // `instance_change(IceFlower, 1)` on the furthest prop, else a
+        // fresh flower in place of a random enemy.
+        let mut spawn = |at: glam::Vec2| {
+            crate::combat::queue_enemy_spawn(
+                commands,
+                crate::data::EnemyKind::IceFlower,
+                at,
+                1.0,
+                run.loop_count,
+            );
+        };
+        let center = glam::Vec2::splat(crate::worldgen::TILE * 0.5);
+        let furthest = events
+            .iter()
+            .filter_map(|e| match e {
+                PopulationEvent::Prop { pos, .. } => Some(*pos),
+                _ => None,
+            })
+            .max_by(|a, b| {
+                a.distance_squared(center)
+                    .partial_cmp(&b.distance_squared(center))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        if let Some(at) = furthest {
+            events.retain(|e| !matches!(e, PopulationEvent::Prop { pos, .. } if *pos == at));
+            spawn(at);
+        } else {
+            let enemies: Vec<usize> = events
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| matches!(e, PopulationEvent::Enemy { .. }))
+                .map(|(i, _)| i)
+                .collect();
+            if !enemies.is_empty() {
+                let mut rng = StdRng::seed_from_u64(run.gen_seed ^ 0x1CE5_5EED);
+                let idx = enemies[rng.random_range(0..enemies.len())];
+                if let PopulationEvent::Enemy { pos, .. } = events.remove(idx) {
+                    spawn(pos);
+                }
+            }
+        }
+    }
 
     let difficulty = difficulty_multiplier(run.floor);
     let spawn_context = EnemySpawnContext {
@@ -1940,6 +1968,28 @@ pub fn spawn_level(
                 ));
             }
         }
+    }
+    let mut idpd_stings: Vec<&'static str> = Vec::new();
+    for (i, pos) in plan.idpd_portals.iter().copied().enumerate() {
+        let (_, elite) = crate::idpd::spawn_idpd_spawn(commands, run, live_portals + i as u32, pos);
+        idpd_stings.push(if elite {
+            "sndEliteIDPDPortalSpawn"
+        } else {
+            "sndIDPDPortalSpawn"
+        });
+    }
+    if !idpd_stings.is_empty() {
+        commands.queue(move |world: &mut World| {
+            if let Some(mut cues) = world.get_resource_mut::<Queue<crate::audio::AudioCue>>() {
+                for name in idpd_stings {
+                    cues.push(crate::audio::AudioCue {
+                        name,
+                        volume: 0.7,
+                        variance: 0.05,
+                    });
+                }
+            }
+        });
     }
     if let Some(kind) = plan.boss {
         match kind {
@@ -2353,6 +2403,7 @@ pub fn setup_title_campfire(world: &mut World) {
         chests: Vec::new(),
         enemies: Vec::new(),
         population_events: Vec::new(),
+        idpd_portals: Vec::new(),
         boss: None,
         boss_count: 1,
         styleb: false,

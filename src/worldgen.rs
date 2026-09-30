@@ -3,13 +3,12 @@
 //! the GML secret-area scripts).
 //!
 //! Scope: `LevelPlan`, `PropKind`, `ChestSpawn`, `Gen`/`Maker` +
-//! `step_delta`, `rng_choose`, `turn_table`, `gml_area`, `gml_area_from_run`,
+//! `step_delta`, `rng_choose`, `turn_table`, `gml_area_from_run`,
 //! `generation_goal`, `generation_goal_for_run`, `is_screen_end_wall`,
 //! `floor_cell_for_wall`, `wall_cell_at`, `generate_level`,
 //! `generate_palace_last`, `generate_campfire`, `generate_crib`,
 //! `generate_hq_last`,
-//! `world_of`, `floor_in_world`, `boss_for_floor`,
-//! `boss_for_floor_and_loop`, `is_secret_area`.
+//! `world_of`, `floor_in_world`, `is_secret_area`.
 //!
 //! Wall helpers (`wall_point`, `nearest_wall`, `populate_throne_room`,
 //! `big_bandit_count`) and the full `populate` live here too.
@@ -20,11 +19,6 @@
 //!   becomes the local `is_secret_area` ported below. Inner
 //!   `use crate::game::areas::AreaId;` lines are covered by the top import.
 //! - Logic, RNG call order, tables and comments are byte-identical to source.
-//!
-//! TODO(port) index: all helpers landed (cell_center_*, wall_*,
-//! is_boss_subarea*, game_hard, populate + tables). Remaining world.rs
-//! surface (spawning entities from plans, wall visuals) belongs to the setup
-//! phase, not this file.
 
 use glam::Vec2;
 use rand::rngs::StdRng;
@@ -53,6 +47,10 @@ pub struct LevelPlan {
     pub chests: Vec<ChestSpawn>,
     pub enemies: Vec<(EnemyKind, Vec2)>,
     pub population_events: Vec<PopulationEvent>,
+    /// GML `scrPopEnemies.gml:120-121`: the palace `random(16) < 1` roll
+    /// raises an `IDPDSpawn` portal (positions only -- `setup.rs` spawns
+    /// them through `crate::idpd::spawn_idpd_spawn`).
+    pub idpd_portals: Vec<Vec2>,
     pub boss: Option<EnemyKind>,
 
     pub boss_count: u32,
@@ -160,20 +158,6 @@ impl ChestSpawn {
     }
 }
 
-fn gml_area(floor: u32) -> i32 {
-    let rf = ((floor.max(1) - 1) % 15) + 1;
-    match rf {
-        1..=3 => 1,
-        4 => 2,
-        5..=7 => 3,
-        8 => 4,
-        9..=11 => 5,
-        12 => 6,
-        13..=15 => 7,
-        _ => 7,
-    }
-}
-
 pub fn gml_area_from_run(run: &Run) -> i32 {
     match run.area {
         AreaId::Desert => 1,
@@ -193,10 +177,8 @@ pub fn gml_area_from_run(run: &Run) -> i32 {
         AreaId::Crib => 107,
         AreaId::Palace | AreaId::Campfire => 7,
         // GML's between-loop portal room borrows the Desert's tiles, the same
-        // mapping `vortex::SpiralKind::for_gml_area` uses. Spelled out so the
-        // wildcard below cannot quietly resolve the portal room to area 1.
+        // mapping `vortex::SpiralKind::for_gml_area` uses.
         AreaId::Loop => 1,
-        _ => gml_area(run.floor),
     }
 }
 
@@ -311,18 +293,21 @@ fn phase_rng(seed: u64, state: u64) -> StdRng {
 /// GML `point_distance(floor.x, floor.y, 10016, 10016)`. A `Floor` instance
 /// sits at `10000 + 32k`, so the spawn point is a half tile off the tile
 /// centre -- `scrMakeFloor`, `FloorMaker/Step_0`, `scrPopulate` and
-/// `scrPopEnemies` all measure from the tile *origin*.
+/// `scrPopEnemies` all measure from the tile *origin*, 16px from the
+/// port's (16, 16) room centre.
 fn cell_dist2_origin(cx: i32, cy: i32) -> f32 {
     let (x, y) = cell_center_i(cx, cy);
-    let (dx, dy) = (x - TILE * 0.5, y - TILE * 0.5);
+    let (dx, dy) = (x - TILE, y - TILE);
     dx * dx + dy * dy
 }
 
 /// GML `point_distance(bbox_center_x, bbox_center_y, 10016, 10016)` -- the
-/// metric `scrPopProps` uses for `_spawn_distance` (the tile centre).
+/// metric `scrPopProps` uses for `_spawn_distance` (the tile centre, one
+/// half tile from the port's (16, 16) room centre).
 fn cell_dist2_center(cx: i32, cy: i32) -> f32 {
     let (x, y) = cell_center_i(cx, cy);
-    x * x + y * y
+    let (dx, dy) = (x - TILE * 0.5, y - TILE * 0.5);
+    dx * dx + dy * dy
 }
 
 #[derive(Clone, Copy)]
@@ -420,6 +405,7 @@ impl Gen {
                 chests: Vec::new(),
                 enemies: Vec::new(),
                 population_events: Vec::new(),
+                idpd_portals: Vec::new(),
                 boss: None,
                 boss_count: 1,
                 styleb,
@@ -944,9 +930,6 @@ fn turn_table(rng: &mut StdRng, area: i32) -> i32 {
     }
 }
 
-// TODO(port): calls `cell_center_px`, `build_walls` and `populate`, whose
-// bodies live in world.rs:818/837/874 and are outside this port's scope.
-// Call sites below are preserved byte-identical (same RNG call order).
 /// GML `GenCont/Step_0` safespawn shift verbatim: once the makers finish,
 /// if the spawn ring is already full (`_numfloors >= _maxfloors`) the
 /// whole level drifts one `safedir` step and grows a fresh centre floor.
@@ -955,7 +938,7 @@ fn turn_table(rng: &mut StdRng, area: i32) -> i32 {
 /// per-frame but converges the same way).
 /// Skipped exactly where `scrAreaHasSafespawn` is false (campfire, crib,
 /// vault, palace/HQ finales).
-fn apply_safespawn_shift(plan: &mut LevelPlan, run: &Run) {
+fn apply_safespawn_shift(plan: &mut LevelPlan, run: &Run, gen_rng: &mut StdRng) {
     let no_safe = matches!(
         run.area,
         AreaId::Campfire | AreaId::Vault | AreaId::CrownVault | AreaId::Crib
@@ -966,16 +949,14 @@ fn apply_safespawn_shift(plan: &mut LevelPlan, run: &Run) {
     }
     let safedis: f32 = if run.loop_count > 0 { 96.0 } else { 64.0 };
     let maxfloors = ((safedis / 32.0) * 2.5).ceil() as usize;
-    // GML `GenCont/Create_0:33`: `safedir = choose(0, 90, 180, 270)`. That
-    // `choose` comes from the *default* RNG stream, which is seeded from
-    // `RNGStates.Generation` and re-seeded per `scrPopEnemies` call -- drawing
-    // it from the Generation stream itself shifted every later prop, enemy and
-    // bone draw in the level.
-    let mut safedir_rng = rand::rngs::StdRng::seed_from_u64(run.gen_seed ^ 0x5AFE_D1CE);
-    let (dx, dy) = match safedir_rng.random_range(0..4) {
+    // GML `GenCont/Create_0:33`: `safedir = choose(0, 90, 180, 270)` off the
+    // Generation stream. GML draws it in `Create_0`, before any floor stamp,
+    // which would reorder every existing draw here, so the port takes it from
+    // the tail of that same stream instead.
+    let (dx, dy) = match rng_choose(gen_rng, &[0i32, 90, 180, 270]) {
         0 => (1, 0),
-        1 => (0, 1),
-        2 => (-1, 0),
+        90 => (0, 1),
+        180 => (-1, 0),
         _ => (0, -1),
     };
     let delta_px = Vec2::new(dx as f32 * TILE, dy as f32 * TILE);
@@ -1034,9 +1015,8 @@ pub fn generate_level(run: &Run) -> LevelPlan {
     let mut genr = Gen::new(run, area, false);
     let initial = genr.create_maker(0, 0);
     genr.run_makers(goal, vec![initial]);
+    apply_safespawn_shift(&mut genr.plan, run, &mut genr.rng);
     let (mut plan, styleb_cells) = genr.finish();
-
-    apply_safespawn_shift(&mut plan, run);
 
     let floors = plan.floor_cells.clone();
     build_walls(run, &floors, &mut plan);
@@ -1060,6 +1040,7 @@ fn generate_palace_last(run: &Run) -> LevelPlan {
         chests: Vec::new(),
         enemies: Vec::new(),
         population_events: Vec::new(),
+        idpd_portals: Vec::new(),
         boss: None,
         boss_count: 1,
         styleb: false,
@@ -1267,7 +1248,7 @@ fn build_crib_rooms(plan: &mut LevelPlan, run: &Run) {
             let cy = (upy + 32 + diy) / TILE as i32;
             push_cell(&mut cells, &mut seen, (cx, cy));
             let at = Vec2::new(cx as f32 * TILE + TILE * 0.5, cy as f32 * TILE + TILE * 0.5);
-            if at.distance(Vec2::splat(10016.0)) > 96.0
+            if at.distance(Vec2::splat(TILE * 0.5)) > 96.0
                 && (rng.random::<f32>() * 5.0 < 1.0 || cars == 0)
             {
                 cars += 1;
@@ -1292,6 +1273,7 @@ fn generate_hq_last(run: &Run) -> LevelPlan {
         chests: Vec::new(),
         enemies: Vec::new(),
         population_events: Vec::new(),
+        idpd_portals: Vec::new(),
         boss: None,
         boss_count: 1,
         styleb: true,
@@ -1903,21 +1885,6 @@ fn nearest_wall(plan: &LevelPlan, walls: &HashSet<(i32, i32)>, px: f32, py: f32)
     best.map(|(_, at)| at)
 }
 
-#[allow(dead_code)]
-fn is_boss_subarea(floor: u32) -> bool {
-    let rf = ((floor.max(1) - 1) % 15) + 1;
-
-    matches!(rf, 3 | 7 | 11 | 15)
-}
-
-#[allow(dead_code)]
-fn is_boss_subarea_run(run: &Run) -> bool {
-    if is_secret_area(run.area) {
-        return false;
-    }
-    is_boss_subarea(run.floor)
-}
-
 /// GML `GameCont.hard` is a live accumulator, not `scrAreaGetDifficulty`:
 /// `GameCont/Create_0.gml:9` seeds it at 0 (`:85-88` sets 13 and bumps
 /// `loops` in hardmode) and `GameCont/Other_5.gml:136` adds
@@ -1996,6 +1963,7 @@ fn populate(
                 &mut plan.enemies,
                 &mut plan.props,
                 &mut prop_tiles,
+                &mut plan.idpd_portals,
                 &mut er,
                 (cx, cy),
                 &plan.small_walls,
@@ -2101,6 +2069,7 @@ fn populate(
                 &mut plan.enemies,
                 &mut plan.props,
                 &mut prop_tiles,
+                &mut plan.idpd_portals,
                 &mut er,
                 (cx, cy),
                 &plan.small_walls,
@@ -2134,6 +2103,7 @@ fn populate(
                 &mut plan.enemies,
                 &mut plan.props,
                 &mut prop_tiles,
+                &mut plan.idpd_portals,
                 &mut er,
                 (cx, cy),
                 &plan.small_walls,
@@ -2544,26 +2514,6 @@ fn lil_hunter_kind(loop_count: u32) -> EnemyKind {
     }
 }
 
-
-/// GML `scrPopulate.gml:319-377`: Big Bandit on desert 1-1/1-2/1-3, Big Dog
-/// on scrapyards 5-3, Lil Hunter on city 9-3, Throne on 15-3 -- nothing on
-/// 2-1, 4-1, 6-1, 13-1 or 13-2.
-pub fn boss_for_floor_and_loop(floor: u32, loop_count: u32) -> Option<EnemyKind> {
-    let rf = ((floor.max(1) - 1) % 15) + 1;
-    match rf {
-        1..=3 => Some(big_bandit_kind(loop_count)),
-        7 => Some(big_dog_kind(loop_count)),
-        11 => Some(lil_hunter_kind(loop_count)),
-        15 => Some(EnemyKind::Throne),
-        _ => None,
-    }
-}
-
-#[allow(dead_code)]
-pub fn boss_for_floor(floor: u32) -> Option<EnemyKind> {
-    boss_for_floor_and_loop(floor, (floor.max(1) - 1) / 15)
-}
-
 pub fn floor_in_world(floor: u32) -> u32 {
     let rf = ((floor.max(1) - 1) % 15) + 1;
     match rf {
@@ -2656,6 +2606,7 @@ fn scr_pop_enemies(
     enemies: &mut Vec<(EnemyKind, Vec2)>,
     props: &mut Vec<(PropKind, Vec2)>,
     prop_tiles: &mut HashSet<(i32, i32)>,
+    idpd_portals: &mut Vec<Vec2>,
     rng: &mut StdRng,
     cell: (i32, i32),
     small_walls: &[(i16, i16)],
@@ -2670,13 +2621,13 @@ fn scr_pop_enemies(
     {
         return;
     }
-    // GML `scrPopEnemies:12`: `var _loop_rand = random(_loops)`. `random(n)` is
-    // an integer in 0..n-1, so `random(2) < _loop_rand` can only be true when
-    // `_loop_rand >= 1` -- i.e. never on loop 1, and never at 50% on loop 2.
+    // GML `scrPopEnemies:12`: `var _loop_rand = random(_loops)` -- a real in
+    // [0, loops), drawn per enemy call; `random(0)` is 0, so `random(2) <
+    // _loop_rand` never fires on the first playthrough.
     let loop_rand = if run.loop_count == 0 {
-        0
+        0.0
     } else {
-        rng.random_range(0i32..run.loop_count as i32)
+        rng.random::<f32>() * run.loop_count as f32
     };
     if run.area == AreaId::Campfire {
         return;
@@ -2687,7 +2638,7 @@ fn scr_pop_enemies(
             if run.tutorial {
                 return;
             }
-            if rng.random_range(0i32..2) < loop_rand {
+            if rng.random::<f32>() * 2.0 < loop_rand {
                 spawn_pop_enemy(
                     enemies,
                     rng,
@@ -2747,7 +2698,7 @@ fn scr_pop_enemies(
             }
         }
         2 => {
-            if rng.random_range(0i32..2) < loop_rand {
+            if rng.random::<f32>() * 2.0 < loop_rand {
                 spawn_pop_enemy(
                     enemies,
                     rng,
@@ -2811,7 +2762,7 @@ fn scr_pop_enemies(
         }
         3 => {
             if rng.random::<f32>() * 5.0 < 4.0 && (!is_last || rng.random::<f32>() * 2.0 < 1.0) {
-                if rng.random_range(0i32..2) < loop_rand {
+                if rng.random::<f32>() * 2.0 < loop_rand {
                     spawn_pop_enemy(
                         enemies,
                         rng,
@@ -2865,7 +2816,7 @@ fn scr_pop_enemies(
             }
         }
         4 => {
-            if rng.random_range(0i32..2) < loop_rand {
+            if rng.random::<f32>() * 2.0 < loop_rand {
                 spawn_pop_enemy(
                     enemies,
                     rng,
@@ -2898,7 +2849,7 @@ fn scr_pop_enemies(
             }
         }
         5 => {
-            if rng.random_range(0i32..2) < loop_rand {
+            if rng.random::<f32>() * 2.0 < loop_rand {
                 spawn_pop_enemy(
                     enemies,
                     rng,
@@ -2932,7 +2883,7 @@ fn scr_pop_enemies(
             }
         }
         6 => {
-            if rng.random_range(0i32..2) < loop_rand {
+            if rng.random::<f32>() * 2.0 < loop_rand {
                 spawn_pop_enemy(
                     enemies,
                     rng,
@@ -2997,14 +2948,14 @@ fn scr_pop_enemies(
             }
         }
         7 => {
-            // GML `scrPopEnemies:112`: `if (_is_last || random(2) > 1) break`.
-            // `random(2)` is an integer in 0..1, so `> 1` is never true and the
-            // only skip is the last palace subarea. A float compare fired on
-            // half the eligible floors.
-            if is_last {
+            // GML `scrPopEnemies:113`: `if (_is_last || random(2) > 1) break`.
+            // `random(2)` is a real in [0, 2), so half the eligible floors
+            // skip the palace roll and only the last subarea always skips;
+            // the `||` short-circuits, so the last subarea pays no draw.
+            if is_last || rng.random::<f32>() * 2.0 > 1.0 {
                 return;
             }
-            if rng.random_range(0i32..2) < loop_rand {
+            if rng.random::<f32>() * 2.0 < loop_rand {
                 spawn_pop_enemy(
                     enemies,
                     rng,
@@ -3035,9 +2986,12 @@ fn scr_pop_enemies(
                     ],
                 );
             } else if rng.random::<f32>() * 16.0 < 1.0 {
-                // GML `scrPopEnemies.gml:120-121` spawns `IDPDSpawn`, the IDPD
-                // portal spawner, not a live grunt; the port has no portal
-                // spawner prop, so the roll is kept and nothing is emitted.
+                // GML `scrPopEnemies.gml:120-121`: `__spawn(IDPDSpawn)` -- the
+                // IDPD portal spawner, not a live grunt. Same `bbox_center +
+                // orandom(2)` placement and single-entry `irandom(argument_count
+                // - 1)` pick as every spawn; `setup.rs` raises it through
+                // `crate::idpd::spawn_idpd_spawn`.
+                idpd_portals.push(pop_spawn(rng, center, &[PropKind::None]).1);
             }
         }
         101 => {
@@ -3192,12 +3146,12 @@ fn cluster_kind(kind: EnemyKind) -> EnemyKind {
 }
 
 fn cluster_source_skips(kind: EnemyKind, loops: u32, rng: &mut StdRng) -> bool {
-    // GML `scrPopulate:288-294`: `if (random(60) > _loops) continue`.
-    // `random(60)` is an integer in 0..59, so the cluster runs on
-    // (loops + 1) of 60 rolls, not loops of 60. The GML text names all four
-    // mimics even though they are `chestprop` children rather than `enemy`
-    // instances, so the port keeps the list verbatim.
-    rng.random_range(0i32..60) > loops as i32
+    // GML `scrPopulate:288-294`: inside `if (_loops > 0 && ...)`,
+    // `if (random(60) > _loops || ...) continue`. `random(60)` is a real in
+    // [0, 60), so `loops / 60` of the sources cluster. The GML text names all
+    // four mimics even though they are `chestprop` children rather than
+    // `enemy` instances, so the port keeps the list verbatim.
+    rng.random::<f32>() * 60.0 > loops as f32
         || matches!(
             kind,
             EnemyKind::Mimic

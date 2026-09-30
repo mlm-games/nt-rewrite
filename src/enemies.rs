@@ -37,8 +37,9 @@ use crate::combat::{
     PendingEnemySpawn, apply_birth_overrides, queue_enemy_spawn, queue_enemy_spawn_birth,
 };
 use crate::comps_a::{
-    ARENA_H, ARENA_W, BossIntro, BouncesLeft, CurrentFrame, DamageSource, Euphoria, FloorMask,
-    GameCleanup, GrenadeFuse, Health, HeavyHeart, Hitbox, Homing, LevelCleanup, NextHurt, Player,
+    ARENA_H, ARENA_W, BossIntro, BouncesLeft, CurrentFrame, DamageSource, DogGuardianLeap,
+    DogGuardianPose, Euphoria, FireCooldown,
+    FloorMask, GameCleanup, Health, HeavyHeart, Hitbox, Homing, LevelCleanup, NextHurt, Player,
     Projectile, ProjectileFade, ProjectileFriction, ProjectileTyp, ProjectileVisual, Run,
     ScarierFace, ShellWallBounce, SplitOnDeath, Team, Toast, Velocity, WallCell, WallTile,
     apply_gml_friction, gml_motion_add_clamp,
@@ -222,26 +223,6 @@ fn spawn_enemy_impl(
     } else {
         spawn_hp(kind, def.hp, loops)
     };
-    let speed = if matches!(
-        kind,
-        EnemyKind::Bandit
-            | EnemyKind::SnowBandit
-            | EnemyKind::Maggot
-            | EnemyKind::MaggotSpawn
-            | EnemyKind::BigMaggot
-            | EnemyKind::JungleFly
-            | EnemyKind::FiredMaggot
-            | EnemyKind::Scorpion
-            | EnemyKind::GoldScorpion
-            | EnemyKind::Sniper
-            | EnemyKind::JungleBandit
-            | EnemyKind::MeleeBandit
-            | EnemyKind::Ballguy
-    ) {
-        if kind == EnemyKind::Ballguy { 1.0 } else { 0.0 }
-    } else {
-        def.speed * (0.9 + 0.02 * difficulty)
-    };
     let weapon_chance = if heavy_heart || context.heavy_heart {
         def.weapon_chance + 9
     } else {
@@ -304,6 +285,13 @@ fn spawn_enemy_impl(
     if kind == EnemyKind::ScrapBossMissile {
         ec.insert(ScrapBossMissileState::new(loops));
     }
+    if kind == EnemyKind::DogGuardian {
+        ec.insert(DogGuardianLeap {
+            pose: DogGuardianPose::Ground,
+            z: 0.0,
+            zspeed: 0.0,
+        });
+    }
     // GML `Create_0` `alarm[1]`, in frames. `random(n)` yields 0..n-1.
     let attack_frames = match kind {
         EnemyKind::MaggotSpawn | EnemyKind::FiredMaggot => 0.0,
@@ -324,7 +312,9 @@ fn spawn_enemy_impl(
         EnemyKind::GoldSnowtank => 120.0 + rng.random_range(0.0..10.0),
         EnemyKind::LaserCrystal | EnemyKind::LightningCrystal => 50.0 + rng.random_range(0.0..90.0),
         EnemyKind::InvLaserCrystal => 30.0 + rng.random_range(0.0..90.0),
-        EnemyKind::Guardian | EnemyKind::CrownGuardian => 40.0 + rng.random_range(0.0..10.0),
+        EnemyKind::Guardian | EnemyKind::CrownGuardian | EnemyKind::PalaceGuardian => {
+            40.0 + rng.random_range(0.0..10.0)
+        }
         EnemyKind::DogGuardian => 120.0 + rng.random_range(0.0..10.0),
         // `20 + random(10)` for the freaks and the ExploGuardian.
         EnemyKind::Freak
@@ -373,12 +363,8 @@ fn spawn_enemy_impl(
         GTimer::from_seconds(attack_frames / 30.0, TimerMode::Once)
     };
     ec.insert(EnemyBrain {
-        speed,
-        accel: def.accel,
-        preferred_range: def.preferred_range,
-        shoot_range: def.shoot_range,
         attack,
-        fire_alarm: GTimer::from_seconds(def.attack_cooldown, TimerMode::Once),
+        fire_alarm: GTimer::from_seconds(attack_frames / 30.0, TimerMode::Once),
         burst_left: 0,
         burst_timer: ready_timer(),
         dash: 0.0,
@@ -386,7 +372,7 @@ fn spawn_enemy_impl(
         strafe_timer: GTimer::from_seconds(rng.random_range(0.8..1.6), TimerMode::Once),
         melee: ready_timer(),
         wkick: 0.0,
-        walk: 0.0,
+        walk: if kind == EnemyKind::IdpdElite { 30.0 } else { 0.0 },
         slash_delay: 0.0,
         ammo: match kind {
             EnemyKind::Scorpion | EnemyKind::GoldScorpion => 10,
@@ -658,8 +644,6 @@ fn gml_wants_fire(
     }
     let mut roll = |n: f32| rng.random_range(0.0..n);
     match kind {
-        // GML `Turret/Alarm_1:4`.
-        EnemyKind::Turret => dist < 160.0 && roll(4.0) < 3.0,
         // GML `PopoFreak/Alarm_1:7`.
         EnemyKind::PopoFreak => (64.0..160.0).contains(&dist) && roll(3.0) < 2.0,
         // GML `Raven/Alarm_1:5-6`.
@@ -678,17 +662,23 @@ fn gml_wants_fire(
         }
         // GML `HostileHorror/Alarm_1:5-6`.
         EnemyKind::HostileHorror => dist > 48.0 && roll(2.0 + dist / 100.0) < 1.0,
-        // GML `Grunt/Alarm_1:19`, `EliteGrunt/Alarm_1:17`,
-        // `Inspector/Alarm_1:15` — all `random(2) < 1`. Their `freeze > 40`
-        // term needs the `Other_10` freeze accumulator, which only the
-        // dedicated IDPD ticks carry.
-        EnemyKind::IdpdGrunt | EnemyKind::IdpdElite | EnemyKind::IdpdInspector => {
-            roll(2.0) < 1.0
-        }
-        // GML `Shielder/Alarm_1:12`.
-        EnemyKind::IdpdShield => dist <= 250.0 && roll(2.0) < 1.0,
         // GML `SuperFrog/Alarm_1:4` states no fire condition of its own.
         _ => true,
+    }
+}
+
+fn gml_fire_rearm_secs(kind: EnemyKind, rng: &mut impl RngExt) -> f32 {
+    match kind {
+        EnemyKind::FireBaller | EnemyKind::SuperFireBaller => 8.0 / 30.0,
+        EnemyKind::Molefish => (20.0 + rnd(rng, 5.0)) / 30.0,
+        EnemyKind::Molesarge => (30.0 + rnd(rng, 5.0)) / 30.0,
+        EnemyKind::OldGuardian | EnemyKind::PalaceGuardian | EnemyKind::CrownGuardian => {
+            12.0 / 30.0
+        }
+        _ => {
+            let def = enemy_def(kind);
+            def.attack_cooldown + rng.random_range(0.0..def.attack_jitter / 30.0)
+        }
     }
 }
 
@@ -722,7 +712,6 @@ fn sync_heading(brain: &mut EnemyBrain, vel: &Velocity) {
     if vel.0.length_squared() > 0.000001 {
         brain.heading = vel.0.y.atan2(vel.0.x);
     }
-    brain.speed = vel.0.length() / 30.0;
 }
 
 #[inline]
@@ -901,10 +890,13 @@ fn gml_speed_cap(kind: EnemyKind) -> f32 {
         EnemyKind::Crab => 4.5,
         // `HostileHorror/Other_10:9` `if (speed > 4.5) speed = 4.5`.
         EnemyKind::HostileHorror => 4.5,
-        // IDPD `Other_10`: `Grunt`/`EliteGrunt` 3, `Shielder`/`EliteShielder`
-        // 3.5, `Inspector` 3, `EliteInspector` 3.5.
+        // IDPD `Other_10`: `Grunt`/`EliteGrunt` 3, `Shielder` 3.5,
+        // `Inspector` 3. The elites are separate kinds of their own and were
+        // falling through to the `_` arm below.
         EnemyKind::IdpdGrunt | EnemyKind::IdpdElite | EnemyKind::IdpdInspector => 3.0,
         EnemyKind::IdpdShield => 3.5,
+        // `EliteInspector/Other_10:7`, `EliteShielder/Other_10:8`.
+        EnemyKind::EliteInspector | EnemyKind::EliteShielder => 3.5,
         // The palace statue is GML's `Guardian`, whose `Step_0:10` caps at 0.6.
         EnemyKind::PalaceGuardian => 0.6,
         // GML caps these conditionally on `spr_fire` / `maxspeed`. `Wolf` is at
@@ -922,22 +914,14 @@ fn gml_speed_cap(kind: EnemyKind) -> f32 {
     frames * crate::SIM_HZ as f32
 }
 
-/// GML per-object speed FLOOR, from the `if (speed < N) speed = N` lines that
-/// sit next to several of the caps. A `0.0` floor means no floor of its own.
-///
-/// Applied after the cap, because GML writes the two lines in that order.
 fn gml_speed_floor(kind: EnemyKind) -> f32 {
     match kind {
-        // `LilHunter/Other_10:9` and `JungleFly/Other_10:8` both keep the
-        // hunter at 1 px/frame even when it is standing still, so it visibly
-        // slides rather than freezing.
+        // `LilHunter/Other_10:9`, `JungleFly/Other_10:8`
         EnemyKind::LilHunter | EnemyKind::LilHunterLoop | EnemyKind::JungleFly => 1.0,
         _ => 0.0,
     }
 }
 
-/// `Other_10`'s `if (speed > cap) speed = cap` followed by its
-/// `if (speed < floor) speed = floor`, in source order.
 fn gml_clamp_speed(brain: &mut EnemyBrain, vel: &mut Velocity, kind: EnemyKind, cap_f: f32) {
     cap_gml_speed(brain, vel, cap_f);
     let floor_f = gml_speed_floor(kind);
@@ -1105,14 +1089,7 @@ fn integrate_verbatim(
     frame: u64,
     law: EnemyWallLaw,
 ) {
-    // GML `enemy/Create_0.gml` sets `friction = 0.4` on every enemy. GMS2
-    // applies `friction` to `hspeed`/`vspeed` once per step for any object
-    // using built-in movement, `physicsObject: false` or not, so it is a
-    // per-step decay and not merely the wall-slide input. Running the walk
-    // law's `motion_add` with no decay left every enemy ratcheting up to its
-    // `Other_10` cap and then gliding at that cap indefinitely after `walk`
-    // expired, which is what made them move far more often and far faster
-    // than GML. GML's order is step code, then friction, then the move.
+    // `enemy/Create_0.gml` `friction = 0.4`
     apply_gml_friction(&mut vel.0, brain.friction, dt);
     let saved_direction = vel.0.normalize_or_zero();
     let saved_speed = vel.0.length();
@@ -1334,8 +1311,6 @@ struct GmlDecide<'a> {
     hp: f32,
     max_hp: f32,
     dt: f32,
-    /// `GameCont.loops` (the LilHunter bouncer cadence divides by it).
-    loops: u32,
     enemy: &'a mut Enemy,
     brain: &'a mut EnemyBrain,
     vel: &'a mut Velocity,
@@ -1439,10 +1414,10 @@ fn spread<R: RngExt + ?Sized>(rng: &mut R, n: f32) -> f32 {
     rnd(rng, n) - n * 0.5
 }
 
-/// GML `orandom(n)`: `+n/2 .. -n/2` degrees.
+/// GML `orandom(n)`: `±n/2` degrees.
 #[inline]
 fn ornd<R: RngExt + ?Sized>(rng: &mut R, n: f32) -> f32 {
-    rng.random_range(n * 0.5..-n * 0.5)
+    rng.random_range(-n * 0.5..n * 0.5)
 }
 
 /// GML `objects/<kind>/Alarm_2` for the objects whose decide only staged a
@@ -1692,7 +1667,6 @@ fn hostile_horror_spray(
 #[allow(clippy::too_many_arguments)]
 fn gml_alarm_1_decide<R: RngExt + ?Sized>(
     kind: EnemyKind,
-    loops: u32,
     pos: glam::Vec2,
     target: glam::Vec2,
     mask: &FloorMask,
@@ -1702,6 +1676,8 @@ fn gml_alarm_1_decide<R: RngExt + ?Sized>(
     vel: &mut Velocity,
     dt: f32,
     rng: &mut R,
+    entity: Entity,
+    leaps: &mut HashMap<Entity, DogLeap>,
 ) {
     let to_target = target - pos;
     let mut d = GmlDecide {
@@ -1713,7 +1689,6 @@ fn gml_alarm_1_decide<R: RngExt + ?Sized>(
         hp: health.hp as f32,
         max_hp: health.max as f32,
         dt,
-        loops,
         enemy,
         brain,
         vel,
@@ -1739,7 +1714,15 @@ fn gml_alarm_1_decide<R: RngExt + ?Sized>(
         // GML `RadMaggot/Alarm_1` and `SuperFrog/Alarm_1` are the Maggot's
         // decide: turn toward the target, or scatter.
         EnemyKind::RadMaggot | EnemyKind::SuperFrog => maggot_alarm_1(&mut d, rng, 30.0, 20.0),
-        EnemyKind::LilHunter => lil_hunter_alarm_1(&mut d, rng),
+        EnemyKind::Molefish => molefish_alarm_1(&mut d, rng),
+        EnemyKind::Molesarge => molesarge_alarm_1(&mut d, rng),
+        EnemyKind::FireBaller => fireballer_alarm_1(&mut d, rng),
+        EnemyKind::SuperFireBaller => super_fireballer_alarm_1(&mut d, rng),
+        EnemyKind::PalaceGuardian | EnemyKind::CrownGuardian => guardian_alarm_1(&mut d, rng),
+        EnemyKind::DogGuardian => {
+            let leap = leaps.entry(entity).or_default();
+            dog_guardian_alarm_1(&mut d, leap, rng);
+        }
         // GML `objects/Crystal` has no `Alarm_1` at all, so nothing here is
         // reachable for it; an unmodelled object parks its alarm instead of
         // spinning on the default.
@@ -2075,46 +2058,210 @@ fn maggot_alarm_1(
     }
 }
 
-/// GML `LilHunter/Alarm_1`. The lift arm and the IDPD-summon arm are feature
-/// gaps in the port, but every timing arm is transcribed: the blocked arm
-/// DIVIDES the decide by three (`alarm[1] /= 3`), the bouncer arm divides by
-/// `1 + loops * 2` (floored at 1), and the last line is GML's own
-/// `if (instance_exists(target) && walk > 0) motion_add(mcr_target_direction, 0.3)`.
-fn lil_hunter_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
-    d.arm(20.0 + rnd(rng, 6.0));
+fn molefish_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+    d.arm(15.0 + rnd(rng, 10.0));
     if d.sees {
-        if gml_roll(rng, 4.0, 3.0) {
-            if d.dist < 140.0 {
-                d.aim(d.toward().to_degrees() + spread(rng, 50.0));
-                d.brain.wkick = 8.0;
-                d.arm((d.armed() / (1.0 + d.loops as f32 * 2.0)).max(1.0));
-                d.direction(d.away() + (rnd(rng, 20.0) - 10.0).to_radians());
-                d.speed(0.4);
-                d.brain.walk = 20.0;
+        if d.dist > 96.0 {
+            if gml_chance(rng, 4.0) {
                 d.aim(d.toward().to_degrees());
+                d.brain.wkick = 4.0;
+                d.arm(20.0 + rnd(rng, 5.0));
             } else {
-                d.aim(d.toward().to_degrees() + (rnd(rng, 30.0) - 15.0).to_radians());
-                d.brain.wkick = 8.0;
-                d.arm(5.0 + rnd(rng, 6.0));
+                d.direction(
+                    d.toward()
+                        + ((45.0 + rnd(rng, 90.0)) * gml_choose(rng, &[1.0, -1.0])).to_radians(),
+                );
+                d.speed(0.4);
+                d.brain.walk = 10.0 + rnd(rng, 10.0);
+                d.aim(d.toward().to_degrees());
             }
         } else {
             d.direction(d.away() + (rnd(rng, 20.0) - 10.0).to_radians());
             d.speed(0.4);
-            d.brain.walk = 8.0 + rnd(rng, 4.0);
-            d.arm(d.brain.walk);
+            d.brain.walk = 20.0 + rnd(rng, 10.0);
             d.aim(d.toward().to_degrees());
         }
         d.face_target_x();
-    } else if gml_chance(rng, 10.0) {
+    } else if gml_chance(rng, 4.0) {
         d.impulse(gml_random_angle(rng), 0.4);
-        d.brain.walk = 8.0 + rnd(rng, 4.0);
-        d.arm(d.brain.walk + 10.0 + rnd(rng, 30.0));
+        d.brain.walk = 20.0 + rnd(rng, 10.0);
+        d.arm(d.brain.walk + 5.0);
         d.aim(d.brain.heading.to_degrees());
         d.face_hspeed();
     }
-    if d.brain.walk > 0.0 {
-        d.impulse(d.toward(), 0.3);
+}
+
+fn molesarge_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+    d.arm(15.0 + rnd(rng, 10.0));
+    if d.sees {
+        if d.dist < 120.0 {
+            if gml_chance(rng, 3.0) {
+                d.aim(d.toward().to_degrees() + (rnd(rng, 20.0) - 10.0));
+                d.brain.wkick = 8.0;
+                d.impulse(d.brain.gunangle + std::f32::consts::PI, 3.0);
+                d.arm(30.0 + rnd(rng, 5.0));
+            } else {
+                d.direction(
+                    d.toward()
+                        + ((45.0 + rnd(rng, 90.0)) * gml_choose(rng, &[1.0, -1.0])).to_radians(),
+                );
+                d.speed(0.4);
+                d.brain.walk = 10.0 + rnd(rng, 10.0);
+                d.aim(d.toward().to_degrees());
+            }
+        } else {
+            d.direction(d.toward() + (rnd(rng, 20.0) - 10.0).to_radians());
+            d.speed(0.4);
+            d.brain.walk = 30.0 + rnd(rng, 10.0);
+            d.aim(d.toward().to_degrees());
+        }
+        d.face_target_x();
+    } else if gml_chance(rng, 4.0) {
+        d.impulse(gml_random_angle(rng), 0.4);
+        d.brain.walk = 20.0 + rnd(rng, 10.0);
+        d.arm(d.brain.walk + 5.0);
+        d.aim(d.brain.heading.to_degrees());
+        d.face_hspeed();
     }
+}
+
+fn fireballer_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+    d.arm(20.0 + rnd(rng, 10.0));
+    if d.sees {
+        if gml_chance(rng, 3.0) {
+            d.direction(d.toward() + std::f32::consts::PI);
+            d.arm(8.0);
+        } else {
+            d.direction(d.toward() + (rnd(rng, 20.0) - 10.0).to_radians());
+        }
+    } else {
+        d.impulse(gml_random_angle(rng), 1.0);
+        d.brain.walk = 0.0;
+    }
+}
+
+fn super_fireballer_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+    d.arm(20.0 + rnd(rng, 10.0));
+    if d.sees {
+        if rnd(rng, 5.0) >= 4.0 {
+            d.direction(d.toward() + ornd(rng, 10.0).to_radians());
+            d.brain.walk = 0.0;
+            return;
+        }
+        d.direction(d.toward() + std::f32::consts::PI);
+        d.brain.walk = 0.0;
+        d.arm(8.0);
+    } else {
+        d.impulse(gml_random_angle(rng), 1.0);
+        d.brain.walk = 0.0;
+    }
+}
+
+fn guardian_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+    let justfired = d.armed() == 12.0;
+    d.arm(10.0 + rnd(rng, 40.0));
+    if justfired {
+        d.arm_add(10.0);
+    }
+    if d.sees {
+        d.direction(d.toward() + (rnd(rng, 180.0) - 90.0).to_radians());
+        if ((d.dist > 96.0 && gml_roll(rng, 3.0, 2.0)) || gml_roll(rng, 3.0, 1.0)) && !justfired {
+            d.aim(d.toward().to_degrees());
+            d.arm(12.0);
+        } else if gml_chance(rng, 2.0) {
+            d.arm_add(60.0);
+        }
+    }
+}
+
+/// GML `DogGuardian`'s leap registers (`leap`, `z`, `zspeed`, `jumpdir`,
+/// `jumpdist`, `bounced`), held per instance because `EnemyBrain` has no
+/// slot for them.
+#[derive(Clone, Copy)]
+pub struct DogLeap {
+    /// `Alarm_1:15` `jumpdist = point_distance(...) * 1.1`, spent by `Alarm_2`.
+    dist: f32,
+    /// `Alarm_1:16` `jumpdir = mcr_target_direction + orandom(20)`.
+    dir: f32,
+    /// `Alarm_2:2` `leap = jumpdist / 8`: frames of flight left, 0 grounded.
+    leap: f32,
+    /// `Alarm_2:3` `zspeed = leap / 4`, stepped by `Other_10:25-26`.
+    z: f32,
+    zspeed: f32,
+    /// `Alarm_3` (`alarm[3] = 16` from `Alarm_2:4`): frames until landing.
+    land: f32,
+    /// `Collision_Wall:5` `bounced = 1`: a wall hit ends the `jumpdir` steer.
+    bounced: bool,
+    /// `Other_10:7` drifts only while `spr_idle == sprDogGuardianWalk`
+    /// (`Alarm_1:4` sets it; the staging arm and `Alarm_3:2` clear it).
+    walking: bool,
+    pose: DogGuardianPose,
+}
+
+impl Default for DogLeap {
+    fn default() -> Self {
+        Self {
+            dist: 0.0,
+            dir: 0.0,
+            leap: 0.0,
+            z: 0.0,
+            zspeed: 0.0,
+            land: 0.0,
+            bounced: false,
+            walking: true,
+            pose: DogGuardianPose::Ground,
+        }
+    }
+}
+
+fn dog_leap_airborne(brain: &mut EnemyBrain, vel: &mut Velocity, leap: &mut DogLeap, dt: f32) {
+    if !leap.bounced {
+        set_gml_direction(brain, vel, leap.dir);
+    }
+    set_gml_speed(brain, vel, 8.0);
+    let frames = dt * 30.0;
+    leap.leap -= frames;
+    if leap.leap < 0.0 {
+        leap.leap = 0.0;
+    }
+    leap.z += leap.zspeed * frames;
+    leap.zspeed -= 0.5 * frames;
+}
+
+fn dog_guardian_alarm_1(
+    d: &mut GmlDecide<'_>,
+    leap: &mut DogLeap,
+    rng: &mut (impl RngExt + ?Sized),
+) {
+    d.arm(30.0 + rnd(rng, 20.0));
+    leap.walking = true;
+    leap.pose = DogGuardianPose::Ground;
+    d.impulse(gml_random_angle(rng), 0.5);
+    if d.sees {
+        if d.dist < 100.0 + rnd(rng, 60.0) && gml_roll(rng, 3.0, 2.0) {
+            leap.bounced = false;
+            leap.walking = false;
+            leap.pose = DogGuardianPose::Charge;
+            d.speed(0.0);
+            leap.dist = d.dist * 1.1;
+            leap.dir = d.toward() + ornd(rng, 20.0).to_radians();
+            d.arm2(10.0);
+            d.arm(300.0);
+        } else {
+            d.impulse(d.toward(), 1.4);
+        }
+    }
+}
+
+/// GML `SnowBot`'s `sprite_index == spr_fire`, the key `Other_10:11-13`
+/// picks between the 8 and the 3 px/frame cap. `Alarm_1:13-14` raises it
+/// on the charge arm and `Alarm_1:3-4` on every other arm; a hit overwrites
+/// it with `spr_hurt`, and `enemy/Step_0:27-29` then drops to `spr_idle`/
+/// `spr_walk`, never back to `spr_fire`.
+#[derive(Default, Clone, Copy)]
+pub struct SnowBotFire {
+    armed: bool,
+    hurting: bool,
 }
 
 /// table-driven fire, per bevy `enemy_ai` top to bottom (bosses `continue`
@@ -2130,6 +2277,8 @@ pub fn enemy_ai(
     save: Res<crate::savedata_part::SaveData>,
     mut cues: ResMut<Queue<AudioCue>>,
     mut charge_state: Local<HashMap<Entity, GTimer>>,
+    mut snowbot_fire: Local<HashMap<Entity, SnowBotFire>>,
+    mut dog_leaps: Local<HashMap<Entity, DogLeap>>,
     player_q: Query<(&Pos, &Player), (With<Player>, Without<Enemy>)>,
     mut enemies: Query<
         (
@@ -2142,6 +2291,8 @@ pub fn enemy_ai(
             Option<&BossBrain>,
             Option<&mut SpriteAnim>,
             Option<&HurtAnim>,
+            Option<&mut DogGuardianLeap>,
+            Option<&mut NextHurt>,
         ),
         (With<Enemy>, Without<Prop>),
     >,
@@ -2164,7 +2315,7 @@ pub fn enemy_ai(
     // snapshot, applied to the live position).
     let positions: Vec<(Entity, glam::Vec2, i32, f32)> = enemies
         .iter()
-        .map(|(e, enemy, _, _, pos, _, _, _, _)| {
+        .map(|(e, enemy, _, _, pos, _, _, _, _, _, _)| {
             (
                 e,
                 pos.0,
@@ -2174,9 +2325,13 @@ pub fn enemy_ai(
         })
         .collect();
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
+    snowbot_fire.retain(|e, _| positions.iter().any(|(pe, ..)| pe == e));
+    dog_leaps.retain(|e, _| positions.iter().any(|(pe, ..)| pe == e));
 
-    for (entity, mut enemy, mut brain, mut vel, mut pos, health, boss, mut anim, hurt) in
-        &mut enemies
+    for (
+        entity, mut enemy, mut brain, mut vel, mut pos, health, boss, mut anim, hurt, mut dog_pose,
+        mut next_hurt,
+    ) in &mut enemies
     {
         let epos = pos.0;
         let to_player = player_pos - epos;
@@ -2246,6 +2401,10 @@ pub fn enemy_ai(
         // twice. Their tickers apply the cap themselves, so skipping the
         // generic cap here too is correct.
         let owns_motion = has_dedicated_tick(enemy.kind);
+        // `DogGuardian/Other_10:18-24` puts `speed = 8` outside both caps
+        // while the leap is up.
+        let mut dog_airborne = false;
+        let solids = prop_shapes(&props);
 
         if !owns_motion {
             brain.melee.tick(dt);
@@ -2257,6 +2416,14 @@ pub fn enemy_ai(
             // GML steps every alarm every step; the decide and the fire
             // blocks below only read `just_finished()`.
             brain.burst_timer.tick(dt);
+            if enemy.kind == EnemyKind::DogGuardian && brain.burst_timer.just_finished() {
+                let leap = dog_leaps.entry(entity).or_default();
+                leap.leap = leap.dist / 8.0;
+                leap.zspeed = leap.leap / 4.0;
+                leap.land = 16.0;
+                leap.pose = DogGuardianPose::Airborne;
+                enemy_cue(&mut cues, "sndDogGuardianJump");
+            }
 
             // GML `HostileHorror/Other_10:20-33`: the spray runs every
             // step, not off an alarm, so it is not in `gml_alarm_2_volley`.
@@ -2280,22 +2447,79 @@ pub fn enemy_ai(
             let heading = brain.heading;
             if let Some((impulse_f, cap_f)) = gml_constant_drift(enemy.kind) {
                 // `sprite_index != spr_hurt`, except the laser crystals which
-                // gate on `sprite_index != spr_fire` instead. `DogGuardian` also
-                // gates on `!leap`.
+                // gate on `sprite_index != spr_fire` instead. `DogGuardian`
+                // takes `Other_10:18-35` while `leap` is up and gates the
+                // drift on `spr_idle == sprDogGuardianWalk` (`Other_10:7`).
+                if enemy.kind == EnemyKind::DogGuardian {
+                    let leap = dog_leaps.entry(entity).or_default();
+                    if leap.land > 0.0 {
+                        leap.land -= dt * 30.0;
+                        if leap.land <= 0.0 {
+                            leap.land = 0.0;
+                            leap.leap = 0.0;
+                            leap.z = 0.0;
+                            leap.zspeed = 0.0;
+                            leap.walking = false;
+                            leap.pose = DogGuardianPose::Land;
+                            set_gml_speed(&mut brain, &mut vel, 0.0);
+                            brain.attack = GTimer::from_seconds(8.0 / 30.0, TimerMode::Once);
+                            trauma.add(0.1);
+                            enemy_cue(&mut cues, "sndDogGuardianLand");
+                            commands.spawn((
+                                GameCleanup,
+                                LevelCleanup,
+                                PortalClear {
+                                    timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
+                                    scale: 1.0,
+                                },
+                                Pos(epos),
+                            ));
+                            crate::environment::spawn_dust_ring_12(
+                                &mut commands,
+                                particles_on,
+                                epos + glam::Vec2::new(0.0, 10.0),
+                            );
+                        }
+                    }
+                    if leap.leap > 0.0 {
+                        dog_airborne = true;
+                        dog_leap_airborne(&mut brain, &mut vel, leap, dt);
+                        if let Some(nh) = next_hurt.as_deref_mut() {
+                            nh.0 = 0;
+                        }
+                    } else {
+                        // `Other_10:4-5` `z = 0; zspeed = 0` on the ground.
+                        leap.z = 0.0;
+                        leap.zspeed = 0.0;
+                        if leap.land > 0.0 {
+                            leap.pose = DogGuardianPose::Ground;
+                        }
+                    }
+                }
                 let charging = charge_state.contains_key(&entity);
-                if hurt.is_none()
+                let walking = enemy.kind != EnemyKind::DogGuardian
+                    || dog_leaps.get(&entity).map_or(true, |s| s.walking);
+                if walking
+                    && !dog_airborne
+                    && hurt.is_none()
                     && brain.dash <= 0.0
                     && !(charging && gml_drift_stops_while_firing(enemy.kind))
                 {
                     add_gml_motion(&mut brain, &mut vel, heading, impulse_f, dt);
                 }
-                gml_clamp_speed(&mut brain, &mut vel, enemy.kind, cap_f);
+                if !dog_airborne {
+                    gml_clamp_speed(&mut brain, &mut vel, enemy.kind, cap_f);
+                }
             } else if enemy.kind == EnemyKind::RobotGuard {
                 // GML `SnowBot/Other_10:3-6`: the impulse runs along
                 // `gunangle`, not `direction`, so the sled steers off its
-                // own heading. `Other_10:14-16` caps at 8 while the charge
-                // strip is up (`meleedamage != 0`, which is exactly what
-                // `Alarm_1` raises) and 3 at rest.
+                // own heading. `Other_10:11-13` caps at 8 while
+                // `sprite_index == spr_fire` and 3 otherwise: `Alarm_1:13-14`
+                // raises the sprite WITH `meleedamage` on the charge arm,
+                // but a hit swaps in `spr_hurt` and `enemy/Step_0:27-29`
+                // drops to `spr_idle`/`spr_walk`, never back to `spr_fire`
+                // — so `touch_damage` alone outlives the sprite and the
+                // decide re-arms it instead.
                 if brain.walk > 0.0 {
                     let gun = brain.gunangle;
                     add_gml_motion(&mut brain, &mut vel, gun, 1.0, dt);
@@ -2304,18 +2528,30 @@ pub fn enemy_ai(
                         brain.walk = 0.0;
                     }
                 }
-                let cap = if enemy.touch_damage != 0 { 8.0 } else { 3.0 };
+                let fire = snowbot_fire.entry(entity).or_default();
+                if hurt.is_some() && !fire.hurting {
+                    fire.armed = false;
+                }
+                fire.hurting = hurt.is_some();
+                let cap = if fire.armed { 8.0 } else { 3.0 };
                 gml_clamp_speed(&mut brain, &mut vel, enemy.kind, cap);
             } else if brain.walk > 0.0 {
                 let (impulse_f, cap_f) = gml_walk_law(enemy.kind);
-                // GML `PopoFreak/Other_10:7` pushes along `walkdir` while the
-                // hurt sprite is up, and along `direction` otherwise.
-                let impulse_angle = if enemy.kind == EnemyKind::PopoFreak && hurt.is_some() {
-                    brain.walkdir
-                } else {
-                    heading
-                };
-                add_gml_motion(&mut brain, &mut vel, impulse_angle, impulse_f, dt);
+                // GML `PopoFreak/Other_10:6-7` swaps the push to `walkdir`
+                // at 1 while the hurt sprite is up; `Freak/Other_10:8`,
+                // `ExploFreak/Other_10:8` and `RhinoFreak/Other_10:8` gate
+                // the whole `motion_add` on `sprite_index != spr_hurt` and
+                // push nothing while hurt.
+                let hurt_gated = matches!(
+                    enemy.kind,
+                    EnemyKind::Freak | EnemyKind::ExploFreak | EnemyKind::RhinoFreak
+                );
+                if enemy.kind == EnemyKind::PopoFreak && hurt.is_some() {
+                    let impulse_angle = brain.walkdir;
+                    add_gml_motion(&mut brain, &mut vel, impulse_angle, 1.0, dt);
+                } else if !hurt_gated || hurt.is_none() {
+                    add_gml_motion(&mut brain, &mut vel, heading, impulse_f, dt);
+                }
                 // The walk law's cap is `Other_10`'s own `if (speed > N) speed
                 // = N`, and it sits OUTSIDE the `walk` gate — dropping it let
                 // the `separate` push drive these to its 16 px/frame clamp.
@@ -2338,25 +2574,23 @@ pub fn enemy_ai(
                     }
                 }
             }
+
+            if matches!(enemy.kind, EnemyKind::ExploFreak | EnemyKind::RhinoFreak) {
+                potential_step_solid(
+                    &mut pos.0,
+                    player_pos,
+                    1.0,
+                    def.radius,
+                    &solids,
+                    Some(&mask),
+                );
+            }
         }
 
         // Turtle fire-strip swap: visual-only, omitted (renderer resolves
         // strips from state; no gameplay effect).
 
         let was_dashing = brain.dash > 0.0;
-
-        if matches!(enemy.kind, EnemyKind::DogGuardian)
-            && !was_dashing
-            && dist < 160.0
-            && dist > 40.0
-            && brain.melee.is_finished()
-            && rng.random::<f32>() < 0.67
-        {
-            brain.dash = 0.42;
-            brain.melee = GTimer::from_seconds(10.0, TimerMode::Once);
-            // GML `DogGuardian/Other_10:24` sets `speed = 8` (8 px/frame).
-            vel.0 = dir * 8.0 * crate::SIM_HZ as f32;
-        }
 
         if enemy.kind == EnemyKind::Raven && !was_dashing && brain.melee.is_finished() {
             brain.dash = 0.2;
@@ -2366,7 +2600,7 @@ pub fn enemy_ai(
         }
 
         // GML `Alarm_2` for the objects whose decide only staged `ammo`.
-        if brain.burst_timer.just_finished() {
+        if enemy.kind != EnemyKind::DogGuardian && brain.burst_timer.just_finished() {
             gml_alarm_2_volley(
                 enemy.kind,
                 entity,
@@ -2416,9 +2650,8 @@ pub fn enemy_ai(
         if emplacement {
             vel.0 = glam::Vec2::ZERO;
         } else if dashing {
-            // GML's dash only sets `speed`/`direction`
-            // (`Raven/Alarm_1.gml`, `DogGuardian/Alarm_1.gml`); the
-            // translation happens once, inside `enemy/Collision_Wall`'s
+            // GML's dash only sets `speed`/`direction` (`Raven/Alarm_1.gml`);
+            // the translation happens once, inside `enemy/Collision_Wall`'s
             // `move_bounce_solid` below. Moving here as well integrated
             // `vel * dt` twice, and the second (swept) test started from
             // the unchecked first position — so a dash into a wall
@@ -2438,10 +2671,6 @@ pub fn enemy_ai(
                 EnemyKind::Gator
                     | EnemyKind::BuffGator
                     | EnemyKind::Jock
-                    | EnemyKind::Molefish
-                    | EnemyKind::Molesarge
-                    | EnemyKind::FireBaller
-                    | EnemyKind::SuperFireBaller
                     | EnemyKind::Necromancer
                     | EnemyKind::Mimic
                     | EnemyKind::SuperMimic
@@ -2457,7 +2686,6 @@ pub fn enemy_ai(
             if !owns_motion && !owns_decide && brain.attack.just_finished() {
                 gml_alarm_1_decide(
                     enemy.kind,
-                    run.loop_count,
                     epos,
                     player_pos,
                     &mask,
@@ -2467,23 +2695,35 @@ pub fn enemy_ai(
                     &mut vel,
                     dt,
                     &mut rng,
+                    entity,
+                    &mut dog_leaps,
                 );
+                if enemy.kind == EnemyKind::RobotGuard {
+                    snowbot_fire.entry(entity).or_default().armed = enemy.touch_damage == 4;
+                }
+            }
+
+            if enemy.kind == EnemyKind::DogGuardian
+                && let Some(pose_state) = dog_pose.as_deref_mut()
+                && let Some(leap) = dog_leaps.get(&entity)
+            {
+                pose_state.pose = leap.pose;
+                pose_state.z = leap.z;
+                pose_state.zspeed = leap.zspeed;
             }
 
             let cap = gml_speed_cap(enemy.kind);
-            if vel.0.length() > cap {
+            if !dog_airborne && vel.0.length() > cap {
                 vel.0 = vel.0.normalize() * cap;
             }
         }
 
-        // GML `enemy/Create_0.gml` `friction = 0.4`, applied per step between
-        // the step code above and the move below. See `integrate_verbatim`.
+        // `enemy/Create_0.gml` `friction = 0.4`
         apply_gml_friction(&mut vel.0, brain.friction, dt);
 
         // GML `enemy/Collision_Wall`, per object. Objects that override the
         // event get only their own `move_bounce_solid` argument: no
         // `busycollisions` restore, no `friction` axis slide.
-        let solids = prop_shapes(&props);
         let law = wall_law(enemy.kind);
         let saved_direction = vel.0.normalize_or_zero();
         let saved_speed = vel.0.length();
@@ -2515,6 +2755,16 @@ pub fn enemy_ai(
         {
             // `Maggot/Collision_Wall.gml:5`.
             vel.0 += contact.normal * 30.0;
+        }
+
+        if enemy.kind == EnemyKind::DogGuardian && contact.is_some() {
+            if let Some(leap) = dog_leaps.get_mut(&entity) {
+                let airborne = leap.leap > 0.0;
+                leap.bounced = true;
+                if airborne {
+                    enemy_cue(&mut cues, "sndDogGuardianBounce");
+                }
+            }
         }
 
         // InvSpider/InvLaserCrystal fade: visual-only, omitted.
@@ -2553,8 +2803,7 @@ pub fn enemy_ai(
         // velocity, which is what the next frame's `Other_10` reads. Without
         // this the generic path's `brain.heading` stayed frozen at the spawn
         // value, so every walk impulse went the same way for the enemy's whole
-        // life, and `brain.speed` stayed frozen too, which pinned the
-        // `brain.speed > 0` gate and the `vel = ZERO` fallback.
+        // life.
         sync_heading(&mut brain, &vel);
 
         if enemy.kind == EnemyKind::Necromancer {
@@ -2658,6 +2907,12 @@ pub fn enemy_ai(
                         anim.as_deref_mut(),
                         hurt.is_some(),
                     );
+                    if enemy.kind == EnemyKind::Guardian {
+                        brain.attack = GTimer::from_seconds(
+                            (20.0 + rng.random_range(0.0..40.0)) / 30.0,
+                            TimerMode::Once,
+                        );
+                    }
                     if enemy.kind == EnemyKind::GoldSnowtank {
                         let gdir = glam::Vec2::new(brain.gunangle.cos(), brain.gunangle.sin());
                         spawn_enemy_projectile(
@@ -2721,10 +2976,14 @@ pub fn enemy_ai(
                             entity,
                             GTimer::from_seconds(charge_frames / 30.0, TimerMode::Once),
                         );
-                        brain.attack = GTimer::from_seconds(
-                            def.attack_cooldown + charge_frames / 30.0,
-                            TimerMode::Once,
-                        );
+                        brain.attack = if enemy.kind == EnemyKind::Guardian {
+                            GTimer::from_seconds(charge_frames / 30.0, TimerMode::Once)
+                        } else {
+                            GTimer::from_seconds(
+                                def.attack_cooldown + charge_frames / 30.0,
+                                TimerMode::Once,
+                            )
+                        };
                     } else {
                         let cd_secs = match enemy.kind {
                             EnemyKind::SnowTank => (40.0 + rng.random_range(0.0..30.0)) / 30.0,
@@ -2921,45 +3180,6 @@ pub fn enemy_ai(
             }
         }
 
-        if matches!(
-            enemy.kind,
-            EnemyKind::IdpdGrunt | EnemyKind::IdpdInspector | EnemyKind::IdpdElite
-        ) && brain.ammo > 0
-        {
-            let los = has_line_of_sight(epos, player_pos, &mask);
-            let should_throw = (!los && dist > 64.0) || (los && rng.random::<f32>() < 0.02);
-            if should_throw {
-                brain.ammo = brain.ammo.saturating_sub(1);
-                let base = dir.y.atan2(dir.x);
-                let ang = base + rng.random_range(-10_f32..10.0).to_radians();
-                let sdir = glam::Vec2::new(ang.cos(), ang.sin());
-                commands
-                    .spawn((
-                        GameCleanup,
-                        LevelCleanup,
-                        Team::Enemy,
-                        Projectile {
-                            damage: 5,
-                            life: GTimer::from_seconds(2.0, TimerMode::Once),
-                            radius: 6.0,
-                            knockback: 150.0,
-                            explosive: true,
-                            source: Some(DamageSource::enemy(entity, enemy.kind)),
-                        },
-                        Velocity(sdir * 300.0),
-                        Pos(epos + sdir * 16.0),
-                        BouncesLeft(255),
-                        ProjectileFriction(0.1),
-                        GrenadeFuse {
-                            smoke_armed: false,
-                            friction_switched: false,
-                            alarm1: GTimer::from_seconds(6.0 / 30.0, TimerMode::Once),
-                        },
-                    ))
-                    .insert(ProjectileTyp(1));
-            }
-        }
-
         // GML `Mimic`/`SuperMimic`/`WepMimic/Other_10` has **no** `motion_add`:
         // the mimic never self-moves, it only spins in place pretending to be a
         // weapon. The port lerped it toward the player at up to 2 px/frame, so
@@ -2981,32 +3201,6 @@ pub fn enemy_ai(
                     (90.0 + rng.random_range(0.0..150.0)) / 30.0
                 };
                 brain.attack = GTimer::from_seconds(cd_secs, TimerMode::Once);
-            }
-        }
-
-        if matches!(enemy.kind, EnemyKind::IdpdShield) {
-            brain.melee.tick(dt);
-
-            if brain.slash_delay > 0.0 {
-                brain.slash_delay -= dt * 30.0;
-                if brain.slash_delay <= 0.0 {
-                    brain.slash_delay = 0.0;
-                    // Melee slash visual: GML never damages with it, so the
-                    // headless build keeps the timing state only.
-                }
-            }
-            if brain.melee.just_finished() {
-                // PopoShield follower: sim side keeps the owner-tracking
-                // marker; the shield art resolves renderer-side.
-                let base = brain.gunangle;
-                let off = glam::Vec2::new(base.cos(), base.sin()) * 16.0;
-                commands.spawn((
-                    GameCleanup,
-                    LevelCleanup,
-                    ShieldFollower { owner: entity },
-                    Pos(epos + off),
-                ));
-                brain.melee = GTimer::from_seconds(85.0 / 30.0, TimerMode::Once);
             }
         }
 
@@ -3178,8 +3372,24 @@ pub fn enemy_ai(
             && !dashing
             && !uses_charge
             && !has_dedicated_tick(enemy.kind)
-            && !matches!(enemy.kind, EnemyKind::Gator | EnemyKind::BuffGator)
+            && !matches!(
+                enemy.kind,
+                EnemyKind::Gator
+                    | EnemyKind::BuffGator
+                    | EnemyKind::Crab
+                    | EnemyKind::Raven
+                    | EnemyKind::Salamander
+                    | EnemyKind::PopoFreak
+                    | EnemyKind::HostileHorror
+            )
         {
+            let fire_due = brain.fire_alarm.just_finished();
+            if fire_due {
+                brain.fire_alarm = GTimer::from_seconds(
+                    gml_fire_rearm_secs(enemy.kind, &mut rng),
+                    TimerMode::Once,
+                );
+            }
             // GML gates every shooter on sight plus a per-object distance and
             // roll, in `Alarm_1` short-circuit order. `shoot_range` was
             // standing in for that and let anything shoot through walls.
@@ -3187,7 +3397,6 @@ pub fn enemy_ai(
             if gml_wants_fire(enemy.kind, los, dist, &mut rng) {
                 if def.burst {
                     if brain.burst_left > 0 {
-                        brain.burst_timer.tick(dt);
                         if brain.burst_timer.just_finished() {
                             fire_enemy_bullet(
                                 &mut commands,
@@ -3209,43 +3418,26 @@ pub fn enemy_ai(
                             );
                             brain.burst_left -= 1;
                             if brain.burst_left == 0 {
-                                // GML re-arms as `base + random(N)`.
                                 brain.fire_alarm = GTimer::from_seconds(
-                                    def.attack_cooldown
-                                        + rng.random_range(0.0..def.attack_jitter / 30.0),
+                                    gml_fire_rearm_secs(enemy.kind, &mut rng),
                                     TimerMode::Once,
                                 );
                             }
                         }
-                    } else {
-                        if brain.fire_alarm.just_finished() {
-                            brain.burst_left = def.bullets_per_shot;
-                            brain.burst_timer =
-                                GTimer::from_seconds(def.burst_interval, TimerMode::Once);
-                            fire_enemy_bullet(
-                                &mut commands,
-                                &mut rng,
-                                entity,
-                                &*enemy,
-                                def,
-                                epos,
-                                dir,
-                                euphoria,
-                            );
-                            show_enemy_fire(
-                                &mut commands,
-                                &catalog,
-                                entity,
-                                def.sprite,
-                                anim.as_deref_mut(),
-                                hurt.is_some(),
-                            );
-                            brain.burst_left -= 1;
-                        }
-                    }
-                } else {
-                    if brain.fire_alarm.just_finished() {
-                        fire_enemy_shot(&mut commands, &mut rng, entity, &*enemy, def, epos, dir);
+                    } else if fire_due {
+                        brain.burst_left = def.bullets_per_shot;
+                        brain.burst_timer =
+                            GTimer::from_seconds(def.burst_interval, TimerMode::Once);
+                        fire_enemy_bullet(
+                            &mut commands,
+                            &mut rng,
+                            entity,
+                            &*enemy,
+                            def,
+                            epos,
+                            dir,
+                            euphoria,
+                        );
                         show_enemy_fire(
                             &mut commands,
                             &catalog,
@@ -3254,12 +3446,18 @@ pub fn enemy_ai(
                             anim.as_deref_mut(),
                             hurt.is_some(),
                         );
-                        // GML re-arms as `base + random(N)`.
-                        brain.fire_alarm = GTimer::from_seconds(
-                            def.attack_cooldown + rng.random_range(0.0..def.attack_jitter / 30.0),
-                            TimerMode::Once,
-                        );
+                        brain.burst_left -= 1;
                     }
+                } else if fire_due {
+                    fire_enemy_shot(&mut commands, &mut rng, entity, &*enemy, def, epos, dir);
+                    show_enemy_fire(
+                        &mut commands,
+                        &catalog,
+                        entity,
+                        def.sprite,
+                        anim.as_deref_mut(),
+                        hurt.is_some(),
+                    );
                 }
             }
         }
@@ -5822,8 +6020,6 @@ pub fn tick_scrap_missiles(
         } else if let Some(target) = player_pos {
             vel.0 = (target - pos.0).normalize_or_zero() * 60.0;
         }
-        // `ScrapBossMissile/Other_10.gml` ends with `speed = 2`, then GML
-        // applies `enemy/Create_0.gml`'s `friction = 0.4` before the move.
         apply_gml_friction(&mut vel.0, 0.4, dt);
 
         let wall = move_bounce_solid(
@@ -6202,10 +6398,9 @@ fn gml_right_from_gunangle(gunangle_rad: f32) -> f32 {
 /// / `IDPDRocket` lob; every aggressive arm is gated on `freeze > 40`.
 ///
 /// `freeze` accrues one frame per step while the target is moving or this
-/// object is damaged (`Grunt/Other_10:14-18`). The sibling
-/// `if !target.can_shoot freeze += 3` is dead against a player:
-/// `Player/Create_0:99` sets `can_shoot = true` and no other site ever
-/// clears it, so that arm can never fire.
+/// object is damaged (`Grunt/Other_10:14-18`), plus three frames while the
+/// player cannot shoot (`Grunt/Other_10:16-18`, `scrFire.gml:8` clears
+/// `can_shoot` until the reload finishes).
 ///
 /// Register map: `brain.attack` = `alarm[1]`, `brain.burst_timer` =
 /// `alarm[2]`, `brain.freeze` = `freeze`, `brain.roll` = `roll`,
@@ -6215,11 +6410,12 @@ fn gml_right_from_gunangle(gunangle_rad: f32) -> f32 {
 /// `brain.gunangle` = `gunangle` (radians), `brain.ammo` = `ammo`. The
 /// GML `direction` register rides a local heading map, as in
 /// [`tick_elite_inspectors`].
+#[allow(clippy::too_many_arguments)]
 pub fn tick_popo_rolls(
     time: Res<SimTime>,
     mut commands: Commands,
     mask: Res<FloorMask>,
-    player_q: Query<(&Pos, &Velocity), (With<Player>, Without<Enemy>)>,
+    player_q: Query<(&Pos, &Velocity, &FireCooldown), (With<Player>, Without<Enemy>)>,
     mut enemies: Query<
         (
             Entity,
@@ -6232,23 +6428,31 @@ pub fn tick_popo_rolls(
         (With<Enemy>, Without<Prop>),
     >,
     nades: Query<(), (With<Projectile>, With<PopoNadeM>)>,
+    mut cues: ResMut<Queue<AudioCue>>,
+    catalog: Res<repame_anim::AnimCatalog>,
+    save: Res<crate::savedata_part::SaveData>,
     mut headings: Local<HashMap<Entity, glam::Vec2>>,
+    mut males: Local<HashMap<Entity, bool>>,
 ) {
-    let Ok((player_pos, player_vel)) = player_q.single() else {
+    let Ok((player_pos, player_vel, player_cd)) = player_q.single() else {
         return;
     };
     let player_moving = player_vel.0.length_squared() > 0.001;
+    let can_shoot = player_cd.timer.is_finished();
     let dt = time.delta_secs;
     let frames = dt * crate::SIM_HZ as f32;
     let mut rng = rand::rng();
     headings.retain(|e, _| enemies.contains(*e));
+    males.retain(|e, _| enemies.contains(*e));
     let nades_live = nades.iter().count() as f32;
+    let particles_on = save.settings.particles;
 
     for (entity, enemy, mut brain, mut vel, pos, health) in &mut enemies {
         let elite = enemy.kind == EnemyKind::IdpdElite;
         if !elite && enemy.kind != EnemyKind::IdpdGrunt {
             continue;
         }
+        let male = *males.entry(entity).or_insert_with(|| rng.random_bool(0.5));
         let epos = pos.0;
         let to_player = player_pos.0 - epos;
         let dist = to_player.length();
@@ -6273,8 +6477,15 @@ pub fn tick_popo_rolls(
                     brain.walk = 0.0;
                 }
             }
+            let cap = 3.0 * 30.0;
+            if vel.0.length() > cap {
+                vel.0 = vel.0.normalize() * cap;
+            }
             if player_moving || health.hp < health.max {
                 brain.freeze += 1.0;
+            }
+            if !can_shoot {
+                brain.freeze += 3.0;
             }
         } else if elite {
             // `EliteGrunt/Step_0:33-45`
@@ -6287,6 +6498,14 @@ pub fn tick_popo_rolls(
             vel.0 = glam::Vec2::from_angle(aim) * 7.0 * 30.0;
             *headings.get_mut(&entity).unwrap() = glam::Vec2::from_angle(aim);
             brain.roll_angle = aim.to_degrees() - 90.0;
+            crate::environment::spawn_motes(
+                &mut commands,
+                &catalog,
+                particles_on,
+                epos + glam::Vec2::new(rng.random_range(-3.0..3.0), rng.random_range(-3.0..3.0)),
+                crate::comps_b::MoteStrip::Dust,
+                1,
+            );
         } else {
             // `Grunt/Other_10:24-33`
             vel.0 = heading * 5.0 * 30.0;
@@ -6295,6 +6514,14 @@ pub fn tick_popo_rolls(
                 brain.roll_angle = 0.0;
                 brain.roll = false;
             }
+            crate::environment::spawn_motes(
+                &mut commands,
+                &catalog,
+                particles_on,
+                epos + glam::Vec2::new(rng.random_range(-3.0..3.0), rng.random_range(0.0..6.0)),
+                crate::comps_b::MoteStrip::Dust,
+                1,
+            );
         }
 
         // ---- GML `EliteGrunt/Alarm_2` (3-round burst) ----
@@ -6302,8 +6529,18 @@ pub fn tick_popo_rolls(
             brain.burst_timer.tick(dt);
             if brain.burst_timer.just_finished() {
                 if brain.ammo > 0 {
+                    enemy_cue(&mut cues, "sndGruntFire");
                     brain.wkick = 5.0;
-                    fire_popo_bullet(&mut commands, entity, enemy.kind, epos, brain.gunangle, 10.0, 0.0, 2.0);
+                    fire_popo_bullet(
+                        &mut commands,
+                        entity,
+                        enemy.kind,
+                        epos,
+                        brain.gunangle,
+                        10.0,
+                        rng.random_range(-2.0..2.0),
+                        2.0,
+                    );
                     brain.ammo -= 1;
                     brain.burst_timer =
                         GTimer::from_seconds(3.0 / 30.0, TimerMode::Once);
@@ -6321,13 +6558,13 @@ pub fn tick_popo_rolls(
         // GML `Grunt/Alarm_1:1` and `EliteGrunt/Alarm_1:1-2`, which also
         // carries the elite's `if random(3) < 1 roll = 0` roll-out.
         let mut next = if elite {
-            let base = rng.random_range(13.0..=18.0);
+            let base = rng.random_range(13.0..18.0);
             if rng.random_range(0.0..3.0) < 1.0 {
                 brain.roll = false;
             }
             base
         } else {
-            rng.random_range(15.0..=35.0)
+            rng.random_range(15.0..35.0)
         };
 
         let roll_chance = if elite {
@@ -6335,10 +6572,14 @@ pub fn tick_popo_rolls(
             // for `Grunt` is `Alarm_1:5`, sized by its own hp.
             0.5
         } else {
-            // GML `Grunt/Alarm_1:5`: `random(hp / 2 + 2 + can_shoot * 3) < 1`
-            // with `can_shoot` always 1 against a player.
-            1.0 / ((health.max as f32) / 2.0 + 5.0)
+            // GML `Grunt/Alarm_1:5`: `random(hp / 2 + 2 + can_shoot * 3) < 1`.
+            1.0 / (health.hp as f32 / 2.0 + 2.0 + if can_shoot { 3.0 } else { 0.0 })
         };
+
+        if !elite && brain.roll {
+            brain.attack = GTimer::from_seconds(next / 30.0, TimerMode::Once);
+            continue;
+        }
 
         if !brain.roll {
             if elite {
@@ -6367,6 +6608,15 @@ pub fn tick_popo_rolls(
                     vel.0 = glam::Vec2::from_angle(aim + turn.to_radians()) * 4.0 * 30.0;
                     brain.roll = true;
                     brain.roll_angle = 0.0;
+                    enemy_cue(&mut cues, "sndEliteGruntRoll");
+                    crate::environment::spawn_motes(
+                        &mut commands,
+                        &catalog,
+                        particles_on,
+                        epos,
+                        crate::comps_b::MoteStrip::Dust,
+                        1,
+                    );
                 }
             } else {
                 // `Grunt/Alarm_1:5-9`
@@ -6381,6 +6631,15 @@ pub fn tick_popo_rolls(
                     vel.0 = glam::Vec2::from_angle(aim + turn.to_radians()) * 4.0 * 30.0;
                     brain.roll = true;
                     brain.roll_angle = 0.0;
+                    enemy_cue(&mut cues, "sndRoll");
+                    crate::environment::spawn_motes(
+                        &mut commands,
+                        &catalog,
+                        particles_on,
+                        epos,
+                        crate::comps_b::MoteStrip::Dust,
+                        1,
+                    );
                 }
             }
         }
@@ -6410,8 +6669,18 @@ pub fn tick_popo_rolls(
                     brain.burst_timer = GTimer::from_seconds(1.0 / 30.0, TimerMode::Once);
                     next = 14.0 + rng.random_range(0.0..2.0);
                 } else {
+                    enemy_cue(&mut cues, "sndGruntFire");
                     brain.wkick = 4.0;
-                    fire_popo_bullet(&mut commands, entity, enemy.kind, epos, brain.gunangle, 8.0, 3.0, 3.0);
+                    fire_popo_bullet(
+                        &mut commands,
+                        entity,
+                        enemy.kind,
+                        epos,
+                        brain.gunangle,
+                        8.0,
+                        rng.random_range(-3.0..3.0),
+                        3.0,
+                    );
                     next = 3.0 + rng.random_range(0.0..2.0);
                 }
             } else {
@@ -6466,6 +6735,7 @@ pub fn tick_popo_rolls(
                     brain.grenades -= 1;
                     brain.gunangle = aim + rng.random_range(-10.0_f32..=10.0).to_radians();
                     brain.wkick = 8.0;
+                    enemy_cue(&mut cues, "sndEliteGruntRocketFire");
                     fire_popo_rocket(
                         &mut commands,
                         entity,
@@ -6481,6 +6751,14 @@ pub fn tick_popo_rolls(
                 let to_last = brain.last_seen - epos;
                 brain.gunangle = to_last.y.atan2(to_last.x);
                 brain.wkick = 8.0;
+                enemy_cue(
+                    &mut cues,
+                    if male {
+                        "sndGruntThrowNadeM"
+                    } else {
+                        "sndGruntThrowNadeF"
+                    },
+                );
                 fire_popo_nade(
                     &mut commands,
                     entity,
@@ -6805,11 +7083,12 @@ pub fn tick_ice_flowers(
 /// `brain.right` = `right`, `brain.control` = `control`,
 /// `brain.walk` = `walk`, `brain.wkick` = `wkick`, `brain.gunangle` =
 /// `gunangle` (radians). GML `direction` rides the local heading map.
+#[allow(clippy::too_many_arguments)]
 pub fn tick_popo_gunners(
     time: Res<SimTime>,
     mut commands: Commands,
     mask: Res<FloorMask>,
-    mut player_q: Query<(&Velocity, &mut Pos), (With<Player>, Without<Enemy>)>,
+    mut player_q: Query<(&Velocity, &mut Pos, &FireCooldown), (With<Player>, Without<Enemy>)>,
     mut enemies: Query<
         (
             Entity,
@@ -6823,17 +7102,22 @@ pub fn tick_popo_gunners(
     >,
     shields: Query<&PopoShieldM, (With<PopoShieldM>, Without<Enemy>)>,
     nades: Query<(), (With<Projectile>, With<PopoNadeM>)>,
+    mut cues: ResMut<Queue<AudioCue>>,
+    mut trauma: ResMut<Trauma>,
     mut headings: Local<HashMap<Entity, glam::Vec2>>,
+    mut males: Local<HashMap<Entity, bool>>,
 ) {
-    let Ok((pvel, mut ppos)) = player_q.single_mut() else {
+    let Ok((pvel, mut ppos, player_cd)) = player_q.single_mut() else {
         return;
     };
     let player_moving = pvel.0.length_squared() > 0.001;
+    let can_shoot = player_cd.timer.is_finished();
     let player_at = ppos.0;
     let dt = time.delta_secs;
     let frames = dt * crate::SIM_HZ as f32;
     let mut rng = rand::rng();
     headings.retain(|e, _| enemies.contains(*e));
+    males.retain(|e, _| enemies.contains(*e));
     let nades_live = nades.iter().count() as f32;
     // `Shielder/Alarm_2` opens fire only when it has no shield up.
     let shielded: std::collections::HashSet<Entity> =
@@ -6844,6 +7128,7 @@ pub fn tick_popo_gunners(
         if !shielder && enemy.kind != EnemyKind::IdpdInspector {
             continue;
         }
+        let male = *males.entry(entity).or_insert_with(|| rng.random_bool(0.5));
         let epos = pos.0;
         let to_player = player_at - epos;
         let dist = to_player.length();
@@ -6868,6 +7153,9 @@ pub fn tick_popo_gunners(
         }
         if player_moving || health.hp < health.max {
             brain.freeze += 1.0;
+        }
+        if !can_shoot {
+            brain.freeze += 3.0;
         }
         // `Inspector/Other_10:20-28`: the control field drags the player one
         // pixel per step toward the inspector, per axis, only where free.
@@ -6897,6 +7185,7 @@ pub fn tick_popo_gunners(
                     3.5,
                     dt,
                 );
+                enemy_cue(&mut cues, "sndGruntFire");
                 fire_popo_bullet(
                     &mut commands,
                     entity,
@@ -6918,7 +7207,7 @@ pub fn tick_popo_gunners(
             continue;
         }
         if shielder {
-            let mut next = rng.random_range(15.0..=20.0);
+            let mut next = rng.random_range(15.0..20.0);
             if los {
                 brain.gunangle = aim;
                 brain.right = if player_at.x < epos.x {
@@ -6936,6 +7225,14 @@ pub fn tick_popo_gunners(
                     brain.ammo = 8;
                     next = 50.0;
                 } else if rng.random_range(0.0..3.0) < 1.0 {
+                    enemy_cue(
+                        &mut cues,
+                        if male {
+                            "sndShielderShieldM"
+                        } else {
+                            "sndShielderShieldF"
+                        },
+                    );
                     raise_popo_shield(&mut commands, entity, epos);
                     next = 85.0;
                     vel.0 = glam::Vec2::ZERO;
@@ -6964,6 +7261,14 @@ pub fn tick_popo_gunners(
                 && rng.random_range(0.0..4.0) < 1.0
                 && dist < 96.0
             {
+                enemy_cue(
+                    &mut cues,
+                    if male {
+                        "sndShielderShieldM"
+                    } else {
+                        "sndShielderShieldF"
+                    },
+                );
                 raise_popo_shield(&mut commands, entity, epos);
                 next = 75.0;
                 vel.0 = glam::Vec2::ZERO;
@@ -6977,7 +7282,8 @@ pub fn tick_popo_gunners(
         }
 
         // ---- GML `Inspector/Alarm_1` ----
-        let mut next = rng.random_range(20.0..=40.0);
+        let mut next = rng.random_range(20.0..40.0);
+        let was_control = brain.control;
         brain.control = false;
         if rng.random_range(0.0..3.0) < 1.0 && brain.freeze > 40.0 {
             brain.control = true;
@@ -6992,6 +7298,7 @@ pub fn tick_popo_gunners(
             if rng.random_range(0.0..2.0) < 1.0 && brain.freeze > 40.0 {
                 // GML `PopoSlug`: friction 0.8, knockback 8, damage 5,
                 // `typ = 1`.
+                enemy_cue(&mut cues, "sndGruntFire");
                 let a = brain.gunangle + rng.random_range(-6.0..=6.0_f32).to_radians();
                 commands.spawn((
                     GameCleanup,
@@ -7011,6 +7318,7 @@ pub fn tick_popo_gunners(
                     Pos(epos),
                 ));
                 brain.wkick = 8.0;
+                trauma.add(3.0 / 20.0);
                 next = 20.0 + rng.random_range(0.0..10.0);
             } else {
                 let turn: f32 = if dist > 48.0 {
@@ -7045,6 +7353,14 @@ pub fn tick_popo_gunners(
                 let to_last = brain.last_seen - epos;
                 brain.gunangle = to_last.y.atan2(to_last.x);
                 brain.wkick = 8.0;
+                enemy_cue(
+                    &mut cues,
+                    if male {
+                        "sndGruntThrowNadeM"
+                    } else {
+                        "sndGruntThrowNadeF"
+                    },
+                );
                 fire_popo_nade(
                     &mut commands,
                     entity,
@@ -7055,6 +7371,25 @@ pub fn tick_popo_gunners(
                     10.0,
                 );
             }
+        }
+        if !brain.control && was_control {
+            enemy_cue(
+                &mut cues,
+                if male {
+                    "sndInspectorEndM"
+                } else {
+                    "sndInspectorEndF"
+                },
+            );
+        } else if brain.control && !was_control {
+            enemy_cue(
+                &mut cues,
+                if male {
+                    "sndInspectorStartM"
+                } else {
+                    "sndInspectorStartF"
+                },
+            );
         }
         brain.attack = GTimer::from_seconds(next / 30.0, TimerMode::Once);
     }
@@ -7462,7 +7797,7 @@ pub fn tick_elite_inspectors(
     time: Res<SimTime>,
     mut commands: Commands,
     mask: Res<FloorMask>,
-    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
+    player_q: Query<(&Pos, &FireCooldown), (With<Player>, Without<Enemy>)>,
     mut player_vel: Query<&mut Velocity, (With<Player>, Without<Enemy>)>,
     mut enemies: Query<
         (
@@ -7483,9 +7818,10 @@ pub fn tick_elite_inspectors(
     mut headings: Local<HashMap<Entity, glam::Vec2>>,
     mut inited: Local<std::collections::HashSet<Entity>>,
 ) {
-    let Ok(player_pos) = player_q.single() else {
+    let Ok((player_pos, player_cd)) = player_q.single() else {
         return;
     };
+    let can_shoot = player_cd.timer.is_finished();
     let player_speed_sq = player_vel
         .single()
         .map(|v| v.0.length_squared())
@@ -7523,12 +7859,15 @@ pub fn tick_elite_inspectors(
         let los = has_line_of_sight(epos, player_pos.0, &mask);
         let freeze = brain.freeze;
 
-        // GML `EliteInspector/Other_10:9-15`: `target.speed > 0 or
-        // hp < max_hp`. The sibling `if !target.can_shoot freeze += 3`
-        // is unreachable against a player -- `Player/Create_0:99` sets
-        // `can_shoot = true` and no site clears it.
+        // GML `EliteInspector/Other_10:10-16`: `target.speed > 0 or
+        // hp < max_hp`, then `if target.can_shoot freeze += 3` — the
+        // elite gate is the positive form, live during the player's
+        // reload window.
         if player_speed_sq > 0.001 || health.hp < health.max {
             brain.freeze += 1.0;
+        }
+        if can_shoot {
+            brain.freeze += 3.0;
         }
 
         // Walk locomotion along the latched heading, capped at
@@ -7676,11 +8015,6 @@ pub fn tick_elite_inspectors(
             }
         }
 
-        // GML `enemy/Create_0.gml` `friction = 0.4`, inherited by
-        // `EliteInspector` (its `Create_0` sets no friction of its own).
-        // Applied after the step code and before the move, like every other
-        // enemy path. Without it the `Other_10` `motion_add` ratcheted the
-        // inspector to its 3.5 px/frame cap and held it there.
         apply_gml_friction(&mut vel.0, 0.4, dt);
         pos.0 += vel.0 * dt;
         clamp_to_arena(&mut pos.0, 10.0);
@@ -7700,7 +8034,7 @@ pub fn tick_elite_shielders(
     time: Res<SimTime>,
     mut commands: Commands,
     mask: Res<FloorMask>,
-    player_q: Query<(&Pos, &Velocity), (With<Player>, Without<Enemy>)>,
+    player_q: Query<(&Pos, &Velocity, &FireCooldown), (With<Player>, Without<Enemy>)>,
     mut enemies: Query<
         (
             Entity,
@@ -7715,9 +8049,10 @@ pub fn tick_elite_shielders(
     mut headings: Local<HashMap<Entity, glam::Vec2>>,
     mut inited: Local<std::collections::HashSet<Entity>>,
 ) {
-    let Ok((player_pos, player_v)) = player_q.single() else {
+    let Ok((player_pos, player_v, player_cd)) = player_q.single() else {
         return;
     };
+    let can_shoot = player_cd.timer.is_finished();
     let dt = time.delta_secs;
     let mut rng = rand::rng();
     inited.retain(|e| enemies.contains(*e));
@@ -7748,10 +8083,14 @@ pub fn tick_elite_shielders(
         let los = has_line_of_sight(epos, player_pos.0, &mask);
         let freeze = brain.freeze;
 
-        // GML `EliteShielder/Other_0`: `target.speed > 0 or hp < max_hp`.
-        // The `!target.can_shoot` sibling is unreachable against a player.
-        if player_v.0.length_squared() > 0.001 || health.hp < health.max {
+        // GML `EliteShielder/Other_10:12-16`: `target.speed > 0 && hp <
+        // max_hp`, then `if target[$ "can_shoot"] freeze += 3` — the
+        // `&&` gate and the positive `can_shoot` form.
+        if player_v.0.length_squared() > 0.001 && health.hp < health.max {
             brain.freeze += 1.0;
+        }
+        if can_shoot {
+            brain.freeze += 3.0;
         }
 
         let head = headings.get(&entity).copied().unwrap_or(glam::Vec2::X);
@@ -7897,8 +8236,6 @@ pub fn tick_elite_shielders(
             }
         }
 
-        // As for `EliteInspector`: `EliteShielder/Create_0` sets no friction
-        // of its own, so it inherits `enemy/Create_0.gml`'s 0.4.
         apply_gml_friction(&mut vel.0, 0.4, dt);
         pos.0 += vel.0 * dt;
         clamp_to_arena(&mut pos.0, 11.0);
@@ -8447,6 +8784,25 @@ mod gml_motion_cap_tests {
                 gml_speed_cap(kind).is_finite(),
                 "{kind:?} has no speed ceiling"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod gml_rorand_tests {
+    use super::*;
+
+    #[test]
+    fn orandom_samples_plus_minus_half() {
+        let mut rng = rand::rng();
+        for n in [1.0_f32, 3.0, 10.0, 15.0, 16.0] {
+            for _ in 0..256 {
+                let v = ornd(&mut rng, n);
+                assert!(
+                    (-n * 0.5..=n * 0.5).contains(&v),
+                    "orandom({n}) sampled {v}, outside -n/2..+n/2"
+                );
+            }
         }
     }
 }

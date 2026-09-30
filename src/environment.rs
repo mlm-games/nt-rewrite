@@ -240,7 +240,7 @@ pub fn tick_environment_hazards(
         &mut commands,
         dt,
         paused.is_some_and(|p| p.0),
-        portals.is_empty(),
+        !portals.is_empty(),
         &walls,
         &mut traps,
     );
@@ -646,6 +646,20 @@ fn spawn_dust_ring(commands: &mut Commands, particles_on: bool, pos: glam::Vec2,
     }
 }
 
+pub fn spawn_dust_ring_12(commands: &mut Commands, particles_on: bool, pos: glam::Vec2) {
+    if !particles_on {
+        return;
+    }
+    let mut rng = rand::rng();
+    let mut ang = rng.random_range(0.0..std::f32::consts::TAU);
+    for _ in 0..12 {
+        let dir = glam::Vec2::from_angle(ang);
+        let vel = glam::Vec2::new(dir.x * 3.0, dir.y * 2.4) * 30.0;
+        spawn_native_dust_mote_vel(commands, true, pos, vel);
+        ang += 30.0_f32.to_radians();
+    }
+}
+
 pub fn spawn_prop_corpse(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
@@ -892,6 +906,20 @@ fn spawn_native_dust_mote(
     direction: glam::Vec2,
     speed: f32,
 ) {
+    spawn_native_dust_mote_vel(
+        commands,
+        particles_on,
+        pos,
+        direction.normalize_or_zero() * speed * 30.0,
+    );
+}
+
+fn spawn_native_dust_mote_vel(
+    commands: &mut Commands,
+    particles_on: bool,
+    pos: glam::Vec2,
+    vel: glam::Vec2,
+) {
     if !particles_on {
         return;
     }
@@ -902,10 +930,7 @@ fn spawn_native_dust_mote(
     commands.spawn((
         GameCleanup,
         LevelCleanup,
-        GroundPhysics {
-            vel: direction.normalize_or_zero() * speed * 30.0,
-            rotspeed: spin,
-        },
+        GroundPhysics { vel, rotspeed: spin },
         FxAngle(rng.random_range(0.0..std::f32::consts::TAU)),
         Mote {
             friction: 0.3,

@@ -73,26 +73,6 @@ pub struct VortexSnapshot {
 }
 
 impl VortexSnapshot {
-    pub fn empty(view: [f32; 4]) -> Self {
-        Self {
-            wisps: [[-1.0, -1.0, -1.0, -1.0]; VORTEX_WISPS],
-            debris: [[-1000.0, 0.0, 0.0, 0.0]; VORTEX_DEBRIS],
-            streams: [[-1.0, 0.0, 0.0, 0.0]; VORTEX_WISPS],
-            stars: [[-1000.0, 0.0, 0.0, 0.0]; VORTEX_WISPS],
-            vards: [[-1000.0, 0.0, 0.0, 0.0]; VORTEX_VARDS],
-            vard_meta: [[0.0; 4]; VORTEX_VARDS],
-            ticks: 0.0,
-            drain_bias: 0.0,
-            bg_rgb: [0.0, 0.0, 0.0],
-            bg_alpha: 0.0,
-            thresh: 2.5,
-            kindpacked: 0.0,
-            draw_bolts: 0.0,
-            draw_details: 1.0,
-            view,
-        }
-    }
-
     fn uniform_words(&self) -> Vec<f32> {
         let mut raw = Vec::with_capacity(
             VORTEX_WISPS * 4

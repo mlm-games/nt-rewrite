@@ -51,7 +51,6 @@ use crate::effects::{
     ChromaticAberration, FlashWhite, SlowMotion, chromatic_pulse, flash_white, slow_motion,
     spawn_burst,
 };
-use crate::enemy_data::enemy_def;
 use crate::environment::{PropDeathEffect, spawn_prop_corpse, spawn_prop_death_effect};
 use crate::msg::Queue;
 use crate::pickups::ProtoChestState;
@@ -377,6 +376,8 @@ fn apply_secret_transition(
     run: &mut Run,
     triggers: &mut crate::secrets::SecretTriggers,
     crib: &mut crate::CribTrip,
+    save: &mut SaveData,
+    dirty: &mut SaveDirty,
 ) -> Option<SecretTarget> {
     // GML `GameCont/Other_5.gml:24-44`: the crib hop runs before anything
     // else, including the queued secret, and short-circuits the advance.
@@ -393,6 +394,9 @@ fn apply_secret_transition(
         run.portal_open = false;
         let prev = run.gen_seed;
         run.gen_seed = derive_floor_seed(prev, run.floor, 107, run.loop_count);
+        if crate::savedata_part::try_unlock_race(save, RaceId::Cuz) {
+            dirty.0 = true;
+        }
         triggers.reset_floor_flags();
         return None;
     }
@@ -401,6 +405,9 @@ fn apply_secret_transition(
         crib.can_advance = true;
         return None;
     }
+
+    // GML `GameCont/Other_5:136` (Room End): `hard += hardmode ? 2 : 1`.
+    run.hard += if run.hardmode { 2 } else { 1 };
 
     if let Some(target) = triggers.take_queued() {
         if matches!(target, SecretTarget::Vault | SecretTarget::CrownVault) {
@@ -451,8 +458,6 @@ fn apply_secret_transition(
         return None;
     }
 
-    // GML `GameCont/Other_5:136` (Room End): `hard += hardmode ? 2 : 1`.
-    run.hard += if run.hardmode { 2 } else { 1 };
     run.floor += 1;
     run.loop_count = (run.floor - 1) / 15;
     let (world, floor_in_area) = route_coordinates(run.floor);
@@ -2485,7 +2490,13 @@ pub fn tick_portal_suck(
     let entered_secret = if looped {
         None
     } else {
-        apply_secret_transition(&mut run, &mut route.triggers, &mut route.crib)
+        apply_secret_transition(
+            &mut run,
+            &mut route.triggers,
+            &mut route.crib,
+            &mut save,
+            &mut dirty,
+        )
     };
 
     // GML `IceFlower/Step_0:14-19`: the jungle secret eats the Last Wish
@@ -2729,6 +2740,7 @@ pub struct RoomEntry<'w, 's> {
     pub ice_flower: Option<Res<'w, IceFlowerSeed>>,
     /// GML `instance_exists(CrownObject)`, the second vault-statue gate.
     pub crowns: Query<'w, 's, Entity, With<crate::comps_b::CrownObject>>,
+    pub portals: Query<'w, 's, Entity, With<crate::idpd::IdpdSpawnPortal>>,
 }
 
 pub fn tick_floor_transition(
@@ -2816,15 +2828,17 @@ pub fn tick_floor_transition(
             if perm.horror {
                 run.horror = true;
             }
+            let live_portals = room.portals.iter().count() as u32;
             crate::setup::spawn_level(
                 &mut commands,
                 &catalog,
-                &run,
+                &mut run,
                 scarier.0,
                 heavy_heart.0,
                 crown_kind,
                 player_ultra,
                 &plan,
+                live_portals,
                 &mut mask,
                 &mut tops,
                 room.triggers.vaults_entered,
@@ -3132,69 +3146,6 @@ pub fn flush_dirty_save(
     if *accumulator >= 5.0 {
         *accumulator = 0.0;
         dirty.0 = false;
-    }
-}
-
-/// Immediate single-fire save flush: clears a set dirty flag once;
-/// later ticks are no-ops until something dirties again.
-pub fn flush_dirty_save_once(mut dirty: ResMut<SaveDirty>) {
-    if dirty.0 {
-        dirty.0 = false;
-    }
-}
-
-/// Boss HP bar readout: first boss enemy's (hp, max).
-pub fn boss_info(q: &Query<(&Enemy, &Health), With<Enemy>>) -> Option<(u32, u32)> {
-    for (enemy, health) in q {
-        if enemy_def(enemy.kind).boss {
-            return Some((health.hp.max(0) as u32, health.max as u32));
-        }
-    }
-    None
-}
-
-/// Run teardown: despawn everything tagged `GameCleanup` and reset the
-/// floor mask. Camera strips / damage numbers / juice particles from
-/// the bevy build have no sim counterparts and are omitted.
-pub fn cleanup_run(
-    mut commands: Commands,
-    q: Query<Entity, With<GameCleanup>>,
-    mut mask: Option<ResMut<FloorMask>>,
-) {
-    for e in &q {
-        commands.entity(e).despawn();
-    }
-    commands.remove_resource::<IceFlowerSeed>();
-
-    if let Some(m) = mask.as_mut() {
-        **m = FloorMask::default();
-    }
-}
-
-/// Full run teardown (bevy `mod.rs::teardown_game` parity).
-/// `cleanup_run` covers `GameCleanup`, but sim floaters (`DamageNumber`)
-/// and burst dots (`Particle`) spawn untagged — like the bevy
-/// `DamageNumber`/`Particle`/`TrailGhost` queries — so they are drained
-/// here too. (No `TrailGhost` equivalent exists in the sim.)
-pub fn teardown_game(
-    mut commands: Commands,
-    q: Query<Entity, With<GameCleanup>>,
-    numbers: Query<Entity, With<repame_fx::DamageNumber>>,
-    particles: Query<Entity, With<repame_fx::Particle>>,
-    mut mask: Option<ResMut<FloorMask>>,
-) {
-    for e in &q {
-        commands.entity(e).despawn();
-    }
-    for e in &numbers {
-        commands.entity(e).despawn();
-    }
-    for e in &particles {
-        commands.entity(e).despawn();
-    }
-
-    if let Some(m) = mask.as_mut() {
-        **m = FloorMask::default();
     }
 }
 

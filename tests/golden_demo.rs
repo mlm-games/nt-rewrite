@@ -25,8 +25,8 @@
 //! The tape (seed 4242, desert 1-1):
 //! - ticks 0-29: hold W (walk north)
 //! - tick 30: tap E (interact pulse)
-//! - ticks 92-119: hold D (strafe east; BEFORE the fire leg so the
-//!   only other actor can't touch the player mid-walk)
+//! - ticks 40-169: hold D (strafe east; starts BEFORE the fire leg so
+//!   the only other actor can't touch the player mid-walk)
 //! - ticks 140-147: hold LMB (fire revolver at the bandit)
 //! - tick 148: release LMB
 //! - ticks 170-171: tap Space (swap pulse)
@@ -44,7 +44,7 @@ use nt_rewrite::spatial::Pos;
 use nt_rewrite::state::{AppState, Paused};
 use repose_core::Scheduler;
 use repose_core::input::{Key, KeyEvent, KeyEventType, Modifiers, PhysicalKey};
-use repose_core::shortcuts::{Action, KeyChord};
+use repose_core::shortcuts::KeyChord;
 
 const DT: Duration = Duration::from_millis(33);
 const TICKS: usize = 220;
@@ -302,7 +302,6 @@ fn run_tape() -> Vec<TickSnap> {
                 let chord = KeyChord::new(Key::Escape, Modifiers::default());
                 let action = nt_state.resolve_action(&chord).expect("Esc must resolve");
                 assert!(nt_state.handle(action), "resume shortcut must dispatch");
-                let _ = Action::Custom("unused".into());
             }
             191 => {
                 app.stage_key(&key_up(Key::Escape, PhysicalKey::Escape));

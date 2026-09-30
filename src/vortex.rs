@@ -10,9 +10,9 @@
 //! keeps the shared RNG stream and debris spawn cadence identical) while
 //! the entity handles are dropped.
 //!
-//! Timing is [`repame_sim::SimTime`] driven: [`tick_spiral`] advances the
-//! control at the GML 30 Hz cadence (`dt * 30`), exactly like the bevy
-//! `vortex_tick` system. Area selection goes through [`gml_area_for_area`]
+//! Timing is fixed-step driven: `App::advance` calls [`SpiralCtl::step`]
+//! once per GML 30 Hz tick, exactly like the bevy `vortex_tick` system.
+//! Area selection goes through [`gml_area_for_area`]
 //! (bevy `gml_area_for_bevy_area` by variant name) into
 //! [`SpiralKind::for_gml_area`]; `AreaId::Loop` maps to GML area 1, i.e.
 //! `Normal` — there is no loop-count branch in the reference.
@@ -22,7 +22,6 @@ use crate::vortex_pass::{
     vard_slot,
 };
 use bevy_ecs::prelude::*;
-use repame_sim::SimTime;
 
 use crate::data::AreaId;
 
@@ -109,12 +108,6 @@ pub fn gml_area_for_area(area: AreaId) -> u8 {
         AreaId::CrownVault => 100,
         AreaId::Loop => 1,
     }
-}
-
-/// Area -> spiral variant (area/loop selection: `Loop` rides GML area 1,
-/// hence `Normal`, exactly like the reference).
-pub fn kind_for_area(area: AreaId) -> SpiralKind {
-    SpiralKind::for_gml_area(gml_area_for_area(area))
 }
 
 /// Re-warm the view spiral for a fresh campfire-logo room (GML
@@ -372,14 +365,6 @@ pub struct SpiralCtl {
 }
 
 impl SpiralCtl {
-    pub fn warmed_up() -> Self {
-        Self::warmed_up_for_gml_area(0)
-    }
-
-    pub fn warmed_up_for_area(area: AreaId) -> Self {
-        Self::warmed_up_for_gml_area(gml_area_for_area(area))
-    }
-
     /// Seeded warmup: the spiral and debris streams roll from `seed` (run
     /// seed), so equal seeds snapshot identically.
     pub fn warmed_up_for_area_seeded(area: AreaId, seed: u64) -> Self {
@@ -441,16 +426,6 @@ impl SpiralCtl {
             ctl.tick_once();
         }
         ctl
-    }
-
-    /// Re-warm under a new stream seed (run seed). Same seed + same
-    /// ticks = identical streams and snapshot.
-    pub fn with_seed(self, seed: u64) -> Self {
-        Self::warmed_up_for_gml_area_seeded_in_view(self.gml_area, seed, self.view_w)
-    }
-
-    pub fn with_view_w(self, view_w: f32) -> Self {
-        Self::warmed_up_for_gml_area_seeded_in_view(self.gml_area, self.seed, view_w)
     }
 
     /// Mark the spiral dead (bevy `mark_vortex_dead` / `teardown_vortex`):
@@ -1041,11 +1016,6 @@ pub fn orbit(angle: f32, view_w: f32) -> (f32, f32) {
     )
 }
 
-/// Legacy 320-base orbit (warmup/tests without a live view width).
-pub fn orbit_base(angle: f32) -> (f32, f32) {
-    orbit(angle, GUI_W)
-}
-
 // GML uses degrees, the sim uses radians.
 fn deg_sin(deg: f32) -> f32 {
     deg.to_radians().sin()
@@ -1058,15 +1028,6 @@ fn deg_cos(deg: f32) -> f32 {
 /// GML Spiral/Step_0 destroy plane: 2.5 alive, 3.0 while draining.
 pub fn vortex_thresh(alive: bool) -> f32 {
     if alive { 2.5 } else { 3.0 }
-}
-
-/// Fixed-step driver at the GML 30 Hz cadence (bevy `vortex_tick` rate
-/// half: `step(dt * 30)`; uniform upload stays renderer-side).
-pub fn tick_spiral(time: Res<SimTime>, ctl: Option<ResMut<SpiralCtl>>) {
-    let Some(mut ctl) = ctl else {
-        return;
-    };
-    ctl.step(time.delta_secs * 30.0);
 }
 
 #[cfg(test)]

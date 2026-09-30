@@ -164,42 +164,6 @@ pub const AMMO_GAUGE_ICONS: [(&str, &str); 5] = [
 /// keyboard "E" pill, subimage 1 the other-key/gamepad plate.
 pub const PICKUP_BUTTON_ART: &str = "images/sprEPickup.png";
 
-/// The `scrDrawInteractionHUD` prompt, polled by the UI. `weapon_name` is
-/// the `loc("Weapons", wep, "Name", _name)` line drawn at `(x, y - 31)`;
-/// `button` is the `sprEPickup` pill; `gauge` is the per-type ammo
-/// `scrDrawTypeAmmo` pair with `fill = _player.ammo[type] /
-/// _type_capacity`. GML only shows the gauge for a gun
-/// (`if (type == Ammo.None) _text_offset = 0`).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct PickupPrompt {
-    pub weapon_name: String,
-    pub pos: [f32; 2],
-    pub button: &'static str,
-    pub button_frame: u32,
-    pub gauge: Option<(&'static str, &'static str)>,
-    pub gauge_fill: f32,
-}
-
-/// Mirror [`crate::pickups::WeaponLabel`] into the pollable prompt
-/// state. The predicate itself (nearest `WepPickup` whose mask overlaps
-/// the player) lives in `pickups.rs`; this is the UI-shaped view of it.
-pub fn pickup_prompt(world: &World) -> Option<PickupPrompt> {
-    let label = world.get_resource::<crate::pickups::WeaponLabel>()?;
-    let target = label.target?;
-    if label.text.is_empty() {
-        return None;
-    }
-    let at = world.get::<Pos>(target)?.0;
-    Some(PickupPrompt {
-        weapon_name: label.text.clone(),
-        pos: [at.x, at.y],
-        button: PICKUP_BUTTON_ART,
-        button_frame: label.button_frame,
-        gauge: label.ammo_gauge,
-        gauge_fill: label.ammo_fill,
-    })
-}
-
 /// Cleared flags (bevy `reset_hud_flags` parity: game over off,
 /// mutation picks/toast/boss/loop cleared IN PLACE — hp, weapons,
 /// ammo, level and the rest are preserved).

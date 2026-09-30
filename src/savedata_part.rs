@@ -685,13 +685,11 @@ impl Versioned for SaveData {
     }
 }
 
-// NOTE: `is_race_unlocked` / `check_progress_unlocks` above are the
+// NOTE: `is_race_unlocked` / `check_progress_unlocks` below are the
 // `src/game/generated/unlocks.rs` gameplay slice that already lived here;
 // the `skin_unlocks.rs` half now lives in the section below.
 // Save migration is delegated to `game-utils`' `Versioned` implementation.
 
-// TODO(port): try_unlock_race calls is_race_unlocked (src/game/generated/unlocks.rs) and
-// SaveData::race_loadout_mut (src/save.rs); neither is part of this slice. Body kept verbatim.
 pub fn try_unlock_race(save: &mut SaveData, race: crate::data::RaceId) -> bool {
     try_unlock_race_with_menu(save, race, None)
 }

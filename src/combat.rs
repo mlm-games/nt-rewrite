@@ -14,13 +14,13 @@ use crate::anim::SpriteAnim;
 use crate::audio::{AudioCue, GameAudio};
 use crate::comps_a::{
     ARENA_H, ARENA_W, BouncesLeft, ChainLightning, CurrentFrame, DamageSource, DiscFlight,
-    FireCooldown, FlameShellSlowDeath, FlameTrail, FloorMask, GameCleanup, GrenadeFuse, Health,
-    HitId, Hitbox, HitsAllTeams, Homing, Inventory, LastDamageTaken, LevelCleanup, LightningArc,
-    NextHurt, PendingWallBreak, PiercesLeft, PlasmaSize, Player, Projectile, ProjectileAccel,
-    ProjectileFade, ProjectileFriction, ProjectileHitSet, ProjectileTyp, RaceState,
-    RecycleGlandYield, Run, SaveDirty, Score, ShellBonus, ShellWallBounce, SlashProjectile,
-    SpawnGrace, SpawnHazardOnDeath, SplitOnDeath, Sticky, Team, Toast, Velocity, WallCell,
-    WallTile, boiling_veins_damage,
+    DogGuardianLeap, DogGuardianPose, FireCooldown, FlameShellSlowDeath, FlameTrail, FloorMask,
+    GameCleanup, GrenadeFuse, Health, HitId, Hitbox, HitsAllTeams, Homing, Inventory,
+    LastDamageTaken, LevelCleanup, LightningArc, NextHurt, PendingWallBreak, PiercesLeft,
+    PlasmaSize, Player, Projectile, ProjectileAccel, ProjectileFade, ProjectileFriction,
+    ProjectileHitSet, ProjectileTyp, RaceState, RecycleGlandYield, Run, SaveDirty, Score,
+    ShellBonus, ShellWallBounce, SlashProjectile, SpawnGrace, SpawnHazardOnDeath, SplitOnDeath,
+    Sticky, Team, Toast, Velocity, WallCell, WallTile, boiling_veins_damage,
 };
 use crate::comps_b::{
     Beam, BigDogMissileState, ChestKind, Corpse, CorpseCollision, CustomExplosion, DeploysSentry,
@@ -102,6 +102,10 @@ impl HitFlash {
 /// body already moving keeps its own motion.
 pub fn apply_knockback(velocity: &mut glam::Vec2, dir: glam::Vec2, force: f32) {
     *velocity += dir.normalize_or_zero() * force;
+}
+
+fn airborne_leap(leap: Option<&DogGuardianLeap>) -> bool {
+    leap.is_some_and(|guardian| guardian.pose == DogGuardianPose::Airborne)
 }
 
 /// Gamma Guts aura: enemies within 60px of a guts carrier whose
@@ -489,9 +493,9 @@ mod corpse_launch_tests {
 /// counting, Throne/ThroneII transitions, feel triggers, death burst,
 /// Throne boom, hit sting.
 ///
-/// Slice B (not here): per-kind spawn arms (Ballguy, ExploFreak,
-/// BigMaggot, …), unlock/save writes, the player-death branch. Each is
-/// marked TODO at its bevy location.
+/// The per-kind spawn arms (Ballguy, ExploFreak, BigMaggot, …) and the
+/// kill unlocks/save writes run in this same fn; only the
+/// player-death branch lives elsewhere (`deaths::resolve_player_gameover`).
 pub fn resolve_enemy_deaths(
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
@@ -1200,6 +1204,7 @@ pub fn corpse_hits(
                 &mut Health,
                 &mut NextHurt,
                 Option<&mut Velocity>,
+                Option<&DogGuardianLeap>,
             ),
             With<Enemy>,
         >,
@@ -1237,12 +1242,13 @@ pub fn corpse_hits(
                 mut health,
                 mut next_hurt,
                 mut target_velocity,
+                leap,
             ) in &mut targets
             {
                 if corpse_speed.length() <= 60.0 {
                     break;
                 }
-                if health.hp <= 0 || next_hurt.0 > frame.0 {
+                if health.hp <= 0 || (next_hurt.0 > frame.0 && !airborne_leap(leap)) {
                     continue;
                 }
                 if collision.source_size < crate::enemy_data::gml_size(enemy.kind) - 1 {
@@ -1259,7 +1265,7 @@ pub fn corpse_hits(
                     (target_speed / 150.0).round() as i32 + i32::from(impact_wrists) + 1
                 };
                 health.hp -= damage;
-                next_hurt.0 = frame.0 + 5;
+                next_hurt.0 = if airborne_leap(leap) { 0 } else { frame.0 + 5 };
                 if let Some(velocity) = target_velocity.as_deref_mut() {
                     velocity.0 += direction * (corpse_speed.length() * 0.5);
                 }
@@ -2210,6 +2216,7 @@ fn chain_to_nearby_targets(
             Option<&Shield>,
             Option<&mut NextHurt>,
             Option<&mut BigDogMissileState>,
+            Option<&DogGuardianLeap>,
         ),
         Without<Projectile>,
     >,
@@ -2230,7 +2237,7 @@ fn chain_to_nearby_targets(
 
     for _ in 0..jumps {
         let mut best: Option<(Entity, glam::Vec2, f32)> = None;
-        for (target_e, target_pos, target_team, _, _, _, _, _, missile) in targets.iter() {
+        for (target_e, target_pos, target_team, _, _, _, _, _, missile, _) in targets.iter() {
             if missile.is_some() || *target_team != Team::Enemy || visited.contains(&target_e) {
                 continue;
             }
@@ -2250,7 +2257,7 @@ fn chain_to_nearby_targets(
 
         damage = ((damage as f32) * falloff).round().max(1.0) as i32;
 
-        for (target_e, _, _, _, mut health, vel_opt, _, _, missile) in targets.iter_mut() {
+        for (target_e, _, _, _, mut health, vel_opt, _, _, missile, _) in targets.iter_mut() {
             if target_e != next_e || missile.is_some() {
                 continue;
             }
@@ -2317,11 +2324,12 @@ fn retaliate_sharp_teeth(
             Option<&Shield>,
             Option<&mut NextHurt>,
             Option<&mut BigDogMissileState>,
+            Option<&DogGuardianLeap>,
         ),
         Without<Projectile>,
     >,
 ) {
-    for (ee, epos, team, _, mut health, _, _, nexthurt, missile) in targets.iter_mut() {
+    for (ee, epos, team, _, mut health, _, _, nexthurt, missile, leap) in targets.iter_mut() {
         if missile.is_some() || *team != Team::Enemy {
             continue;
         }
@@ -2330,7 +2338,7 @@ fn retaliate_sharp_teeth(
         }
         health.hp -= damage * 2;
         if let Some(mut nh) = nexthurt {
-            nh.0 = frame.0 + 5;
+            nh.0 = if airborne_leap(leap) { 0 } else { frame.0 + 5 };
         }
         HitFlash::apply(commands, ee, [1.0, 0.4, 0.4, 1.0], 0.12);
     }
@@ -2406,6 +2414,7 @@ pub fn projectile_hits(
             Option<&Shield>,
             Option<&mut NextHurt>,
             Option<&mut BigDogMissileState>,
+            Option<&DogGuardianLeap>,
         ),
         Without<Projectile>,
     >,
@@ -2478,6 +2487,7 @@ pub fn projectile_hits(
             shield,
             nexthurt,
             mut missile,
+            leap,
         ) in targets.iter_mut()
         {
             if health.hp <= 0 {
@@ -2526,6 +2536,7 @@ pub fn projectile_hits(
             }
 
             if is_disc
+                && !airborne_leap(leap)
                 && let Some(nh) = nexthurt.as_ref()
                 && nh.0 > frame.0
             {
@@ -2624,7 +2635,7 @@ pub fn projectile_hits(
             } else if *target_team == Team::Enemy
                 && let Some(mut nh) = nexthurt
             {
-                nh.0 = frame.0 + 5;
+                nh.0 = if airborne_leap(leap) { 0 } else { frame.0 + 5 };
             }
 
             if !missile_target && *target_team == Team::Player {
@@ -3617,6 +3628,7 @@ pub fn tick_slash_projectiles(
             &mut Health,
             Option<&mut Velocity>,
             Option<&mut NextHurt>,
+            Option<&DogGuardianLeap>,
         ),
         (
             With<Enemy>,
@@ -3762,12 +3774,13 @@ pub fn tick_slash_projectiles(
             }
         }
 
-        for (ee, epos, eteam, ebox, mut ehealth, evel, nexthurt) in &mut enemies {
+        for (ee, epos, eteam, ebox, mut ehealth, evel, nexthurt, leap) in &mut enemies {
             if *eteam == slash_team {
                 continue;
             }
             if let Some(nh) = nexthurt.as_ref()
                 && nh.0 > frame.0
+                && !airborne_leap(leap)
             {
                 continue;
             }
@@ -3785,7 +3798,7 @@ pub fn tick_slash_projectiles(
             }
             ehealth.hp -= proj.damage;
             if let Some(mut nh) = nexthurt {
-                nh.0 = frame.0 + 5;
+                nh.0 = if airborne_leap(leap) { 0 } else { frame.0 + 5 };
             }
             if let Some(mut ev) = evel {
                 apply_knockback(&mut ev.0, (epos - pos).normalize_or_zero(), proj.knockback);

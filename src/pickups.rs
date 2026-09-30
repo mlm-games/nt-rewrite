@@ -19,30 +19,23 @@ use crate::comps_a::{
     Run, Team, Toast,
 };
 use crate::comps_b::{
-    ChestArt, ChestKind, CursedAmmoBlink, DropSeed, FlungWeapon, GmlImage, GroundPhysics,
+    ChestArt, ChestKind, CursedAmmoBlink, DropSeed, Enemy, FlungWeapon, GmlImage, GroundPhysics,
     NativeDepth, NativeMotion, NativeWallMotion, OpenedChest, Pickup, PickupCurse, PickupKind,
-    PickupLifetime, Portal, PortalCarriedWeapons, PortalClear, Prop, RadChestContainer,
-    Telekinesis, WepPickupAmmo,
+    PickupLifetime, Portal, PortalCarriedWeapons, PortalClear, Prop, PropSprites,
+    RadChestContainer, Telekinesis, WepPickupAmmo,
 };
 use crate::data::{
     AmmoKind, CrownKind, EnemyKind, MutationId, RaceId, UltraMutationId, WeaponId,
     ammo_pickup_amount_for,
 };
 use crate::effects::{ChromaticAberration, FlashWhite, chromatic_pulse};
+use crate::idpd::{IdpdVanDeploy, IdpdVanDeployed, VAN_DEPLOY_FRAMES};
 use crate::input::NtInput;
 use crate::msg::Queue;
 use crate::progression::{check_level_up, try_recharge_strong_spirit};
 use crate::spatial::Pos;
 use crate::time::{GTimer, TimerMode};
 use crate::weapon_runtime::{weapon_ammo, weapon_id_name, weapon_runtime_def};
-
-/// Art path for a weapon pickup. Weapons-phase stub: nt looks the
-/// strip up per weapon id; until the weapons table lands, every weapon
-/// uses nt's own ultimate fallback.
-pub fn weapon_art_path(_id: WeaponId) -> &'static str {
-    // TODO(weapons): resolve per-id strips from the weapons table.
-    "images/sprRevolver.png"
-}
 
 #[derive(Component, Clone, Copy)]
 pub enum ProtoChestState {
@@ -107,14 +100,14 @@ pub(crate) fn spawn_proto_weapon(
     entity
 }
 
-fn pickup_sprite(kind: PickupKind) -> (&'static str, f32) {
-    match kind {
+fn pickup_sprite(kind: PickupKind) -> Option<(&'static str, f32)> {
+    Some(match kind {
         PickupKind::Rad(_) => ("images/sprRad.png", 12.0),
         PickupKind::Medkit(_) => ("images/sprHP.png", 16.0),
         PickupKind::Ammo(..) => ("images/sprAmmo.png", 12.0),
         PickupKind::CursedAmmo => ("images/sprCursedAmmo.png", 12.0),
         PickupKind::Curse => ("images/sprCurse.png", 10.0),
-        PickupKind::Weapon(k) => (weapon_art_path(k), 20.0),
+        PickupKind::Weapon(_) => return None,
         PickupKind::Chest(kind) => match kind {
             ChestKind::Weapon => ("images/sprWeaponChest.png", 32.0),
             ChestKind::Ammo => ("images/sprAmmoChest.png", 32.0),
@@ -130,19 +123,53 @@ fn pickup_sprite(kind: PickupKind) -> (&'static str, f32) {
             ChestKind::RadMaggot => ("images/sprRadChestMaggot.png", 32.0),
             ChestKind::Idpd => ("images/sprIDPDChest.png", 32.0),
         },
-    }
+    })
 }
 
 // GML mask half-extents (each object's `spriteMaskId` bbox; the
 // reference resolves pickups as per-axis box overlap, never as a
-// distance): `mskPlayer` 16x16 origin 8, `mskWepPickup` 28x28 origin 14,
-// `mskPickup` 10x10 origin 5, `mskRad` 8x8 origin 4, and the chestprop
-// sprites carry no mask so their 16x16 origin-8 bbox is the box.
+// distance): `mskWepPickup` 28x28 origin 14, `mskPickup` 10x10 origin 5,
+// `mskRad` 8x8 origin 4, and the chestprop sprites carry no mask so
+// their 16x16 origin-8 bbox is the box. `PLAYER_MASK_HALF` takes the
+// `mskPlayer` 16x16 FRAME (origin 8), not its `bbox_*` 4..11 x 4..13 —
+// the prop prompts below do use that bbox.
+//
+// The prop prompts instead keep GML `place_meeting(x, y, _player)`
+// verbatim as a closed per-axis window of `player - prop`, from the
+// real `bbox_*` + origin (both edge pixels inclusive, `image_xscale =
+// -1` mirrored): the player's box is `mskPlayer` bbox 4..11 x 4..13 at
+// origin (8,8) — 8x10 inside the 16x16 frame, never mirrored (`Player`
+// draws through `draw_sprite_ext(.., right, ..)`, it never writes
+// `image_xscale`) — against `CarVenusFixed` 0..31 x 3..30 at origin
+// (16,16) (both car sprites and both hurt strips share that box;
+// `image_xscale = choose(1, -1)` in `Create_0` mirrors it, carried by
+// `PropSprites.flip_x`), `IceFlower` `sprIceFlowerIdle` 1..30 x 2..29 at
+// origin (16,16) (pinned `image_xscale = 1`), and `Van` `mskVan` 27..100
+// x 42..85 at origin (64,64) (`Van` never writes `image_xscale`).
 const PLAYER_MASK_HALF: f32 = 8.0;
 const WEP_PICKUP_MASK_HALF: f32 = 14.0;
 const PICKUP_MASK_HALF: f32 = 5.0;
 const RAD_MASK_HALF: f32 = 4.0;
 const CHEST_SPRITE_HALF: f32 = 8.0;
+
+pub struct MaskSpan {
+    pub x: (f32, f32),
+    pub y: (f32, f32),
+}
+
+const PLAYER_BOX: (f32, f32, f32, f32) = (-4.0, 3.0, -4.0, 5.0);
+
+const fn mask_span(bbox: (f32, f32, f32, f32)) -> MaskSpan {
+    MaskSpan {
+        x: (bbox.0 - PLAYER_BOX.1, bbox.1 - PLAYER_BOX.0),
+        y: (bbox.2 - PLAYER_BOX.3, bbox.3 - PLAYER_BOX.2),
+    }
+}
+
+const CAR_PROMPT_SPAN: MaskSpan = mask_span((-16.0, 15.0, -13.0, 14.0));
+const CAR_PROMPT_SPAN_FLIPPED: MaskSpan = mask_span((-15.0, 16.0, -13.0, 14.0));
+const ICE_FLOWER_PROMPT_SPAN: MaskSpan = mask_span((-15.0, 14.0, -14.0, 13.0));
+const VAN_PROMPT_SPAN: MaskSpan = mask_span((-37.0, 36.0, -22.0, 21.0));
 
 /// GML `place_meeting`: a `Collision_Player` event fires when the two
 /// masks overlap on BOTH axes. `half_sum` is the two half-extents
@@ -181,8 +208,9 @@ pub const WEP_AMMO_REACH: f32 = PLAYER_MASK_HALF + WEP_PICKUP_MASK_HALF;
 /// medkits, chests and curse motes are not in
 /// `[ WepPickup, CarVenusFixed, IceFlower, Van ]`, so they must never
 /// light the act button ("the pickup indicator showing over a rad").
-/// The port models the three `Car` objects as world entities, not
-/// pickups, and has no `autopick` gun, so those arms are vacuous here.
+/// The prop half (`scrDrawPlayerHUD.gml:371-376,402`: the
+/// `Prompt{Object}` line plus the `active = true` act raise) rides
+/// [`WeaponLabel::prop_prompts`], scanned by [`sync_weapon_label`].
 pub fn nearest_ground_weapon(
     player: glam::Vec2,
     pickups: impl Iterator<Item = (Entity, glam::Vec2, PickupKind)>,
@@ -203,11 +231,33 @@ pub fn nearest_ground_weapon(
     best.map(|(entity, _)| entity)
 }
 
+fn nearest_prompt_hit(
+    player: glam::Vec2,
+    candidates: impl Iterator<Item = (Entity, glam::Vec2, MaskSpan)>,
+) -> Option<Entity> {
+    let mut best: Option<(Entity, f32)> = None;
+    for (entity, pos, span) in candidates {
+        let dx = player.x - pos.x;
+        let dy = player.y - pos.y;
+        if dx < span.x.0 || dx > span.x.1 || dy < span.y.0 || dy > span.y.1 {
+            continue;
+        }
+        let d = player.distance(pos);
+        if best.is_none_or(|(_, bd)| d < bd) {
+            best = Some((entity, d));
+        }
+    }
+    best.map(|(entity, _)| entity)
+}
+
 /// GML `ButtonAct` fade: `ButtonAct/Other_10` runs the 30 Hz step, and
-/// `scrDrawPlayerHUD` raises `active` while the player stands on a
-/// promptable pickup. The prompt needs no interact press — it shows
-/// whether or not the press landed. Own system so the pickup scan stays
-/// query-free of UI state.
+/// `scrDrawPlayerHUD.gml:378-403` raises `active` while the player
+/// stands on a promptable pickup — but only inside its `is_touch`
+/// block. The port raises it on every device because the sole reader
+/// is the touch chrome (`render.rs touch_sprites`), which never draws
+/// on keyboard/gamepad, so the raise is unobservable there. The prompt
+/// needs no interact press — it shows whether or not the press landed.
+/// Own system so the pickup scan stays query-free of UI state.
 pub fn tick_act_button(
     mut act: ResMut<crate::state::ActButton>,
     player_q: Query<&Pos, (With<Player>, Without<Pickup>)>,
@@ -237,20 +287,21 @@ pub fn spawn_pickup(
     loops: u32,
     hasted: bool,
 ) -> Entity {
-    let (path, _size) = pickup_sprite(kind);
+    let path = pickup_sprite(kind);
 
     let mut rng = rand::rng();
     let mut ec = commands.spawn((GameCleanup, LevelCleanup, Pickup { kind }, Pos(pos)));
     // Only rads animate (bevy parity). Static kinds carry no render
     // handle here; the render phase maps kind -> art path itself
     // (same table as `pickup_sprite`).
-    if matches!(kind, PickupKind::Rad(_)) {
-        if let Some(def) = catalog.def(path) {
-            let mut anim = SpriteAnim::new(path, def);
-            anim.timer = GTimer::from_seconds(1.0 / 12.0, TimerMode::Repeating);
-            anim.frame = rng.random_range(0..def.frames.max(1));
-            ec.insert(anim);
-        }
+    if matches!(kind, PickupKind::Rad(_))
+        && let Some((path, _)) = path
+        && let Some(def) = catalog.def(path)
+    {
+        let mut anim = SpriteAnim::new(path, def);
+        anim.timer = GTimer::from_seconds(1.0 / 12.0, TimerMode::Repeating);
+        anim.frame = rng.random_range(0..def.frames.max(1));
+        ec.insert(anim);
     }
     match kind {
         PickupKind::Rad(_) => {
@@ -1550,10 +1601,11 @@ pub fn collect_pickups(
             continue;
         }
         if is_weapon {
-            // GML `Player/Collision_WepPickup:6` verbatim: press_pick OR
-            // the thrown-gun autopick (`autopick` is set only on Cuz
-            // scatter / Chicken Determination returns,
-            // `scrPowers:581` — never on chest/drop spawns). Every
+            // GML `Player/Collision_WepPickup:6` verbatim: `press_pick`
+            // OR `autopick`. `WepPickup/Create_0:11` starts it false and
+            // the only assignment to true (`scrPowers:581`) sits in
+            // `scrCuzThrowAllAbility`, reached solely behind
+            // `#macro cuz_fun false` (`scrPowers:2,426`), so every
             // ground gun needs the interact press; the pulse is peeked,
             // not taken, so the earlier `tick_throne_sit` peek of the
             // same pulse never starves it.
@@ -2282,12 +2334,16 @@ pub fn open_chest_shock(commands: &mut Commands, e: Entity, kind: ChestKind) {
 
 /// Headless weapon-label state: the nearest in-range weapon name for the
 /// HUD bridge to poll, plus the interact-prompt half of
-/// `scrDrawInteractionHUD`: the `sprEPickup` icon and the per-type ammo
-/// gauge (`scrDrawTypeAmmo`, `_player.ammo[type] / capacity`).
+/// `scrDrawInteractionHUD`: the `sprEPickup` icon, the per-type ammo
+/// gauge (`scrDrawTypeAmmo`, `_player.ammo[type] / capacity`) and
+/// `prop_prompts`, the per-type `Prompt{Object}` hits over
+/// `CarVenusFixed` / `IceFlower` / `Van` (`scrDrawPlayerHUD.gml:374`)
+/// whose overlap also raises the act button (`:402`).
 #[derive(Resource, Default, Debug)]
 pub struct WeaponLabel {
     pub text: String,
     pub target: Option<Entity>,
+    pub prop_prompts: Vec<(Entity, &'static str)>,
     /// GML `draw_pickup_button` (`draw_gamepad_button.gml:43-101`): the
     /// keyboard "E" pill is `sprEPickup` frame 0, the gamepad/other-key
     /// plate is frame 1. Subimage 0 in single-player (no gamepad
@@ -2304,13 +2360,65 @@ pub fn sync_weapon_label(
     player_q: Query<(&Pos, &Player), With<Player>>,
     inv_q: Query<&Inventory>,
     weapon_q: Query<(Entity, &Pos, &Pickup), (Without<Player>, Without<Portal>)>,
+    prop_q: Query<(Entity, &Pos, &Prop, &PropSprites)>,
+    enemy_q: Query<(Entity, &Pos, &Enemy)>,
+    van_q: Query<(Entity, &Pos, &IdpdVanDeploy), Without<IdpdVanDeployed>>,
     mut label: ResMut<WeaponLabel>,
+    mut act: ResMut<crate::state::ActButton>,
 ) {
     let Some((player_pos, player)) = player_q.single().ok() else {
         return;
     };
     let player_pos = player_pos.0;
     let inv = inv_q.single().ok();
+
+    let mut prop_prompts = Vec::new();
+    if let Some(hit) = nearest_prompt_hit(
+        player_pos,
+        prop_q.iter().filter_map(|(entity, pos, _, sprites)| {
+            matches!(
+                sprites.idle,
+                "images/sprVenusCarFixed.png" | "images/sprVenuzCar2.png"
+            )
+            .then_some((
+                entity,
+                pos.0,
+                if sprites.flip_x {
+                    CAR_PROMPT_SPAN_FLIPPED
+                } else {
+                    CAR_PROMPT_SPAN
+                },
+            ))
+        }),
+    ) {
+        prop_prompts.push((hit, "CAR"));
+    }
+    if let Some(hit) = nearest_prompt_hit(
+        player_pos,
+        enemy_q
+            .iter()
+            .filter(|(_, _, enemy)| enemy.kind == EnemyKind::IceFlower)
+            .map(|(entity, pos, _)| (entity, pos.0, ICE_FLOWER_PROMPT_SPAN)),
+    ) {
+        prop_prompts.push((hit, "FEED"));
+    }
+    if let Some(hit) = nearest_prompt_hit(
+        player_pos,
+        van_q
+            .iter()
+            .filter(|(_, _, deploy)| {
+                !deploy.freak
+                    && ((deploy.frames > 0.0 && deploy.frames <= VAN_DEPLOY_FRAMES - 40.0)
+                        || deploy.inert > 0.0)
+            })
+            .map(|(entity, pos, _)| (entity, pos.0, VAN_PROMPT_SPAN)),
+    ) {
+        prop_prompts.push((hit, "VAN"));
+    }
+    if !prop_prompts.is_empty() {
+        act.active = true;
+    }
+    label.prop_prompts = prop_prompts;
 
     let target = nearest_ground_weapon(
         player_pos,

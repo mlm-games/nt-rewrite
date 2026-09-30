@@ -42,9 +42,9 @@ use crate::audio::{AudioCue, GameAudio};
 use crate::combat::{Explosion, queue_enemy_spawn, queue_enemy_spawn_no_kill};
 use crate::comps_a::{
     BossIntro, BouncesLeft, DamageSource, FloorMask, GameCleanup, Health, Hitbox, LevelCleanup,
-    NextHurt, PendingWallBreak, Player, Projectile, ProjectileFade, ProjectileFriction,
-    ProjectileTyp, RaceState, Run, ShellWallBounce, Team, Toast, TopSmalls, Velocity, WallCell,
-    WallTile, gml_motion_add_clamp,
+    NextHurt, PendingWallBreak, Player, Projectile, ProjectileAccel, ProjectileFade,
+    ProjectileFriction, ProjectileTyp, RaceState, Run, ShellWallBounce, Team, Toast, TopSmalls,
+    Velocity, WallCell, WallTile, gml_motion_add_clamp,
 };
 use crate::comps_b::{
     Beam, BigGenerator, BossBrain, BossPhase, CustomExplosion, Enemy, EnemyBrain, HitWarning,
@@ -93,45 +93,10 @@ pub fn dir_from_angle(angle: f32) -> glam::Vec2 {
     glam::Vec2::new(angle.cos(), angle.sin()).normalize_or_zero()
 }
 
-/// Aim ahead of a moving target (clamped 1.2 s lead, NaN-safe).
-pub fn lead_target(
-    shooter: glam::Vec2,
-    target: glam::Vec2,
-    target_vel: glam::Vec2,
-    projectile_speed: f32,
-) -> glam::Vec2 {
-    let to = target - shooter;
-    let dist = to.length();
-    if projectile_speed <= 1.0 || dist <= 1.0 {
-        return to.normalize_or_zero();
-    }
-    let time = (dist / projectile_speed).clamp(0.0, 1.2);
-    (target + target_vel * time - shooter).normalize_or_zero()
-}
-
-/// `lines` evenly spaced directions covering the full circle.
-pub fn split_line_dirs(base_angle: f32, lines: usize) -> Vec<f32> {
-    if lines == 0 {
-        return Vec::new();
-    }
-    let step = std::f32::consts::TAU / lines as f32;
-    (0..lines).map(|i| base_angle + step * i as f32).collect()
-}
-
-/// Star burst points (full circle, `phase` offset).
-pub fn star_angles(points: usize, phase: f32) -> Vec<f32> {
-    ring_angles(points.max(1), phase)
-}
-
 /// Orbit-crystal count scales with loop (GML `cnumber = 3 + loops*2`:
 /// 3/5/7…).
 pub fn hyper_orbit_count(loop_count: u32) -> usize {
     3 + loop_count as usize * 2
-}
-
-/// Point on a circle around `center`.
-pub fn orbit_point(center: glam::Vec2, radius: f32, angle: f32) -> glam::Vec2 {
-    center + dir_from_angle(angle) * radius
 }
 
 // ---------------------------------------------------------------------------
@@ -3153,6 +3118,11 @@ fn yv_boss_ai(
                                 source: Some(DamageSource::enemy(owner, EnemyKind::YvBoss)),
                             },
                             ProjectileTyp(2),
+                            ProjectileAccel {
+                                rate: 2.0,
+                                max: 12.0,
+                                arm: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
+                            },
                             CustomExplosion::default(),
                             Velocity(sdir * 90.0),
                             Pos(epos + sdir * 20.0),

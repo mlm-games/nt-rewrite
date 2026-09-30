@@ -8,17 +8,20 @@
 //! (private floor-advance helper, not duplicated here).
 
 use bevy_ecs::prelude::*;
+use rand::RngExt;
 use repame_fx::Trauma;
 use repame_sim::SimTime;
 
-use crate::audio::{QueuedReactiveCue, ReactiveCue};
+use crate::audio::{AudioCue, QueuedReactiveCue, ReactiveCue};
 use crate::combat::queue_enemy_spawn;
-use crate::comps_a::{GameCleanup, LevelCleanup, Run, Toast};
+use crate::comps_a::{GameCleanup, LevelCleanup, Player, Run, Toast};
 use crate::comps_b::{
-    CampfirePhase, CampfireProp, CampfireState, Enemy, IdpdRaidState, LoopTransition, YvCouch,
+    CampfirePhase, CampfireProp, CampfireState, CuzStrip, Enemy, IdpdRaidState, LoopTransition,
+    YungCuz, YvCouch,
 };
 use crate::data::EnemyKind;
 use crate::idpd::is_idpd_kind;
+use crate::msg::Queue;
 use crate::spatial::Pos;
 
 /// Begin the campfire rest (Throne dead while loop-eligible).
@@ -181,15 +184,57 @@ pub fn tick_campfire(
     }
 }
 
-/// Animate campfire YV couches (GML `YungVenuzCouch/Step_0`:
+/// GML `VenuzCouch/Create_0.gml:13-16` with no Venuz/Cuz player at the
+/// crib couch: a `YungCuz` at `x + 21` whose `image_xscale` is flipped
+/// by the spawning `with`, and the `YungVenuzCouch` sitter at `x - 12`.
+/// `VenuzTV/Destroy_0.gml:3-14` despawns the sitter to raise YvBoss and
+/// `:16-24` puts the `YungCuz` into its cry; the `YungCuz` also owns the
+/// greet/leave interact strips (`YungCuz/Other_7`). The port spawns both
+/// unconditionally (GML picks the pair from the active player races).
+pub fn spawn_yv_couch(commands: &mut Commands, couch: glam::Vec2) {
+    commands.spawn((
+        GameCleanup,
+        LevelCleanup,
+        YungCuz::flipped(),
+        Pos(couch + glam::Vec2::new(21.0, 0.0)),
+    ));
+    commands.spawn((
+        GameCleanup,
+        LevelCleanup,
+        YvCouch::idle(),
+        Pos(couch + glam::Vec2::new(-12.0, 0.0)),
+    ));
+}
+
+const CUZ_CRY_BONUS: [&str; 10] = [
+    "sndCuzCryBonus1",
+    "sndCuzCryBonus2",
+    "sndCuzCryBonus3",
+    "sndCuzCryBonus4",
+    "sndCuzCryBonus5",
+    "sndCuzCryBonus6",
+    "sndCuzCryBonus7",
+    "sndCuzCryBonus8",
+    "sndCuzCryBonus9",
+    "sndCuzCryBonus10",
+];
+
+/// Animate the YV couch sitter (GML `YungVenuzCouch/Step_0`:
 /// `image_speed = timescale * 0.4`, airhorn one-shot back to idle on
-/// animation end). Strip fps/frames resolve from the catalog when the
-/// art is packed, else the GML strip values (idle 12 fps / 24 frames,
-/// airhorn 6 fps / 22 frames).
+/// animation end) and tick `YungCuz` (GML `YungCuz/Create_0` image_speed
+/// 0.4; `Alarm_1` bonus cries; the `Other_7` greet/leave two-step on
+/// every animation end; the `VenuzTV/Destroy_0.gml:16-24` cry keyed on
+/// the raised YvBoss). Strip fps/frames resolve from the catalog when the
+/// art is packed, else the GML strip values (couch idle 12 fps / 24
+/// frames, airhorn 6 fps / 22 frames).
 pub fn tick_yv_couch(
     time: Res<SimTime>,
     catalog: Option<Res<repame_anim::AnimCatalog>>,
     mut q: Query<&mut YvCouch>,
+    mut cuz_q: Query<(&Pos, &mut YungCuz)>,
+    players: Query<&Pos, With<Player>>,
+    enemies: Query<&Enemy>,
+    mut cues: ResMut<Queue<AudioCue>>,
 ) {
     let steps = time.delta_secs * 30.0;
     for mut couch in q.iter_mut() {
@@ -200,5 +245,85 @@ pub fn tick_yv_couch(
             .map(|d| (d.fps, d.frames))
             .unwrap_or(if couch.airhorn { (6.0, 22) } else { (12.0, 24) });
         crate::comps_b::yv_couch_step(&mut couch, steps, fps, frames);
+    }
+
+    let tv_dead = !cuz_q.is_empty() && enemies.iter().any(|e| e.kind == EnemyKind::YvBoss);
+    let mut rng = rand::rng();
+    for (pos, mut cuz) in cuz_q.iter_mut() {
+        if tv_dead && !cuz.crying {
+            cuz.crying = true;
+            cuz.strip = CuzStrip::Idle;
+            cuz.frame = 0.0;
+            cuz.alarm1 = 1.0;
+            cues.push(AudioCue {
+                name: "sndCuzCryNew",
+                volume: 1.0,
+                variance: 0.0,
+            });
+        }
+        let path = cuz.sprite_path();
+        let (fps, frames) = catalog
+            .as_deref()
+            .and_then(|c| c.def(path))
+            .map(|d| (d.fps, d.frames))
+            .unwrap_or(if cuz.crying {
+                (6.0, 15)
+            } else {
+                match cuz.strip {
+                    CuzStrip::Idle => (12.0, 40),
+                    CuzStrip::InteractTo => (8.0, 4),
+                    CuzStrip::InteractFrom => (8.0, 4),
+                    CuzStrip::Heya => (6.0, 20),
+                }
+            });
+        let anim_end = crate::comps_b::yung_cuz_step(&mut cuz, steps, fps, frames);
+        if anim_end && !cuz.crying {
+            let nearest = players
+                .iter()
+                .fold(f32::INFINITY, |d, p| d.min(p.0.distance(pos.0)));
+            if nearest <= 64.0 {
+                if cuz.strip != CuzStrip::Heya {
+                    if cuz.strip == CuzStrip::InteractFrom {
+                        cuz.strip = CuzStrip::Heya;
+                    } else {
+                        cues.push(AudioCue {
+                            name: "sndCuzGreet",
+                            volume: 1.0,
+                            variance: 0.05,
+                        });
+                        cuz.strip = CuzStrip::InteractFrom;
+                    }
+                    cuz.frame = 0.0;
+                }
+            } else if cuz.strip != CuzStrip::Idle {
+                if cuz.strip == CuzStrip::InteractTo {
+                    cuz.strip = CuzStrip::Idle;
+                } else {
+                    cues.push(AudioCue {
+                        name: "sndCuzBye",
+                        volume: 1.0,
+                        variance: 0.05,
+                    });
+                    cuz.strip = CuzStrip::InteractTo;
+                }
+                cuz.frame = 0.0;
+            }
+        }
+        if cuz.alarm1 >= 0.0 {
+            cuz.alarm1 -= steps;
+            if cuz.alarm1 <= 0.0 {
+                cuz.alarm1 = rng.random_range(120.0..=360.0);
+                let mut n = rng.random_range(1..=10u8);
+                while n == cuz.last_cry {
+                    n = rng.random_range(1..=10u8);
+                }
+                cuz.last_cry = n;
+                cues.push(AudioCue {
+                    name: CUZ_CRY_BONUS[(n - 1) as usize],
+                    volume: 1.0,
+                    variance: 0.0,
+                });
+            }
+        }
     }
 }

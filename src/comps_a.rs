@@ -747,6 +747,21 @@ pub struct NextHurt(pub u64);
 #[derive(Resource, Clone, Copy, Debug, Default)]
 pub struct CurrentFrame(pub u64);
 
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DogGuardianPose {
+    Ground,
+    Charge,
+    Airborne,
+    Land,
+}
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct DogGuardianLeap {
+    pub pose: DogGuardianPose,
+    pub z: f32,
+    pub zspeed: f32,
+}
+
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Team {
     Player,

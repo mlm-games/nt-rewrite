@@ -291,6 +291,61 @@ pub fn yv_couch_step(couch: &mut YvCouch, steps: f32, fps: f32, frames: u32) {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CuzStrip {
+    Idle,
+    InteractTo,
+    InteractFrom,
+    Heya,
+}
+
+#[derive(Component, Clone, Debug, PartialEq)]
+pub struct YungCuz {
+    pub frame: f32,
+    pub strip: CuzStrip,
+    pub flipped: bool,
+    pub crying: bool,
+    pub alarm1: f32,
+    pub last_cry: u8,
+}
+
+impl YungCuz {
+    pub fn flipped() -> Self {
+        Self {
+            frame: 0.0,
+            strip: CuzStrip::Idle,
+            flipped: true,
+            crying: false,
+            alarm1: -1.0,
+            last_cry: 0,
+        }
+    }
+
+    pub fn sprite_path(&self) -> &'static str {
+        if self.crying {
+            "images/sprCuzCry.png"
+        } else {
+            match self.strip {
+                CuzStrip::Idle => "images/sprCuzIdle.png",
+                CuzStrip::InteractTo => "images/sprCuzInteractTo.png",
+                CuzStrip::InteractFrom => "images/sprCuzInteractFrom.png",
+                CuzStrip::Heya => "images/sprCuzInteract.png",
+            }
+        }
+    }
+}
+
+pub fn yung_cuz_step(cuz: &mut YungCuz, steps: f32, fps: f32, frames: u32) -> bool {
+    cuz.frame += steps * 0.4 * fps.max(0.0) / 30.0;
+    let total = frames.max(1) as f32;
+    if cuz.frame >= total {
+        cuz.frame -= total * (cuz.frame / total).floor();
+        true
+    } else {
+        false
+    }
+}
+
 #[derive(Resource, Clone, Debug, Default)]
 pub struct LoopTransition {
     pub campfire_active: bool,
@@ -405,14 +460,11 @@ pub struct Enemy {
 
 #[derive(Component)]
 pub struct EnemyBrain {
-    pub speed: f32,
-    pub accel: f32,
-    pub preferred_range: f32,
-    pub shoot_range: f32,
     pub attack: Timer,
-    /// Generic ranged-fire alarm. GML keeps `Alarm_1` (decide) and the
-    /// fire alarm as independent countdowns; sharing one register made the
-    /// decide re-arm starve every shot.
+    /// Generic ranged-fire alarm. GML runs decide and the shot from one
+    /// `alarm[1]` (`Molefish/Alarm_1.gml:1`) with `alarm[2]` for the burst
+    /// cadence (`Crab/Alarm_2.gml:1`); the port keeps the shot on its own
+    /// timer so the decide re-arm cannot starve every shot.
     pub fire_alarm: Timer,
     pub burst_left: usize,
     pub burst_timer: Timer,

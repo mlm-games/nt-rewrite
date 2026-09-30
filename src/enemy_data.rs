@@ -20,7 +20,6 @@ pub struct EnemyDef {
     /// these out as `repeat (2) scrDrop(...)`, each roll its own `random(100)`.
     pub drop_rolls: u8,
     pub preferred_range: f32,
-    pub shoot_range: f32,
     pub attack_cooldown: f32,
     /// GML re-arms `alarm[1]` as `attack_cooldown + random(N)`; this is
     /// that `N`, in frames. Zero where the alarm is a fixed period.
@@ -148,7 +147,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,
@@ -180,7 +178,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 90.0,
-            shoot_range: 480.0,
             // `Bandit/Alarm_1:18` re-arms `alarm[1] = 20 + random(5)` when it
             // fires; the uncommitted cycle at `:1` is `20 + random(10)`.
             attack_jitter: 0.0,
@@ -214,7 +211,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 120.0,
-            shoot_range: 210.0,
             attack_jitter: 0.0,
             attack_cooldown: 0.75,
             bullets_per_shot: 10,
@@ -247,7 +243,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,
@@ -279,7 +274,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,
@@ -311,7 +305,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 2,
             preferred_range: 170.0,
-            shoot_range: 560.0,
             attack_jitter: 0.0,
             attack_cooldown: 1.15,
             bullets_per_shot: 5,
@@ -345,7 +338,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 2,
             preferred_range: 190.0,
-            shoot_range: 620.0,
             attack_jitter: 0.0,
             attack_cooldown: 0.95,
             bullets_per_shot: 7,
@@ -379,7 +371,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 999.0,
             attack_jitter: 0.0,
             attack_cooldown: 0.7,
             bullets_per_shot: 7,
@@ -412,7 +403,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 2,
             preferred_range: 0.0,
-            shoot_range: 999.0,
             attack_jitter: 0.0,
             attack_cooldown: 0.85,
             bullets_per_shot: 3,
@@ -448,7 +438,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 5,
             drop_rolls: 3,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 1.1,
             bullets_per_shot: 0,
@@ -480,7 +469,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,
@@ -515,7 +503,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,
@@ -547,7 +534,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 8,
             drop_rolls: 1,
             preferred_range: 180.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,
@@ -579,7 +565,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 999.0,
-            shoot_range: 160.0,
             attack_jitter: 0.0,
             attack_cooldown: 1.83,
             bullets_per_shot: 10,
@@ -612,7 +597,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 110.0,
-            shoot_range: 500.0,
             // GML has no `SnowBandit` object: `Bandit/Create_0:29-39,43-46`
             // swaps the sprite to the snow set, so this is `Bandit`.
             attack_jitter: 0.0,
@@ -647,7 +631,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,
@@ -681,7 +664,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 100,
             drop_rolls: 1,
             preferred_range: 240.0,
-            shoot_range: 999.0,
             // `ScrapBoss/Alarm_1:36` re-arms the decide tick at 20 frames
             // (30 at spawn). `boss_ai::big_dog_ai` hardcodes both.
             attack_jitter: 0.0,
@@ -715,7 +697,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 100,
             drop_rolls: 1,
             preferred_range: 260.0,
-            shoot_range: 999.0,
             attack_jitter: 0.0,
             attack_cooldown: 0.65,
             bullets_per_shot: 7,
@@ -747,7 +728,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 190.0,
-            shoot_range: 640.0,
             // `LilHunter/Alarm_1:3` `alarm[1] = 20 + random(6)`.
             attack_jitter: 0.0,
             attack_cooldown: 0.75,
@@ -780,7 +760,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 210.0,
-            shoot_range: 720.0,
             attack_jitter: 0.0,
             attack_cooldown: 0.42,
             bullets_per_shot: 5,
@@ -812,7 +791,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 220.0,
-            shoot_range: 520.0,
             attack_jitter: 0.0,
             attack_cooldown: 0.13,
             bullets_per_shot: 1,
@@ -844,7 +822,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 180.0,
-            shoot_range: 250.0,
             attack_jitter: 0.0,
             attack_cooldown: 1.66,
             bullets_per_shot: 8,
@@ -876,7 +853,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 260.0,
-            shoot_range: 700.0,
             // `EliteGrunt/Alarm_1:34` arms the burst and re-arms
             // `alarm[1] = 14 + random(2)`; `Alarm_2:13` spaces the three
             // `IDPDBullet`s 3 frames apart at 10 px/frame.
@@ -912,7 +888,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 3,
             preferred_range: 0.0,
-            shoot_range: 999.0,
             attack_jitter: 0.0,
             attack_cooldown: 2.0,
             bullets_per_shot: 0,
@@ -948,7 +923,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 18,
             drop_rolls: 1,
             preferred_range: 160.0,
-            shoot_range: 520.0,
             attack_jitter: 0.0,
             attack_cooldown: 1.1,
             bullets_per_shot: 0,
@@ -983,7 +957,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 2,
 
             preferred_range: 140.0,
-            shoot_range: 999.0,
             attack_jitter: 0.0,
             attack_cooldown: 1.3,
             bullets_per_shot: 0,
@@ -1017,7 +990,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 2,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             // `TechnoMancer/Alarm_1:1` `alarm[1] = 90`; spawn is 300.
             attack_jitter: 0.0,
             attack_cooldown: 3.0,
@@ -1054,7 +1026,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 140.0,
-            shoot_range: 700.0,
             attack_jitter: 0.0,
             attack_cooldown: 0.75,
             bullets_per_shot: 5,
@@ -1088,7 +1059,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 1.0,
             bullets_per_shot: 0,
@@ -1120,7 +1090,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 4.0,
             bullets_per_shot: 0,
@@ -1152,7 +1121,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 180.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 0.75,
             bullets_per_shot: 0,
@@ -1184,7 +1152,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 2,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,
@@ -1217,7 +1184,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,
@@ -1249,7 +1215,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 5,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 160.0,
             // `LaserCrystal/Alarm_1:11` `alarm[1] = 90 + random(10)` once
             // the burst is armed; `:1` re-arms at `30 + random(10)` when the
             // target is out of the 64..160 band.
@@ -1286,7 +1251,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 220.0,
-            shoot_range: 800.0,
             attack_jitter: 0.0,
             attack_cooldown: 1.42,
 
@@ -1321,7 +1285,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 1,
 
             preferred_range: 90.0,
-            shoot_range: 999.0,
             attack_jitter: 10.0,
             attack_cooldown: 0.3333,
             bullets_per_shot: 16,
@@ -1357,7 +1320,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 15,
             drop_rolls: 1,
             preferred_range: 120.0,
-            shoot_range: 500.0,
             attack_jitter: 40.0,
             attack_cooldown: 0.3333,
             bullets_per_shot: 4,
@@ -1393,7 +1355,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 80.0,
-            shoot_range: 420.0,
             // `Guardian/Alarm_1:3` `alarm[1] = 10 + random(40)`.
             attack_jitter: 40.0,
             attack_cooldown: 0.3333,
@@ -1429,7 +1390,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 2,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             // `Mimic/Alarm_1:1` `alarm[1] = 90 + random(150)`.
             attack_jitter: 0.0,
             attack_cooldown: 5.5,
@@ -1462,7 +1422,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 2,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             // `SuperMimic/Alarm_1:1` `alarm[1] = 150 + random(180)`.
             attack_jitter: 0.0,
             attack_cooldown: 8.0,
@@ -1495,7 +1454,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 2,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             // `WepMimic/Alarm_1:1` `alarm[1] = 90 + random(150)`.
             attack_jitter: 0.0,
             attack_cooldown: 5.5,
@@ -1530,7 +1488,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 200.0,
-            shoot_range: 600.0,
             // `YVBoss/Alarm_1:8` `alarm[1] = 10 + irandom(30)`; an armed
             // attack re-arms at `irandom_range(5, 15)` (`:75`).
             attack_jitter: 0.0,
@@ -1564,7 +1521,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 180.0,
-            shoot_range: 520.0,
             // `CrownGuardian/Alarm_1:3` `alarm[1] = 10 + random(40)`; the
             // fire branch re-arms at 12 (`:15`).
             attack_jitter: 40.0,
@@ -1607,7 +1563,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 560.0,
             // `IceFlower` has no `Alarm_*` and spawns no projectile: the
             // `feed >= 4` portal (`Step_0.gml:4-22`) rides the feed counter
             // the player's `press_pick` bumps in
@@ -1643,7 +1598,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 120.0,
-            shoot_range: 380.0,
             attack_jitter: 0.0,
             attack_cooldown: 1.1,
             bullets_per_shot: 3,
@@ -1675,7 +1629,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,
@@ -1707,7 +1660,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,
@@ -1741,7 +1693,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 200.0,
-            shoot_range: 520.0,
             // `HostileHorror/Alarm_1:1` `alarm[1] = 10 + random(10)`.
             attack_jitter: 10.0,
             attack_cooldown: 0.3333,
@@ -1778,7 +1729,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,
@@ -1810,7 +1760,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,
@@ -1842,7 +1791,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 64.0,
-            shoot_range: 160.0,
             attack_jitter: 0.0,
             attack_cooldown: 1.0,
             bullets_per_shot: 0,
@@ -1874,7 +1822,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 150.0,
-            shoot_range: 150.0,
             attack_jitter: 0.0,
             attack_cooldown: 1.0,
             bullets_per_shot: 0,
@@ -1906,7 +1853,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,
@@ -1940,7 +1886,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 1,
 
             preferred_range: 90.0,
-            shoot_range: 170.0,
             attack_jitter: 0.0,
             attack_cooldown: 1.5,
             bullets_per_shot: 6,
@@ -1973,7 +1918,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 120.0,
-            shoot_range: 260.0,
             attack_jitter: 0.0,
             attack_cooldown: 1.4,
             bullets_per_shot: 8,
@@ -2005,7 +1949,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 150.0,
-            shoot_range: 480.0,
             attack_jitter: 10.0,
             attack_cooldown: 0.6667,
             bullets_per_shot: 3,
@@ -2039,7 +1982,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 1,
 
             preferred_range: 70.0,
-            shoot_range: 150.0,
             attack_jitter: 10.0,
             attack_cooldown: 0.3333,
             bullets_per_shot: 45,
@@ -2071,7 +2013,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,
@@ -2103,7 +2044,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 100.0,
-            shoot_range: 96.0,
             attack_jitter: 0.0,
             attack_cooldown: 1.65,
             bullets_per_shot: 6,
@@ -2136,7 +2076,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 5,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,
@@ -2168,7 +2107,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,
@@ -2200,7 +2138,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 16,
             drop_rolls: 1,
             preferred_range: 190.0,
-            shoot_range: 520.0,
             attack_jitter: 0.0,
             attack_cooldown: 1.5,
             bullets_per_shot: 0,
@@ -2232,7 +2169,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 10,
             drop_rolls: 1,
             preferred_range: 130.0,
-            shoot_range: 240.0,
             attack_jitter: 0.0,
             attack_cooldown: 0.8,
             bullets_per_shot: 10,
@@ -2264,7 +2200,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 5,
             drop_rolls: 1,
             preferred_range: 999.0,
-            shoot_range: 96.0,
             // `LightningCrystal/Alarm_1:11` `alarm[1] = 90 + random(10)`.
             attack_jitter: 0.0,
             attack_cooldown: 3.1667,
@@ -2299,7 +2234,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,
@@ -2331,7 +2265,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 20,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,
@@ -2365,7 +2298,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 2,
 
             preferred_range: 230.0,
-            shoot_range: 240.0,
             // `SnowTank/Alarm_1:1` `alarm[1] = 40 + random(30)`.
             attack_jitter: 0.0,
             attack_cooldown: 1.8333,
@@ -2398,7 +2330,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 2,
             preferred_range: 250.0,
-            shoot_range: 160.0,
             // `GoldSnowTank/Alarm_1:1` `alarm[1] = 15 + random(5)`.
             attack_jitter: 0.0,
             attack_cooldown: 0.5833,
@@ -2434,10 +2365,9 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 1,
 
             preferred_range: 180.0,
-            shoot_range: 999.0,
             // `Guardian/Alarm_1:3` `alarm[1] = 10 + random(40)`; the fire
             // branch re-arms at 12 (`:15`).
-            attack_jitter: 0.0,
+            attack_jitter: 40.0,
             attack_cooldown: 1.0,
             bullets_per_shot: 3,
             burst: false,
@@ -2469,7 +2399,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 10,
             drop_rolls: 1,
             preferred_range: 150.0,
-            shoot_range: 90.0,
             // `ExploGuardian/Alarm_2:18` `alarm[1] = 8 / max(0.01, image_speed)`
             // = 10..20 frames; the uncharged tick is `6 + random(5)` (`:2`).
             attack_jitter: 0.0,
@@ -2504,7 +2433,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 2,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,
@@ -2536,7 +2464,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,
@@ -2570,7 +2497,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 1,
 
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 1.7,
             bullets_per_shot: 0,
@@ -2602,7 +2528,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 150.0,
-            shoot_range: 999.0,
             attack_jitter: 10.0,
             attack_cooldown: 0.5000,
             bullets_per_shot: 1,
@@ -2634,7 +2559,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 170.0,
-            shoot_range: 120.0,
             attack_jitter: 10.0,
             attack_cooldown: 0.5000,
 
@@ -2669,7 +2593,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 1,
 
             preferred_range: 160.0,
-            shoot_range: 999.0,
             attack_jitter: 10.0,
             attack_cooldown: 0.6667,
             bullets_per_shot: 1,
@@ -2701,7 +2624,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 2,
             preferred_range: 180.0,
-            shoot_range: 999.0,
             attack_jitter: 10.0,
             attack_cooldown: 0.6667,
             bullets_per_shot: 3,
@@ -2735,7 +2657,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 1,
 
             preferred_range: 190.0,
-            shoot_range: 520.0,
             attack_jitter: 0.0,
             attack_cooldown: 0.267,
             bullets_per_shot: 1,
@@ -2769,7 +2690,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 1,
 
             preferred_range: 110.0,
-            shoot_range: 380.0,
             attack_jitter: 0.0,
             attack_cooldown: 1.0,
             bullets_per_shot: 6,
@@ -2802,7 +2722,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 2,
             drop_rolls: 1,
             preferred_range: 0.0,
-            shoot_range: 0.0,
             attack_jitter: 0.0,
             attack_cooldown: 9.9,
             bullets_per_shot: 0,
@@ -2834,7 +2753,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 5,
             drop_rolls: 1,
             preferred_range: 999.0,
-            shoot_range: 160.0,
             // `InvLaserCrystal/Alarm_1:11` `alarm[1] = 90 + random(10)`.
             attack_jitter: 0.0,
             attack_cooldown: 3.1667,
@@ -2871,7 +2789,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             drop_rolls: 1,
 
             preferred_range: 130.0,
-            shoot_range: 160.0,
             // `PopoFreak/Alarm_1:2,9`: `alarm[1] = 15 + random(5)`, plus 30
             // on the tick that arms `ammo = 8` and `alarm[2] = 15`.
             attack_jitter: 5.0,
@@ -2908,7 +2825,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 35, // GML also rolls scrDrop(0, 35)
             drop_rolls: 1,
             preferred_range: 999.0,
-            shoot_range: 999.0,
             attack_jitter: 0.0,
             attack_cooldown: 2.6,
             bullets_per_shot: 0,
@@ -2941,7 +2857,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             weapon_chance: 0,
             drop_rolls: 1,
             preferred_range: 210.0,
-            shoot_range: 560.0,
             attack_jitter: 0.0,
             attack_cooldown: 0.85,
             bullets_per_shot: 1,
