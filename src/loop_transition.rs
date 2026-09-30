@@ -12,7 +12,7 @@ use rand::RngExt;
 use repame_fx::Trauma;
 use repame_sim::SimTime;
 
-use crate::audio::{AudioCue, QueuedReactiveCue, ReactiveCue};
+use crate::audio::AudioCue;
 use crate::combat::queue_enemy_spawn;
 use crate::comps_a::{GameCleanup, LevelCleanup, Player, Run, Toast};
 use crate::comps_b::{
@@ -85,7 +85,8 @@ fn start_campfire_rising(campfire: &mut CampfireState, toast: &mut Toast, trauma
 /// [`PendingEnemySpawn`]; any living IDPD or pending raid parks the
 /// fire in `WaitingForIdpd` until the room stays clear 0.35 s.
 /// Ember/particle bursts are skipped (renderer-side); trauma, toasts,
-/// the `ThroneRises` reactive cue, and the spawn are verbatim.
+/// the `sndNothing2Appear` spawn sting (GML `Nothing2/Create_0:37`),
+/// and the spawn are verbatim.
 pub fn tick_campfire(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -94,6 +95,7 @@ pub fn tick_campfire(
     run: Res<Run>,
     mut trauma: ResMut<Trauma>,
     mut toast: ResMut<Toast>,
+    mut cues: ResMut<Queue<AudioCue>>,
     enemies: Query<&Enemy>,
     mut campfires: Query<(Entity, &Pos, &mut CampfireState), With<CampfireProp>>,
 ) {
@@ -175,7 +177,11 @@ pub fn tick_campfire(
                 );
 
                 trauma.add(0.45);
-                commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::ThroneRises)));
+                cues.push(AudioCue {
+                    name: "sndNothing2Appear",
+                    volume: 1.0,
+                    variance: 0.0,
+                });
                 toast.show("THE THRONE RISES");
 
                 commands.entity(entity).despawn();
@@ -289,7 +295,7 @@ pub fn tick_yv_couch(
                         cues.push(AudioCue {
                             name: "sndCuzGreet",
                             volume: 1.0,
-                            variance: 0.05,
+                            variance: 0.1,
                         });
                         cuz.strip = CuzStrip::InteractFrom;
                     }
@@ -302,7 +308,7 @@ pub fn tick_yv_couch(
                     cues.push(AudioCue {
                         name: "sndCuzBye",
                         volume: 1.0,
-                        variance: 0.05,
+                        variance: 0.1,
                     });
                     cuz.strip = CuzStrip::InteractTo;
                 }

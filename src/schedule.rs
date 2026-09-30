@@ -5,7 +5,7 @@
 //! tuple, so bevy `.before()`/`.after()` edges hold by position
 //! (`update_carpet_occupancy` before `boss_ai`, `handle_throne_room_props`
 //! after `move_projectiles`). `gameplay_active` gates the same subsets
-//! bevy gates; `Update`-set audio/UI/ambience systems stay out (shell
+//! bevy gates; `Update`-set UI systems stay out (shell
 //! phase), as do the deferred render/UI systems listed in the audit
 //! (sprite strips, toasts-as-text, HUD bridge).
 //!
@@ -87,8 +87,9 @@ pub fn in_game(state: Res<AppState>) -> bool {
 /// `animate_environment` alpha — resolved renderer-side from
 /// `SurfacePulse` via the same wave law; `sprite_from_candidates`
 /// records its pick in `PulseSprite` at spawn)
-/// and `Update`-set audio / HUD / ambience systems (music/intensity
-/// bridges). `sample_input` IS ported (keyboard/mouse/gamepad/touch
+/// and `Update`-set HUD systems (the area music/ambience trio
+/// `update_amb_filter` / `sync_area_audio` / `tick_area_audio_fades`
+/// IS registered, in the transient-FX tail below). `sample_input` IS ported (keyboard/mouse/gamepad/touch
 /// samplers feed `NtInput` through the `App` shell staging).
 /// `hurt_on_damage` / `prop_hurt_on_damage` ARE registered (state half
 /// only — image/rect/anchor/flip resolve renderer-side);
@@ -128,6 +129,7 @@ pub fn build_sim_schedule() -> Schedule {
     // what satisfies bevy's `.before()`/`.after()` edges by position.
     sched.add_systems(
         (
+            audio::init_area_audio_resources.in_set(NtSimSet::Always),
             (
                 anim::animate_sprites.in_set(NtSimSet::Always),
                 anim::tick_gml_images.in_set(NtSimSet::Always),
@@ -196,15 +198,17 @@ pub fn build_sim_schedule() -> Schedule {
             )
                 .chain(),
             // Transient-FX tail (Always, ungated): muzzle expiry then
-            // particle/number/trauma/flash stepping. Own group so the
+            // particle/number/trauma/flash stepping, then the area
+            // music/ambience trio. Own group so the
             // group above stays under the 20-node tuple cap.
             (
                 effects::tick_fired_weapons.in_set(NtSimSet::Always),
                 environment::tick_native_lifetimes.in_set(NtSimSet::Always),
                 effects::step_fx.in_set(NtSimSet::Always),
-                audio::flush_queued_cues.in_set(NtSimSet::Always),
-                audio::play_reactive_audio_requests.in_set(NtSimSet::Always),
                 effects::tick_hitstop_slowmo.in_set(NtSimSet::Always),
+                audio::update_amb_filter.in_set(NtSimSet::Always),
+                audio::sync_area_audio.in_set(NtSimSet::Always),
+                audio::tick_area_audio_fades.in_set(NtSimSet::Always),
             )
                 .chain(),
             (

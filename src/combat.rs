@@ -159,13 +159,19 @@ pub fn contact_damage(
     mut commands: Commands,
     mut trauma: ResMut<Trauma>,
     mut flash: ResMut<FlashWhite>,
-    audio: Res<GameAudio>,
     mut rumble_queue: ResMut<Queue<RumbleRequest>>,
     mut cues: ResMut<Queue<AudioCue>>,
     mut secrets: ResMut<SecretTriggers>,
     mut last_damage: ResMut<LastDamageTaken>,
     mut player_q: Query<
-        (Entity, &Pos, &mut Health, &mut Velocity, &Player),
+        (
+            Entity,
+            &Pos,
+            &mut Health,
+            &mut Velocity,
+            &Player,
+            &RaceState,
+        ),
         (With<Player>, Without<Enemy>),
     >,
     mut enemies: Query<
@@ -181,7 +187,8 @@ pub fn contact_damage(
     >,
 ) {
     let _ = &mut flash;
-    let Ok((player_e, player_pos, mut health, mut player_vel, player)) = player_q.single_mut()
+    let Ok((player_e, player_pos, mut health, mut player_vel, player, race_state)) =
+        player_q.single_mut()
     else {
         return;
     };
@@ -258,7 +265,11 @@ pub fn contact_damage(
         // Single-player build: rumble routing is platform-side, so the
         // bevy per-gamepad fan-out collapses to one queued request.
         rumble(&mut rumble_queue, 0.2, 0.8, 0.16);
-        audio.play_hurt(&mut cues);
+        cues.push(AudioCue {
+            name: crate::enemy_data::gml_race_hurt(race_state.race),
+            volume: 1.0,
+            variance: 0.2,
+        });
 
         let mut rng = rand::rng();
         spawn_burst(
@@ -543,13 +554,22 @@ pub fn resolve_enemy_deaths(
     let decide_owned: Vec<WeaponId> = pinv0.weapons.iter().copied().collect();
     let decide_steroids = race_state.race == RaceId::Steroids;
 
-    let enemy_total = q
+    let oasis = run.area == crate::data::AreaId::Oasis;
+    let pre: Vec<EnemyKind> = q
         .iter()
         .filter(|(_, _, team, _, _, _, _, _)| **team == Team::Enemy)
+        .map(|(_, _, _, _, enemy, _, _, _)| {
+            enemy.copied().map(|e| e.kind).unwrap_or(EnemyKind::Maggot)
+        })
+        .collect();
+    let mut enemy_alive = pre
+        .iter()
+        .filter(|kind| crate::enemy_data::gml_counts_as_enemy(**kind))
         .count();
-    if enemy_total == 2 {
-        audio.play_levelup(&mut cues);
-    }
+    let mut techno_remaining = pre
+        .iter()
+        .filter(|kind| **kind == EnemyKind::Technomancer)
+        .count();
 
     for (e, pos, team, health, enemy, enemy_vel, enemy_brain, statue) in &mut q {
         if *team != Team::Enemy || health.hp > 0 {
@@ -696,7 +716,22 @@ pub fn resolve_enemy_deaths(
             ));
         }
 
-        audio.play_hit(&mut cues);
+        if crate::enemy_data::gml_runs_enemy_destroy(enemy.kind) && enemy_alive == 2 {
+            cues.push(AudioCue {
+                name: "sndLastEnemy",
+                volume: 1.0,
+                variance: 0.2,
+            });
+        }
+        if crate::enemy_data::gml_counts_as_enemy(enemy.kind) {
+            enemy_alive -= 1;
+        }
+        for cue in crate::enemy_data::gml_death_cues(enemy.kind, oasis, techno_remaining) {
+            cues.push(cue);
+        }
+        if enemy.kind == EnemyKind::Technomancer {
+            techno_remaining -= 1;
+        }
 
         match enemy.kind {
             EnemyKind::YvBoss => {
@@ -1211,10 +1246,11 @@ pub fn corpse_hits(
     )>,
     player_q: Query<&Player, With<Player>>,
     catalog: Res<repame_anim::AnimCatalog>,
-    audio: Res<GameAudio>,
+    run: Res<Run>,
     frame: Res<CurrentFrame>,
     mut cues: ResMut<Queue<AudioCue>>,
 ) {
+    let oasis = run.area == crate::data::AreaId::Oasis;
     let impact_wrists = player_q
         .single()
         .is_ok_and(|player| player.mutations.contains(&MutationId::ImpactWrists));
@@ -1264,11 +1300,17 @@ pub fn corpse_hits(
                 } else {
                     (target_speed / 150.0).round() as i32 + i32::from(impact_wrists) + 1
                 };
+                let hp_frac = health.hp.max(0) as f32 / health.max.max(1) as f32;
                 health.hp -= damage;
                 next_hurt.0 = if airborne_leap(leap) { 0 } else { frame.0 + 5 };
                 if let Some(velocity) = target_velocity.as_deref_mut() {
                     velocity.0 += direction * (corpse_speed.length() * 0.5);
                 }
+                cues.push(AudioCue {
+                    name: crate::enemy_data::gml_snd_hurt(enemy.kind, oasis, hp_frac),
+                    volume: 1.0,
+                    variance: 0.2,
+                });
                 if !collision.settled {
                     HitFlash::apply(&mut commands, target_entity, [1.0, 0.4, 0.4, 1.0], 0.12);
                     let idle = enemy_def(enemy.kind).sprite;
@@ -1284,7 +1326,6 @@ pub fn corpse_hits(
                             .unwrap_or(1.0)
                             .max(1.0),
                     });
-                    audio.play_hit(&mut cues);
                 }
                 if impact_wrists {
                     commands.spawn((
@@ -1295,10 +1336,17 @@ pub fn corpse_hits(
                         Pos(corpse_pos),
                     ));
                     cues.push(AudioCue {
-                        name: "ImpWristHit",
-                        volume: 0.2,
-                        variance: 0.0,
+                        name: "sndImpWristHit",
+                        volume: 1.0,
+                        variance: 0.2,
                     });
+                    if health.hp <= 0 {
+                        cues.push(AudioCue {
+                            name: "sndImpWristKill",
+                            volume: 1.0,
+                            variance: 0.2,
+                        });
+                    }
                 }
                 corpse_speed *= 0.5;
                 hit = true;
@@ -1445,15 +1493,44 @@ pub fn resolve_death_drops(
         if player.mutations.contains(&MutationId::TriggerFingers)
             && let Ok(mut fc) = fire_q.single_mut()
         {
+            let primary_id = pinv.weapons[pinv.current];
+            let secondary_id = if race_state.race == RaceId::Steroids {
+                pinv.weapons
+                    [crate::player::steroids_secondary_slot(pinv.current, pinv.weapon_slots)]
+            } else {
+                WeaponId::NONE
+            };
             let mut shine = false;
             if !fc.timer.is_finished() {
                 let ticks = (fc.timer.remaining_secs() * 30.0 * 0.6).floor().max(0.0);
-                fc.timer = GTimer::from_seconds(ticks / 30.0, TimerMode::Once);
+                if ticks <= 0.0 {
+                    crate::player_fire::gun_reload_fx(
+                        &mut cues,
+                        primary_id,
+                        primary_id,
+                        &pinv,
+                        player.laser_brain,
+                    );
+                    fc.timer = GTimer::from_seconds(1.0 / 30.0, TimerMode::Once);
+                } else {
+                    fc.timer = GTimer::from_seconds(ticks / 30.0, TimerMode::Once);
+                }
                 shine = true;
             }
             if !fc.timer_b.is_finished() {
                 let ticks = (fc.timer_b.remaining_secs() * 30.0 * 0.6).floor().max(0.0);
-                fc.timer_b = GTimer::from_seconds(ticks / 30.0, TimerMode::Once);
+                if ticks <= 0.0 {
+                    crate::player_fire::gun_reload_fx(
+                        &mut cues,
+                        secondary_id,
+                        primary_id,
+                        &pinv,
+                        player.laser_brain,
+                    );
+                    fc.timer_b = GTimer::from_seconds(0.0, TimerMode::Once);
+                } else {
+                    fc.timer_b = GTimer::from_seconds(ticks / 30.0, TimerMode::Once);
+                }
                 shine = true;
             }
             if shine {
@@ -1879,7 +1956,6 @@ pub fn move_projectiles(
                     [0.7, 0.7, 0.7, 0.7],
                     (20.0, 60.0),
                 );
-                audio.play_hit(&mut cues);
                 tpos.0 -= vel.0 * dt;
                 if ps.0 <= 0.5 {
                     on_projectile_removed(
@@ -1940,7 +2016,6 @@ pub fn move_projectiles(
                             }),
                         );
                     }
-                    audio.play_hit(&mut cues);
                     continue;
                 }
                 if disc_dist.is_some_and(|d| d > 50.0) {
@@ -2217,6 +2292,7 @@ fn chain_to_nearby_targets(
             Option<&mut NextHurt>,
             Option<&mut BigDogMissileState>,
             Option<&DogGuardianLeap>,
+            Option<&Enemy>,
         ),
         Without<Projectile>,
     >,
@@ -2237,7 +2313,7 @@ fn chain_to_nearby_targets(
 
     for _ in 0..jumps {
         let mut best: Option<(Entity, glam::Vec2, f32)> = None;
-        for (target_e, target_pos, target_team, _, _, _, _, _, missile, _) in targets.iter() {
+        for (target_e, target_pos, target_team, _, _, _, _, _, missile, _, _) in targets.iter() {
             if missile.is_some() || *target_team != Team::Enemy || visited.contains(&target_e) {
                 continue;
             }
@@ -2257,7 +2333,7 @@ fn chain_to_nearby_targets(
 
         damage = ((damage as f32) * falloff).round().max(1.0) as i32;
 
-        for (target_e, _, _, _, mut health, vel_opt, _, _, missile, _) in targets.iter_mut() {
+        for (target_e, _, _, _, mut health, vel_opt, _, _, missile, _, _) in targets.iter_mut() {
             if target_e != next_e || missile.is_some() {
                 continue;
             }
@@ -2325,11 +2401,12 @@ fn retaliate_sharp_teeth(
             Option<&mut NextHurt>,
             Option<&mut BigDogMissileState>,
             Option<&DogGuardianLeap>,
+            Option<&Enemy>,
         ),
         Without<Projectile>,
     >,
 ) {
-    for (ee, epos, team, _, mut health, _, _, nexthurt, missile, leap) in targets.iter_mut() {
+    for (ee, epos, team, _, mut health, _, _, nexthurt, missile, leap, _) in targets.iter_mut() {
         if missile.is_some() || *team != Team::Enemy {
             continue;
         }
@@ -2366,7 +2443,7 @@ pub fn projectile_hits(
     mut cues: ResMut<Queue<AudioCue>>,
     mut secrets: ResMut<SecretTriggers>,
     mut last_damage: ResMut<LastDamageTaken>,
-    mut player_state: Query<(&Player, &mut Inventory), With<Player>>,
+    mut player_state: Query<(&Player, &mut Inventory, &RaceState), With<Player>>,
     mut projectiles: Query<
         (
             Entity,
@@ -2415,12 +2492,19 @@ pub fn projectile_hits(
             Option<&mut NextHurt>,
             Option<&mut BigDogMissileState>,
             Option<&DogGuardianLeap>,
+            Option<&Enemy>,
         ),
         Without<Projectile>,
     >,
     trap_fires: Query<&TrapFire>,
+    run: Res<Run>,
 ) {
     let mut player_state = player_state.single_mut().ok();
+    let oasis = run.area == AreaId::Oasis;
+    let player_race = player_state
+        .as_ref()
+        .map(|(_, _, race)| race.race)
+        .unwrap_or(RaceId::Random);
 
     let hits_all_set: std::collections::HashSet<Entity> = aux.p5().iter().collect();
     let grace_set: std::collections::HashSet<Entity> = aux.p6().iter().collect();
@@ -2467,7 +2551,7 @@ pub fn projectile_hits(
         let recycle_yield = if *proj_team == Team::Player
             && player_state
                 .as_ref()
-                .is_some_and(|(player, _)| player.recycle_gland)
+                .is_some_and(|(player, _, _)| player.recycle_gland)
         {
             aux.p7().get(proj_e).ok().map(|marker| marker.0)
         } else {
@@ -2488,6 +2572,7 @@ pub fn projectile_hits(
             nexthurt,
             mut missile,
             leap,
+            target_enemy,
         ) in targets.iter_mut()
         {
             if health.hp <= 0 {
@@ -2598,7 +2683,7 @@ pub fn projectile_hits(
                 && !missile_target
                 && rand::rng().random_bool(0.6)
             {
-                if let Some((player, inventory)) = player_state.as_mut() {
+                if let Some((player, inventory, _)) = player_state.as_mut() {
                     let slot = inventory.ammo_mut(crate::data::AmmoKind::Bullets);
                     *slot = (*slot + i32::from(recycle_amount))
                         .min(player.ammo_cap(crate::data::AmmoKind::Bullets));
@@ -2610,9 +2695,9 @@ pub fn projectile_hits(
                         Pos(proj_pos.0),
                     ));
                     cues.push(AudioCue {
-                        name: "RecGlandProc",
+                        name: "sndRecGlandProc",
                         volume: 1.0,
-                        variance: 0.0,
+                        variance: 0.2,
                     });
                 }
             }
@@ -2643,7 +2728,21 @@ pub fn projectile_hits(
                 hit_player = true;
                 secrets.mark_damage_taken();
                 last_damage.note_from_source(proj.source.as_ref());
-                audio.play_hurt(&mut cues);
+                cues.push(AudioCue {
+                    name: crate::enemy_data::gml_race_hurt(player_race),
+                    volume: 1.0,
+                    variance: 0.2,
+                });
+            } else if let Some(enemy) = target_enemy {
+                cues.push(AudioCue {
+                    name: crate::enemy_data::gml_snd_hurt(
+                        enemy.kind,
+                        oasis,
+                        hp_before as f32 / health.max.max(1) as f32,
+                    ),
+                    volume: 1.0,
+                    variance: 0.2,
+                });
             } else {
                 audio.play_hit(&mut cues);
             }
@@ -2757,7 +2856,7 @@ pub fn projectile_hits(
         }
 
         if hit_player
-            && let Some((p, _)) = &player_state
+            && let Some((p, _, _)) = &player_state
             && p.sharp_teeth
         {
             retaliate_sharp_teeth(&mut commands, proj.damage, hit_pos, &frame, &mut targets);
@@ -3582,6 +3681,24 @@ fn slash_hits_aabb(
         && (closest.y - center.y).abs() <= half.y + half_width
 }
 
+const GUITAR_HIT_STEMS: [&str; 7] = [
+    "sndGuitarHit1",
+    "sndGuitarHit2",
+    "sndGuitarHit3",
+    "sndGuitarHit4",
+    "sndGuitarHit5",
+    "sndGuitarHit6",
+    "sndGuitarHit7",
+];
+const ELECTRIC_GUITAR_HIT_STEMS: [&str; 6] = [
+    "sndElectricGuitarHit1",
+    "sndElectricGuitarHit2",
+    "sndElectricGuitarHit3",
+    "sndElectricGuitarHit4",
+    "sndElectricGuitarHit5",
+    "sndElectricGuitarHit6",
+];
+
 /// GML Slash/Shank projectiles (melee). Friction 0.1 slide, pierce via
 /// nexthurt (no despawn on hit), shank passes walls, slash stops with
 /// MeleeHitWall + shake damage/3 once, deflects enemy bullets (typ 1),
@@ -3629,6 +3746,7 @@ pub fn tick_slash_projectiles(
             Option<&mut Velocity>,
             Option<&mut NextHurt>,
             Option<&DogGuardianLeap>,
+            &Enemy,
         ),
         (
             With<Enemy>,
@@ -3649,30 +3767,34 @@ pub fn tick_slash_projectiles(
         ),
         (With<Prop>, Without<Enemy>, Without<SlashProjectile>),
     >,
-    mut eproj: Query<
-        (
-            Entity,
-            &Pos,
-            &mut Velocity,
-            &mut Team,
-            &Projectile,
-            Option<&ProjectileTyp>,
-            Option<&GrenadeFuse>,
-            Option<&ProjectileFade>,
-        ),
-        (With<Projectile>, Without<SlashProjectile>),
-    >,
-    walls: Query<
-        (Entity, &WallCell, &Pos),
-        (
-            With<WallTile>,
-            Without<SlashProjectile>,
-            Without<Projectile>,
-        ),
-    >,
+    mut projs: ParamSet<(
+        Query<
+            (
+                Entity,
+                &Pos,
+                &mut Velocity,
+                &mut Team,
+                &Projectile,
+                Option<&ProjectileTyp>,
+                Option<&GrenadeFuse>,
+                Option<&ProjectileFade>,
+            ),
+            (With<Projectile>, Without<SlashProjectile>),
+        >,
+        Query<
+            (Entity, &WallCell, &Pos),
+            (
+                With<WallTile>,
+                Without<SlashProjectile>,
+                Without<Projectile>,
+            ),
+        >,
+    )>,
     mut secrets: ResMut<SecretTriggers>,
     mut all_health: Query<&mut Health, Without<Enemy>>,
+    run: Res<Run>,
 ) {
+    let oasis = run.area == AreaId::Oasis;
     let dt = time.delta_secs;
     for (e, mut proj, mut vel, mut tpos, mut slash) in &mut slash_q {
         proj.life.tick(time.delta_secs);
@@ -3688,7 +3810,7 @@ pub fn tick_slash_projectiles(
         tpos.0 += vel.0 * dt;
         let pos = tpos.0;
 
-        for (pe, ppos, mut pvel, mut pteam, pproj, ptyp, pfuse, pfade) in &mut eproj {
+        for (pe, ppos, mut pvel, mut pteam, pproj, ptyp, pfuse, pfade) in projs.p0().iter_mut() {
             let same_team = *pteam == slash_team;
             let is_grenade = pfuse.is_some();
             if same_team && !is_grenade {
@@ -3774,7 +3896,7 @@ pub fn tick_slash_projectiles(
             }
         }
 
-        for (ee, epos, eteam, ebox, mut ehealth, evel, nexthurt, leap) in &mut enemies {
+        for (ee, epos, eteam, ebox, mut ehealth, evel, nexthurt, leap, enemy) in &mut enemies {
             if *eteam == slash_team {
                 continue;
             }
@@ -3796,6 +3918,7 @@ pub fn tick_slash_projectiles(
             ) {
                 continue;
             }
+            let hp_frac = ehealth.hp.max(0) as f32 / ehealth.max.max(1) as f32;
             ehealth.hp -= proj.damage;
             if let Some(mut nh) = nexthurt {
                 nh.0 = if airborne_leap(leap) { 0 } else { frame.0 + 5 };
@@ -3811,10 +3934,26 @@ pub fn tick_slash_projectiles(
                 proj.damage.to_string(),
                 [1.0, 0.95, 0.6, 1.0],
             );
-            audio.play_hit(&mut cues);
+            cues.push(AudioCue {
+                name: crate::enemy_data::gml_snd_hurt(enemy.kind, oasis, hp_frac),
+                volume: 1.0,
+                variance: 0.2,
+            });
             slash.hit = true;
             if slash.guitar || slash.electric_guitar {
-                audio.play_hit(&mut cues);
+                let pick = rand::rng().random_range(0..7);
+                let name = if slash.electric_guitar {
+                    ELECTRIC_GUITAR_HIT_STEMS.get(pick)
+                } else {
+                    GUITAR_HIT_STEMS.get(pick)
+                };
+                if let Some(name) = name {
+                    cues.push(AudioCue {
+                        name: *name,
+                        volume: 1.0,
+                        variance: 0.2,
+                    });
+                }
             }
             if slash.lightning {
                 commands.spawn((
@@ -3909,7 +4048,7 @@ pub fn tick_slash_projectiles(
 
         if !slash.shank && !slash.walled {
             let mut wall_hit: Option<(Option<Entity>, glam::Vec2, f32)> = None;
-            for (we, _cell, wpos) in &walls {
+            for (we, _cell, wpos) in projs.p1().iter() {
                 let wpos = wpos.0;
                 let half = glam::Vec2::splat(8.0);
                 if !slash_hits_aabb(
@@ -3933,7 +4072,7 @@ pub fn tick_slash_projectiles(
                 tpos.0 -= vel.0 * dt;
                 if slash.hammer_wallbreak
                     && let Some(we) = we
-                    && let Ok((_, cell, wpos2)) = walls.get(we)
+                    && let Ok((_, cell, wpos2)) = projs.p1().get(we)
                 {
                     commands.spawn((
                         GameCleanup,
@@ -3963,7 +4102,19 @@ pub fn tick_slash_projectiles(
                     he.insert(SpriteAnim::new(hit_path, def));
                 }
                 trauma.add((proj.damage as f32 / 3.0 / 20.0).clamp(0.1, 0.5));
-                audio.play_hit(&mut cues);
+                if slash.guitar {
+                    cues.push(AudioCue {
+                        name: GUITAR_HIT_STEMS[rand::rng().random_range(0..7)],
+                        volume: 1.0,
+                        variance: 0.2,
+                    });
+                } else {
+                    cues.push(AudioCue {
+                        name: "sndMeleeWall",
+                        volume: 1.0,
+                        variance: 0.0,
+                    });
+                }
                 slash.walled = true;
                 vel.0 = glam::Vec2::ZERO;
             }
@@ -4160,7 +4311,14 @@ pub fn apply_explosions(
         (Without<Enemy>, Without<Player>, Without<Prop>),
     >,
     mut enemies: Query<
-        (Entity, &Pos, &mut Health, &Hitbox, Option<&mut Velocity>),
+        (
+            Entity,
+            &Pos,
+            &mut Health,
+            &Hitbox,
+            Option<&mut Velocity>,
+            &Enemy,
+        ),
         (With<Enemy>, Without<Player>),
     >,
     mut player_q: Query<
@@ -4255,7 +4413,8 @@ pub fn apply_explosions(
         }
 
         if boom.team == Team::Player {
-            for (ee, epos, mut health, hitbox, vel_opt) in &mut enemies {
+            let oasis = run.area == AreaId::Oasis;
+            for (ee, epos, mut health, hitbox, vel_opt, enemy) in &mut enemies {
                 let target_pos = epos.0;
                 if target_pos.distance(pos) >= boom.radius + hitbox.radius {
                     continue;
@@ -4263,6 +4422,7 @@ pub fn apply_explosions(
                 if hit_opt.as_ref().is_some_and(|hit| hit.contains(&ee)) {
                     continue;
                 }
+                let hp_frac = health.hp.max(0) as f32 / health.max.max(1) as f32;
                 health.hp -= boom.damage;
                 if let Some(mut vel) = vel_opt {
                     if vel.0.length() < 480.0 {
@@ -4272,6 +4432,11 @@ pub fn apply_explosions(
                         }
                     }
                 }
+                cues.push(AudioCue {
+                    name: crate::enemy_data::gml_snd_hurt(enemy.kind, oasis, hp_frac),
+                    volume: 1.0,
+                    variance: 0.2,
+                });
                 HitFlash::apply(&mut commands, ee, [1.0, 1.0, 1.0, 1.0], 0.12);
                 repame_fx::spawn_number(
                     &mut commands,
@@ -4398,7 +4563,8 @@ pub fn apply_explosions(
         }
 
         if boom.hits_player
-            && let Ok((player_e, ppos, mut health, player, vel_opt, _, _)) = player_q.single_mut()
+            && let Ok((player_e, ppos, mut health, player, vel_opt, _, race_state)) =
+                player_q.single_mut()
             && ppos.0.distance(pos) < boom.radius + PLAYER_RADIUS
             && !hit_opt.as_ref().is_some_and(|hit| hit.contains(&player_e))
         {
@@ -4420,7 +4586,11 @@ pub fn apply_explosions(
             secrets.mark_damage_taken();
             last_damage.note_from_source(boom.source.as_ref());
             HitFlash::apply(&mut commands, player_e, [1.0, 0.3, 0.2, 1.0], 0.15);
-            audio.play_hurt(&mut cues);
+            cues.push(AudioCue {
+                name: crate::enemy_data::gml_race_hurt(race_state.race),
+                volume: 1.0,
+                variance: 0.2,
+            });
             if let Some(hit) = hit_opt.as_mut() {
                 hit.push(player_e);
             }

@@ -71,6 +71,49 @@ pub fn circle_aabb_penetration(pos: Vec2, radius: f32, center: Vec2, half: Vec2)
     Some(radius + dx.min(dy))
 }
 
+pub fn circle_aabb_overlap(
+    pos: Vec2,
+    radius: f32,
+    center: Vec2,
+    half: Vec2,
+) -> Option<(Vec2, f32)> {
+    let half = half.abs();
+    let closest = Vec2::new(
+        pos.x.clamp(center.x - half.x, center.x + half.x),
+        pos.y.clamp(center.y - half.y, center.y + half.y),
+    );
+    let delta = pos - closest;
+    let d2 = delta.length_squared();
+    if d2 > radius * radius {
+        return None;
+    }
+    let normal = if d2 > 1e-8 {
+        delta.normalize()
+    } else {
+        let dx = half.x - (pos.x - center.x).abs();
+        let dy = half.y - (pos.y - center.y).abs();
+        let sx = if pos.x < center.x { -1.0 } else { 1.0 };
+        let sy = if pos.y < center.y { -1.0 } else { 1.0 };
+        if dx < dy {
+            Vec2::new(sx, 0.0)
+        } else {
+            Vec2::new(0.0, sy)
+        }
+    };
+    let distance = delta.length();
+    if distance > radius {
+        return None;
+    }
+    let penetration = if distance > 1e-8 {
+        radius - distance
+    } else {
+        let dx = half.x - (pos.x - center.x).abs();
+        let dy = half.y - (pos.y - center.y).abs();
+        radius + dx.min(dy)
+    };
+    Some((normal, penetration))
+}
+
 pub fn swept_circle_aabb(
     start: Vec2,
     displacement: Vec2,
@@ -87,6 +130,14 @@ pub fn swept_circle_aabb(
             p.y.clamp(center.y - half.y, center.y + half.y),
         );
         (p - closest).length()
+    };
+    let distance_squared = |t: f32| {
+        let p = start + displacement * t;
+        let closest = Vec2::new(
+            p.x.clamp(center.x - half.x, center.x + half.x),
+            p.y.clamp(center.y - half.y, center.y + half.y),
+        );
+        (p - closest).length_squared()
     };
     let d0 = distance(0.0);
     if d0 <= radius + 1e-5 {
@@ -110,7 +161,7 @@ pub fn swept_circle_aabb(
     for _ in 0..48 {
         let m1 = lo + (hi - lo) / 3.0;
         let m2 = hi - (hi - lo) / 3.0;
-        if distance(m1) < distance(m2) {
+        if distance_squared(m1) < distance_squared(m2) {
             hi = m2;
         } else {
             lo = m1;

@@ -8,7 +8,7 @@ use glam::Vec2;
 use rand::RngExt;
 use repame_sim::SimTime;
 
-use crate::audio::AudioCue;
+use crate::audio::{AudioCue, GameAudio};
 use crate::comps_a::{
     AbilityHazard, AimDir, DamageSource, FloorMask, GameCleanup, Health, HitId,
     Inventory, LevelCleanup, Player, Projectile, RaceState, Team, Velocity,
@@ -225,11 +225,14 @@ pub fn player_aim(
 }
 
 /// Equip/cycle weapons. Slot-select + cycle logic is bevy-verbatim
-/// (skips `NONE` slots, wraps with `weapon_slots`); audio is a `pickup`
-/// cue at 0.25/0.05 (bevy `play_sfx_varied` parity). Fire timers are
-/// untouched (bevy keeps the old cooldown running across a switch).
+/// (skips `NONE` slots, wraps with `weapon_slots`); audio is the
+/// per-weapon swap stem GML `Player/Step_0:34` plays
+/// (`snd_play(wep_swap[wep])`, via [`GameAudio::play_weapon_swap`]).
+/// Fire timers are untouched (bevy keeps the old cooldown running
+/// across a switch).
 pub fn weapon_switch(
     mut input: ResMut<NtInput>,
+    audio: Res<GameAudio>,
     mut q: Query<&mut Inventory, With<Player>>,
     mut cues: ResMut<Queue<AudioCue>>,
     mut tut: Option<ResMut<crate::state::TutorialState>>,
@@ -279,12 +282,7 @@ pub fn weapon_switch(
         if let Some(tut) = tut.as_deref_mut() {
             tut.complete_step(crate::state::TutorialStep::Swapping);
         }
-        inv.swapanim = 1.0;
-        cues.push(AudioCue {
-            name: "sndAmmoPickup",
-            volume: 0.25,
-            variance: 0.05,
-        });
+        audio.play_weapon_swap(&mut cues, inv.weapons[inv.current]);
     }
 }
 
@@ -501,6 +499,11 @@ pub fn ally_ai(
         ally.life.tick(dt);
         ally.shoot.tick(dt);
         if ally.life.just_finished() {
+            cues.push(AudioCue {
+                name: "sndAllyDead",
+                volume: 1.0,
+                variance: 0.0,
+            });
             commands.entity(e).despawn();
             continue;
         }
@@ -539,9 +542,9 @@ pub fn ally_ai(
                     Pos(pos),
                 ));
                 cues.push(AudioCue {
-                    name: "bolt",
-                    volume: 0.7,
-                    variance: 0.05,
+                    name: "sndEnemyFire",
+                    volume: 1.0,
+                    variance: 0.0,
                 });
             }
         }
@@ -679,6 +682,13 @@ pub fn tick_hold_abilities(
             let cost = (time_val + 1.0).floor() as u32;
             if player.rads >= cost && cost > 0 {
                 player.rads -= cost;
+                if player.rads == 0 {
+                    cues.push(AudioCue {
+                        name: "sndHorrorEmpty",
+                        volume: 1.0,
+                        variance: 0.0,
+                    });
+                }
                 time_val += 0.03 * dt * 30.0;
                 if let Ok(mut c) = horror_q.get_mut(player_e) {
                     c.time = time_val;
@@ -727,6 +737,15 @@ pub fn tick_hold_abilities(
                 c.gas
             } else {
                 commands.entity(player_e).insert(FrogCharge { gas: 0.0 });
+                cues.push(AudioCue {
+                    name: if player.throne_butt {
+                        "sndFrogStartButt"
+                    } else {
+                        "sndFrogStart"
+                    },
+                    volume: 1.0,
+                    variance: 0.0,
+                });
                 0.0
             };
             if gas < 30.0 {
@@ -760,11 +779,22 @@ pub fn tick_hold_abilities(
                         Pos(pos + off),
                     ));
                 }
-                cues.push(AudioCue {
-                    name: "sndExplosionL",
-                    volume: 0.9,
-                    variance: 0.04,
-                });
+                if gas >= 25.0 {
+                    cues.push(AudioCue {
+                        name: "sndFrogGasRelease",
+                        volume: 1.0,
+                        variance: 0.0,
+                    });
+                    cues.push(AudioCue {
+                        name: if player.throne_butt {
+                            "sndFrogEndButt"
+                        } else {
+                            "sndFrogEnd"
+                        },
+                        volume: 1.0,
+                        variance: 0.0,
+                    });
+                }
             }
         }
     } else if frog_q.get(player_e).is_ok() {
@@ -856,7 +886,7 @@ impl LoopSfx {
 fn push_loop_cue(cues: &mut Queue<AudioCue>, name: &'static str) {
     cues.push(AudioCue {
         name,
-        volume: 0.6,
+        volume: 1.0,
         variance: 0.0,
     });
 }

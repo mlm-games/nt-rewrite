@@ -1553,8 +1553,8 @@ pub fn tick_boss_taunts(
             brain.taunt = true;
             cues.push(AudioCue {
                 name: cue_name,
-                volume: 0.7,
-                variance: 0.05,
+                volume: 1.0,
+                variance: 0.0,
             });
         }
     }

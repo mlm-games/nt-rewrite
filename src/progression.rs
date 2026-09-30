@@ -30,7 +30,7 @@ use rand::RngExt;
 use repame_fx::Trauma;
 use repame_sim::SimTime;
 
-use crate::audio::{AudioCue, GameAudio, QueuedReactiveCue, ReactiveCue};
+use crate::audio::{AudioCue, GameAudio};
 use crate::combat::queue_enemy_spawn;
 use crate::comps_a::{
     Euphoria, FloorMask, FloorStarted, GameCleanup, Health, HeavyHeart, Inventory, LevelCleanup,
@@ -41,7 +41,7 @@ use crate::comps_b::{
     ChestKind, CrownPedestal, Enemy, FloorTransition, GroundPhysics, LoopTransition, OpenedChest,
     Pickup, PickupCurse, PickupKind, Portal, PortalCarriedWeapons, PortalClear, PortalClosing,
     PortalPhase, PortalShock, PortalState, PortalSucking, Prop, PropSprites, RadChestContainer,
-    SecretEntrance, SitZone, ThroneSit,
+    SecretEntrance, SitZone, ThroneSit, YungCuz,
 };
 use crate::data::{
     AmmoKind, AreaId, CrownKind, MutationId, RaceId, SecretTarget, UltraMutationId, ammo_max,
@@ -142,6 +142,40 @@ pub fn mutation_name(id: MutationId) -> (&'static str, &'static str) {
         ),
         MutationId::OpenMind => ("OPEN MIND", "EXTRA @wCHESTS@s SPAWN"),
         MutationId::HeavyHeart => ("HEAVY HEART", "MORE WEAPON DROPS"),
+    }
+}
+
+pub fn mutation_pick_stem(id: MutationId) -> &'static str {
+    match id {
+        MutationId::RhinoSkin => "sndMutRhinoSkin",
+        MutationId::PlutoniumHunger => "sndMutPlutoniumHunger",
+        MutationId::TriggerFingers => "sndMutTriggerFingers",
+        MutationId::RabbitPaw => "sndMutRabbitPaw",
+        MutationId::SecondStomach => "sndMutSecondStomach",
+        MutationId::ScarierFace => "sndMutScarierFace",
+        MutationId::BoilingVeins => "sndMutBoilingVeins",
+        MutationId::ImpactWrists => "sndMutImpactWrists",
+        MutationId::ExtraFeet => "sndMutExtraFeet",
+        MutationId::Bloodlust => "sndMutBloodLust",
+        MutationId::LuckyShot => "sndMutLuckyShot",
+        MutationId::GammaGuts => "sndMutGammaGuts",
+        MutationId::BackMuscle => "sndMutBackMuscle",
+        MutationId::Euphoria => "sndMutEuphoria",
+        MutationId::LongArms => "sndMutLongArms",
+        MutationId::Stress => "sndMutStress",
+        MutationId::EagleEyes => "sndMutEagleEyes",
+        MutationId::OpenMind => "sndMutOpenMind",
+        MutationId::HeavyHeart => "sndMutHeavyHeart",
+        MutationId::StrongSpirit => "sndMutStrongSpirit",
+        MutationId::SharpTeeth => "sndMutSharpTeeth",
+        MutationId::LastWish => "sndMutLastWish",
+        MutationId::BoltMarrow => "sndMutBoltMarrow",
+        MutationId::Hammerhead => "sndMutHammerhead",
+        MutationId::LaserBrain => "sndMutLaserBrain",
+        MutationId::RecycleGland => "sndMutRecycleGland",
+        MutationId::ShotgunShoulders => "sndMutShotgunFingers",
+        MutationId::ThroneButt => "sndMutThroneButt",
+        MutationId::Patience => "sndMutPatience",
     }
 }
 
@@ -289,6 +323,44 @@ pub fn ultra_mutation_name(id: UltraMutationId) -> (&'static str, &'static str) 
         UltraMutationId::CuzQuickSwap => ("QUICK SWAP", "SWAP ABILITY IS NEARLY INSTANT"),
         UltraMutationId::CuzEmotional => ("EMOTIONAL", "TWICE AS MANY @bTEARS@w"),
     }
+}
+
+pub fn ultra_pick_stem(id: UltraMutationId) -> Option<&'static str> {
+    Some(match id {
+        UltraMutationId::FishConfiscate => "sndFishUltraA",
+        UltraMutationId::FishGunWarrant => "sndFishUltraB",
+        UltraMutationId::CrystalFortress => "sndCrystalUltraA",
+        UltraMutationId::CrystalJuggernaut => "sndCrystalUltraB",
+        UltraMutationId::EyesProjectileStyle => "sndEyesUltraA",
+        UltraMutationId::EyesMonsterStyle => "sndEyesUltraB",
+        UltraMutationId::MeltingBrainCapacity => "sndMeltingUltraA",
+        UltraMutationId::MeltingDetachment => "sndMeltingUltraB",
+        UltraMutationId::PlantTrapper => "sndPlantUltraA",
+        UltraMutationId::PlantKiller => "sndPlantUltraB",
+        UltraMutationId::VenuzGunGod => "sndYVUltraA",
+        UltraMutationId::VenuzBack2Bizniz => "sndYVUltraB",
+        UltraMutationId::SteroidsAmbidextrous => "sndSteroidsUltraA",
+        UltraMutationId::SteroidsGetArmed => "sndSteroidsUltraB",
+        UltraMutationId::RobotRefinedTaste => "sndRobotUltraA",
+        UltraMutationId::RobotRegurgitate => "sndRobotUltraB",
+        UltraMutationId::ChickenHarderToKill => "sndChickenUltraA",
+        UltraMutationId::ChickenDetermination => "sndChickenUltraB",
+        UltraMutationId::RebelPersonalGuard => "sndRebelUltraA",
+        UltraMutationId::RebelRiot => "sndRebelUltraB",
+        UltraMutationId::HorrorStalker => "sndHorrorUltraA",
+        UltraMutationId::HorrorAnomaly => "sndHorrorUltraB",
+        UltraMutationId::HorrorMeltdown => "sndHorrorUltraC",
+        UltraMutationId::RoguePortalStrike => "sndRogueUltraA",
+        UltraMutationId::RogueSuperBlastArmor => "sndRogueUltraB",
+        UltraMutationId::BigDogGuardian | UltraMutationId::BigDogHeavyArtillery => "sndBigDogTaunt",
+        UltraMutationId::SkeletonBloodArmor => "sndSkeletonUltraA",
+        UltraMutationId::SkeletonNecromancy => "sndSkeletonUltraB",
+        UltraMutationId::FrogSwampBody => "sndFrogUltraA",
+        UltraMutationId::FrogToxicLord => "sndFrogUltraB",
+        UltraMutationId::CuzHoarder => "sndCuzUltraA",
+        UltraMutationId::CuzEmotional => "sndCuzUltraB",
+        UltraMutationId::CuzQuickSwap => return None,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -516,7 +588,6 @@ pub fn check_level_up(
     flash: &mut FlashWhite,
     player: &mut Player,
     toast: &mut Toast,
-    audio: &GameAudio,
     cues: &mut Queue<AudioCue>,
     pos: glam::Vec2,
 ) {
@@ -548,7 +619,6 @@ pub fn check_level_up(
             commands,
             trauma,
             flash,
-            audio,
             cues,
             pos,
             if player.level >= 10 {
@@ -556,6 +626,7 @@ pub fn check_level_up(
             } else {
                 [0.25, 1.0, 0.25, 1.0]
             },
+            player.level,
         );
     }
 }
@@ -583,21 +654,31 @@ pub fn try_start_pending_floor_gen(commands: &mut Commands, run: &Run) {
     ));
 }
 
-/// Level-up juice: trauma + white flash + particle burst + jingle.
+/// Level-up juice: trauma + white flash + particle burst + jingle
+/// (GML `GameCont/Step_0`: `sndLevelUltra` once the level reaches the
+/// level max, `sndLevelUp` below it).
 pub fn level_up_feedback(
     commands: &mut Commands,
     trauma: &mut Trauma,
     flash: &mut FlashWhite,
-    audio: &GameAudio,
     cues: &mut Queue<AudioCue>,
     pos: glam::Vec2,
     color: [f32; 4],
+    level: u32,
 ) {
     trauma.add(0.35);
     flash_white(flash, 0.15);
     let mut rng = rand::rng();
     spawn_burst(commands, &mut rng, pos, 32, color, (120.0, 360.0));
-    audio.play_levelup(cues);
+    cues.push(AudioCue {
+        name: if level >= 10 {
+            "sndLevelUltra"
+        } else {
+            "sndLevelUp"
+        },
+        volume: 1.0,
+        variance: 0.0,
+    });
 }
 
 /// Roll up to 4 unowned mutations (Destiny crowns roll 1; Patience
@@ -727,6 +808,7 @@ pub struct MutationFlagSet<'w> {
 pub struct RouteBookkeeping<'w> {
     pub triggers: ResMut<'w, crate::secrets::SecretTriggers>,
     pub crib: ResMut<'w, crate::CribTrip>,
+    pub cues: ResMut<'w, Queue<AudioCue>>,
 }
 
 #[derive(bevy_ecs::system::SystemParam)]
@@ -736,7 +818,7 @@ pub struct LevelFx<'w> {
     pub slow_mo: ResMut<'w, SlowMotion>,
 }
 
-/// Mutation-choice flow state (pause / defer / toast / audio).
+/// Mutation-choice flow state (pause / defer / toast / run).
 #[derive(bevy_ecs::system::SystemParam)]
 pub struct ChoiceFlow<'w> {
     pub choice: ResMut<'w, MutationChoice>,
@@ -744,7 +826,6 @@ pub struct ChoiceFlow<'w> {
     pub deferred: ResMut<'w, DeferredFloorGen>,
     pub toast: ResMut<'w, Toast>,
     pub run: Res<'w, Run>,
-    pub audio: Res<'w, GameAudio>,
     pub cues: ResMut<'w, Queue<AudioCue>>,
 }
 
@@ -790,7 +871,7 @@ pub fn handle_mutation_choice(
             &mut flags,
             &mut fx,
             &mut flow.toast,
-            &flow.audio,
+            flow.run.area == AreaId::Oasis,
             &mut flow.cues,
             id,
         );
@@ -800,8 +881,6 @@ pub fn handle_mutation_choice(
             dirty.0 = true;
             flow.toast.show("ULTRA TIME");
         }
-
-        commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::UltraChosen)));
 
         ultra.choices.clear();
         commands.remove_resource::<PendingUltra>();
@@ -855,12 +934,10 @@ pub fn handle_mutation_choice(
         &mut flags,
         &mut fx,
         &mut flow.toast,
-        &flow.audio,
+        flow.run.area == AreaId::Oasis,
         &mut flow.cues,
         id,
     );
-
-    commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::MutationChosen)));
 
     pending.choices.clear();
     commands.remove_resource::<PendingMutation>();
@@ -903,15 +980,14 @@ pub fn handle_mutation_choice(
 }
 
 /// Apply a mutation's stat effects (bevy `apply_mutation` verbatim,
-/// minus sprite code — there was none — and minus the `Commands` param,
-/// which the bevy body used only for the level-up sound; the headless
-/// audio queue needs no commands).
+/// minus sprite code — there was none — and minus the `Commands` param;
+/// the GML `SkillIcon/Other_10` select sound rides `cues` instead).
 pub fn apply_mutation(
     player_q: &mut Query<(&mut Player, &mut Health, &mut Inventory, &RaceState), With<Player>>,
     flags: &mut MutationFlagSet,
     fx: &mut LevelFx,
     toast: &mut Toast,
-    audio: &GameAudio,
+    underwater: bool,
     cues: &mut Queue<AudioCue>,
     id: MutationId,
 ) {
@@ -1048,7 +1124,15 @@ pub fn apply_mutation(
     fx.trauma.add(0.3);
     chromatic_pulse(&mut fx.chroma, 0.25);
     slow_motion(&mut fx.slow_mo, 0.5, 0.35);
-    audio.play_levelup(cues);
+    cues.push(AudioCue {
+        name: if underwater {
+            "sndOasisShoot"
+        } else {
+            mutation_pick_stem(id)
+        },
+        volume: 1.0,
+        variance: 0.0,
+    });
 }
 
 /// Throne Butt's immediate per-race bonus (bevy verbatim).
@@ -1128,7 +1212,7 @@ pub fn apply_ultra_mutation(
     flags: &mut MutationFlagSet,
     fx: &mut LevelFx,
     toast: &mut Toast,
-    audio: &GameAudio,
+    underwater: bool,
     cues: &mut Queue<AudioCue>,
     id: UltraMutationId,
 ) {
@@ -1335,7 +1419,17 @@ pub fn apply_ultra_mutation(
     fx.trauma.add(0.55);
     chromatic_pulse(&mut fx.chroma, 0.4);
     slow_motion(&mut fx.slow_mo, 0.35, 0.5);
-    audio.play_levelup(cues);
+    if let Some(stem) = if underwater {
+        Some("sndOasisShoot")
+    } else {
+        ultra_pick_stem(id)
+    } {
+        cues.push(AudioCue {
+            name: stem,
+            volume: 1.0,
+            variance: 0.0,
+        });
+    }
     // GML `UltraIcon/Other_10` verbatim: the pick spawns a `SkillText`
     // with the ultra NAME (not `Name: Desc`) at the same SkillText
     // position. The `Toast` resource is the headless `SkillText`.
@@ -1476,7 +1570,6 @@ pub fn portal_check(
     mask: Res<FloorMask>,
     enemies: Query<Entity, With<Enemy>>,
     mut enemy_shots: Query<(Entity, &Team), With<Projectile>>,
-    audio: Res<GameAudio>,
     mut cues: ResMut<Queue<AudioCue>>,
     catalog: Res<repame_anim::AnimCatalog>,
     portals: Query<Entity, With<Portal>>,
@@ -1509,7 +1602,15 @@ pub fn portal_check(
     }
 
     run.portal_open = true;
-    commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::PortalOpen)));
+    cues.push(AudioCue {
+        name: if run.area == AreaId::Oasis {
+            "sndOasisPortal"
+        } else {
+            "sndPortalOpen"
+        },
+        volume: 1.0,
+        variance: 0.0,
+    });
 
     let mut rng = rand::rng();
     let pos = mask.random_floor_pos(&mut rng, 80.0);
@@ -1523,7 +1624,6 @@ pub fn portal_check(
 
     trauma.add(0.25);
     chromatic_pulse(&mut chroma, 0.25);
-    audio.play_portal(&mut cues);
 }
 
 /// Portal vortex drag: pulls the player and loose weapon pickups toward
@@ -2152,6 +2252,7 @@ pub fn tick_run_clock(state: Res<AppState>, paused: Res<Paused>, mut run: ResMut
 pub fn portal_enter(
     mut commands: Commands,
     run: Res<Run>,
+    mut cues: ResMut<Queue<AudioCue>>,
     catalog: Res<repame_anim::AnimCatalog>,
     mut portal_q: Query<
         (
@@ -2274,8 +2375,27 @@ pub fn portal_enter(
         }
     }
 
-    commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::PortalEnter)));
+    cues.push(AudioCue {
+        name: "sndPortalClose",
+        volume: 1.0,
+        variance: 0.0,
+    });
 }
+
+const CUZ_CRY_STOPS: [&str; 12] = [
+    "stop_sndCuzCryNew",
+    "stop_sndCuzCry",
+    "stop_sndCuzCryBonus1",
+    "stop_sndCuzCryBonus2",
+    "stop_sndCuzCryBonus3",
+    "stop_sndCuzCryBonus4",
+    "stop_sndCuzCryBonus5",
+    "stop_sndCuzCryBonus6",
+    "stop_sndCuzCryBonus7",
+    "stop_sndCuzCryBonus8",
+    "stop_sndCuzCryBonus9",
+    "stop_sndCuzCryBonus10",
+];
 
 /// Portal suck: drags the player into the portal core, then flips the
 /// level (loop / secret / normal advance), drains pending mutation
@@ -2305,7 +2425,7 @@ pub fn tick_portal_suck(
     >,
     // GML `GenCont/Destroy_0.gml:186`: every level instance is destroyed
     // on room change; the carried proto chests survive.
-    level_q: Query<Entity, With<LevelCleanup>>,
+    level_q: Query<(Entity, Option<&YungCuz>), With<LevelCleanup>>,
     mut loop_transition: ResMut<LoopTransition>,
     mut trauma: ResMut<Trauma>,
     mut toast: ResMut<Toast>,
@@ -2454,7 +2574,21 @@ pub fn tick_portal_suck(
         dirty.0 = true;
     }
 
-    for e in &level_q {
+    if level_q.iter().any(|(_, cuz)| cuz.is_some()) {
+        for name in CUZ_CRY_STOPS {
+            route.cues.push(AudioCue {
+                name,
+                volume: 1.0,
+                variance: 0.0,
+            });
+        }
+        route.cues.push(AudioCue {
+            name: "sndCuzOutaway",
+            volume: 1.0,
+            variance: 0.1,
+        });
+    }
+    for (e, _) in &level_q {
         if !proto_carriers.contains(&e) {
             commands.entity(e).despawn();
         }
@@ -2484,7 +2618,6 @@ pub fn tick_portal_suck(
         // GML `ctot_loop[race]`: looping as a race counts toward Fish/B.
         save.race_looped.insert(race, true);
         unlock_held_crown(race, player.crown, &mut save, &mut dirty, &mut toast);
-        commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::LoopComplete)));
     }
 
     let entered_secret = if looped {
@@ -2520,10 +2653,8 @@ pub fn tick_portal_suck(
     }
 
     if let Some(secret) = entered_secret {
-        commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::SecretFound)));
         toast.show(&format!("ENTERING {}", secret_name(secret)));
     } else if !looped {
-        commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::PortalEnter)));
         toast.show(&format!(
             "FLOOR {}-{}",
             run.world,

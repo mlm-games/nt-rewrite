@@ -1,7 +1,7 @@
 //! Tick message queues. The bevy build used `Message` events
-//! (`FloorStarted`, `ReactiveAudioRequest`, `UiBridgeAction`,
-//! `GamepadRumbleRequest`); here each channel is a drained `Vec`
-//! resource — same single-tick delivery, no engine events needed.
+//! (`FloorStarted`, `UiBridgeAction`, `GamepadRumbleRequest`); here
+//! each channel is a drained `Vec` resource — same single-tick
+//! delivery, no engine events needed.
 //!
 //! Concrete payloads land with their owner modules (areas, audio, ui);
 //! this file owns the queue mechanics both sides share.

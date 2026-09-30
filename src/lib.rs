@@ -106,6 +106,7 @@ use crate::vortex::{SpiralCtl, gml_area_for_area};
 
 pub mod anim;
 pub mod audio;
+pub mod audio_host;
 pub mod boss_ai;
 pub mod combat;
 pub mod comps_a;
@@ -3056,8 +3057,6 @@ impl App {
         }
     }
 
-    /// Build this frame's view: stage input, advance the sim, snapshot
-    /// sim+render+vortex+HUD+menus into repose views.
     pub fn drain_audio_cues(&mut self) -> Vec<repame_audio::Cue> {
         if let Some(mut q) = self
             .sim
@@ -3077,6 +3076,31 @@ impl App {
         }
     }
 
+    pub fn area_audio_snapshot(
+        &mut self,
+    ) -> (
+        Option<crate::audio::MusicCue>,
+        Option<crate::audio::AmbienceCue>,
+        f32,
+        f32,
+    ) {
+        let Some(state) = self
+            .sim
+            .world
+            .get_resource::<crate::audio::AreaAudioState>()
+        else {
+            return (None, None, 0.0, 0.0);
+        };
+        (
+            state.current_music,
+            state.current_ambience,
+            state.music_volume,
+            state.ambience_volume,
+        )
+    }
+
+    /// Build this frame's view: stage input, advance the sim, snapshot
+    /// sim+render+vortex+HUD+menus into repose views.
     pub fn view(&mut self, sched: &mut Scheduler, _ctx: &RenderContext, dt: Duration) -> View {
         request_frame();
         // Runtime-owned cursor position (GML `mouse_x`/`mouse_y` parity):
@@ -4507,7 +4531,6 @@ fn init_schedule_resources(world: &mut World) {
     world.init_resource::<crate::state::menus::MenuEdge>();
     world.init_resource::<crate::audio::AudioChannels>();
     world.init_resource::<Queue<crate::audio::UiBridgeAction>>();
-    world.init_resource::<Queue<crate::audio::ReactiveAudioRequest>>();
     world.init_resource::<repame_anim::AnimCatalog>();
     // Editable controls: default map, then overlay the save file's
     // rows when present (GML `scrOptionsLoadKeymaps` on boot). The
@@ -5604,7 +5627,7 @@ pub extern "C" fn android_main(android_app: winit::platform::android::activity::
         save_path.display(),
         save.version
     );
-    let mut audio = repame_audio::Audio::noop();
+    let mut audio = crate::audio_host::AudioHost::new();
     let mut last = std::time::Instant::now();
     if let Err(e) = repame_shell::run_android(android_app, move |sched, ctx| {
         // `App::view` runs the poll/store/feed pipeline (keyboard repair,
@@ -5615,17 +5638,13 @@ pub extern "C" fn android_main(android_app: winit::platform::android::activity::
         // forwards South/East/Start/DPad as synthetic keys (Space, Esc,
         // Enter, arrows) into the normal key path — repadio-shaped, no
         // game-side pad bridge needed.
-        let view = root_view(sched, ctx, &mut app, {
-            let now = std::time::Instant::now();
-            let dt = now
-                .duration_since(last)
-                .min(std::time::Duration::from_secs_f32(0.25));
-            last = now;
-            dt
-        });
-        for cue in app.drain_audio_cues() {
-            audio.play(cue.name);
-        }
+        let now = std::time::Instant::now();
+        let dt = now
+            .duration_since(last)
+            .min(std::time::Duration::from_secs_f32(0.25));
+        last = now;
+        let view = root_view(sched, ctx, &mut app, dt);
+        audio.pump(dt.as_secs_f32(), &mut app);
         // Touch-chrome verdict (logcat, ~1/s): sprites pushed this
         // frame + touch batch size + state. Proves the sticks/buttons
         // drew without a screenshot.

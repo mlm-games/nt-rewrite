@@ -1,4 +1,5 @@
 use super::data::EnemyKind;
+use rand::RngExt;
 
 #[derive(Clone, Copy)]
 #[allow(dead_code)]
@@ -126,6 +127,313 @@ pub fn gml_size(kind: EnemyKind) -> i32 {
         EnemyKind::Captain | EnemyKind::ThroneII => 6,
         EnemyKind::IdpdVan => 7,
         EnemyKind::Throne => 8,
+    }
+}
+
+const OASIS_OVERRIDING: &[EnemyKind] = &[
+    EnemyKind::Bandit,
+    EnemyKind::SnowBandit,
+    EnemyKind::IdpdGrunt,
+    EnemyKind::IdpdShield,
+    EnemyKind::IdpdInspector,
+    EnemyKind::IdpdElite,
+    EnemyKind::EliteInspector,
+    EnemyKind::EliteShielder,
+];
+
+const GENDERED_HURT: &[(&str, &str)] = &[
+    ("sndGruntHurtM", "sndGruntHurtF"),
+    ("sndShielderHurtM", "sndShielderHurtF"),
+    ("sndInspectorHurtM", "sndInspectorHurtF"),
+];
+
+const GENDERED_DEAD: &[(&str, &str)] = &[
+    ("sndGruntDeadM", "sndGruntDeadF"),
+    ("sndShielderDeadM", "sndShielderDeadF"),
+    ("sndInspectorDeadM", "sndInspectorDeadF"),
+];
+
+const CHOOSE_HURT: &[&str] = &[
+    "sndLaserCrystalHit",
+    "sndRavenHit",
+    "sndSniperHit",
+    "sndBanditHit",
+    "sndHitFlesh",
+];
+
+const CHOOSE_DEAD: &[&str] = &[
+    "sndLaserCrystalDeath",
+    "sndRavenDie",
+    "sndBanditDie",
+    "sndEnemyDie",
+];
+
+fn gendered(table: &[(&'static str, &'static str)], kind: EnemyKind) -> &'static str {
+    let idx = match kind {
+        EnemyKind::IdpdGrunt => 0,
+        EnemyKind::IdpdShield => 1,
+        _ => 2,
+    };
+    let (male, female) = table[idx];
+    if rand::rng().random_range(0..2) == 1 {
+        female
+    } else {
+        male
+    }
+}
+
+fn choose(options: &[&'static str]) -> &'static str {
+    options[rand::rng().random_range(0..options.len())]
+}
+
+pub fn gml_snd_hurt(kind: EnemyKind, oasis: bool, hp_frac: f32) -> &'static str {
+    use EnemyKind::*;
+    let base: &'static str = match kind {
+        Throne => {
+            return if hp_frac < 0.4 {
+                "sndNothingHurtLow"
+            } else if hp_frac < 0.7 {
+                "sndNothingHurtMid"
+            } else {
+                "sndNothingHurtHigh"
+            };
+        }
+        ThroneII => "sndNothing2Hurt",
+        Technomancer => "sndTechnomancerHurt",
+        ProtoStatue => "sndStatueHurt",
+        Crystal => "sndHitRock",
+        IceFlower | Maggot | RadMaggot | FiredMaggot | Ballguy | SuperFrog | MaggotSpawn
+        | MeleeFake | Mom | OldGuardian | PalaceGuardian => "sndHitFlesh",
+        ScrapBossMissile => "sndHitMetal",
+        Mimic | SuperMimic | WepMimic => "sndMimicHurt",
+        Bandit | SnowBandit | JungleBandit => "sndBanditHit",
+        Assassin | MeleeBandit => "sndAssassinHit",
+        Freak => "sndFreakHurt",
+        Scorpion => "sndScorpionHit",
+        GoldScorpion => "sndGoldScorpionHurt",
+        Rat | BigRat => "sndRatHit",
+        FastRat => "sndFastRatHit",
+        Ratking => "sndRatKingHit",
+        Turret => "sndTurretHurt",
+        Wolf => "sndWolfHurt",
+        Gator => "sndGatorHit",
+        BuffGator => "sndBuffGatorHit",
+        Raven => "sndRavenHit",
+        Salamander => "sndSalamanderHurt",
+        BigMaggot => "sndBigMaggotHit",
+        ExploFreak => "sndExploFreakHurt",
+        RhinoFreak => "sndRhinoFreakHurt",
+        Spider => "sndSpiderHurt",
+        FrogEgg => "sndFrogEggHurt",
+        Necromancer => "sndNecromancerHurt",
+        Molefish => "sndMolefishHurt",
+        Molesarge => "sndMolesargeHurt",
+        FireBaller => "sndFireballerHurt",
+        SuperFireBaller => "sndSuperFireballerHurt",
+        Jock => "sndJockHurt",
+        JungleFly => "sndFlyHurt",
+        PopoFreak => "sndFreakPopoHurt",
+        LightningCrystal => "sndLightningCrystalHit",
+        LaserCrystal => "sndLaserCrystalHit",
+        ExploGuardian => "sndExploGuardianHurt",
+        CrownGuardian => "sndCrownGuardianHurt",
+        DogGuardian => "sndDogGuardianHurt",
+        HostileHorror => "sndMutant11Hurt",
+        YvBoss => "sndMutant6Hurt",
+        Hyper => "sndHyperCrystalHurt",
+        BigBandit | BigBanditLoop => "sndBigBanditHit",
+        BigDog | BigDogLoop => "sndBigDogHit",
+        LilHunter | LilHunterLoop => "sndLilHunterHurt",
+        FrogQueen => "sndBallMamaHurt",
+        Captain => "sndLastHurt",
+        RobotGuard => "sndSnowBotHurt",
+        SnowTank => "sndSnowTankHurt",
+        GoldSnowtank => "sndGoldTankHurt",
+        Guardian => "sndGuardianHurt",
+        Sniper => "sndSniperHit",
+        Crab | BoneFish => "sndOasisHurt",
+        IdpdVan => "sndVanHurt",
+        Turtle => "sndTurtleHurt",
+        IdpdGrunt => gendered(GENDERED_HURT, IdpdGrunt),
+        IdpdShield => gendered(GENDERED_HURT, IdpdShield),
+        IdpdInspector => gendered(GENDERED_HURT, IdpdInspector),
+        IdpdElite => "sndEliteGruntHurt",
+        EliteInspector => "sndEliteInspectorHurt",
+        EliteShielder => "sndEliteShielderHurt",
+        InvSpider | InvLaserCrystal => choose(CHOOSE_HURT),
+    };
+    if oasis && OASIS_OVERRIDING.contains(&kind) {
+        "sndOasisHurt"
+    } else {
+        base
+    }
+}
+
+fn gml_dead_stem(kind: EnemyKind, oasis: bool) -> &'static str {
+    use EnemyKind::*;
+    let base: &'static str = match kind {
+        Maggot | FiredMaggot | Sniper | IdpdVan | ScrapBossMissile | MeleeFake | Mom
+        | OldGuardian | PalaceGuardian => "sndEnemyDie",
+        Mimic | SuperMimic | WepMimic => "sndMimicDead",
+        Bandit | SnowBandit | JungleBandit => "sndBanditDie",
+        Assassin | MeleeBandit => "sndAssassinDie",
+        Freak => "sndFreakDead",
+        Scorpion => "sndScorpionDie",
+        GoldScorpion => "sndGoldScorpionDead",
+        Rat | BigRat => "sndRatDie",
+        FastRat => "sndFastRatDie",
+        Ratking => "sndRatKingDie",
+        Turret => "sndTurretDead",
+        Wolf => "sndWolfDead",
+        Gator => "sndGatorDie",
+        BuffGator => "sndBuffGatorDie",
+        Raven => "sndRavenDie",
+        Salamander => "sndSalamanderDead",
+        BigMaggot => "sndBigMaggotDie",
+        ExploFreak => "sndExploFreakDead",
+        RhinoFreak => "sndRhinoFreakDead",
+        Spider => "sndSpiderDead",
+        FrogEgg => "sndFrogEggDead",
+        Necromancer => "sndNecromancerDead",
+        Molefish => "sndMolefishDead",
+        Molesarge => "sndMolesargeDead",
+        FireBaller => "sndFireballerDead",
+        SuperFireBaller => "sndSuperFireballerDead",
+        Jock => "sndJockDead",
+        JungleFly => "sndFlyDead",
+        PopoFreak => "sndFreakPopoDead",
+        LightningCrystal => "sndLightningCrystalDeath",
+        LaserCrystal => "sndLaserCrystalDeath",
+        ExploGuardian => "sndExploGuardianDead",
+        CrownGuardian => "sndCrownGuardianDead",
+        DogGuardian => "sndDogGuardianDead",
+        HostileHorror => "sndMutant11Dead",
+        YvBoss => "sndMutant6Dead",
+        Hyper => "sndHyperCrystalDead",
+        BigBandit | BigBanditLoop => "sndBigBanditDie",
+        BigDog | BigDogLoop => "sndBigDogDeath",
+        LilHunter | LilHunterLoop => "sndLilHunterDeath",
+        FrogQueen => "sndBallMamaDead1",
+        Captain => "sndLastDeath",
+        RobotGuard => "sndSnowBotDead",
+        SnowTank => "sndSnowTankDead",
+        GoldSnowtank => "sndGoldTankDead",
+        Guardian => "sndGuardianDead",
+        Crab | BoneFish => "sndOasisDeath",
+        Ballguy => "sndFrogExplode",
+        SuperFrog => "sndSuperFrogExplode",
+        RadMaggot => "sndRadMaggotDie",
+        MaggotSpawn => "sndMaggotSpawnDie",
+        Turtle => {
+            let idx = rand::rng().random_range(1..=4);
+            match idx {
+                2 => "sndTurtleDead2",
+                3 => "sndTurtleDead3",
+                4 => "sndTurtleDead4",
+                _ => "sndTurtleDead1",
+            }
+        }
+        IdpdGrunt => gendered(GENDERED_DEAD, IdpdGrunt),
+        IdpdShield => gendered(GENDERED_DEAD, IdpdShield),
+        IdpdInspector => gendered(GENDERED_DEAD, IdpdInspector),
+        IdpdElite => "sndEliteGruntDead",
+        EliteInspector => "sndEliteInspectorDead",
+        EliteShielder => "sndEliteShielderDead",
+        InvSpider | InvLaserCrystal => choose(CHOOSE_DEAD),
+        _ => unreachable!("handled by gml_death_cues"),
+    };
+    if oasis && OASIS_OVERRIDING.contains(&kind) {
+        "sndOasisDeath"
+    } else {
+        base
+    }
+}
+
+pub fn gml_death_cues(
+    kind: EnemyKind,
+    oasis: bool,
+    kind_count: usize,
+) -> Vec<crate::audio::AudioCue> {
+    let q = |name: &'static str, variance: f32| crate::audio::AudioCue {
+        name,
+        volume: 1.0,
+        variance,
+    };
+    match kind {
+        EnemyKind::Throne => vec![q("sndNothingDeath1", 0.0)],
+        EnemyKind::ThroneII => vec![q("sndNothing2DeadStart", 0.2)],
+        EnemyKind::Crystal => vec![q("sndCrystalPropBreak", 0.2)],
+        EnemyKind::IceFlower => vec![],
+        EnemyKind::ProtoStatue => vec![q("sndStatueDead", 0.2), q("sndStatueDead", 0.2)],
+        EnemyKind::Technomancer => vec![q(
+            if kind_count <= 1 {
+                "sndTechnomancerDead"
+            } else {
+                "sndTechnomancerDestroy"
+            },
+            0.0,
+        )],
+        _ => vec![q(gml_dead_stem(kind, oasis), 0.0)],
+    }
+}
+
+pub fn gml_counts_as_enemy(kind: EnemyKind) -> bool {
+    !matches!(
+        kind,
+        EnemyKind::Crystal | EnemyKind::IceFlower | EnemyKind::ProtoStatue | EnemyKind::MeleeFake
+    )
+}
+
+pub fn gml_runs_enemy_destroy(kind: EnemyKind) -> bool {
+    !matches!(
+        kind,
+        EnemyKind::Throne
+            | EnemyKind::ThroneII
+            | EnemyKind::Crystal
+            | EnemyKind::IceFlower
+            | EnemyKind::ProtoStatue
+    )
+}
+
+pub fn gml_race_hurt(race: crate::data::RaceId) -> &'static str {
+    match race as u8 {
+        2 => "sndMutant2Hurt",
+        3 => "sndMutant3Hurt",
+        4 => "sndMutant4Hurt",
+        5 => "sndMutant5Hurt",
+        6 => "sndMutant6Hurt",
+        7 => "sndMutant7Hurt",
+        8 => "sndMutant8Hurt",
+        9 => "sndMutant9Hurt",
+        10 => "sndMutant10Hurt",
+        11 => "sndMutant11Hurt",
+        12 => "sndMutant12Hurt",
+        13 => "sndMutant13Hurt",
+        14 => "sndMutant14Hurt",
+        15 => "sndMutant15Hurt",
+        16 => "sndMutant16Hurt",
+        _ => "sndMutant1Hurt",
+    }
+}
+
+pub fn gml_race_dead(race: crate::data::RaceId) -> &'static str {
+    match race as u8 {
+        2 => "sndMutant2Dead",
+        3 => "sndMutant3Dead",
+        4 => "sndMutant4Dead",
+        5 => "sndMutant5Dead",
+        6 => "sndMutant6Dead",
+        7 => "sndMutant7Dead",
+        8 => "sndMutant8Dead",
+        9 => "sndMutant9Dead",
+        10 => "sndMutant10Dead",
+        11 => "sndMutant11Dead",
+        12 => "sndMutant12Dead",
+        13 => "sndMutant13Dead",
+        14 => "sndMutant14Dead",
+        15 => "sndMutant15Dead",
+        16 => "sndMutant16Dead",
+        _ => "sndMutant1Dead",
     }
 }
 

@@ -7,7 +7,7 @@
 //!
 //! [`apply_menu_action`] ports every `UiAction` arm's state law verbatim
 //! (reusing the canonical [`crate::audio::UiAction`] + [`crate::audio::UiBridgeAction`]
-//! queue and the [`crate::audio::ui_action_to_cue`] mapping for audio).
+//! queue and the [`crate::audio::ui_action_sfx`] mapping for audio).
 //! [`tick_menus`] is the headless `Update` driver: it drains the action
 //! queue and routes [`NtInput`] pulses + [`MenuEdge`] shell edges per
 //! app state. Register it as an exclusive system before
@@ -48,15 +48,15 @@
 //!   surface as toasts in `apply_floor_reach_unlocks`; the headless
 //!   queue ([`MenuState::unlock_queue`]) exists with push/dismiss laws,
 //!   but no producer wires into it yet (deferred with the toast bridge).
-//! - Denied picks (locked race/crown/skin) have no variant in the static
-//!   `ui_action_to_cue` map, so they emit `UiBack` directly (bevy played
-//!   `sndNoSelect`).
+//! - Denied picks (locked race/crown/skin) have no variant in the
+//!   [`crate::audio::ui_action_sfx`] map, so [`emit_denied`] pushes
+//!   `sndNoSelect` directly (bevy played `sndNoSelect`).
 
 use bevy_ecs::prelude::*;
 
 use crate::audio::{
-    ReactiveAudioRequest, UiAction, UiBridgeAction, crown_select_sfx, denied_sfx, hover_sfx,
-    race_select_sfx, skin_select_sfx, ui_action_sfx, ui_action_to_cue,
+    UiAction, UiBridgeAction, crown_select_sfx, denied_sfx, hover_sfx, race_select_sfx,
+    skin_select_sfx, ui_action_sfx,
 };
 use crate::comps_a::{
     MutationChoice, PendingMutation, PendingUltra, Player, Run, SaveDirty, Score, SelectedCharacter,
@@ -776,15 +776,9 @@ pub(crate) fn reset_mutation_offer(world: &mut World) {
     }
 }
 
-/// Emit the mapped UI cue for an applied action (no-op when the static
-/// map has none), plus the bevy-exact one-shot stems (`ui_action_sfx`).
+/// Emit the mapped UI cue for an applied action via [`ui_action_sfx`]
+/// (no-op when the map has none).
 fn emit_cue(world: &mut World, action: &UiAction) {
-    if let Some(cue) = ui_action_to_cue(action) {
-        world.init_resource::<Queue<ReactiveAudioRequest>>();
-        world
-            .resource_mut::<Queue<ReactiveAudioRequest>>()
-            .push(ReactiveAudioRequest::new(cue));
-    }
     let sfx = ui_action_sfx(action);
     if !sfx.is_empty() {
         world.init_resource::<Queue<crate::audio::AudioCue>>();
@@ -827,16 +821,16 @@ pub(crate) fn emit_hover_if_changed(world: &mut World, label: &str) {
     }
 }
 
-/// Emit the bevy `SettingsBack` pop one-shot (`sndClickBack` 0.6). The
-/// reactive `UiClick` cue comes from the static `ui_action_to_cue` map via
-/// `emit_cue` (both pop and close paths emit it, bevy parity).
+/// Emit the bevy `SettingsBack` pop one-shot (`sndClickBack` 1.0). The
+/// click cue comes from `ui_action_sfx` via `emit_cue` (both pop and
+/// close paths emit it, bevy parity).
 fn emit_click_back(world: &mut World) {
     world.init_resource::<Queue<crate::audio::AudioCue>>();
     world
         .resource_mut::<Queue<crate::audio::AudioCue>>()
         .push(crate::audio::AudioCue {
             name: "sndClickBack",
-            volume: 0.6,
+            volume: 1.0,
             variance: 0.0,
         });
 }
@@ -859,7 +853,7 @@ fn mark_dirty(world: &mut World) {
 
 /// Apply one menu action: every bevy `process_ui_actions` arm's state
 /// law, verbatim, minus rendering/audio-asset spawning (cues go to the
-/// [`ReactiveAudioRequest`] queue) and minus disk writes (dirty flag).
+/// [`crate::audio::AudioCue`] queue) and minus disk writes (dirty flag).
 pub fn apply_menu_action(world: &mut World, action: UiAction) {
     match action {
         UiAction::StartGame => {
@@ -1696,7 +1690,6 @@ pub fn tick_menus(world: &mut World) {
     world.init_resource::<AppState>();
     world.init_resource::<NtInput>();
     world.init_resource::<Queue<UiBridgeAction>>();
-    world.init_resource::<Queue<ReactiveAudioRequest>>();
 
     let dt = world
         .get_resource::<repame_sim::SimTime>()

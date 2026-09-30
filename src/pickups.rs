@@ -12,7 +12,7 @@ use repame_fx::Trauma;
 use repame_sim::SimTime;
 
 use crate::anim::SpriteAnim;
-use crate::audio::{AudioCue, GameAudio, QueuedReactiveCue, ReactiveCue};
+use crate::audio::{AudioCue, GameAudio};
 use crate::combat::queue_enemy_spawn_birth;
 use crate::comps_a::{
     FloorMask, GameCleanup, Health, Inventory, LevelCleanup, MAX_WEAPON_SLOTS, Player, RaceState,
@@ -876,8 +876,8 @@ pub fn tick_flung_weapons(
         }
         cues.push(AudioCue {
             name: "sndChickenReturn",
-            volume: 0.6,
-            variance: 0.05,
+            volume: 1.0,
+            variance: 0.0,
         });
     }
 }
@@ -2062,7 +2062,6 @@ pub fn collect_pickups(
                     &mut flash,
                     &mut player,
                     &mut toast,
-                    &audio,
                     &mut cues,
                     player_pos,
                 );
@@ -2136,8 +2135,6 @@ pub fn collect_pickups(
                 audio.play_ammo_pickup(&mut cues);
             }
             PickupKind::Weapon(weapon) => {
-                commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::WeaponPickup)));
-
                 // GML `Player/Collision_WepPickup`: a cursed held gun
                 // cannot be swapped for an uncursed one unless a free
                 // slot (or invalid bwep) takes it.

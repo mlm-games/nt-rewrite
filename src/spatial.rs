@@ -9,9 +9,7 @@ use bevy_ecs::prelude::*;
 use glam::Vec2;
 
 use crate::comps_a::{ARENA_H, ARENA_W, FloorMask, TILE, WALL_TILE, floor_cell_for_wall};
-use crate::projectile_math::{
-    bounce_velocity, circle_aabb_normal, circle_aabb_penetration, swept_circle_aabb,
-};
+use crate::projectile_math::{bounce_velocity, circle_aabb_overlap, swept_circle_aabb};
 
 /// World position in pixels, y-down (GameMaker convention).
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
@@ -81,14 +79,14 @@ impl SolidAabb {
     }
 }
 
-fn solid_shapes(
+fn fill_solid_shapes(
+    shapes: &mut Vec<SolidAabb>,
     start: Vec2,
     displacement: Vec2,
     radius: f32,
     props: &[(Vec2, Vec2)],
     mask: Option<&FloorMask>,
-) -> Vec<SolidAabb> {
-    let mut shapes = Vec::with_capacity(props.len() + 5);
+) {
     for &(center, size) in props {
         if size.x > 0.0 || size.y > 0.0 {
             shapes.push(SolidAabb::from_center_size(center, size));
@@ -148,7 +146,32 @@ fn solid_shapes(
             }
         }
     }
+}
+
+pub struct SolidShapes(Vec<SolidAabb>);
+
+fn solid_shapes(
+    start: Vec2,
+    displacement: Vec2,
+    radius: f32,
+    props: &[(Vec2, Vec2)],
+    mask: Option<&FloorMask>,
+) -> Vec<SolidAabb> {
+    let mut shapes = Vec::with_capacity(props.len() + 5);
+    fill_solid_shapes(&mut shapes, start, displacement, radius, props, mask);
     shapes
+}
+
+pub fn build_solid_shapes(
+    start: Vec2,
+    displacement: Vec2,
+    radius: f32,
+    props: &[(Vec2, Vec2)],
+    mask: Option<&FloorMask>,
+) -> SolidShapes {
+    let mut shapes = Vec::with_capacity(props.len() + 5);
+    fill_solid_shapes(&mut shapes, start, displacement, radius, props, mask);
+    SolidShapes(shapes)
 }
 
 fn first_swept_contact(
@@ -184,10 +207,7 @@ fn first_current_contact(pos: Vec2, radius: f32, shapes: &[SolidAabb]) -> Option
     let mut first: Option<SolidContact> = None;
     for shape in shapes {
         let (center, half) = shape.center_half();
-        let Some(normal) = circle_aabb_normal(pos, radius, center, half) else {
-            continue;
-        };
-        let Some(penetration) = circle_aabb_penetration(pos, radius, center, half) else {
+        let Some((normal, penetration)) = circle_aabb_overlap(pos, radius, center, half) else {
             continue;
         };
         let candidate = SolidContact {
@@ -200,6 +220,10 @@ fn first_current_contact(pos: Vec2, radius: f32, shapes: &[SolidAabb]) -> Option
         }
     }
     first
+}
+
+pub fn contact_at(pos: Vec2, radius: f32, shapes: &SolidShapes) -> Option<SolidContact> {
+    first_current_contact(pos, radius, &shapes.0)
 }
 
 pub fn solid_contact(

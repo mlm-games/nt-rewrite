@@ -58,8 +58,8 @@ use crate::effects::{HitStop, spawn_burst};
 use crate::enemy_data::{EnemyDef, enemy_def};
 use crate::msg::Queue;
 use crate::spatial::{
-    Pos, clamp_to_arena, move_bounce_solid, potential_step_solid, resolve_prop_collision,
-    solid_contact,
+    Pos, build_solid_shapes, clamp_to_arena, contact_at, move_bounce_solid, potential_step_solid,
+    resolve_prop_collision,
 };
 use crate::time::{GTimer, TimerMode};
 
@@ -1054,14 +1054,18 @@ fn wall_probe_axis(
         return value;
     }
     let sign = if value > 0.0 { 1.0 } else { -1.0 };
+    let axis = if horizontal {
+        glam::Vec2::new(1.0, 0.0)
+    } else {
+        glam::Vec2::new(0.0, 1.0)
+    };
+    let start = pos + axis * (value / 30.0);
+    let displacement = axis * (-sign * friction * 4095.0);
+    let shapes = build_solid_shapes(start, displacement, radius, solids, Some(mask));
     let mut current = value;
     for _ in 0..4096 {
-        let candidate = if horizontal {
-            pos + glam::Vec2::new(current / 30.0, 0.0)
-        } else {
-            pos + glam::Vec2::new(0.0, current / 30.0)
-        };
-        if solid_contact(candidate, radius, solids, Some(mask)).is_none() {
+        let candidate = pos + axis * (current / 30.0);
+        if contact_at(candidate, radius, &shapes).is_none() {
             break;
         }
         current -= sign * friction * 30.0;

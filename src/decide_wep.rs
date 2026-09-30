@@ -235,9 +235,10 @@ fn decide_wep_drawing(
 /// }
 /// ```
 /// The tier half lives in [`decide_wep`]; every caller rolls through this
-/// (or [`decide_wep_seeded_at`]) so the ally is never dropped. `RobotA` has
-/// no GML source in the reference build, so it lands as the port's `Ally`
-/// (same shape as Rebel's Riot summon).
+/// (or [`decide_wep_seeded_at`]) so the ally is never dropped. GML
+/// `objects/RobotA` is an eventless FX object (`eventList` empty, no
+/// parent), so it lands as the port's `Ally` (same shape as Rebel's
+/// Riot summon) and answers with that object's create sting.
 pub fn decide_wep_at(
     commands: &mut Commands,
     rng: &mut impl RngExt,
@@ -287,6 +288,18 @@ fn spawn_refined_taste_ally(commands: &mut Commands, ctx: &DecideCtx, pos: glam:
         Velocity(glam::Vec2::ZERO),
         Pos(pos),
     ));
+    commands.queue(|world: &mut World| {
+        world.init_resource::<crate::msg::Queue<crate::audio::AudioCue>>();
+        if let Some(mut cues) =
+            world.get_resource_mut::<crate::msg::Queue<crate::audio::AudioCue>>()
+        {
+            cues.push(crate::audio::AudioCue {
+                name: "sndAllySpawn",
+                volume: 1.0,
+                variance: 0.2,
+            });
+        }
+    });
 }
 
 /// GML `scrDecideWepGold`: tier pool by loop count, owned-reject loop

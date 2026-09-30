@@ -516,7 +516,14 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
     world.init_resource::<crate::state::menus::MenuEdge>();
     world.init_resource::<crate::audio::AudioChannels>();
     world.init_resource::<Queue<crate::audio::UiBridgeAction>>();
-    world.init_resource::<Queue<crate::audio::ReactiveAudioRequest>>();
+    // A retry never runs the menu-room teardown, so the run start
+    // re-arms the alarm[11]-style audio sequence itself (GML
+    // `GenCont/Create_0.gml:66` re-arms `alarm[11]=1` per run; without
+    // the reset a `silent_until_room` armed by a prior game over would
+    // leak into a retry that lands on the same floor/area).
+    world.init_resource::<crate::audio::AreaAudioState>();
+    *world.resource_mut::<crate::audio::AreaAudioState>() = crate::audio::AreaAudioState::default();
+    world.init_resource::<crate::audio::AmbFilter>();
     // Area-fog scroll persists like GML's persistent TopCont
     // (init-only: never reset mid-run).
     world.init_resource::<crate::environment::FogState>();
@@ -627,6 +634,11 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
     // generation keeps its own `gen_seed` stream either way).
     let mut roll_rng = StdRng::seed_from_u64(seed ^ 0x9E37_79B9_7F4A_7C15);
     let race = roll_random_race(&save, picked, &mut roll_rng);
+    // GML `scrRunStart.gml:39`: the run-start confirm sting.
+    world.init_resource::<Queue<crate::audio::AudioCue>>();
+    world
+        .resource_mut::<Queue<crate::audio::AudioCue>>()
+        .push(crate::audio::race_confirm_sfx(race));
     let loadout = resolve_run_loadout(&save, race);
     // GML `scrPopulate` Blood-crown extra pass reads the run-start crown.
     world.resource_mut::<Run>().blood_crown = loadout.crown == CrownKind::Blood;
@@ -2161,6 +2173,8 @@ fn reset_menu_room_resources(world: &mut World) {
     }
     world.init_resource::<crate::audio::AreaAudioState>();
     *world.resource_mut::<crate::audio::AreaAudioState>() = crate::audio::AreaAudioState::default();
+    world.init_resource::<crate::audio::AmbFilter>();
+    *world.resource_mut::<crate::audio::AmbFilter>() = crate::audio::AmbFilter::default();
     world.init_resource::<crate::audio::GameAudio>();
     world.remove_resource::<PendingMutation>();
     world.remove_resource::<PendingUltra>();

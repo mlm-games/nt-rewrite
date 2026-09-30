@@ -63,13 +63,13 @@ use crate::comps_a::{
 use crate::comps_b::{
     Ally, BIG_DOG_MISSILE_DAMAGE, BIG_DOG_MISSILE_HP, BIG_DOG_MISSILE_RADIUS, BigDogMissileState,
     BloodAmmo, ChestKind, CryAnim, CustomExplosion, Dash, DeploysSentry, Enemy, GmlImage,
-    HazardCloud, NativeAngle, NativeDepth, NativeExplosionKind, NativeFlip, PickupKind, PlasmaBurst,
-    PopPopCharges, PortalStrike, PortalSucking, Prop, PropSprites, SecretEntrance, Shield, Slowed,
-    SpawnsWeaponPickup, SwingFx, Telekinesis, WeaponVisual,
+    HazardCloud, HorrorCharge, NativeAngle, NativeDepth, NativeExplosionKind, NativeFlip,
+    PickupKind, PlasmaBurst, PopPopCharges, PortalStrike, PortalSucking, Prop, PropSprites,
+    SecretEntrance, Shield, Slowed, SpawnsWeaponPickup, SwingFx, Telekinesis, WeaponVisual,
 };
 use crate::data::{
     AbilityKind, AmmoKind, AreaId, CrownKind, HazardDef, HazardKind, MutationId, RaceId, SplitDef,
-    UltraMutationId, WeaponId, WeaponKind, ammo_pickup_amount,
+    UltraMutationId, WeaponId, ammo_pickup_amount,
 };
 use crate::effects::{
     ChromaticAberration, FiredWeapon, HitStop, RumbleRequest, SlowMotion, chromatic_pulse, rumble,
@@ -117,6 +117,57 @@ fn weapon_ammo(id: WeaponId) -> AmmoKind {
         AmmoType::Bolts => AmmoKind::Bolts,
         AmmoType::Explosives => AmmoKind::Explosives,
         AmmoType::Energy => AmmoKind::Energy,
+    }
+}
+
+pub fn gun_reload_fx(
+    cues: &mut Queue<AudioCue>,
+    weapon_id: WeaponId,
+    primary_id: WeaponId,
+    inv: &Inventory,
+    laser_brain: bool,
+) {
+    if weapon_id == WeaponId::NONE {
+        return;
+    }
+    let meta = weapon_meta(weapon_id);
+    let ammo_type = meta.wep_type;
+    let cost = i32::from(meta.wep_cost);
+
+    if ammo_type != AmmoType::None
+        && inv.ammo_of(weapon_ammo(weapon_id)) < cost
+        && weapon_ammo(primary_id) != AmmoKind::None
+    {
+        cue(cues, "sndEmpty", 1.0, 0.0);
+    }
+
+    if ammo_type == AmmoType::None {
+        cue(cues, "sndMeleeFlip", 1.0, 0.0);
+    } else if ammo_type == AmmoType::Bolts {
+        cue(cues, "sndCrossReload", 1.0, 0.0);
+    }
+
+    let name = meta.wep_name;
+    if name.starts_with("PLASMA") {
+        cue(
+            cues,
+            if laser_brain {
+                "sndPlasmaReloadUpg"
+            } else {
+                "sndPlasmaReload"
+            },
+            1.0,
+            0.0,
+        );
+    }
+    if name.starts_with("LIGHTNING") {
+        cue(cues, "sndLightningReload", 1.0, 0.0);
+    }
+    if name.starts_with("GRENADE") || matches!(meta.id, 47 | 54 | 72 | 78 | 122) {
+        cue(cues, "sndNadeReload", 1.0, 0.0);
+    }
+    if ammo_type == AmmoType::Shells {
+        cue(cues, "sndShotReload", 1.0, 0.0);
     }
 }
 
@@ -446,6 +497,7 @@ pub struct GunShot {
     pub weapon_id: WeaponId,
     pub def: WeaponDef,
     pub visual_slot: u8,
+    pub burst: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -500,25 +552,6 @@ pub fn player_fire(
     let shake_scale: f32 = save.settings.screenshake.clamp(0.0, 2.0);
 
     let dt = time.delta_secs;
-    cooldown.timer.tick(dt);
-    cooldown.burst_timer.tick(dt);
-    // GML `Player/Step_0`: reload finish flips the melee mirror.
-    if cooldown.timer.just_finished() {
-        inv.wepflip *= -1.0;
-    }
-    if cooldown.timer_b.just_finished() {
-        inv.bwepflip *= -1.0;
-    }
-    cooldown.timer_b.tick(dt);
-    cooldown.burst_timer_b.tick(dt);
-
-    let fire_held = input.fire_held;
-    // GML `JoystickAttack` swaps edges by design: the attack finger's
-    // lift lands in `fire_released`, which counts as the shot edge
-    // (`press_fire` on release) alongside the normal press edge.
-    let fire_pressed = input.take_fire_pressed() || input.take_fire_released();
-    let spec_held = input.spec_held;
-    let spec_pressed = input.take_spec_pressed();
 
     let primary_id = inv.weapons[inv.current];
     let primary_def = weapon_runtime_def(primary_id);
@@ -531,6 +564,34 @@ pub fn player_fire(
         WeaponId::NONE
     };
     let secondary_def = weapon_runtime_def(secondary_id);
+
+    cooldown.timer.tick(dt);
+    cooldown.burst_timer.tick(dt);
+    // GML `Player/Step_0`: reload finish flips the melee mirror.
+    if cooldown.timer.just_finished() {
+        gun_reload_fx(&mut cues, primary_id, primary_id, &inv, player.laser_brain);
+        inv.wepflip *= -1.0;
+    }
+    if cooldown.timer_b.just_finished() {
+        gun_reload_fx(
+            &mut cues,
+            secondary_id,
+            primary_id,
+            &inv,
+            player.laser_brain,
+        );
+        inv.bwepflip *= -1.0;
+    }
+    cooldown.timer_b.tick(dt);
+    cooldown.burst_timer_b.tick(dt);
+
+    let fire_held = input.fire_held;
+    // GML `JoystickAttack` swaps edges by design: the attack finger's
+    // lift lands in `fire_released`, which counts as the shot edge
+    // (`press_fire` on release) alongside the normal press edge.
+    let fire_pressed = input.take_fire_pressed() || input.take_fire_released();
+    let spec_held = input.spec_held;
+    let spec_pressed = input.take_spec_pressed();
 
     let mut fx = FireFx {
         trauma: &mut trauma,
@@ -554,6 +615,7 @@ pub fn player_fire(
             weapon_id: primary_id,
             def: primary_def,
             visual_slot: 0,
+            burst: true,
         };
         // GML `scrFire`: non-melee gunfire records `hasfiredshots`.
         if primary_def.melee.is_none() {
@@ -582,6 +644,7 @@ pub fn player_fire(
             weapon_id: secondary_id,
             def: secondary_def,
             visual_slot: 1,
+            burst: true,
         };
         if secondary_def.melee.is_none() {
             run.shots_fired += 1;
@@ -615,6 +678,7 @@ pub fn player_fire(
             weapon_id: primary_id,
             def: primary_def,
             visual_slot: 0,
+            burst: false,
         };
         if primary_def.melee.is_none() {
             run.shots_fired += 1;
@@ -647,6 +711,7 @@ pub fn player_fire(
             weapon_id: secondary_id,
             def: secondary_def,
             visual_slot: 1,
+            burst: false,
         };
         if secondary_def.melee.is_none() {
             run.shots_fired += 1;
@@ -711,7 +776,7 @@ fn fire_one_gun(
 
     if def.rad_cost > 0 && player.rads < def.rad_cost {
         fx.toast.show("NOT ENOUGH RADS");
-        cue(fx.cues, "ultra_empty", 0.5, 0.05);
+        cue(fx.cues, "sndUltraEmpty", 1.0, 0.2);
         for mut wv in vis_q.iter_mut() {
             if wv.owner == shot.player_ent && wv.slot == shot.visual_slot {
                 wv.wkick = -2.0;
@@ -755,7 +820,7 @@ fn fire_one_gun(
                     "1".to_string(),
                     [1.0, 0.35, 0.35, 1.0],
                 );
-                cue(fx.cues, "sndBloodHurt", 0.8, 0.2);
+                cue(fx.cues, "sndBloodHurt", 1.0, 0.2);
                 fx.hitstop.trigger(0.35, 0.08);
             }
         }
@@ -767,7 +832,7 @@ fn fire_one_gun(
                 } else {
                     fx.toast.show("EMPTY");
                 }
-                cue(fx.cues, "empty", 0.5, 0.05);
+                cue(fx.cues, "sndEmpty", 1.0, 0.0);
                 for mut wv in vis_q.iter_mut() {
                     if wv.owner == shot.player_ent && wv.slot == shot.visual_slot {
                         wv.wkick = -2.0;
@@ -794,19 +859,6 @@ fn fire_one_gun(
         &mut cooldown.timer_b
     };
     *timer = GTimer::from_seconds(cd.max(0.03), TimerMode::Once);
-    match def.ammo {
-        AmmoKind::Shells => cue(fx.cues, "shot_reload", 0.4, 0.1),
-        AmmoKind::Bolts => cue(fx.cues, "cross_reload", 0.4, 0.1),
-        AmmoKind::Explosives => cue(fx.cues, "nade_reload", 0.4, 0.1),
-        AmmoKind::Energy => {
-            if def.name.contains("LIGHTNING") {
-                cue(fx.cues, "lightning_reload", 0.4, 0.1);
-            } else {
-                cue(fx.cues, "plasma_reload", 0.4, 0.1);
-            }
-        }
-        _ => {}
-    }
 
     if let Some(melee) = def.melee {
         melee_attack(commands, fx, shot, player, health, vel, melee, vis_q);
@@ -889,6 +941,391 @@ fn apply_weapon_mutation_mods(def: &mut WeaponDef, arch: &mut FireArch, player: 
     }
 }
 
+fn fire_cue_push(out: &mut Vec<AudioCue>, name: &'static str, volume: f32, variance: f32) {
+    if !out.iter().any(|c| c.name == name) {
+        out.push(AudioCue {
+            name,
+            volume,
+            variance,
+        });
+    }
+}
+
+fn weapon_fire_cues(fx: &mut FireFx, id: WeaponId, burst: bool, player: &Player, mega: bool) {
+    let underwater = fx.underwater;
+    let meta = weapon_meta(id);
+    let gold = meta.wep_gold;
+    let laser_brain = player.laser_brain;
+    let electric = melee_projectile_spec(meta.wep_name).electric_guitar;
+
+    let mut out: Vec<AudioCue> = Vec::new();
+    let gun = |out: &mut Vec<AudioCue>, stem: &'static str, variance: f32| {
+        let stem = if underwater && stem != "sndOasisMelee" {
+            "sndOasisShoot"
+        } else {
+            stem
+        };
+        fire_cue_push(out, stem, 1.0, variance);
+    };
+    let big = |out: &mut Vec<AudioCue>, stem: &'static str, variance: f32| {
+        let stem = if underwater { "sndOasisShoot" } else { stem };
+        fire_cue_push(out, stem, 1.0, variance);
+    };
+    let play = |out: &mut Vec<AudioCue>, stem: &'static str| fire_cue_push(out, stem, 1.0, 0.0);
+
+    if !burst && underwater && weapon_ammo(id) == AmmoKind::None {
+        gun(&mut out, "sndOasisMelee", 0.2);
+    }
+
+    if burst {
+        match id.0 {
+            17 | 103 => gun(
+                &mut out,
+                if gold {
+                    "sndGoldMachinegun"
+                } else {
+                    "sndMachinegun"
+                },
+                0.2,
+            ),
+            23 => play(&mut out, "sndSlugger"),
+            26 => gun(&mut out, "sndHyperRifle", 0.1),
+            71 => gun(&mut out, "sndPopgun", 0.2),
+            80 => gun(&mut out, "sndGrenadeRifle", 0.2),
+            81 => play(&mut out, "sndRogueRifle"),
+            106 => gun(&mut out, "sndHeavyMachinegun", 0.2),
+            _ => {}
+        }
+    } else {
+        match id.0 {
+            1 | 39 | 56 => gun(
+                &mut out,
+                if gold { "sndGoldPistol" } else { "sndPistol" },
+                0.2,
+            ),
+            2 => gun(&mut out, "sndTripleMachinegun", 0.2),
+            3 | 40 => gun(
+                &mut out,
+                if gold { "sndGoldWrench" } else { "sndWrench" },
+                0.2,
+            ),
+            4 | 41 => gun(
+                &mut out,
+                if gold {
+                    "sndGoldMachinegun"
+                } else {
+                    "sndMachinegun"
+                },
+                0.2,
+            ),
+            5 => play(&mut out, if gold { "sndGoldShotgun" } else { "sndShotgun" }),
+            6 | 11 | 43 => gun(
+                &mut out,
+                if gold {
+                    "sndGoldCrossbow"
+                } else {
+                    "sndCrossbow"
+                },
+                0.2,
+            ),
+            7 | 44 => gun(
+                &mut out,
+                if gold { "sndGoldGrenade" } else { "sndGrenade" },
+                0.2,
+            ),
+            8 => play(&mut out, "sndDoubleShotgun"),
+            9 => gun(&mut out, "sndMinigun", 0.2),
+            10 => play(&mut out, "sndShotgun"),
+            12 => gun(&mut out, "sndSuperCrossbow", 0.2),
+            13 => gun(&mut out, "sndShovel", 0.2),
+            14 | 84 | 102 => gun(
+                &mut out,
+                if gold { "sndGoldRocket" } else { "sndRocket" },
+                0.2,
+            ),
+            15 => play(&mut out, "sndGrenade"),
+            16 => gun(&mut out, "sndPistol", 0.2),
+            17 | 103 => gun(
+                &mut out,
+                if gold {
+                    "sndGoldMachinegun"
+                } else {
+                    "sndMachinegun"
+                },
+                0.2,
+            ),
+            18 | 123 => gun(&mut out, "sndDiscgun", 0.2),
+            19 | 20 | 28 | 45 => gun(
+                &mut out,
+                if gold {
+                    if laser_brain {
+                        "sndGoldLaserUpg"
+                    } else {
+                        "sndGoldLaser"
+                    }
+                } else if laser_brain {
+                    "sndLaserUpg"
+                } else {
+                    "sndLaser"
+                },
+                0.2,
+            ),
+            21 | 22 | 99 => gun(
+                &mut out,
+                if gold { "sndGoldSlugger" } else { "sndSlugger" },
+                0.2,
+            ),
+            23 => play(&mut out, "sndSlugger"),
+            24 => gun(
+                &mut out,
+                if laser_brain {
+                    "sndEnergySwordUpg"
+                } else {
+                    "sndEnergySword"
+                },
+                0.2,
+            ),
+            25 => big(&mut out, "sndSuperSlugger", 0.2),
+            26 => gun(&mut out, "sndHyperRifle", 0.2),
+            27 | 101 => gun(
+                &mut out,
+                if gold {
+                    "sndGoldScrewdriver"
+                } else {
+                    "sndScrewdriver"
+                },
+                0.2,
+            ),
+            29 => gun(&mut out, "sndBloodLauncher", 0.2),
+            30 => gun(&mut out, "sndSplinterGun", 0.2),
+            31 => gun(&mut out, "sndCrossbow", 0.2),
+            32 => gun(&mut out, "sndGrenade", 0.2),
+            33 => {
+                gun(&mut out, "sndWaveGun", 0.2);
+                play(&mut out, "sndShotgun");
+            }
+            34 | 98 => gun(
+                &mut out,
+                if gold {
+                    if laser_brain {
+                        "sndGoldPlasmaUpg"
+                    } else {
+                        "sndGoldPlasma"
+                    }
+                } else if laser_brain {
+                    "sndPlasmaUpg"
+                } else {
+                    "sndPlasma"
+                },
+                0.2,
+            ),
+            35 => gun(
+                &mut out,
+                if laser_brain {
+                    "sndPlasmaBigUpg"
+                } else {
+                    "sndPlasmaBig"
+                },
+                0.2,
+            ),
+            36 => gun(
+                &mut out,
+                if laser_brain {
+                    "sndEnergyHammer"
+                } else {
+                    "sndEnergyHammerUpg"
+                },
+                0.2,
+            ),
+            37 => play(&mut out, "sndJackHammer"),
+            38 => gun(&mut out, "sndFlakCannon", 0.2),
+            42 => play(&mut out, "sndGoldShotgun"),
+            46 => gun(&mut out, "sndChickenSword", 0.2),
+            47 | 122 => gun(&mut out, "sndNukeFire", 0.2),
+            48 => gun(
+                &mut out,
+                if laser_brain {
+                    "sndLaserUpg"
+                } else {
+                    "sndLaser"
+                },
+                0.2,
+            ),
+            49 => gun(&mut out, "sndQuadMachinegun", 0.2),
+            52 => gun(&mut out, "sndFlare", 0.2),
+            53 => gun(
+                &mut out,
+                if laser_brain {
+                    "sndEnergyScrewdriverUpg"
+                } else {
+                    "sndEnergyScrewdriver"
+                },
+                0.2,
+            ),
+            54 => gun(&mut out, "sndHyperLauncher", 0.2),
+            55 => gun(&mut out, "sndLaserCannonCharge", 0.2),
+            57 | 64 => gun(
+                &mut out,
+                if laser_brain {
+                    "sndLightningPistolUpg"
+                } else {
+                    "sndLightningPistol"
+                },
+                0.2,
+            ),
+            58 => gun(
+                &mut out,
+                if laser_brain {
+                    "sndLightningRifleUpg"
+                } else {
+                    "sndLightningRifle"
+                },
+                0.2,
+            ),
+            59 => gun(
+                &mut out,
+                if laser_brain {
+                    "sndLightningShotgunUpg"
+                } else {
+                    "sndLightningShotgun"
+                },
+                0.2,
+            ),
+            60 => gun(&mut out, "sndSuperFlakCannon", 0.2),
+            61 => play(&mut out, "sndSawedOffShotgun"),
+            62 => gun(&mut out, "sndSplinterPistol", 0.2),
+            63 => {
+                gun(&mut out, "sndSuperSplinterGun", 0.2);
+                gun(&mut out, "sndSplinterGun", 0.1);
+            }
+            65 => gun(&mut out, "sndSmartgun", 0.2),
+            66 | 105 => gun(&mut out, "sndHeavyCrossbow", 0.2),
+            67 => gun(&mut out, "sndBloodHammer", 0.2),
+            68 => gun(
+                &mut out,
+                if laser_brain {
+                    "sndLightningCannonUpg"
+                } else {
+                    "sndLightningCannon"
+                },
+                0.2,
+            ),
+            69 => gun(&mut out, "sndPopgun", 0.2),
+            70 => gun(
+                &mut out,
+                if laser_brain {
+                    "sndPlasmaRifleUpg"
+                } else {
+                    "sndPlasmaRifle"
+                },
+                0.2,
+            ),
+            71 => gun(&mut out, "sndPopgun", 0.2),
+            72 => gun(&mut out, "sndToxicLauncher", 0.2),
+            73 => big(&mut out, "sndFlameCannon", 0.2),
+            74 => gun(&mut out, "sndLightningHammer", 0.2),
+            75 | 77 => play(&mut out, "sndFireShotgun"),
+            76 => gun(&mut out, "sndDoubleFireShotgun", 0.2),
+            78 => gun(&mut out, "sndClusterLauncher", 0.2),
+            79 | 85 => gun(&mut out, "sndGrenadeShotgun", 0.2),
+            80 => gun(&mut out, "sndGrenadeRifle", 0.2),
+            81 => play(&mut out, "sndRogueRifle"),
+            82 => big(&mut out, "sndConfettiGun", 0.2),
+            83 => big(&mut out, "sndDoubleMinigun", 0.2),
+            86 => big(&mut out, "sndUltraPistol", 0.2),
+            87 => big(
+                &mut out,
+                if laser_brain {
+                    "sndUltraLaserUpg"
+                } else {
+                    "sndUltraLaser"
+                },
+                0.2,
+            ),
+            88 => gun(&mut out, "sndHammer", 0.2),
+            89 | 90 => gun(&mut out, "sndHeavyRevolver", 0.2),
+            91 => gun(&mut out, "sndHeavySlugger", 0.2),
+            92 => big(&mut out, "sndUltraShovel", 0.2),
+            93 => big(&mut out, "sndUltraShotgun", 0.2),
+            94 => big(&mut out, "sndUltraCrossbow", 0.2),
+            95 => big(&mut out, "sndUltraGrenade", 0.2),
+            96 => gun(
+                &mut out,
+                if laser_brain {
+                    "sndPlasmaMinigunUpg"
+                } else {
+                    "sndPlasmaMinigun"
+                },
+                0.2,
+            ),
+            97 => gun(
+                &mut out,
+                if laser_brain {
+                    "sndDevastatorUpg"
+                } else {
+                    "sndDevastator"
+                },
+                0.2,
+            ),
+            100 => gun(&mut out, "sndGoldSplinterGun", 0.2),
+            104 => gun(&mut out, "sndSuperDiscGun", 0.2),
+            106 => gun(&mut out, "sndHeavyMachinegun", 0.2),
+            107 => gun(&mut out, "sndBloodCannon", 0.2),
+            110 => gun(&mut out, "sndIncinerator", 0.2),
+            111 => gun(
+                &mut out,
+                if laser_brain {
+                    "sndPlasmaHugeUpg"
+                } else {
+                    "sndPlasmaHuge"
+                },
+                0.2,
+            ),
+            112 => gun(&mut out, "sndSeekerPistol", 0.2),
+            113 => gun(&mut out, "sndSeekerShotgun", 0.2),
+            114 => gun(&mut out, "sndEraser", 0.2),
+            115 | 128 => gun(
+                &mut out,
+                if electric {
+                    "sndElectricGuitar"
+                } else {
+                    "sndGuitar"
+                },
+                0.2,
+            ),
+            116 => gun(&mut out, "sndBouncerSmg", 0.2),
+            117 => gun(&mut out, "sndBouncerShotgun", 0.2),
+            118 => gun(&mut out, "sndHyperSlugger", 0.2),
+            119 => gun(&mut out, "sndSuperBazooka", 0.2),
+            120 | 127 => gun(
+                &mut out,
+                if gold {
+                    "sndGoldFrogPistol"
+                } else {
+                    "sndFrogPistol"
+                },
+                0.2,
+            ),
+            121 => gun(
+                &mut out,
+                if mega {
+                    "sndBlackSwordMega"
+                } else {
+                    "sndBlackSword"
+                },
+                0.2,
+            ),
+            124 => gun(&mut out, "sndHeavyNader", 0.2),
+            125 => gun(&mut out, "sndGunGun", 0.2),
+            _ => {}
+        }
+    }
+
+    for c in out {
+        cue(fx.cues, c.name, c.volume, c.variance);
+    }
+}
+
 fn spawn_pellets(commands: &mut Commands, fx: &mut FireFx, shot: &GunShot, player: &Player) {
     let id = shot.weapon_id;
     let sleep = weapon_sleep_secs(id);
@@ -898,42 +1335,7 @@ fn spawn_pellets(commands: &mut Commands, fx: &mut FireFx, shot: &GunShot, playe
     fx.trauma.add(shot.def.shake * fx.shake_scale);
     rumble(fx.rumble, 0.08, shot.def.shake, 0.07);
 
-    let kind: WeaponKind = id.into();
-    if fx.underwater {
-        cue(fx.cues, "fire_gml_water", 0.7, 0.05);
-    } else {
-        let legacy_fallback = matches!(
-            kind,
-            WeaponKind::Revolver
-                | WeaponKind::Machinegun
-                | WeaponKind::Smg
-                | WeaponKind::AssaultRifle
-                | WeaponKind::Shotgun
-                | WeaponKind::Crossbow
-                | WeaponKind::GrenadeLauncher
-        );
-        if legacy_fallback {
-            let name = shot.def.name;
-            let is_gold =
-                name.contains("GOLDEN") || name.contains("GOLD ") || name.starts_with("GOLD");
-            if is_gold {
-                cue(fx.cues, "fire_gml", 0.7, 0.05);
-            } else {
-                match kind {
-                    WeaponKind::Revolver => cue(fx.cues, "shoot", 0.7, 0.05),
-                    WeaponKind::Machinegun | WeaponKind::Smg | WeaponKind::AssaultRifle => {
-                        cue(fx.cues, "machine", 0.6, 0.05);
-                    }
-                    WeaponKind::Shotgun => cue(fx.cues, "shotgun", 0.8, 0.04),
-                    WeaponKind::Crossbow => cue(fx.cues, "bolt", 0.7, 0.05),
-                    WeaponKind::GrenadeLauncher => cue(fx.cues, "explode", 0.8, 0.04),
-                    _ => cue(fx.cues, "fire_gml", 0.7, 0.05),
-                }
-            }
-        } else {
-            cue(fx.cues, "fire_gml", 0.7, 0.05);
-        }
-    }
+    weapon_fire_cues(fx, id, shot.burst, player, false);
 
     // GML `scrFire` style: Bullet1 spawns near the body (player x/y plus a
     // tiny forward nudge), not a fixed 24px out. Keep longer muzzles for
@@ -1183,7 +1585,8 @@ fn melee_attack(
 ) {
     let _ = melee;
     fx.trauma.add(shot.def.shake.max(0.12) * fx.shake_scale);
-    cue(fx.cues, "melee", 0.7, 0.05);
+    let mega = shot.def.name == "BLACK SWORD" && (health.hp <= 0 || health.max <= 0);
+    weapon_fire_cues(fx, shot.weapon_id, shot.burst, player, mega);
     for mut wv in vis_q.iter_mut() {
         if wv.owner == shot.player_ent && wv.slot == shot.visual_slot {
             wv.wkick = gml_melee_wkick(shot.def.name);
@@ -1194,7 +1597,6 @@ fn melee_attack(
     vel.0 -= shot.aim.normalize_or_zero() * gml_fire_push_px_s(shot.def.name);
     player.melee_flip = !player.melee_flip;
 
-    let mega = shot.def.name == "BLACK SWORD" && (health.hp <= 0 || health.max <= 0);
     if mega {
         fx.hitstop.trigger(0.35, 0.08);
     }
@@ -2003,9 +2405,13 @@ fn spawn_snare_seed(
     ));
     cue(
         cues,
-        if throne_butt { "sndPlantFireTB" } else { "sndPlantFire" },
-        0.7,
-        0.05,
+        if throne_butt {
+            "sndPlantFireTB"
+        } else {
+            "sndPlantFire"
+        },
+        1.0,
+        0.0,
     );
 }
 
@@ -2027,12 +2433,7 @@ fn plant_tangle(
     } else {
         "sndPlantSnare"
     };
-    cue(
-        cues,
-        if throne_butt { ultra } else { plain },
-        0.7,
-        0.05,
-    );
+    cue(cues, if throne_butt { ultra } else { plain }, 1.0, 0.0);
     // GML `Tangle/Create_0.gml:4-5`: `image_xscale = choose(1, -1)`,
     // `image_speed = 0.4` over the 6-frame strip.
     let body = |commands: &mut Commands, at: Vec2, rng: &mut rand::rngs::ThreadRng| {
@@ -2183,7 +2584,7 @@ pub fn tick_portal_strikes(
             }
         }
         trauma.add(0.4);
-        cue(&mut cues, "sndExplosionL", 0.9, 0.04);
+        cue(&mut cues, "sndIDPDNadeExplo", 1.0, 0.0);
         spawn_native_explosion_visual(
             &mut commands,
             save.settings.particles,
@@ -2408,6 +2809,8 @@ pub fn player_ability(
             &RaceState,
             Option<&mut Shield>,
             Option<&mut Telekinesis>,
+            Option<&Dash>,
+            Option<&HorrorCharge>,
         ),
         (With<Player>, Without<Enemy>),
     >,
@@ -2430,6 +2833,8 @@ pub fn player_ability(
         race_state,
         shield,
         telek,
+        dash,
+        horror_charge,
     )) = player_q.single_mut()
     else {
         return;
@@ -2584,7 +2989,11 @@ pub fn player_ability(
             trauma.add(0.12);
             slow_motion(&mut slow_mo, 0.55, 0.2);
             rumble(&mut rumble_q, 0.2, 0.2, 0.1);
-            cue(&mut cues, "bolt", 0.7, 0.05);
+            if player.throne_butt {
+                cue(&mut cues, "sndFishRollUpg", 1.0, 0.0);
+            } else if dash.is_none() {
+                cue(&mut cues, "sndRoll", 1.0, 0.0);
+            }
         }
         AbilityKind::Shield => {
             let timer = GTimer::from_seconds(1.6 * ability_mult.clamp(1.0, 2.0), TimerMode::Once);
@@ -2594,7 +3003,16 @@ pub fn player_ability(
                 commands.entity(player_e).insert(Shield { timer });
             }
             trauma.add(0.08);
-            cue(&mut cues, "sndAmmoPickup", 0.5, 0.15);
+            cue(
+                &mut cues,
+                if matches!(player.ultra, Some(UltraMutationId::CrystalJuggernaut)) {
+                    "sndCrystalJuggernaut"
+                } else {
+                    "sndCrystalShield"
+                },
+                1.0,
+                0.0,
+            );
         }
         AbilityKind::Telekinesis => {
             let timer = GTimer::from_seconds(1.4, TimerMode::Once);
@@ -2603,7 +3021,6 @@ pub fn player_ability(
             } else {
                 commands.entity(player_e).insert(Telekinesis { timer });
             }
-            cue(&mut cues, "sndPortalOpen", 0.7, 0.05);
         }
         AbilityKind::Detonate => {
             if health.hp <= 1 {
@@ -2653,7 +3070,16 @@ pub fn player_ability(
                 1
             };
             commands.entity(player_e).insert(PopPopCharges(charges));
-            cue(&mut cues, "bolt", 0.7, 0.05);
+            cue(
+                &mut cues,
+                if player.throne_butt {
+                    "sndPopPopUpg"
+                } else {
+                    "sndPopPop"
+                },
+                1.0,
+                0.0,
+            );
         }
         AbilityKind::GetLoaded => {
             for slot in 0..inv.weapon_slots {
@@ -2739,8 +3165,8 @@ pub fn player_ability(
             cue(
                 &mut cues,
                 if tb { "sndRobotEatUpg" } else { "sndRobotEat" },
-                0.7,
-                0.05,
+                1.0,
+                0.0,
             );
             let mut rng = rand::rng();
             spawn_burst(
@@ -2761,7 +3187,7 @@ pub fn player_ability(
                 return;
             }
             if inv.cursed[slot] {
-                cue(&mut cues, "sndCursedReminder", 0.6, 0.05);
+                cue(&mut cues, "sndCursedReminder", 1.0, 0.0);
                 return;
             }
             let aim_angle = aim_v.y.atan2(aim_v.x);
@@ -2783,7 +3209,7 @@ pub fn player_ability(
             if let Some(next) = (0..inv.weapon_slots).find(|&i| inv.weapons[i] != WeaponId::NONE) {
                 inv.current = next;
             }
-            cue(&mut cues, "sndChickenThrow", 0.7, 0.05);
+            cue(&mut cues, "sndChickenThrow", 1.0, 0.0);
         }
         AbilityKind::SpawnAlly => {
             let has_ally = !walls_and_allies.p1().is_empty();
@@ -2794,6 +3220,9 @@ pub fn player_ability(
             };
             if health.hp <= cost {
                 return;
+            }
+            if player.throne_butt {
+                cue(&mut cues, "sndSpawnSuperAlly", 1.0, 0.0);
             }
             health.hp -= cost;
             let ally_count = if matches!(player.ultra, Some(UltraMutationId::RebelRiot)) {
@@ -2830,10 +3259,15 @@ pub fn player_ability(
                     Velocity(Vec2::ZERO),
                     Pos(spawn_at),
                 ));
+                cue(&mut cues, "sndAllySpawn", 1.0, 0.2);
             }
-            cue(&mut cues, "sndPortalOpen", 0.7, 0.05);
         }
         AbilityKind::HorrorBeam => {
+            let cost = horror_charge.map_or(1.0, |c| c.time + 1.0).floor() as u32;
+            if player.rads < cost {
+                cue(&mut cues, "sndHorrorEmpty", 1.0, 0.0);
+                return;
+            }
             let dir = aim_v.normalize_or_zero();
             let beam_len = 320.0 * ability_mult.clamp(1.0, 1.8);
             let beam_damage = (4.0 * ability_mult).round() as i32;
@@ -2862,10 +3296,11 @@ pub fn player_ability(
                 Pos(pos + dir * 160.0),
             ));
             trauma.add(0.18);
-            cue(&mut cues, "bolt", 0.7, 0.05);
+            cue(&mut cues, "sndHorrorBeam", 1.0, 0.0);
         }
         AbilityKind::PortalStrike => {
             if player.rogue_ammo == 0 {
+                cue(&mut cues, "sndPortalStrikeEmpty", 1.0, 0.0);
                 return;
             }
             player.rogue_ammo = player.rogue_ammo.saturating_sub(1);
@@ -2879,7 +3314,7 @@ pub fn player_ability(
                 },
                 Pos(target),
             ));
-            cue(&mut cues, "sndPortalOpen", 0.7, 0.05);
+            cue(&mut cues, "sndRogueAim", 1.0, 0.0);
         }
         AbilityKind::RocketBarrage => {
             let slot = inv.ammo_mut(AmmoKind::Explosives);
@@ -2929,7 +3364,7 @@ pub fn player_ability(
                 ));
             }
             trauma.add(0.25);
-            cue(&mut cues, "sndExplosionL", 0.9, 0.04);
+            cue(&mut cues, "sndBigDogMissile", 1.0, 0.0);
         }
         AbilityKind::BloodGamble => {
             let cur = inv.weapons[inv.current.min(inv.weapon_slots.saturating_sub(1))];
@@ -2951,32 +3386,13 @@ pub fn player_ability(
                 health.hp -= 1;
                 player.skeleton_gamble = 0;
             }
-            cue(&mut cues, "sndAmmoPickup", 0.5, 0.15);
         }
-        AbilityKind::ToxicPuke => {
-            let spot = pos + aim_v.normalize_or_zero() * 48.0;
-            commands.spawn((
-                LevelCleanup,
-                AbilityHazard,
-                HazardCloud {
-                    kind: HazardKind::Toxic,
-                    radius: 70.0 * ability_mult.clamp(1.0, 2.0),
-                    damage: ((1.0 * ability_mult).ceil() as i32).max(1),
-                    timer: GTimer::from_seconds(
-                        3.0 * ability_mult.clamp(1.0, 1.8),
-                        TimerMode::Once,
-                    ),
-                    tick: GTimer::from_seconds(0.25, TimerMode::Repeating),
-                },
-                Pos(spot),
-            ));
-            cue(&mut cues, "sndExplosionL", 0.9, 0.04);
-        }
+        AbilityKind::ToxicPuke => {}
         AbilityKind::CuzSwap => {
             // GML Cuz (`scrPowers.gml:430-454`): ring of
             // `20*(1+Emotional)` tears + `spr_cry` swap.
             if player.cuz_ammo == 0 {
-                cue(&mut cues, "sndCuzCryAttackNoAmmo", 0.6, 0.05);
+                cue(&mut cues, "sndCuzCryAttackNoAmmo", 1.0, 0.0);
                 return;
             }
             player.cuz_ammo = player.cuz_ammo.saturating_sub(1);
@@ -2988,8 +3404,8 @@ pub fn player_ability(
                 } else {
                     "sndCuzCryAttack"
                 },
-                0.7,
-                0.05,
+                1.0,
+                0.0,
             );
             let tears = 20 * (1 + emotional);
             let step = std::f32::consts::TAU / tears as f32;
@@ -3027,6 +3443,7 @@ pub fn player_ability(
 pub fn tick_big_dog_missiles(
     time: Res<SimTime>,
     mut commands: Commands,
+    mut cues: ResMut<Queue<AudioCue>>,
     mask: Res<FloorMask>,
     frame: Res<CurrentFrame>,
     save: Option<Res<SaveData>>,
@@ -3105,6 +3522,7 @@ pub fn tick_big_dog_missiles(
             state.hurt_timer.tick(dt);
             if state.fuse.just_finished() || health.hp <= 0 {
                 spawn_explosion(&mut commands, pos.0);
+                cue(&mut cues, "sndExplosion", 1.0, 0.0);
                 commands.entity(entity).despawn();
                 continue;
             }

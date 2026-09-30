@@ -8,9 +8,9 @@
 //! Render split: portal bursts route through
 //! [`crate::effects::spawn_burst`] and trauma through
 //! `repame_fx::Trauma`, matching the bevy `VfxSpawner`/`ScreenEffects`
-//! call sites. The warning sting uses the `sndVanWarning` cue at
-//! 0.7/0.05 (bevy `play_van_warning` parity); the portal whoosh goes
-//! through [`GameAudio::play_portal`].
+//! call sites. The warning sting is the `VanSpawn/Create_0:41` cue
+//! (`sndOasisPopo` under water, else `sndVanWarning`) at 1.0/0.0; the
+//! portal whoosh goes through [`GameAudio::play_portal`].
 //!
 //! Spawn path: waves call [`crate::enemies::spawn_enemy_at`] (base
 //! bundle + brains + table stats), so no second spawn pipeline.
@@ -24,7 +24,7 @@ use rand::RngExt;
 use repame_fx::Trauma;
 use repame_sim::SimTime;
 
-use crate::audio::{AudioCue, GameAudio, QueuedReactiveCue, ReactiveCue};
+use crate::audio::{AudioCue, GameAudio};
 use crate::combat::{queue_enemy_spawn, queue_enemy_spawn_birth};
 use crate::comps_a::{
     ARENA_H, ARENA_W, FloorMask, GameCleanup, Health, HeavyHeart, Inventory, LevelCleanup, Player,
@@ -300,8 +300,8 @@ fn idpd_portals(
             } else {
                 "sndIDPDPortalSpawn"
             },
-            volume: 0.7,
-            variance: 0.05,
+            volume: 1.0,
+            variance: 0.0,
         });
     }
     elites
@@ -688,12 +688,15 @@ pub fn tick_idpd_raids(
         raid.pending_wave = Some(wave);
         raid.warning = GTimer::from_seconds(1.25, TimerMode::Once);
         toast.show("IDPD INCOMING");
-        commands.spawn((GameCleanup, QueuedReactiveCue(ReactiveCue::IdpdIncoming)));
-        // Bevy `play_van_warning`: sndVanWarning at 0.7 vol, 0.05 var.
+        // GML `VanSpawn/Create_0:41`: `underwater` swaps in the oasis sting.
         cues.push(AudioCue {
-            name: "sndVanWarning",
-            volume: 0.7,
-            variance: 0.05,
+            name: if run.area == AreaId::Oasis {
+                "sndOasisPopo"
+            } else {
+                "sndVanWarning"
+            },
+            volume: 1.0,
+            variance: 0.0,
         });
         trauma.add(0.12);
         return;
@@ -1134,8 +1137,8 @@ fn van_destroy(
     trauma.add(0.3);
     cues.push(AudioCue {
         name: "sndIDPDNadeExplo",
-        volume: 0.7,
-        variance: 0.05,
+        volume: 1.0,
+        variance: 0.1,
     });
 }
 

@@ -7,7 +7,7 @@
 
 use std::time::{Duration, Instant};
 
-use nt_rewrite::{App, root_view};
+use nt_rewrite::{App, audio_host::AudioHost, root_view};
 
 fn boot() -> App {
     boot_at(None)
@@ -60,7 +60,7 @@ fn main() -> anyhow::Result<()> {
     let mut app = boot();
     let mut poller = GamepadPoller::new();
     let mut bank = PadBank::default();
-    let mut audio = repame_audio::Audio::noop();
+    let mut audio = AudioHost::new();
     let mut last = Instant::now();
     let size = std::env::var("NT_WINDOW")
         .ok()
@@ -74,15 +74,11 @@ fn main() -> anyhow::Result<()> {
         for pad in bank.drain() {
             app.stage_gamepad(pad);
         }
-        let view = root_view(sched, ctx, &mut app, {
-            let now = Instant::now();
-            let dt = now.duration_since(last).min(Duration::from_secs_f32(0.25));
-            last = now;
-            dt
-        });
-        for cue in app.drain_audio_cues() {
-            audio.play(cue.name);
-        }
+        let now = Instant::now();
+        let dt = now.duration_since(last).min(Duration::from_secs_f32(0.25));
+        last = now;
+        let view = root_view(sched, ctx, &mut app, dt);
+        audio.pump(dt.as_secs_f32(), &mut app);
         view
     })
 }

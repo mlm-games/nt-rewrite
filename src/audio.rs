@@ -1,4 +1,4 @@
-//! Audio selection: cues, area music/ambience, reactive stingers.
+//! Audio selection: cues, area music/ambience.
 //!
 //! The bevy build spawned `AudioPlayer` entities straight from systems
 //! and resolved files through `AssetCatalog` + `AssetServer`; here
@@ -6,35 +6,24 @@
 //!
 //! * one-shots ([`AudioCue`]) queue with stem + volume + pitch variance;
 //!   the backend samples the pitch at play time (bevy
-//!   `AudioM::play_sfx_varied` parity) and resolves
-//!   [`resolve_sfx_path`] against its asset store.
-//! * reactive stingers ([`ReactiveCue`]) arrive as
-//!   [`ReactiveAudioRequest`]s, pass bus/throttle/selection in
-//!   [`play_reactive_audio_requests`], and land as
-//!   [`ResolvedReactiveCue`]s in a backend-neutral queue the audio
-//!   backend drains (no `Handle<AudioSource>`, no `AssetServer`).
-//! * area music/ambience (`music_for_area`, `ambience_for_area`,
-//!   `boss_music_for_kind`) resolve to first-candidate stems with
-//!   fade gains in [`AreaAudioState`], which the backend polls.
-//! * the combat-intensity layer ([`CombatIntensityLayer`]) carries the
-//!   smoothed `current` per area; the backend mixes it with
-//!   [`intensity_bus`].
+//!   `AudioM::play_sfx_varied` parity) and resolves stems against its
+//!   asset store.
+//! * area music/ambience ([`sync_area_audio`]) resolves the GML
+//!   `MusCont` selection law to bare GML stems in [`AreaAudioState`],
+//!   which the backend polls every tick.
 //!
-//! Only the cues needed by ported systems exist yet for gameplay SFX;
-//! the full GML stem table for `GameAudio` lands below with the
-//! weapon-fire dispatch.
-
-use std::collections::{HashMap, HashSet};
+//! Only the cues needed by ported systems exist yet for gameplay SFX.
 
 use bevy_ecs::prelude::*;
 use repame_sim::SimTime;
 
-use crate::comps_a::{GameCleanup, Health, Player, Run};
-use crate::comps_b::{BossBrain, CampfireProp, Enemy, LoopTransition};
-use crate::data::{AreaId, EnemyKind};
+use crate::comps_a::{Player, RaceState, Run};
+use crate::comps_b::{
+    BossBrain, CampfireProp, CrownPedestal, Enemy, FloorTransition, LoopTransition,
+};
+use crate::data::{AreaId, EnemyKind, RaceId};
 use crate::msg::Queue;
 use crate::state::{AppState, Paused};
-use crate::time::{GTimer, TimerMode};
 
 /// One fire-and-forget sound with playback variation.
 #[derive(Clone, Debug, PartialEq)]
@@ -80,69 +69,6 @@ impl AudioChannels {
     }
 }
 
-/// Stem -> path resolution (bevy `resolve_sfx` selection half).
-/// The catalog existence scan lives backend-side (the headless sim has
-/// no filesystem); the law kept here is the deterministic fallback:
-/// `audio/{stem}.wav` when no `audio| sounds/{stem}.{ogg,wav,mp3,flac}`
-/// hit exists.
-pub fn resolve_sfx_path(stem: &str) -> String {
-    format!("audio/{stem}.wav")
-}
-
-/// Reactive music/stinger requests (nt `ReactiveCue` parity, full
-/// variant list — the audio layer resolves them).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub enum ReactiveCue {
-    LevelUp,
-    MutationChosen,
-    UltraChosen,
-    BossAppear,
-    BossDefeated,
-    PlayerCritical,
-    PlayerDeath,
-    PortalOpen,
-    PortalEnter,
-    SecretFound,
-    WeaponPickup,
-    ChestOpen,
-    LoopComplete,
-    ThroneRises,
-    IdpdIncoming,
-
-    Kill,
-    KillStreak,
-
-    UiClick,
-    UiBack,
-    UiConfirm,
-    UiCycle,
-}
-
-/// Queued reactive cue marker (drained by the audio layer).
-#[derive(bevy_ecs::prelude::Component, Clone, Copy, Debug)]
-pub struct QueuedReactiveCue(pub ReactiveCue);
-
-/// In-sim reactive request (bevy `Message` -> [`Queue`] channel).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ReactiveAudioRequest {
-    pub cue: ReactiveCue,
-}
-
-impl ReactiveAudioRequest {
-    pub fn new(cue: ReactiveCue) -> Self {
-        Self { cue }
-    }
-}
-
-/// Backend-neutral resolved stinger: first-candidate stem plus the
-/// mixed volume. The backend verifies file existence and plays it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ResolvedReactiveCue {
-    pub cue: ReactiveCue,
-    pub path: &'static str,
-    pub volume: f32,
-}
-
 /// Sound bank handle (asset paths resolve platform-side).
 #[derive(Resource, Debug, Default)]
 pub struct GameAudio;
@@ -156,93 +82,55 @@ impl GameAudio {
         });
     }
 
-    /// Player-hurt sting (bevy `play_hurt`: sndPlayerHit, 0.7, 0.05).
-    pub fn play_hurt(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndPlayerHit", 0.7, 0.05);
-    }
-
-    /// Hit thock (bevy `play_hit`: sndHitWall, 0.45, 0.15).
+    /// Hit thock (GML `Bullet1/Collision_Wall.gml:7` and 15 sibling
+    /// `*/Collision_Wall.gml` sites — `snd_play_hit(sndHitWall, 0.2)`,
+    /// with `WepPickup/Collision_Wall.gml:6` on the script's `0.2`
+    /// default).
     pub fn play_hit(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndHitWall", 0.45, 0.15);
+        Self::cue(cues, "sndHitWall", 1.0, 0.2);
     }
 
-    /// Explosion boom (bevy `play_boom`: sndExplosionL, 0.9, 0.04).
+    /// Explosion boom (GML `Grenade/Destroy_0.gml:3`
+    /// `snd_play(sndExplosionL)`).
     pub fn play_boom(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndExplosionL", 0.9, 0.04);
+        Self::cue(cues, "sndExplosionL", 1.0, 0.0);
     }
 
-    /// Level-up jingle (bevy `play_levelup`: sndLevelUp, 0.8, 0.03).
-    pub fn play_levelup(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndLevelUp", 0.8, 0.03);
-    }
-
-    /// Pickup blip (bevy `play_pickup`: sndAmmoPickup, 0.5, 0.15).
+    /// Pickup blip (GML `AmmoPickup/Collision_Player.gml:26`
+    /// `snd_play(sndAmmoPickup)`).
     pub fn play_pickup(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndAmmoPickup", 0.5, 0.15);
+        Self::cue(cues, "sndAmmoPickup", 1.0, 0.0);
     }
 
-    /// Portal whoosh (bevy `play_portal`: sndPortalOpen, 0.7, 0.05).
+    /// Portal whoosh (GML `GenCont/Destroy_0.gml:93` /
+    /// `Portal/Create_0.gml:5` `snd_play(sndPortalOpen)`).
     pub fn play_portal(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndPortalOpen", 0.7, 0.05);
+        Self::cue(cues, "sndPortalOpen", 1.0, 0.0);
     }
 
-    /// Player-death sting (bevy `play_death`: sndPlayerDeath, 0.9, 0.02).
-    pub fn play_death(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndPlayerDeath", 0.9, 0.02);
-    }
+    // --- Full GML stem table (`snd*` asset names); volume/variance
+    // follow the GML call site cited on each helper.
 
-    // --- Full GML stem table (bevy `GameAudio::load` selection half).
-    // Stems are the `snd*` asset names; volume/var mirror the bevy
-    // `play_*` methods exactly. The pre-existing short-name cues above
-    // predate this slice and are left untouched.
-
-    /// Revolver/pop fire (bevy `play_shoot`: sndPistol, 0.5, 0.12).
-    pub fn play_shoot(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndPistol", 0.5, 0.12);
-    }
-
-    /// Machinegun chatter (bevy `play_machine`: sndMachinegun, 0.4, 0.15).
-    pub fn play_machine(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndMachinegun", 0.4, 0.15);
-    }
-
-    /// Shotgun blast (bevy `play_shotgun`: sndShotgun, 0.6, 0.1).
-    pub fn play_shotgun(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndShotgun", 0.6, 0.1);
-    }
-
-    /// Crossbow bolt (bevy `play_bolt`: sndCrossbow, 0.5, 0.08).
-    pub fn play_bolt(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndCrossbow", 0.5, 0.08);
-    }
-
-    /// Melee swing (bevy `play_melee`: sndHammer, 0.5, 0.1).
-    pub fn play_melee(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndHammer", 0.5, 0.1);
-    }
-
-    /// Explosion crack (bevy `play_explode`: sndExplosion, 0.7, 0.06).
+    /// Explosion crack (GML `Sniper/Destroy_0.gml:6`
+    /// `snd_play(sndExplosion)`).
     pub fn play_explode(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndExplosion", 0.7, 0.06);
+        Self::cue(cues, "sndExplosion", 1.0, 0.0);
     }
 
-    /// Chest open (bevy `play_chest`: sndChest, 0.6, 0.05).
+    /// Chest zap (GML `AmmoChest/Collision_PortalShock.gml:7`
+    /// `snd_play(sndChest)`).
     pub fn play_chest(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndChest", 0.6, 0.05);
+        Self::cue(cues, "sndChest", 1.0, 0.0);
     }
 
-    /// Weapon chest (bevy `play_weapon_chest`: sndWeaponChest, 0.6, 0.05).
+    /// Proto-chest open (GML `ProtoChest/Collision_Player.gml:24`
+    /// `snd_play(sndWeaponChest)`).
     pub fn play_weapon_chest(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndWeaponChest", 0.6, 0.05);
+        Self::cue(cues, "sndWeaponChest", 1.0, 0.0);
     }
 
-    /// Ammo chest (bevy `play_ammo_chest`: sndAmmoChest, 0.6, 0.05).
-    pub fn play_ammo_chest(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndAmmoChest", 0.6, 0.05);
-    }
-
-    /// Health chest (GML `sndHealthChest` / `sndHealthChestBig` with
-    /// Second Stomach, 0.6, 0.05).
+    /// Health chest (GML `HealthChest/Collision_Player.gml:18`
+    /// `snd_play(... sndHealthChestBig : sndHealthChest)`).
     pub fn play_health_chest(&self, cues: &mut Queue<AudioCue>, big: bool) {
         Self::cue(
             cues,
@@ -251,122 +139,22 @@ impl GameAudio {
             } else {
                 "sndHealthChest"
             },
-            0.6,
-            0.05,
+            1.0,
+            0.0,
         );
     }
 
-    /// Cursed big chest (GML `sndBigCursedChest` via `snd_play_hit`).
-    pub fn play_cursed_chest(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndBigCursedChest", 0.6, 0.05);
-    }
-
-    /// Pickup fade-out (bevy `play_pickup_disappear`: sndPickupDisappear,
-    /// 0.4, 0.1).
+    /// Pickup fade-out (GML `AmmoPickup/Alarm_0.gml:3`
+    /// `snd_play(sndPickupDisappear)`).
     pub fn play_pickup_disappear(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndPickupDisappear", 0.4, 0.1);
-    }
-
-    /// Dry fire (bevy `play_empty`: sndEmpty, 0.6, 0.05).
-    pub fn play_empty(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndEmpty", 0.6, 0.05);
-    }
-
-    /// Ultra dry fire (bevy `play_ultra_empty`: sndUltraEmpty, 0.6, 0.05).
-    pub fn play_ultra_empty(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndUltraEmpty", 0.6, 0.05);
-    }
-
-    /// Melee flip (bevy `play_melee_flip`: sndMeleeFlip, 0.5, 0.08).
-    pub fn play_melee_flip(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndMeleeFlip", 0.5, 0.08);
-    }
-
-    /// Crossbow reload (bevy `play_cross_reload`: sndCrossReload, 0.5, 0.08).
-    pub fn play_cross_reload(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndCrossReload", 0.5, 0.08);
-    }
-
-    /// Shotgun reload (bevy `play_shot_reload`: sndShotReload, 0.5, 0.08).
-    pub fn play_shot_reload(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndShotReload", 0.5, 0.08);
-    }
-
-    /// Grenade reload (bevy `play_nade_reload`: sndNadeReload, 0.5, 0.08).
-    pub fn play_nade_reload(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndNadeReload", 0.5, 0.08);
-    }
-
-    /// Plasma reload (bevy `play_plasma_reload`: sndPlasmaReload, 0.5, 0.08).
-    pub fn play_plasma_reload(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndPlasmaReload", 0.5, 0.08);
-    }
-
-    /// Lightning reload (bevy `play_lightning_reload`:
-    /// sndLightningReload, 0.5, 0.08).
-    pub fn play_lightning_reload(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndLightningReload", 0.5, 0.08);
-    }
-
-    /// Sniper acquire (bevy `play_sniper_target`: sndSniperTarget, 0.6, 0.05).
-    pub fn play_sniper_target(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndSniperTarget", 0.6, 0.05);
-    }
-
-    /// Sniper shot (bevy `play_sniper_fire`: sndSniperFire, 0.5, 0.08).
-    pub fn play_sniper_fire(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndSniperFire", 0.5, 0.08);
-    }
-
-    /// Assassin lunge (bevy `play_assassin_attack`: sndAssassinAttack,
-    /// 0.6, 0.05).
-    pub fn play_assassin_attack(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndAssassinAttack", 0.6, 0.05);
-    }
-
-    /// Laser-crystal charge (bevy `play_laser_charge`:
-    /// sndLaserCrystalCharge, 0.5, 0.05).
-    pub fn play_laser_charge(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndLaserCrystalCharge", 0.5, 0.05);
-    }
-
-    /// Lightning-crystal charge (bevy `play_lightning_charge`:
-    /// sndLightningCrystalCharge, 0.5, 0.05).
-    pub fn play_lightning_charge(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndLightningCrystalCharge", 0.5, 0.05);
-    }
-
-    /// Snowtank aim (bevy `play_snowtank_aim`: sndSnowTankAim, 0.6, 0.05).
-    pub fn play_snowtank_aim(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndSnowTankAim", 0.6, 0.05);
-    }
-
-    /// Gold-tank aim (bevy `play_goldtank_aim`: sndGoldTankAim, 0.6, 0.05).
-    pub fn play_goldtank_aim(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndGoldTankAim", 0.6, 0.05);
-    }
-
-    /// Explo-guardian charge (bevy `play_explo_charge`:
-    /// sndExploGuardianCharge, 0.6, 0.05).
-    pub fn play_explo_charge(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndExploGuardianCharge", 0.6, 0.05);
-    }
-
-    /// Mimic slurp (bevy `play_mimic_slurp`: sndMimicSlurp, 0.6, 0.05).
-    pub fn play_mimic_slurp(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndMimicSlurp", 0.6, 0.05);
-    }
-
-    /// IDPD van warning (bevy `play_van_warning`: sndVanWarning, 0.7, 0.05).
-    pub fn play_van_warning(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndVanWarning", 0.7, 0.05);
+        Self::cue(cues, "sndPickupDisappear", 1.0, 0.0);
     }
 
     // --- Pickup / chest cues (GML stems verbatim).
 
     /// GML `Rad/Step_0.gml:33` `snd_play(sndRadPickup)`.
     pub fn play_rad_pickup(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndRadPickup", 0.5, 0.15);
+        Self::cue(cues, "sndRadPickup", 1.0, 0.0);
     }
 
     /// GML `HPPickup/Collision_Player.gml:18`
@@ -375,14 +163,14 @@ impl GameAudio {
         Self::cue(
             cues,
             if big { "sndHPPickupBig" } else { "sndHPPickup" },
-            0.6,
-            0.05,
+            1.0,
+            0.0,
         );
     }
 
     /// GML `AmmoPickup/Collision_Player.gml:26` `sndAmmoPickup`.
     pub fn play_ammo_pickup(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndAmmoPickup", 0.6, 0.05);
+        Self::cue(cues, "sndAmmoPickup", 1.0, 0.0);
     }
 
     /// GML `WeaponChest/Collision_Player.gml:26-34`: Oasis
@@ -402,8 +190,8 @@ impl GameAudio {
             } else {
                 "sndWeaponChest"
             },
-            0.6,
-            0.05,
+            1.0,
+            0.0,
         );
     }
 
@@ -418,35 +206,35 @@ impl GameAudio {
             } else {
                 "sndAmmoChest"
             },
-            0.6,
-            0.05,
+            1.0,
+            0.0,
         );
     }
 
     /// GML `GoldChest/Collision_Player.gml:10` `sndGoldChest`.
     pub fn play_gold_chest(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndGoldChest", 0.6, 0.05);
+        Self::cue(cues, "sndGoldChest", 1.0, 0.0);
     }
 
     /// GML `RogueChest/Collision_Player.gml:17` (and
     /// `RogueAmmo/Collision_Player.gml:20`) `sndRogueCanister`.
     pub fn play_rogue_canister(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndRogueCanister", 0.6, 0.05);
+        Self::cue(cues, "sndRogueCanister", 1.0, 0.0);
     }
 
     /// GML `RadChest/Destroy_0.gml:11-12` / `RadMaggotChest/Destroy_0.gml:11`
     /// `snd_play(sndEXPChest)` — the rad-chest family, never the
     /// generic pickup blip.
     pub fn play_exp_chest(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndEXPChest", 0.6, 0.05);
+        Self::cue(cues, "sndEXPChest", 1.0, 0.0);
     }
 
     /// GML `CursedPickup/Create_0.gml:8` `snd_play_hit(sndCursedPickup, 0.2)`.
-    /// `snd_play_hit`'s 2nd arg is random PITCH, and `_gain` is
-    /// `UberCont.opt_sndvol` (1.0) — see `scripts/snd_play_hit`. The port's
-    /// 4th field is pitch jitter, so `0.2 * 0.5 = 0.1`.
+    /// `snd_play_hit`'s 2nd arg is random PITCH and `_gain` is
+    /// `UberCont.opt_sndvol` (1.0) — see `scripts/snd_play_hit`; the port's
+    /// 4th field is the same pitch jitter law, so it carries `0.2` as-is.
     pub fn play_cursed_pickup(&self, cues: &mut Queue<AudioCue>) {
-        Self::cue(cues, "sndCursedPickup", 1.0, 0.1);
+        Self::cue(cues, "sndCursedPickup", 1.0, 0.2);
     }
 
     /// GML `CursedPickup/Alarm_0.gml:1-4`:
@@ -474,7 +262,7 @@ impl GameAudio {
         } else {
             "sndWeaponPickup"
         };
-        Self::cue(cues, name, 0.6, 0.05);
+        Self::cue(cues, name, 1.0, 0.0);
     }
 
     /// GML `BigWeaponChest/Collision_Player.gml:26-28` /
@@ -494,10 +282,10 @@ impl GameAudio {
             } else {
                 "sndBigWeaponChest"
             },
-            0.6,
-            0.05,
+            1.0,
+            0.2,
         );
-        Self::cue(cues, chst, 0.9, 0.05);
+        Self::cue(cues, chst, 1.0, 0.2);
     }
 
     /// GML `Player/Collision_WepPickup.gml:67` `snd_play(wep_swap[wep])`
@@ -505,115 +293,8 @@ impl GameAudio {
     pub fn play_weapon_swap(&self, cues: &mut Queue<AudioCue>, weapon: crate::data::WeaponId) {
         let swap = crate::weapon_runtime::weapon_meta(weapon).wep_swap;
         if !swap.is_empty() {
-            Self::cue(cues, swap, 0.6, 0.05);
+            Self::cue(cues, swap, 1.0, 0.0);
         }
-    }
-
-    /// GML weapon-name -> (stem, volume, var) dispatch (bevy
-    /// `play_weapon_fire` selection half, verbatim branch order).
-    pub fn weapon_fire_cue(weapon_name: &str, underwater: bool) -> (&'static str, f32, f32) {
-        if underwater {
-            return ("sndOasisShoot", 0.5, 0.1);
-        }
-        let n = weapon_name;
-        let is_gold = n.contains("GOLDEN") || n.contains("GOLD ") || n.starts_with("GOLD");
-        if is_gold {
-            if n.contains("PISTOL") || n.contains("REVOLVER") {
-                return ("sndGoldPistol", 0.5, 0.1);
-            } else if n.contains("MACHINEGUN") || n.contains("SMG") || n.contains("MINIGUN") {
-                return ("sndGoldMachinegun", 0.5, 0.1);
-            } else if n.contains("SHOTGUN") || n.contains("ERASER") {
-                return ("sndGoldShotgun", 0.5, 0.1);
-            } else if n.contains("CROSSBOW") || n.contains("XBOW") {
-                return ("sndGoldCrossbow", 0.5, 0.1);
-            } else if n.contains("GRENADE")
-                || n.contains("ROCKET")
-                || n.contains("NUKE")
-                || n.contains("BAZOOKA")
-            {
-                return ("sndGoldGrenade", 0.5, 0.1);
-            } else if n.contains("PLASMA") {
-                return ("sndGoldPlasma", 0.5, 0.1);
-            } else if n.contains("LASER") || n.contains("ION") {
-                return ("sndGoldLaser", 0.5, 0.1);
-            }
-        }
-        if n.contains("PLASMA") || n.contains("DEVASTATOR") || n == "GUN GUN" {
-            ("sndPlasma", 0.55, 0.08)
-        } else if n.contains("LASER") || n.contains("ION") {
-            ("sndLaser", 0.55, 0.08)
-        } else if n.contains("LIGHTNING") {
-            ("sndLightningPistol", 0.55, 0.08)
-        } else if n.contains("FLAME")
-            || n.contains("DRAGON")
-            || n.contains("FLARE")
-            || n.contains("INCINERATOR")
-        {
-            ("sndFlameCannon", 0.55, 0.08)
-        } else if n.contains("DISC") || n.contains("BOUNCER") {
-            ("sndDiscgun", 0.55, 0.08)
-        } else if n.contains("SLUGGER") {
-            ("sndSlugger", 0.6, 0.08)
-        } else if n.contains("SPLINTER") || n.contains("SEEKER") || n.contains("TOXIC") {
-            ("sndSplinterGun", 0.5, 0.08)
-        } else if n.contains("GRENADE")
-            || n.contains("BAZOOKA")
-            || n.contains("NUKE")
-            || n.contains("ROCKET")
-            || n.contains("CLUSTER")
-            || n.contains("BLOOD")
-            || n.contains("FLAK")
-            || n.contains("NADER")
-        {
-            ("sndGrenade", 0.6, 0.08)
-        } else if n.contains("CROSSBOW") || n.contains("HEAVY XBOW") {
-            ("sndCrossbow", 0.5, 0.08)
-        } else if n.contains("SHOTGUN")
-            || n.contains("ERASER")
-            || n.contains("WAVE")
-            || n.contains("SLUGGER")
-        {
-            ("sndShotgun", 0.6, 0.1)
-        } else if n.contains("MACHINEGUN")
-            || n.contains("SMG")
-            || n.contains("MINIGUN")
-            || n.contains("ASSAULT")
-            || n.contains("QUAD")
-            || n.contains("POP RIFLE")
-            || n.contains("ROGUE")
-            || n.contains("HEAVY")
-        {
-            ("sndMachinegun", 0.4, 0.15)
-        } else if n.contains("REVOLVER")
-            || n.contains("PISTOL")
-            || n.contains("SMART")
-            || n.contains("POP GUN")
-            || n.contains("FROG")
-        {
-            ("sndPistol", 0.5, 0.12)
-        } else if n.contains("SENTRY") {
-            ("sndMachinegun", 0.4, 0.15)
-        } else {
-            ("sndPistol", 0.5, 0.12)
-        }
-    }
-
-    /// Weapon fire one-shot (bevy `play_weapon_fire`).
-    pub fn play_weapon_fire(&self, cues: &mut Queue<AudioCue>, weapon_name: &str) {
-        let (stem, vol, var) = Self::weapon_fire_cue(weapon_name, false);
-        Self::cue(cues, stem, vol, var);
-    }
-
-    /// GML `snd_play_gun` tiers with underwater override (bevy
-    /// `play_weapon_fire_gml`).
-    pub fn play_weapon_fire_gml(
-        &self,
-        cues: &mut Queue<AudioCue>,
-        weapon_name: &str,
-        underwater: bool,
-    ) {
-        let (stem, vol, var) = Self::weapon_fire_cue(weapon_name, underwater);
-        Self::cue(cues, stem, vol, var);
     }
 }
 
@@ -628,7 +309,6 @@ pub enum MusicCue {
     FrozenCity,
     Labs,
     Palace,
-
     Oasis,
     PizzaSewers,
     CursedCaves,
@@ -636,58 +316,83 @@ pub enum MusicCue {
     Vault,
     CrownVault,
     Hq,
+    HqRogue,
     City,
     Campfire,
     /// GML `MusCont/Alarm_11.gml:30` `"mus" + string(area)` with
     /// `area_crib = 107` -> `mus107`.
     Crib,
 
-    BossBigBandit,
-    BossBigDog,
-    BossLilHunter,
-    BossThrone,
-    BossThroneII,
+    BossDesert,
+    BossSewers,
+    BossScrapyards,
+    BossCrystalCaves,
+    BossFrozenCity,
+    BossLabs,
+    BossPalace,
+    BossCursedCaves,
+    BossHq,
+    BossCampfire,
     /// GML `MusCont/Alarm_2.gml:16` `case area_crib: song = musBoss9`.
-    BossYvBoss,
-    TitleTheme,
+    BossCrib,
+    /// GML `MusCont/Alarm_4.gml:3` `song = mus100b`.
+    BossCrownGuardian,
+    /// GML `MusCont/Alarm_5.gml:4` `song = musBoss4B`.
+    BossThroneII,
+    /// GML `MusCont/Alarm_11.gml:10` BigDog-race `song = musBoss2`.
+    RaceBigDog,
+    /// GML `MusCont/Alarm_3.gml:5` `song = musBossDead`.
+    BossDead,
+    TitleThemeA,
+    TitleThemeB,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum AmbienceCue {
     None,
-    DesertWind,
-    SewerDrip,
-    ScrapHum,
-    CrystalHum,
-    FrozenWind,
-    LabBuzz,
-    PalaceFire,
-    OasisBreeze,
-    JungleBugs,
-    VaultHum,
-    HqSirens,
-    CampfireCrackle,
-    CityNoise,
-    /// GML `amb0b`, the `audio_exists` fallback at `MusCont/Alarm_11.gml:49`
-    /// for any area whose `amb<area>` asset is missing (the crib).
-    DefaultLoop,
+    /// GML `Menu/Create_0.gml:96` char-select bed `amb0`.
+    Menu,
+    /// GML `MusCont/Alarm_11.gml:49,55` `amb0b` — the `audio_exists`
+    /// fallback for any area whose `amb<area>` asset is missing (the
+    /// crib) and the campfire special case.
+    Rest,
+    /// GML `MusCont/Alarm_5.gml:5` `amb = amb0c`.
+    ThroneII,
+    Desert,
+    Sewers,
+    Scrapyards,
+    CrystalCaves,
+    FrozenCity,
+    Labs,
+    Palace,
+    Vault,
+    Oasis,
+    PizzaSewers,
+    City,
+    CursedCaves,
+    Jungle,
+    Hq,
 }
 
-/// Current area loop selection. The backend polls this resource: on a
-/// cue change it crossfades from its previous stem to the new
-/// [`music_path`]/[`ambience_path`] over the bevy fade durations;
-/// `music_volume`/`ambience_volume` already include pause dim,
-/// channel mix, ambience scale/filter, and the switch fades.
+/// Current area loop selection. The backend polls this resource and
+/// plays [`music_path`]/[`ambience_path`] on a cue change (instant
+/// switch, GML `snd_play_music`/`snd_play_ambience` parity);
+/// `music_volume`/`ambience_volume` are the absolute per-layer gains
+/// ([`tick_area_audio_fades`], master excluded).
 #[derive(Resource, Debug)]
 pub struct AreaAudioState {
     pub current_music: Option<MusicCue>,
     pub current_ambience: Option<AmbienceCue>,
-    pub music_gain: f32,
-    pub ambience_gain: f32,
     pub music_volume: f32,
     pub ambience_volume: f32,
-    pub music_fade: AreaAudioFader,
-    pub ambience_fade: AreaAudioFader,
+    boss_alive: bool,
+    jingle_in: f32,
+    boss_dead_pending: bool,
+    boss_dead: bool,
+    boss_dead_area: AreaId,
+    silent_until_room: bool,
+    title_in: f32,
+    room: (u32, AreaId),
 }
 
 impl Default for AreaAudioState {
@@ -695,12 +400,16 @@ impl Default for AreaAudioState {
         Self {
             current_music: None,
             current_ambience: None,
-            music_gain: 0.0,
-            ambience_gain: 0.0,
             music_volume: 0.0,
             ambience_volume: 0.0,
-            music_fade: AreaAudioFader::default(),
-            ambience_fade: AreaAudioFader::default(),
+            boss_alive: false,
+            jingle_in: 0.0,
+            boss_dead_pending: false,
+            boss_dead: false,
+            boss_dead_area: AreaId::default(),
+            silent_until_room: false,
+            title_in: TITLE_A_SECS,
+            room: (0, AreaId::Campfire),
         }
     }
 }
@@ -711,32 +420,6 @@ pub struct AmbFilter(pub f32);
 impl Default for AmbFilter {
     fn default() -> Self {
         Self(1.0)
-    }
-}
-
-/// Headless fade voice (bevy `AreaAudioFader` minus the entity
-/// despawn flag — a single gain per bus replaces the overlapping
-/// fade-out/fade-in entity pair).
-#[derive(Clone, Copy, Debug)]
-pub struct AreaAudioFader {
-    pub start: f32,
-    pub end: f32,
-    pub timer: GTimer,
-}
-
-impl Default for AreaAudioFader {
-    fn default() -> Self {
-        Self {
-            start: 0.0,
-            end: 0.0,
-            timer: GTimer::from_seconds(0.0, TimerMode::Once),
-        }
-    }
-}
-
-impl AreaAudioFader {
-    pub fn value(&self) -> f32 {
-        self.start + (self.end - self.start) * self.timer.fraction()
     }
 }
 
@@ -767,364 +450,155 @@ pub fn music_for_area(area: AreaId) -> MusicCue {
 
 pub fn ambience_for_area(area: AreaId) -> AmbienceCue {
     match area {
-        AreaId::Desert => AmbienceCue::DesertWind,
-        AreaId::Sewers => AmbienceCue::SewerDrip,
-        AreaId::Scrapyards => AmbienceCue::ScrapHum,
-        AreaId::CrystalCaves => AmbienceCue::CrystalHum,
-        AreaId::FrozenCity => AmbienceCue::FrozenWind,
-        AreaId::Labs => AmbienceCue::LabBuzz,
-        AreaId::Palace => AmbienceCue::PalaceFire,
+        AreaId::Desert => AmbienceCue::Desert,
+        AreaId::Sewers => AmbienceCue::Sewers,
+        AreaId::Scrapyards => AmbienceCue::Scrapyards,
+        AreaId::CrystalCaves => AmbienceCue::CrystalCaves,
+        AreaId::FrozenCity => AmbienceCue::FrozenCity,
+        AreaId::Labs => AmbienceCue::Labs,
+        AreaId::Palace => AmbienceCue::Palace,
 
-        AreaId::Oasis => AmbienceCue::OasisBreeze,
-        AreaId::PizzaSewers => AmbienceCue::SewerDrip,
-        AreaId::CursedCaves => AmbienceCue::CrystalHum,
-        AreaId::Jungle => AmbienceCue::JungleBugs,
-        AreaId::Vault => AmbienceCue::VaultHum,
-        AreaId::CrownVault => AmbienceCue::VaultHum,
-        AreaId::HQ => AmbienceCue::HqSirens,
-        AreaId::City => AmbienceCue::CityNoise,
-        AreaId::Campfire => AmbienceCue::CampfireCrackle,
+        AreaId::Oasis => AmbienceCue::Oasis,
+        AreaId::PizzaSewers => AmbienceCue::PizzaSewers,
+        AreaId::CursedCaves => AmbienceCue::CursedCaves,
+        AreaId::Jungle => AmbienceCue::Jungle,
+        AreaId::Vault => AmbienceCue::Vault,
+        AreaId::CrownVault => AmbienceCue::Vault,
+        AreaId::HQ => AmbienceCue::Hq,
+        AreaId::City => AmbienceCue::City,
+        AreaId::Campfire => AmbienceCue::Rest,
         // GML `MusCont/Alarm_11.gml:31` looks up `amb107`, which the pack
         // does not ship, so `audio_exists` fails and the fallback at :49
         // (`amb = amb0b`) is the crib bed.
-        AreaId::Crib => AmbienceCue::DefaultLoop,
+        AreaId::Crib => AmbienceCue::Rest,
 
-        AreaId::Loop => AmbienceCue::DesertWind,
+        AreaId::Loop => AmbienceCue::Desert,
     }
 }
 
-pub fn boss_music_for_kind(kind: EnemyKind) -> Option<MusicCue> {
-    match kind {
-        EnemyKind::BigBandit | EnemyKind::BigBanditLoop => Some(MusicCue::BossBigBandit),
-        EnemyKind::BigDog | EnemyKind::BigDogLoop => Some(MusicCue::BossBigDog),
-        EnemyKind::LilHunter | EnemyKind::LilHunterLoop => Some(MusicCue::BossLilHunter),
-        EnemyKind::Throne => Some(MusicCue::BossThrone),
-        EnemyKind::ThroneII => Some(MusicCue::BossThroneII),
-        EnemyKind::YvBoss => Some(MusicCue::BossYvBoss),
+/// GML `MusCont/Alarm_2.gml` stage-dependent boss switch:
+/// `Alarm_5.gml:4`/`Alarm_4.gml:3` specials first, then the per-area
+/// cases; `None` = no case (`Alarm_2.gml:17`) and the caller keeps
+/// the current bed.
+pub fn boss_music_cue(area: AreaId, throne_ii: bool, guardian: bool) -> Option<MusicCue> {
+    if throne_ii {
+        return Some(MusicCue::BossThroneII);
+    }
+    if guardian {
+        return Some(MusicCue::BossCrownGuardian);
+    }
+    match area {
+        AreaId::Desert | AreaId::Loop => Some(MusicCue::BossDesert),
+        AreaId::Sewers => Some(MusicCue::BossSewers),
+        AreaId::Scrapyards => Some(MusicCue::BossScrapyards),
+        AreaId::CrystalCaves => Some(MusicCue::BossCrystalCaves),
+        AreaId::FrozenCity => Some(MusicCue::BossFrozenCity),
+        AreaId::Labs => Some(MusicCue::BossLabs),
+        AreaId::Palace => Some(MusicCue::BossPalace),
+        AreaId::Campfire => Some(MusicCue::BossCampfire),
+        AreaId::CursedCaves => Some(MusicCue::BossCursedCaves),
+        AreaId::HQ => Some(MusicCue::BossHq),
+        AreaId::Crib => Some(MusicCue::BossCrib),
         _ => None,
     }
 }
 
-pub fn music_candidates(cue: MusicCue) -> &'static [&'static str] {
-    match cue {
-        MusicCue::Desert => &[
-            "audio/mus1.ogg",
-            "audio/mus1b.ogg",
-            "audio/music/desert.ogg",
-            "audio/music/musDesert.ogg",
-            "sounds/music/desert.ogg",
-        ],
-        MusicCue::Sewers => &[
-            "audio/mus2.ogg",
-            "audio/music/sewers.ogg",
-            "audio/music/musSewers.ogg",
-            "sounds/music/sewers.ogg",
-        ],
-        MusicCue::Scrapyards => &[
-            "audio/mus3.ogg",
-            "audio/mus3b.ogg",
-            "audio/music/scrapyards.ogg",
-            "audio/music/musScrapyards.ogg",
-            "sounds/music/scrapyards.ogg",
-        ],
-        MusicCue::CrystalCaves => &[
-            "audio/mus4.ogg",
-            "audio/music/crystal_caves.ogg",
-            "audio/music/crystalcaves.ogg",
-            "audio/music/musCrystal.ogg",
-            "sounds/music/crystal_caves.ogg",
-        ],
-        MusicCue::FrozenCity => &[
-            "audio/mus5.ogg",
-            "audio/mus5b.ogg",
-            "audio/music/frozen_city.ogg",
-            "audio/music/frozencity.ogg",
-            "audio/music/musFrozen.ogg",
-            "sounds/music/frozen_city.ogg",
-        ],
-        MusicCue::Labs => &[
-            "audio/mus6.ogg",
-            "audio/music/labs.ogg",
-            "audio/music/musLabs.ogg",
-            "sounds/music/labs.ogg",
-        ],
-        MusicCue::Palace => &[
-            "audio/mus7.ogg",
-            "audio/mus7b.ogg",
-            "audio/music/palace.ogg",
-            "audio/music/musPalace.ogg",
-            "sounds/music/palace.ogg",
-        ],
-        MusicCue::Oasis => &[
-            "audio/mus100.ogg",
-            "audio/mus100b.ogg",
-            "audio/music/oasis.ogg",
-            "audio/music/musOasis.ogg",
-            "sounds/music/oasis.ogg",
-        ],
-        MusicCue::PizzaSewers => &[
-            "audio/mus101.ogg",
-            "audio/music/pizza_sewers.ogg",
-            "audio/music/pizzasewers.ogg",
-            "audio/music/musPizza.ogg",
-            "sounds/music/pizza_sewers.ogg",
-        ],
-        MusicCue::CursedCaves => &[
-            "audio/mus102.ogg",
-            "audio/music/cursed_caves.ogg",
-            "audio/music/cursedcaves.ogg",
-            "audio/music/musCursed.ogg",
-            "sounds/music/cursed_caves.ogg",
-        ],
-        MusicCue::Jungle => &[
-            "audio/mus103.ogg",
-            "audio/music/jungle.ogg",
-            "audio/music/musJungle.ogg",
-            "sounds/music/jungle.ogg",
-        ],
-        MusicCue::Vault => &[
-            "audio/mus104.ogg",
-            "audio/music/vault.ogg",
-            "audio/music/musVault.ogg",
-            "sounds/music/vault.ogg",
-        ],
-        MusicCue::CrownVault => &[
-            "audio/mus105.ogg",
-            "audio/music/crown_vault.ogg",
-            "audio/music/crownvault.ogg",
-            "audio/music/musCrownVault.ogg",
-            "sounds/music/crown_vault.ogg",
-        ],
-        MusicCue::Hq => &[
-            "audio/mus106.ogg",
-            "audio/mus106b.ogg",
-            "audio/music/hq.ogg",
-            "audio/music/idpd_hq.ogg",
-            "audio/music/musHq.ogg",
-            "sounds/music/hq.ogg",
-        ],
-        MusicCue::City => &[
-            "audio/mus107.ogg",
-            "audio/music/city.ogg",
-            "audio/music/yv_mansion.ogg",
-            "audio/music/musCity.ogg",
-            "sounds/music/city.ogg",
-        ],
-        MusicCue::Campfire => &[
-            "audio/musBoss4Silence.ogg",
-            "audio/musboss4silence.ogg",
-            "audio/music/campfire.ogg",
-            "audio/music/rest.ogg",
-            "audio/music/musCampfire.ogg",
-            "sounds/music/campfire.ogg",
-        ],
-        MusicCue::Crib => &[
-            "audio/mus107.ogg",
-            "audio/music/crib.ogg",
-            "audio/music/yv_crib.ogg",
-            "audio/music/musCrib.ogg",
-            "sounds/music/crib.ogg",
-        ],
-        MusicCue::TitleTheme => &[
-            "audio/musthemea.ogg",
-            "audio/musThemeA.ogg",
-            "audio/musthemeb.ogg",
-            "audio/musThemeB.ogg",
-            "audio/musthemep.ogg",
-            "audio/music/title.ogg",
-            "audio/music/musThemeA.ogg",
-            "sounds/music/title.ogg",
-        ],
-        MusicCue::BossBigBandit => &[
-            "audio/musBoss1.ogg",
-            "audio/musboss1.ogg",
-            "audio/music/boss_big_bandit.ogg",
-            "audio/music/big_bandit.ogg",
-            "audio/music/musBossBandit.ogg",
-            "sounds/music/boss_big_bandit.ogg",
-        ],
-        MusicCue::BossBigDog => &[
-            "audio/musBoss2.ogg",
-            "audio/musboss2.ogg",
-            "audio/music/boss_big_dog.ogg",
-            "audio/music/big_dog.ogg",
-            "audio/music/musBossDog.ogg",
-            "sounds/music/boss_big_dog.ogg",
-        ],
-        MusicCue::BossLilHunter => &[
-            "audio/musBoss3.ogg",
-            "audio/musboss3.ogg",
-            "audio/music/boss_lil_hunter.ogg",
-            "audio/music/lil_hunter.ogg",
-            "audio/music/musBossHunter.ogg",
-            "sounds/music/boss_lil_hunter.ogg",
-        ],
-        MusicCue::BossThrone => &[
-            "audio/musBoss4A.ogg",
-            "audio/musBoss4B.ogg",
-            "audio/musboss4a.ogg",
-            "audio/music/boss_throne.ogg",
-            "audio/music/throne.ogg",
-            "audio/music/musThrone.ogg",
-            "sounds/music/boss_throne.ogg",
-        ],
-        MusicCue::BossThroneII => &[
-            "audio/musBoss5.ogg",
-            "audio/musboss5.ogg",
-            "audio/musBoss6.ogg",
-            "audio/music/boss_throne_ii.ogg",
-            "audio/music/throne_ii.ogg",
-            "audio/music/musThrone2.ogg",
-            "sounds/music/boss_throne_ii.ogg",
-        ],
-        MusicCue::BossYvBoss => &[
-            "audio/musBoss9.ogg",
-            "audio/musboss9.ogg",
-            "audio/music/boss_yv_boss.ogg",
-            "audio/music/yv_boss.ogg",
-            "audio/music/musBossYV.ogg",
-            "sounds/music/boss_yv_boss.ogg",
-        ],
-    }
-}
-
-pub fn ambience_candidates(cue: AmbienceCue) -> &'static [&'static str] {
-    match cue {
-        AmbienceCue::None => &[],
-        AmbienceCue::DesertWind => &[
-            "audio/amb0.ogg",
-            "audio/ambience/desert_wind.ogg",
-            "audio/ambient/desert.ogg",
-            "sounds/ambience/desert_wind.ogg",
-        ],
-        AmbienceCue::SewerDrip => &[
-            "audio/amb1.ogg",
-            "audio/ambience/sewer_drip.ogg",
-            "audio/ambient/sewers.ogg",
-            "sounds/ambience/sewer_drip.ogg",
-        ],
-        AmbienceCue::ScrapHum => &[
-            "audio/amb2.ogg",
-            "audio/ambience/scrap_hum.ogg",
-            "audio/ambient/scrapyards.ogg",
-            "sounds/ambience/scrap_hum.ogg",
-        ],
-        AmbienceCue::CrystalHum => &[
-            "audio/amb3.ogg",
-            "audio/ambience/crystal_hum.ogg",
-            "audio/ambient/crystal.ogg",
-            "sounds/ambience/crystal_hum.ogg",
-        ],
-        AmbienceCue::FrozenWind => &[
-            "audio/amb4.ogg",
-            "audio/ambience/frozen_wind.ogg",
-            "audio/ambient/frozen.ogg",
-            "sounds/ambience/frozen_wind.ogg",
-        ],
-        AmbienceCue::LabBuzz => &[
-            "audio/amb5.ogg",
-            "audio/ambience/lab_buzz.ogg",
-            "audio/ambient/labs.ogg",
-            "sounds/ambience/lab_buzz.ogg",
-        ],
-        AmbienceCue::PalaceFire => &[
-            "audio/amb6.ogg",
-            "audio/ambience/palace_fire.ogg",
-            "audio/ambient/palace.ogg",
-            "sounds/ambience/palace_fire.ogg",
-        ],
-        AmbienceCue::OasisBreeze => &[
-            "audio/amb0b.ogg",
-            "audio/ambience/oasis_breeze.ogg",
-            "audio/ambient/oasis.ogg",
-            "sounds/ambience/oasis_breeze.ogg",
-        ],
-        AmbienceCue::JungleBugs => &[
-            "audio/amb0c.ogg",
-            "audio/ambience/jungle_bugs.ogg",
-            "audio/ambient/jungle.ogg",
-            "sounds/ambience/jungle_bugs.ogg",
-        ],
-        AmbienceCue::VaultHum => &[
-            "audio/amb101.ogg",
-            "audio/ambience/vault_hum.ogg",
-            "audio/ambient/vault.ogg",
-            "sounds/ambience/vault_hum.ogg",
-        ],
-        AmbienceCue::HqSirens => &[
-            "audio/amb107.ogg",
-            "audio/ambience/hq_sirens.ogg",
-            "audio/ambient/hq.ogg",
-            "sounds/ambience/hq_sirens.ogg",
-        ],
-        AmbienceCue::CampfireCrackle => &[
-            "audio/amb105.ogg",
-            "audio/ambience/campfire_crackle.ogg",
-            "audio/ambient/campfire.ogg",
-            "sounds/ambience/campfire_crackle.ogg",
-        ],
-        AmbienceCue::CityNoise => &[
-            "audio/amb106.ogg",
-            "audio/ambience/city_noise.ogg",
-            "audio/ambient/city.ogg",
-            "sounds/ambience/city_noise.ogg",
-        ],
-        AmbienceCue::DefaultLoop => &[
-            "audio/amb0b.ogg",
-            "audio/ambience/default_loop.ogg",
-            "audio/ambient/default.ogg",
-            "sounds/ambience/default_loop.ogg",
-        ],
-    }
-}
-
-/// First-candidate resolution (bevy `pick_audio_handle` minus the
-/// catalog/`AssetServer` half, which lives backend-side).
+/// GML `MusCont` stem law: `"mus" + string(area)` at
+/// `Alarm_11.gml:30` (campfire/HQ overrides at :53-68) plus the
+/// `Alarm_2`/`Alarm_3`/`Alarm_4`/`Alarm_5`/`Alarm_0` specials, as bare
+/// GML asset stems the backend resolves.
 pub fn music_path(cue: MusicCue) -> Option<&'static str> {
-    music_candidates(cue).first().copied()
+    Some(match cue {
+        MusicCue::Desert => "mus1",
+        MusicCue::Sewers => "mus2",
+        MusicCue::Scrapyards => "mus3",
+        MusicCue::CrystalCaves => "mus4",
+        MusicCue::FrozenCity => "mus5",
+        MusicCue::Labs => "mus6",
+        MusicCue::Palace => "mus7",
+        MusicCue::Vault => "mus100",
+        MusicCue::CrownVault => "mus100",
+        MusicCue::Oasis => "mus101",
+        MusicCue::PizzaSewers => "mus102",
+        MusicCue::City => "mus103",
+        MusicCue::CursedCaves => "mus104",
+        MusicCue::Jungle => "mus105",
+        MusicCue::Hq => "mus106",
+        MusicCue::HqRogue => "mus106b",
+        MusicCue::Crib => "mus107",
+        MusicCue::Campfire => "musBoss4Silence",
+        MusicCue::BossDesert => "musBoss1",
+        MusicCue::BossSewers => "musBoss5",
+        MusicCue::BossScrapyards => "musBoss2",
+        MusicCue::BossCrystalCaves => "musBoss6",
+        MusicCue::BossFrozenCity => "musBoss3",
+        MusicCue::BossLabs => "musBoss7",
+        MusicCue::BossPalace => "musBoss4A",
+        MusicCue::BossCursedCaves => "musBoss6B",
+        MusicCue::BossHq => "musBoss8",
+        MusicCue::BossCampfire => "musBoss4B",
+        MusicCue::BossCrib => "musBoss9",
+        MusicCue::BossCrownGuardian => "mus100b",
+        MusicCue::BossThroneII => "musBoss4B",
+        MusicCue::RaceBigDog => "musBoss2",
+        MusicCue::BossDead => "musBossDead",
+        MusicCue::TitleThemeA => "musThemeA",
+        MusicCue::TitleThemeB => "musThemeB",
+    })
 }
 
-/// First-candidate resolution for ambience loops.
+/// GML `MusCont` stem law: `"amb" + string(area)` at
+/// `Alarm_11.gml:31` (`amb0b` fallback at :49, campfire at :55, HQ at
+/// :67), plus `Menu/Create_0.gml:96` and `Alarm_5.gml:5`; `None` is
+/// the BigDog-race `amb = -1` at `Alarm_11.gml:11`.
 pub fn ambience_path(cue: AmbienceCue) -> Option<&'static str> {
-    ambience_candidates(cue).first().copied()
+    match cue {
+        AmbienceCue::None => None,
+        AmbienceCue::Menu => Some("amb0"),
+        AmbienceCue::Rest => Some("amb0b"),
+        AmbienceCue::ThroneII => Some("amb0c"),
+        AmbienceCue::Desert => Some("amb1"),
+        AmbienceCue::Sewers => Some("amb2"),
+        AmbienceCue::Scrapyards => Some("amb3"),
+        AmbienceCue::CrystalCaves => Some("amb4"),
+        AmbienceCue::FrozenCity => Some("amb5"),
+        AmbienceCue::Labs => Some("amb6"),
+        AmbienceCue::Palace => Some("amb7"),
+        AmbienceCue::Vault => Some("amb100"),
+        AmbienceCue::Oasis => Some("amb101"),
+        AmbienceCue::PizzaSewers => Some("amb102"),
+        AmbienceCue::City => Some("amb103"),
+        AmbienceCue::CursedCaves => Some("amb104"),
+        AmbienceCue::Jungle => Some("amb105"),
+        AmbienceCue::Hq => Some("amb106"),
+    }
 }
 
-/// Campfire rest wins, then the first boss with its own theme, then
-/// the area track (bevy `desired_music_cue`).
-pub fn desired_music_cue(
-    area: AreaId,
-    campfire_present: bool,
-    boss_kinds: impl IntoIterator<Item = EnemyKind>,
-) -> MusicCue {
+/// GML `MusCont/Alarm_11.gml:53-56` campfire special case wins, else
+/// the `"mus" + string(area)` area bed.
+pub fn desired_music_cue(area: AreaId, campfire_present: bool) -> MusicCue {
     if campfire_present {
-        return MusicCue::Campfire;
+        MusicCue::Campfire
+    } else {
+        music_for_area(area)
     }
-
-    for kind in boss_kinds {
-        if let Some(cue) = boss_music_for_kind(kind) {
-            return cue;
-        }
-    }
-
-    music_for_area(area)
 }
 
-/// Campfire crackle wins, else the area bed (bevy
-/// `desired_ambience_cue`).
+/// GML `MusCont/Alarm_11.gml:55` campfire `amb0b` wins, else the
+/// `"amb" + string(area)` area bed.
 pub fn desired_ambience_cue(area: AreaId, campfire_present: bool) -> AmbienceCue {
     if campfire_present {
-        return AmbienceCue::CampfireCrackle;
+        AmbienceCue::Rest
+    } else {
+        ambience_for_area(area)
     }
-
-    ambience_for_area(area)
 }
 
-pub const MUSIC_FADE_SECS: f32 = 1.2;
-pub const AMBIENCE_FADE_SECS: f32 = 0.8;
-pub const AMBIENCE_BASE_SCALE: f32 = 0.55;
-pub const MUSIC_PAUSE_DIM: f32 = 0.45;
-const GAME_OVER_FADE_SECS: f32 = 0.18;
-
+/// GML `MusCont/Alarm_1.gml:16` `alarm[3] = 180` frames at 30 fps.
+const BOSS_JINGLE_SECS: f32 = 180.0 / 30.0;
+/// GML `MusCont/Create_0.gml:10-12`
+/// `audio_sound_length(musThemeA) * 30 - 175` on the 48.0 s asset.
+const TITLE_A_SECS: f32 = (48.0 * 30.0 - 175.0) / 30.0;
 /// Ambience filter target (bevy `update_amb_filter` law: duck to 0.2
 /// while paused or while the spiral background state exists, else 1.0).
 pub fn amb_filter_target(paused: bool, vortex_suppressed: bool) -> f32 {
@@ -1157,103 +631,183 @@ pub fn update_amb_filter(
     );
 }
 
-/// Area loop selection with bevy `AppState` gating: Splash silences,
-/// Loading previews the area, menus hold the title theme, game-over
-/// silences, InGame follows campfire/boss/area priority.
+/// GML `MusCont` selection law per app state: menus hold the title
+/// theme (A→B timer at `Create_0.gml:10-12`, char-select ambience at
+/// `Menu/Create_0.gml:96`), Loading previews the area, InGame runs the
+/// `Alarm_11` area bed under the boss-death jingle / boss-dead /
+/// big-dog / campfire priority.
 pub fn sync_area_audio(
+    time: Res<SimTime>,
     app_state: Res<AppState>,
     run: Res<Run>,
     transition: Res<LoopTransition>,
+    floor: Res<FloorTransition>,
+    channels: Res<AudioChannels>,
+    mut cues: ResMut<Queue<AudioCue>>,
     mut state: ResMut<AreaAudioState>,
     campfires: Query<(), With<CampfireProp>>,
     bosses: Query<&Enemy, With<BossBrain>>,
+    enemies: Query<&Enemy>,
+    pedestals: Query<(), With<CrownPedestal>>,
+    players: Query<&RaceState, With<Player>>,
 ) {
+    let dt = time.delta_secs;
+    let in_game = *app_state == AppState::InGame;
     let campfire_present = transition.campfire_active || !campfires.is_empty();
+    let guardian_present = enemies.iter().any(|e| e.kind == EnemyKind::CrownGuardian);
+    let boss_alive_now = !bosses.is_empty() || guardian_present;
+    let throne_ii_present =
+        transition.throne_ii_alive || bosses.iter().any(|e| e.kind == EnemyKind::ThroneII);
+    let player_present = !players.is_empty();
+    let bigdog = players.iter().any(|r| r.race == RaceId::BigDog);
+    let rogue = players.iter().any(|r| r.race == RaceId::Rogue);
 
-    let (wanted_music, wanted_ambience): (Option<MusicCue>, Option<AmbienceCue>) =
-        if *app_state != AppState::InGame {
-            if *app_state == AppState::Loading {
-                (
-                    Some(desired_music_cue(
-                        run.area,
-                        campfire_present,
-                        bosses.iter().map(|e| e.kind),
-                    )),
-                    Some(desired_ambience_cue(run.area, campfire_present)),
-                )
-            } else if *app_state == AppState::Splash {
-                (None, None)
-            } else {
-                (Some(MusicCue::TitleTheme), None)
-            }
-        } else if run.game_over {
-            (None, None)
+    let room = (run.floor, run.area);
+    if state.room != room {
+        state.room = room;
+        state.boss_dead_pending = false;
+        state.silent_until_room = false;
+        if bigdog {
+            state.boss_dead = false;
+        }
+    }
+
+    let boss_alive_prev = state.boss_alive;
+    state.boss_alive = in_game && boss_alive_now;
+    if in_game && boss_alive_prev && !boss_alive_now && !floor.active {
+        state.jingle_in = BOSS_JINGLE_SECS;
+        state.boss_dead_pending = true;
+        let name = if pedestals.is_empty() {
+            "sndBossWin"
         } else {
+            "sndVaultBossWin"
+        };
+        cues.push(AudioCue {
+            name,
+            volume: channels.music,
+            variance: 0.0,
+        });
+    }
+
+    if state.boss_dead && (run.area != state.boss_dead_area || boss_alive_now) {
+        state.boss_dead = false;
+    }
+    if state.jingle_in > 0.0 {
+        state.jingle_in -= dt;
+        if state.jingle_in <= 0.0 {
+            state.jingle_in = 0.0;
+            if state.boss_dead_pending {
+                state.boss_dead_pending = false;
+                if player_present && !matches!(run.area, AreaId::Palace | AreaId::HQ) {
+                    state.boss_dead = true;
+                    state.boss_dead_area = run.area;
+                } else {
+                    state.silent_until_room = true;
+                }
+            }
+        }
+    }
+    if in_game && run.game_over {
+        state.boss_dead = false;
+        state.silent_until_room = true;
+    }
+    if !in_game && state.title_in > 0.0 {
+        state.title_in = (state.title_in - dt).max(0.0);
+    }
+
+    let (wanted_music, wanted_ambience): (Option<MusicCue>, Option<AmbienceCue>) = if !in_game {
+        if *app_state == AppState::Loading {
             (
-                Some(desired_music_cue(
-                    run.area,
-                    campfire_present,
-                    bosses.iter().map(|e| e.kind),
-                )),
+                Some(desired_music_cue(run.area, campfire_present)),
                 Some(desired_ambience_cue(run.area, campfire_present)),
             )
-        };
-
-    if state.current_music != wanted_music {
-        // Compromise: one gain per bus instead of overlapping fade-out /
-        // fade-in voices. Fades start from the current gain so a switch
-        // holds level (bevy net crossfade) and game-over dips to silence.
-        let fade_secs = if wanted_music.is_none() && run.game_over {
-            GAME_OVER_FADE_SECS
         } else {
-            MUSIC_FADE_SECS
-        };
-        let end = if wanted_music.is_some() { 1.0 } else { 0.0 };
-        state.music_fade = AreaAudioFader {
-            start: state.music_gain,
-            end,
-            timer: GTimer::from_seconds(fade_secs, TimerMode::Once),
-        };
-        state.current_music = wanted_music;
-    }
-
-    if state.current_ambience != wanted_ambience {
-        let end = if wanted_ambience.is_some_and(|c| c != AmbienceCue::None) {
-            1.0
+            let title = if state.title_in > 0.0 {
+                MusicCue::TitleThemeA
+            } else {
+                MusicCue::TitleThemeB
+            };
+            let ambience = if *app_state == AppState::Title {
+                Some(AmbienceCue::Menu)
+            } else {
+                None
+            };
+            (Some(title), ambience)
+        }
+    } else {
+        let wanted_ambience = if bigdog {
+            Some(AmbienceCue::None)
+        } else if throne_ii_present {
+            Some(AmbienceCue::ThroneII)
         } else {
-            0.0
+            Some(desired_ambience_cue(run.area, campfire_present))
         };
-        state.ambience_fade = AreaAudioFader {
-            start: state.ambience_gain,
-            end,
-            timer: GTimer::from_seconds(AMBIENCE_FADE_SECS, TimerMode::Once),
+        let wanted_music = if run.game_over {
+            None
+        } else {
+            let fallback = if state.silent_until_room {
+                None
+            } else if state.boss_dead {
+                Some(MusicCue::BossDead)
+            } else if bigdog {
+                Some(MusicCue::RaceBigDog)
+            } else if campfire_present {
+                Some(MusicCue::Campfire)
+            } else if run.area == AreaId::HQ && rogue {
+                Some(MusicCue::HqRogue)
+            } else {
+                Some(music_for_area(run.area))
+            };
+            if state.jingle_in > 0.0 {
+                None
+            } else if boss_alive_now {
+                boss_music_cue(run.area, throne_ii_present, guardian_present).or(fallback)
+            } else {
+                fallback
+            }
         };
-        state.current_ambience = wanted_ambience;
+        (wanted_music, wanted_ambience)
+    };
+
+    if wanted_music == Some(MusicCue::TitleThemeA)
+        && state.current_music != Some(MusicCue::TitleThemeA)
+    {
+        cues.push(AudioCue {
+            name: "sndRestart",
+            volume: 1.0,
+            variance: 0.0,
+        });
     }
+    state.current_music = wanted_music;
+    state.current_ambience = wanted_ambience;
 }
 
-/// Advance switch fades and remix volumes (covers both bevy
-/// `tick_area_audio_fades` and `sync_area_audio_volumes`: volumes are
-/// recomputed every tick from the current gains, not just while a
-/// fade is active).
+/// Remix layer volumes every tick (GML `MusCont/Step_0.gml:13-14`:
+/// song `opt_musvol`, ambience `opt_ambvol * ambfilter`; the backend
+/// applies `channels.master` itself).
 pub fn tick_area_audio_fades(
-    time: Res<SimTime>,
     channels: Res<AudioChannels>,
-    paused: Res<Paused>,
     amb_filter: Res<AmbFilter>,
+    save: Option<Res<crate::savedata_part::SaveData>>,
     mut state: ResMut<AreaAudioState>,
 ) {
-    state.music_fade.timer.tick(time.delta_secs);
-    state.ambience_fade.timer.tick(time.delta_secs);
-    state.music_gain = state.music_fade.value().clamp(0.0, 1.0);
-    state.ambience_gain = state.ambience_fade.value().clamp(0.0, 1.0);
+    let music_on = if state.current_music.is_some() {
+        1.0
+    } else {
+        0.0
+    };
+    let ambience_on = if state
+        .current_ambience
+        .is_some_and(|c| c != AmbienceCue::None)
+    {
+        1.0
+    } else {
+        0.0
+    };
+    let ambience_base = save.map_or(channels.music, |s| s.settings.ambience_volume);
 
-    let music_dim = if paused.0 { MUSIC_PAUSE_DIM } else { 1.0 };
-    let music_base = channels.master * channels.music * music_dim;
-    let ambience_base = channels.master * channels.music * AMBIENCE_BASE_SCALE * amb_filter.0;
-
-    state.music_volume = (music_base * state.music_gain).clamp(0.0, 1.0);
-    state.ambience_volume = (ambience_base * state.ambience_gain).clamp(0.0, 1.0);
+    state.music_volume = (channels.music * music_on).clamp(0.0, 1.0);
+    state.ambience_volume = (ambience_base * amb_filter.0 * ambience_on).clamp(0.0, 1.0);
 }
 
 /// Silence both buses (bevy `despawn_area_audio`).
@@ -1261,307 +815,16 @@ pub fn reset_area_audio(mut state: ResMut<AreaAudioState>) {
     *state = AreaAudioState::default();
 }
 
-// --- Reactive audio selection (bevy `reactive_audio.rs` port) ---
-
-pub fn cue_candidates(cue: ReactiveCue) -> &'static [&'static str] {
-    match cue {
-        ReactiveCue::LevelUp => &[
-            "audio/sfx/snd_levelup.ogg",
-            "audio/sfx/snd_mutation.ogg",
-            "sounds/snd_levelup.ogg",
-        ],
-        ReactiveCue::MutationChosen => &[
-            "audio/sfx/snd_mutation_chosen.ogg",
-            "audio/sfx/snd_mutation.ogg",
-            "sounds/snd_mutation.ogg",
-        ],
-        ReactiveCue::UltraChosen => &[
-            "audio/sfx/snd_ultra_chosen.ogg",
-            "audio/sfx/snd_mutation_chosen.ogg",
-            "audio/sfx/snd_levelup.ogg",
-        ],
-        ReactiveCue::BossAppear => &[
-            "audio/sfx/snd_boss_appear.ogg",
-            "audio/sfx/snd_boss_intro.ogg",
-            "sounds/snd_boss_intro.ogg",
-        ],
-        ReactiveCue::BossDefeated => &[
-            "audio/sfx/snd_boss_dead.ogg",
-            "audio/sfx/snd_boss_defeated.ogg",
-            "sounds/snd_boss_dead.ogg",
-        ],
-        ReactiveCue::PlayerCritical => &[
-            "audio/sfx/snd_hurt_critical.ogg",
-            "audio/sfx/snd_low_health.ogg",
-            "audio/sfx/snd_hurt.ogg",
-        ],
-        ReactiveCue::PlayerDeath => &[
-            "audio/sfx/snd_player_dead.ogg",
-            "audio/sfx/snd_death.ogg",
-            "sounds/snd_death.ogg",
-        ],
-        ReactiveCue::PortalOpen => &[
-            "audio/sfx/snd_portal_open.ogg",
-            "audio/sfx/snd_portal.ogg",
-            "sounds/snd_portal.ogg",
-        ],
-        ReactiveCue::PortalEnter => &[
-            "audio/sfx/snd_portal_enter.ogg",
-            "audio/sfx/snd_portal.ogg",
-            "sounds/snd_portal.ogg",
-        ],
-        ReactiveCue::SecretFound => &["audio/sfx/snd_secret.ogg", "audio/sfx/snd_secret_found.ogg"],
-        ReactiveCue::WeaponPickup => &[
-            "audio/sfx/snd_weapon_pickup.ogg",
-            "audio/sfx/snd_pickup.ogg",
-        ],
-        ReactiveCue::ChestOpen => &["audio/sfx/snd_chest_open.ogg", "audio/sfx/snd_pickup.ogg"],
-        ReactiveCue::LoopComplete => &[
-            "audio/sfx/snd_loop_complete.ogg",
-            "audio/sfx/snd_levelup.ogg",
-        ],
-        ReactiveCue::ThroneRises => &[
-            "audio/sfx/snd_throne_rises.ogg",
-            "audio/sfx/snd_boss_intro.ogg",
-        ],
-        ReactiveCue::IdpdIncoming => {
-            &["audio/sfx/snd_idpd_incoming.ogg", "audio/sfx/snd_alarm.ogg"]
-        }
-        ReactiveCue::Kill => &["audio/sfx/snd_kill.ogg", "audio/sfx/snd_hit.ogg"],
-        ReactiveCue::KillStreak => &["audio/sfx/snd_streak.ogg", "audio/sfx/snd_levelup.ogg"],
-        ReactiveCue::UiClick => &["audio/sfx/ui_click.ogg", "audio/sfx/snd_ui_click.ogg"],
-        ReactiveCue::UiBack => &["audio/sfx/ui_back.ogg", "audio/sfx/snd_ui_back.ogg"],
-        ReactiveCue::UiConfirm => &["audio/sfx/ui_confirm.ogg", "audio/sfx/snd_ui_confirm.ogg"],
-        ReactiveCue::UiCycle => &["audio/sfx/ui_cycle.ogg", "audio/sfx/snd_ui_cycle.ogg"],
-    }
+/// Head init for the area-audio resources the schedule's first tick
+/// reads as bare `Res`/`ResMut` (`sync_area_audio`,
+/// `update_amb_filter`, `tick_area_audio_fades`).
+pub fn init_area_audio_resources(world: &mut World) {
+    world.init_resource::<AreaAudioState>();
+    world.init_resource::<AmbFilter>();
+    world.init_resource::<Queue<AudioCue>>();
 }
 
-pub fn cue_base_volume(cue: ReactiveCue) -> f32 {
-    match cue {
-        ReactiveCue::PlayerDeath => 1.0,
-        ReactiveCue::BossAppear | ReactiveCue::BossDefeated | ReactiveCue::ThroneRises => 0.95,
-        ReactiveCue::LoopComplete => 0.95,
-        ReactiveCue::LevelUp
-        | ReactiveCue::MutationChosen
-        | ReactiveCue::UltraChosen
-        | ReactiveCue::SecretFound
-        | ReactiveCue::IdpdIncoming => 0.85,
-        ReactiveCue::PortalOpen | ReactiveCue::PortalEnter | ReactiveCue::PlayerCritical => 0.75,
-        ReactiveCue::KillStreak => 0.70,
-        ReactiveCue::WeaponPickup | ReactiveCue::ChestOpen | ReactiveCue::UiBack => 0.58,
-        ReactiveCue::UiConfirm => 0.58,
-        ReactiveCue::UiClick => 0.48,
-        ReactiveCue::UiCycle => 0.40,
-        ReactiveCue::Kill => 0.32,
-    }
-}
-
-pub fn cue_throttle_seconds(cue: ReactiveCue) -> f32 {
-    match cue {
-        ReactiveCue::Kill => 0.12,
-        ReactiveCue::UiCycle => 0.06,
-        ReactiveCue::WeaponPickup | ReactiveCue::ChestOpen => 0.25,
-        ReactiveCue::PlayerCritical => 1.5,
-        ReactiveCue::KillStreak => 2.5,
-        _ => 0.38,
-    }
-}
-
-pub fn throttle_allows(cue: ReactiveCue, last_fired: Option<f32>, now: f32) -> bool {
-    let Some(last) = last_fired else {
-        return true;
-    };
-
-    now - last >= cue_throttle_seconds(cue).max(1.0 / 30.0)
-}
-
-/// IDPD kind check (bevy `game/idpd.rs::is_idpd_kind` parity: the
-/// inspector is NOT an IDPD raid kind).
-pub fn is_idpd_kind(kind: EnemyKind) -> bool {
-    matches!(
-        kind,
-        EnemyKind::IdpdGrunt | EnemyKind::IdpdShield | EnemyKind::IdpdElite | EnemyKind::IdpdVan
-    )
-}
-
-#[derive(Resource, Default)]
-pub struct ReactiveAudioState {
-    last_fired: HashMap<ReactiveCue, f32>,
-    known_bosses: HashSet<Entity>,
-    last_player_level: Option<u32>,
-    last_player_hp: Option<i32>,
-    low_hp_armed: bool,
-    kill_streak: u32,
-    kill_streak_last: f32,
-}
-
-impl ReactiveAudioState {
-    pub fn reset(&mut self) {
-        self.last_fired.clear();
-        self.known_bosses.clear();
-        self.last_player_level = None;
-        self.last_player_hp = None;
-        self.low_hp_armed = true;
-        self.kill_streak = 0;
-        self.kill_streak_last = 0.0;
-    }
-
-    fn mark_fired(&mut self, cue: ReactiveCue, now: f32) {
-        self.last_fired.insert(cue, now);
-    }
-
-    fn last_fired(&self, cue: ReactiveCue) -> Option<f32> {
-        self.last_fired.get(&cue).copied()
-    }
-
-    fn note_kill(&mut self, now: f32) -> bool {
-        if now - self.kill_streak_last > 3.5 {
-            self.kill_streak = 0;
-        }
-
-        self.kill_streak_last = now;
-        self.kill_streak += 1;
-
-        self.kill_streak % 10 == 0
-    }
-}
-
-pub fn reset_reactive_audio_state(mut state: ResMut<ReactiveAudioState>) {
-    state.reset();
-}
-
-pub fn flush_queued_cues(
-    mut commands: Commands,
-    queued: Query<(Entity, &QueuedReactiveCue)>,
-    mut requests: ResMut<Queue<ReactiveAudioRequest>>,
-) {
-    for (entity, cue) in queued.iter() {
-        requests.push(ReactiveAudioRequest::new(cue.0));
-        commands.entity(entity).despawn();
-    }
-}
-
-/// Selection half of bevy `play_reactive_audio_requests`: bus gate,
-/// per-cue throttle, first-candidate resolution, base*bus volume —
-/// emitted as backend-neutral [`ResolvedReactiveCue`]s. The actual
-/// spawn/playback is backend-owned.
-pub fn play_reactive_audio_requests(
-    time: Option<Res<SimTime>>,
-    channels: Option<Res<AudioChannels>>,
-    state: Option<ResMut<ReactiveAudioState>>,
-    requests: Option<ResMut<Queue<ReactiveAudioRequest>>>,
-    out: Option<ResMut<Queue<ResolvedReactiveCue>>>,
-) {
-    let (Some(time), Some(channels), Some(mut state), Some(mut requests), Some(mut out)) =
-        (time, channels, state, requests, out)
-    else {
-        return;
-    };
-    let now = time.elapsed_secs as f32;
-    let bus = channels.master.clamp(0.0, 1.0) * channels.sfx.clamp(0.0, 1.0);
-
-    if bus <= 0.0 {
-        requests.drain();
-        return;
-    }
-
-    for request in requests.drain() {
-        if !throttle_allows(request.cue, state.last_fired(request.cue), now) {
-            continue;
-        }
-
-        // No catalog in the sim: always emit the first candidate; the
-        // backend drops missing files. Mark fired either way (bevy did
-        // the same when no file existed) so a missing asset can't spin.
-        let path = cue_candidates(request.cue)
-            .first()
-            .copied()
-            .unwrap_or("audio/sfx/snd_hit.ogg");
-        out.push(ResolvedReactiveCue {
-            cue: request.cue,
-            path,
-            volume: (cue_base_volume(request.cue) * bus).clamp(0.0, 1.0),
-        });
-
-        state.mark_fired(request.cue, now);
-    }
-}
-
-pub fn observe_player_audio_state(
-    mut state: ResMut<ReactiveAudioState>,
-    player_q: Query<(&Player, &Health), With<Player>>,
-    mut requests: ResMut<Queue<ReactiveAudioRequest>>,
-) {
-    let Ok((player, health)) = player_q.single() else {
-        state.last_player_level = None;
-        state.last_player_hp = None;
-        state.low_hp_armed = true;
-        return;
-    };
-
-    if let Some(prev_level) = state.last_player_level
-        && player.level > prev_level
-    {
-        requests.push(ReactiveAudioRequest::new(ReactiveCue::LevelUp));
-    }
-    state.last_player_level = Some(player.level);
-
-    let crit = (health.max as f32 * 0.10).ceil() as i32;
-    if let Some(prev_hp) = state.last_player_hp
-        && health.hp < prev_hp
-        && health.hp > 0
-        && health.hp <= crit
-    {
-        requests.push(ReactiveAudioRequest::new(ReactiveCue::PlayerCritical));
-    }
-
-    let low = (health.max as f32 * 0.25).ceil() as i32;
-    if health.hp > low {
-        state.low_hp_armed = true;
-    } else if health.hp > 0 && state.low_hp_armed {
-        requests.push(ReactiveAudioRequest::new(ReactiveCue::PlayerCritical));
-        state.low_hp_armed = false;
-    }
-
-    state.last_player_hp = Some(health.hp);
-}
-
-pub fn observe_boss_audio_state(
-    mut state: ResMut<ReactiveAudioState>,
-    bosses: Query<Entity, With<BossBrain>>,
-    mut requests: ResMut<Queue<ReactiveAudioRequest>>,
-) {
-    let current: HashSet<Entity> = bosses.iter().collect();
-
-    if current.difference(&state.known_bosses).next().is_some() {
-        requests.push(ReactiveAudioRequest::new(ReactiveCue::BossAppear));
-    }
-
-    if state.known_bosses.difference(&current).next().is_some() {
-        requests.push(ReactiveAudioRequest::new(ReactiveCue::BossDefeated));
-    }
-
-    state.known_bosses = current;
-}
-
-pub fn observe_kill_audio_state(
-    time: Res<SimTime>,
-    mut state: ResMut<ReactiveAudioState>,
-    mut removed: RemovedComponents<Enemy>,
-    mut requests: ResMut<Queue<ReactiveAudioRequest>>,
-) {
-    let now = time.elapsed_secs as f32;
-
-    for _ in removed.read() {
-        requests.push(ReactiveAudioRequest::new(ReactiveCue::Kill));
-
-        if state.note_kill(now) {
-            requests.push(ReactiveAudioRequest::new(ReactiveCue::KillStreak));
-        }
-    }
-}
-
-// --- UI action -> cue mapping (bevy `menus::UiAction` mirror) ---
+// --- Menu action enum (bevy `menus::UiAction` mirror) ---
 
 /// Headless mirror of the bevy menu `UiAction` (variant shapes kept so
 /// the mapping below ports verbatim; the real menu slice owns the
@@ -1641,121 +904,57 @@ pub enum UiAction {
 #[derive(Clone, Debug)]
 pub struct UiBridgeAction(pub UiAction);
 
-pub fn ui_action_to_cue(action: &UiAction) -> Option<ReactiveCue> {
-    match action {
-        UiAction::StartGame | UiAction::MainMenuPlay | UiAction::Resume => {
-            Some(ReactiveCue::UiConfirm)
-        }
-
-        UiAction::QuitToTitle | UiAction::QuitApp => Some(ReactiveCue::UiBack),
-
-        UiAction::ToggleLoadout | UiAction::ToggleHardmode => Some(ReactiveCue::UiBack),
-
-        UiAction::OpenSettings
-        | UiAction::OpenCredits
-        | UiAction::CloseOverlay
-        | UiAction::SaveSettings => Some(ReactiveCue::UiClick),
-
-        UiAction::SelectCharacter(_) | UiAction::PickMutation(_) | UiAction::SelectCrown(_) => {
-            Some(ReactiveCue::UiConfirm)
-        }
-        // GML `SkillIcon` highlight law: landing on a card plays
-        // `sndHover`, not a confirm. `SelectMutation` is the highlight
-        // half of the two-step; only the commit (`PickMutation`) is a
-        // confirm.
-        UiAction::SelectMutation(_) => None,
-
-        UiAction::SelectSkin(_)
-        | UiAction::NextLanguage
-        | UiAction::CycleStartWeapon(_)
-        | UiAction::CycleStoredWeapon(_)
-        | UiAction::CycleCrown(_) => Some(ReactiveCue::UiCycle),
-
-        UiAction::SetMasterVol(_)
-        | UiAction::SetSfxVol(_)
-        | UiAction::SetMusicVol(_)
-        | UiAction::SetAmbienceVol(_)
-        | UiAction::SetLanguage(_) => None,
-        UiAction::SettingsCategory(_)
-        | UiAction::SettingsBack
-        | UiAction::ShowPauseConfirm(_)
-        | UiAction::CancelPauseConfirm
-        | UiAction::ConfirmPause(_)
-        | UiAction::PlaySubmenu(_)
-        | UiAction::ClosePlaySubmenu
-        | UiAction::AdvanceCredits
-        | UiAction::DismissUnlock
-        | UiAction::RemapControl(_)
-        | UiAction::RemapReset => Some(ReactiveCue::UiClick),
-        UiAction::SettingToggle(_)
-        | UiAction::SettingCycle { .. }
-        | UiAction::SettingInput { .. }
-        | UiAction::SettingResetOptions
-        | UiAction::SettingEraseProgress
-        | UiAction::SettingViewCredits
-        | UiAction::SettingOpenSubcategory(_)
-        | UiAction::ShowStats => Some(ReactiveCue::UiClick),
-        UiAction::SettingSlider { .. } => None,
-    }
-}
-
-pub fn play_ui_action_audio(
-    mut inbox: ResMut<Queue<UiBridgeAction>>,
-    mut requests: ResMut<Queue<ReactiveAudioRequest>>,
-) {
-    for bridged in inbox.drain() {
-        if let Some(cue) = ui_action_to_cue(&bridged.0) {
-            requests.push(ReactiveAudioRequest::new(cue));
-        }
-    }
-}
-
-/// Bevy `app.rs` UI one-shot map verbatim (stems + volumes; variance 0
-/// — `play_ui_sfx` plays dry). Context-free actions only; character/
-/// skin/crown/mutation picks need site context (see the `*_sfx`
-/// helpers below) and sliders commit per change.
+/// UI one-shot map (stems from bevy `app.rs`; every GML site behind
+/// these arms is a plain `snd_play(stem)` — gain 1.0, no pitch jitter).
+/// Context-free actions only; character/skin/crown/mutation picks need
+/// site context (see the `*_sfx` helpers below) and sliders commit per
+/// change.
 pub fn ui_action_sfx(action: &UiAction) -> Vec<AudioCue> {
     let mut out = Vec::new();
-    let mut push = |stem: &'static str, volume: f32| {
+    let mut push = |stem: &'static str| {
         out.push(AudioCue {
             name: stem,
-            volume,
+            volume: 1.0,
             variance: 0.0,
         });
     };
     match action {
         UiAction::MainMenuPlay => {
-            push("sndClick", 0.7);
-            push("sndMenuCharSelect", 0.7);
+            push("sndClick");
+            push("sndMenuCharSelect");
         }
         UiAction::PlaySubmenu(0) | UiAction::PlaySubmenu(3) => {
-            push("sndClick", 0.7);
-            push("sndMenuCharSelect", 0.7);
+            push("sndMenuCharSelect");
+            push("sndClick");
         }
         UiAction::PlaySubmenu(_) => {
-            push("sndClick", 0.7);
+            push("sndClick");
         }
         UiAction::ClosePlaySubmenu => {
-            push("sndClickBack", 0.6);
+            push("sndClickBack");
         }
         UiAction::AdvanceCredits => {
-            // GML `Credits/Step_0` advances on click with no named sting
-            // (the section change itself is the feedback).
+            // GML `Credits/Step_0` advances on click with no named
+            // sting (the section change itself is the feedback).
         }
         UiAction::DismissUnlock => {
-            // GML `UnlockScreen` dismisses on click with no named sting
-            // (the FIFO chain advancing is the feedback).
+            // GML `UnlockScreen/Mouse_56` dismisses on click with no
+            // named sting (the FIFO chain advancing is the feedback).
         }
         UiAction::RemapControl(_) => {
-            // GML `keybind` click arms `await_input` silently; the
-            // resolve sting (`sndSliderLetGo`) fires on capture.
-            push("sndClick", 0.6);
+            // GML `MenuOptions/Other_10.gml:703` generic option click
+            // on arming; the capture resolve sting (`sndSliderLetGo`,
+            // `MenuOptions/Other_10.gml:401`) fires on capture.
+            push("sndClick");
         }
         UiAction::RemapReset => {
-            push("sndRestart", 0.7);
+            push("sndRestart");
         }
-        UiAction::QuitToTitle | UiAction::QuitApp => {
-            push("sndClickBack", 0.6);
+        UiAction::QuitToTitle => {
+            push("sndClickBack");
+        }
+        UiAction::QuitApp => {
+            push("sndClick");
         }
         // GML `PauseButton/Other_10` plays NO transition sound on
         // MENU/RETRY/SETTINGS/CONTINUE/BACK/QUIT (hover `sndHover`
@@ -1766,31 +965,57 @@ pub fn ui_action_sfx(action: &UiAction) -> Vec<AudioCue> {
         UiAction::SettingToggle(_)
         | UiAction::SettingCycle { .. }
         | UiAction::SettingInput { .. } => {
-            push("sndClick", 0.6);
+            push("sndClick");
         }
         UiAction::SetMasterVol(_)
         | UiAction::SetSfxVol(_)
         | UiAction::SetMusicVol(_)
         | UiAction::SetAmbienceVol(_) => {
-            push("sndSliderLetGo", 0.5);
+            push("sndSliderLetGo");
         }
-        UiAction::SetLanguage(_) | UiAction::SettingsCategory(_) => {
-            push("sndClick", 0.7);
+        // GML `MainMenuButton/Other_10.gml:84-85` settings case.
+        UiAction::OpenSettings => {
+            push("sndClick");
+            push("sndMenuOptions");
+        }
+        // GML `MenuOptions/Other_20.gml:250` ViewCredits click.
+        UiAction::OpenCredits => {
+            push("sndMenuCredits");
+        }
+        // GML `BackButton/Other_10.gml:201` unconditional tail
+        // `snd_play(sndClickBack)` — the close path either way.
+        UiAction::SettingsBack | UiAction::CloseOverlay | UiAction::SaveSettings => {
+            push("sndClickBack");
+        }
+        // GML `MenuOptions/Other_20.gml:630` language row click.
+        UiAction::NextLanguage => {
+            push("sndClick");
+        }
+        UiAction::SetLanguage(_) => {
+            push("sndClick");
+        }
+        // GML `scrOptionsMenu.gml:215`: Main category opens the options
+        // sting, every other category clicks.
+        UiAction::SettingsCategory(0) => {
+            push("sndMenuOptions");
+        }
+        UiAction::SettingsCategory(_) => {
+            push("sndClick");
         }
         UiAction::SettingSlider { .. } => {
-            push("sndSliderLetGo", 0.5);
+            push("sndSliderLetGo");
         }
         UiAction::SettingResetOptions | UiAction::SettingEraseProgress => {
-            push("sndClick", 0.7);
+            push("sndClick");
         }
         UiAction::SettingViewCredits => {
-            push("sndMenuCredits", 0.7);
+            push("sndMenuCredits");
         }
         UiAction::ShowStats => {
-            push("sndMenuStats", 0.7);
+            push("sndMenuStats");
         }
         UiAction::SettingOpenSubcategory(_) => {
-            push("sndClick", 0.7);
+            push("sndClick");
         }
         _ => {}
     }
@@ -1828,12 +1053,31 @@ pub fn race_select_sfx(race: crate::data::RaceId) -> AudioCue {
     }
 }
 
-/// Bevy `SelectSkin` cue verbatim: A/B/C skin sting by slot, 1.0.
-pub fn skin_select_sfx(skin: u8) -> AudioCue {
-    let name = match skin {
-        2 => "sndMenuCSkin",
-        1 => "sndMenuBSkin",
-        _ => "sndMenuASkin",
+/// GML `scrRunStart.gml:39`
+/// `snd_play(scr_race_get_sound(race, "Cnfm", sndMutant0Cnfm))` verbatim:
+/// `sndMutant{N}Cnfm` by GML race id (= port `RaceId` discriminant,
+/// Random = 0); Skeleton (14) has no Cnfm asset and maps to
+/// `sndMutant14Turn`.
+pub fn race_confirm_sfx(race: crate::data::RaceId) -> AudioCue {
+    let name = match race as u8 {
+        14 => "sndMutant14Turn",
+        0 => "sndMutant0Cnfm",
+        1 => "sndMutant1Cnfm",
+        2 => "sndMutant2Cnfm",
+        3 => "sndMutant3Cnfm",
+        4 => "sndMutant4Cnfm",
+        5 => "sndMutant5Cnfm",
+        6 => "sndMutant6Cnfm",
+        7 => "sndMutant7Cnfm",
+        8 => "sndMutant8Cnfm",
+        9 => "sndMutant9Cnfm",
+        10 => "sndMutant10Cnfm",
+        11 => "sndMutant11Cnfm",
+        12 => "sndMutant12Cnfm",
+        13 => "sndMutant13Cnfm",
+        15 => "sndMutant15Cnfm",
+        16 => "sndMutant16Cnfm",
+        _ => "sndMutant0Cnfm",
     };
     AudioCue {
         name,
@@ -1842,197 +1086,49 @@ pub fn skin_select_sfx(skin: u8) -> AudioCue {
     }
 }
 
-/// Denial sting (bevy `sndNoSelect`, 0.5).
+/// GML `scrCampfireMenuCreate.gml:887-892` skin pick: `sndMenuCSkin`
+/// at `random_range(0.95, 1.05)`, `sndMenuBSkin` at exactly 1
+/// (`_skin_id == SkinLetter.B`), `sndMenuASkin` at `0.95 + random(0.1)`
+/// — pitch jitter of ±0.05 either way, i.e. variance 0.1.
+pub fn skin_select_sfx(skin: u8) -> AudioCue {
+    let (name, variance) = match skin {
+        2 => ("sndMenuCSkin", 0.1),
+        1 => ("sndMenuBSkin", 0.0),
+        _ => ("sndMenuASkin", 0.1),
+    };
+    AudioCue {
+        name,
+        volume: 1.0,
+        variance,
+    }
+}
+
+/// Denial sting (GML `CharSelect/Mouse_4.gml:13` `snd_play(sndNoSelect)`).
 pub fn denied_sfx() -> AudioCue {
     AudioCue {
         name: "sndNoSelect",
-        volume: 0.5,
-        variance: 0.0,
-    }
-}
-
-/// Mutation highlight sting (bevy `sndHover`, 0.45).
-pub fn hover_sfx() -> AudioCue {
-    AudioCue {
-        name: "sndHover",
-        volume: 0.45,
-        variance: 0.0,
-    }
-}
-
-/// Crown pick sting (bevy `sndMenuCrown`, 1.0).
-pub fn crown_select_sfx() -> AudioCue {
-    AudioCue {
-        name: "sndMenuCrown",
         volume: 1.0,
         variance: 0.0,
     }
 }
 
-// --- Combat intensity layer (bevy `reactive_audio.rs` tail) ---
-
-#[derive(Component)]
-pub struct CombatIntensityLayer {
-    #[allow(dead_code)]
-    pub area: AreaId,
-    pub current: f32,
-}
-
-#[derive(Resource, Default)]
-pub struct CombatIntensityState {
-    last_area: Option<AreaId>,
-}
-
-pub fn intensity_candidates(area: AreaId) -> &'static [&'static str] {
-    match area {
-        AreaId::Desert => &[
-            "audio/music/mus_desert_intensity.ogg",
-            "audio/music/desert_intensity.ogg",
-        ],
-        AreaId::Sewers | AreaId::PizzaSewers => &[
-            "audio/music/mus_sewers_intensity.ogg",
-            "audio/music/sewers_intensity.ogg",
-        ],
-        AreaId::Scrapyards => &[
-            "audio/music/mus_scrapyard_intensity.ogg",
-            "audio/music/scrapyard_intensity.ogg",
-        ],
-        AreaId::CrystalCaves | AreaId::CursedCaves => &[
-            "audio/music/mus_caves_intensity.ogg",
-            "audio/music/caves_intensity.ogg",
-        ],
-        AreaId::FrozenCity => &[
-            "audio/music/mus_frozen_intensity.ogg",
-            "audio/music/frozen_intensity.ogg",
-        ],
-        AreaId::Labs => &[
-            "audio/music/mus_labs_intensity.ogg",
-            "audio/music/labs_intensity.ogg",
-        ],
-        AreaId::Palace => &[
-            "audio/music/mus_palace_intensity.ogg",
-            "audio/music/palace_intensity.ogg",
-        ],
-        AreaId::HQ => &[
-            "audio/music/mus_hq_intensity.ogg",
-            "audio/music/hq_intensity.ogg",
-        ],
-        _ => &[],
+/// Hover sting (GML `MainMenuButton/Step_0.gml:21`,
+/// `SkillIcon/Mouse_4.gml:12`, `SkillIcon/Mouse_10.gml:9`
+/// `snd_play(sndHover)`).
+pub fn hover_sfx() -> AudioCue {
+    AudioCue {
+        name: "sndHover",
+        volume: 1.0,
+        variance: 0.0,
     }
 }
 
-/// First-candidate stem for the intensity layer, if the area has one.
-pub fn intensity_path(area: AreaId) -> Option<&'static str> {
-    intensity_candidates(area).first().copied()
-}
-
-pub fn combat_intensity_score(enemies_total: usize, idpd_count: usize, boss_count: usize) -> u32 {
-    let ordinary = enemies_total.saturating_sub(idpd_count + boss_count);
-
-    ordinary as u32 + idpd_count as u32 * 2 + boss_count as u32 * 4
-}
-
-pub fn combat_intensity_target(score: u32) -> f32 {
-    match score {
-        0..=2 => 0.0,
-        3..=9 => (score - 2) as f32 / 7.0,
-        _ => 1.0,
-    }
-}
-
-pub fn smooth_value(current: f32, target: f32, dt: f32, half_life: f32) -> f32 {
-    if dt <= 0.0 || half_life <= 0.0 {
-        return target;
-    }
-
-    let keep = 2.0_f32.powf(-dt / half_life);
-    target + (current - target) * keep
-}
-
-/// Intensity mix bus (bevy law: master * music * 0.42). The backend
-/// multiplies this by the layer `current` it polls.
-pub fn intensity_bus(channels: &AudioChannels) -> f32 {
-    channels.master.clamp(0.0, 1.0) * channels.music.clamp(0.0, 1.0) * 0.42
-}
-
-pub fn intensity_volume(current: f32, channels: &AudioChannels) -> f32 {
-    (current * intensity_bus(channels)).clamp(0.0, 1.0)
-}
-
-pub fn reset_combat_intensity(
-    mut commands: Commands,
-    mut state: ResMut<CombatIntensityState>,
-    layers: Query<Entity, With<CombatIntensityLayer>>,
-) {
-    state.last_area = None;
-
-    for entity in layers.iter() {
-        commands.entity(entity).despawn();
-    }
-}
-
-/// Track the per-area intensity layer and smooth its `current` toward
-/// the combat target. The looped playback + sink volumes are
-/// backend-owned (it polls the layer `current` and mixes with
-/// [`intensity_bus`]); without a catalog the layer spawns whenever
-/// the area has candidates and the backend skips missing files.
-pub fn update_combat_intensity_audio(
-    mut commands: Commands,
-    time: Res<SimTime>,
-    run: Option<Res<Run>>,
-    transition: Option<Res<LoopTransition>>,
-    mut state: ResMut<CombatIntensityState>,
-    enemies: Query<&Enemy>,
-    bosses: Query<(), With<BossBrain>>,
-    mut layers: Query<(Entity, &mut CombatIntensityLayer)>,
-) {
-    let Some(run) = run else {
-        return;
-    };
-
-    let suppressed = transition
-        .as_ref()
-        .is_some_and(|t| t.campfire_active || t.throne_ii_alive);
-
-    if state.last_area != Some(run.area) {
-        for (entity, _) in layers.iter() {
-            commands.entity(entity).despawn();
-        }
-
-        state.last_area = Some(run.area);
-
-        if intensity_path(run.area).is_some() {
-            commands.spawn((
-                GameCleanup,
-                CombatIntensityLayer {
-                    area: run.area,
-                    current: 0.0,
-                },
-            ));
-        }
-
-        return;
-    }
-
-    let mut enemy_total = 0usize;
-    let mut idpd_total = 0usize;
-
-    for enemy in enemies.iter() {
-        enemy_total += 1;
-        if is_idpd_kind(enemy.kind) {
-            idpd_total += 1;
-        }
-    }
-
-    let boss_total = bosses.iter().count();
-    let score = combat_intensity_score(enemy_total, idpd_total, boss_total);
-    let mut target = combat_intensity_target(score);
-
-    if suppressed {
-        target = 0.0;
-    }
-
-    for (_, mut layer) in &mut layers {
-        layer.current = smooth_value(layer.current, target, time.delta_secs, 0.55);
+/// Crown pick sting (GML `scrCampfireMenuCreate.gml:822`
+/// `snd_play(sndMenuCrown, 0.95 + random(0.1))` — ±0.05 pitch jitter).
+pub fn crown_select_sfx() -> AudioCue {
+    AudioCue {
+        name: "sndMenuCrown",
+        volume: 1.0,
+        variance: 0.1,
     }
 }

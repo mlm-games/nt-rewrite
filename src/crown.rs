@@ -13,6 +13,7 @@ use bevy_ecs::prelude::*;
 use rand::RngExt;
 use repame_sim::SimTime;
 
+use crate::audio::AudioCue;
 use crate::comps_a::{
     CrownState, FloorStarted, GameCleanup, Health, Hitbox, Inventory, LevelCleanup, NextHurt, Player,
     Projectile, Run, Team, Toast, Velocity,
@@ -274,6 +275,7 @@ pub fn tick_crown_love(
     time: Res<SimTime>,
     mut commands: Commands,
     mut q: Query<(&mut CrownState, &Pos), With<Player>>,
+    mut cues: ResMut<Queue<AudioCue>>,
 ) {
     let dt = time.delta_secs;
     for (mut state, pos) in &mut q {
@@ -306,6 +308,11 @@ pub fn tick_crown_love(
             Velocity(glam::Vec2::ZERO),
             Pos(at),
         ));
+        cues.push(AudioCue {
+            name: "sndAllySpawn",
+            volume: 1.0,
+            variance: 0.2,
+        });
     }
 }
 

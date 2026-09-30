@@ -1895,6 +1895,11 @@ pub fn game_hard(run: &Run) -> f32 {
     run.hard as f32
 }
 
+fn enemy_body_on_rect(pos: Vec2, radius: f32, x: f32, y: f32) -> bool {
+    let near = Vec2::new(pos.x.clamp(x, x + TILE), pos.y.clamp(y, y + TILE));
+    pos.distance(near) <= radius
+}
+
 /// GML `scripts/scrPopulate/scrPopulate.gml` end to end, with each phase on
 /// its own stream (see `phase_rng`). The chest restriction lives in
 /// `apply_chest_permutations` because the trim needs the Open-Mind count.
@@ -2133,9 +2138,28 @@ fn populate(
             )
         })
         .collect();
+    let mut enemy_tiles: HashSet<(i32, i32)> = HashSet::new();
+    for &(kind, pos) in &plan.enemies {
+        let r = crate::enemy_data::enemy_def(kind).radius;
+        let min = (
+            ((pos.x - r) / TILE).floor() as i32,
+            ((pos.y - r) / TILE).floor() as i32,
+        );
+        let max = (
+            ((pos.x + r) / TILE).floor() as i32,
+            ((pos.y + r) / TILE).floor() as i32,
+        );
+        for ex in min.0..=max.0 {
+            for ey in min.1..=max.1 {
+                if enemy_body_on_rect(pos, r, ex as f32 * TILE, ey as f32 * TILE) {
+                    enemy_tiles.insert((ex, ey));
+                }
+            }
+        }
+    }
     let mut rng = phase_rng(run.gen_seed, RNG_PROPS);
     for &(cx, cy) in floors {
-        if prop_tiles.contains(&(cx, cy)) {
+        if prop_tiles.contains(&(cx, cy)) || enemy_tiles.contains(&(cx, cy)) {
             continue;
         }
         let (ox, oy) = (cx as f32 * TILE, cy as f32 * TILE);
@@ -2161,8 +2185,18 @@ fn populate(
             let uy = rng.random_range(0.0..31.0);
             let sx = (ux as i32).div_euclid(16) * 16;
             let sy = (uy as i32).div_euclid(16) * 16;
-            if !wall_point(plan, walls, ox + sx as f32, oy + sy as f32) {
-                plan.small_walls.push(((cx * 2 + sx / 16) as i16, (cy * 2 + sy / 16) as i16));
+            if !wall_point(plan, walls, ox + sx as f32, oy + sy as f32)
+                && !plan.enemies.iter().any(|&(kind, pos)| {
+                    enemy_body_on_rect(
+                        pos,
+                        crate::enemy_data::enemy_def(kind).radius,
+                        ox + sx as f32,
+                        oy + sy as f32,
+                    )
+                })
+            {
+                plan.small_walls
+                    .push(((cx * 2 + sx / 16) as i16, (cy * 2 + sy / 16) as i16));
                 prop_tiles.insert((cx, cy));
                 // GML :24-28 -- the scrapyards trap, on the tile's own corner.
                 if area == 3

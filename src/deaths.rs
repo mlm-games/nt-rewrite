@@ -9,7 +9,7 @@ use rand::RngExt;
 use repame_fx::Trauma;
 
 use crate::anim::{PlayerAnim, SpriteAnim};
-use crate::audio::{AudioCue, GameAudio, QueuedReactiveCue, ReactiveCue};
+use crate::audio::{AudioCue, GameAudio};
 use crate::comps_a::{
     AimDir, GameCleanup, Health, Inventory, LastDamageTaken, LevelCleanup, Player, Projectile,
     RaceState, Team, Velocity,
@@ -235,8 +235,22 @@ pub fn resolve_player_gameover(
     commands.entity(player_e).insert(PlayerDying {
         timer: GTimer::from_seconds(0.85, TimerMode::Once),
     });
-    commands.spawn(QueuedReactiveCue(ReactiveCue::PlayerDeath));
-    GameAudio.play_death(&mut cues);
+    if player.crown == crate::data::CrownKind::Death {
+        cues.push(AudioCue {
+            name: if run.area == crate::data::AreaId::Oasis {
+                "sndOasisExplosion"
+            } else {
+                "sndExplosionXL"
+            },
+            volume: 1.0,
+            variance: 0.2,
+        });
+    }
+    cues.push(AudioCue {
+        name: crate::enemy_data::gml_race_dead(race_state.race),
+        volume: 1.0,
+        variance: 0.0,
+    });
 
     let pos = player_pos.0;
     // Bevy `face_aim` law for the dying flip: live aim.x, else velocity.
