@@ -4049,8 +4049,6 @@ checksum = "a17ed3cd80c222fc1ff37c65311dcba3eea6c0519a064b5522f28f4357950144"
 [[package]]
 name = "repame-audio"
 version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "791d19ccaef3c6364a3d57fc3b9727311d25792a7b96bd79b774670822fecee9"
 dependencies = [
  "anyhow",
  "cpal",

@@ -2291,13 +2291,16 @@ impl App {
         // Splash advances on any key/mouse edge (bevy `boot_intro` law):
         // arrows/WASD/digits never stage fire/interact/spec pulses, so
         // without this a keyboard-only shell stalls on the logo until the
-        // timeout. Any `just` key, pad edge, or staged click counts.
+        // timeout. Any `just` key, pad edge, or tap counts — edge split
+        // like GML `mouse_ui_clicked`: Android on the lift, desktop on
+        // the press.
         if state == AppState::Splash
             && (!just.is_empty()
                 || had_pause
                 || had_restart
                 || had_interact
-                || !staging_clicks.is_empty())
+                || (!cfg!(target_os = "android") && !staging_clicks.is_empty())
+                || (cfg!(target_os = "android") && !released_touch_clicks.is_empty()))
         {
             self.sim.world.resource_mut::<NtInput>().press_interact();
         }
@@ -2370,20 +2373,25 @@ impl App {
             // only pause route a touch device has (no Esc key), and the
             // only one a mouse gets either. GML loops
             // `device_mouse_check_button_released` over touches 0..4 —
-            // released contacts, so a press that lands in the circle and
-            // lifts pauses, exactly as the port's `staging_clicks` and
-            // `released_touch_clicks` are both release events.
+            // released contacts on every platform — so a press that
+            // lands in the circle and lifts pauses. The port splits the
+            // edge like GML `mouse_ui_clicked`: Android reads the lifts
+            // (`released_touch_clicks`); desktop stays on
+            // `staging_clicks`, which are pointer-DOWN presses, not
+            // releases (known GML divergence for the disc).
             {
                 let frame = self.gml_frame();
                 let vw = frame.gui_width();
-                let clicked = staging_clicks.last().is_some_and(|c| {
-                    let g = frame.dp_to_gui(c.dp);
-                    crate::input::pause_button_hit(g[0], g[1], vw)
-                });
-                let tapped = released_touch_clicks.iter().any(|(_, p)| {
-                    let g = frame.dp_to_gui([p.x, p.y]);
-                    crate::input::pause_button_hit(g[0], g[1], vw)
-                });
+                let clicked = !cfg!(target_os = "android")
+                    && staging_clicks.last().is_some_and(|c| {
+                        let g = frame.dp_to_gui(c.dp);
+                        crate::input::pause_button_hit(g[0], g[1], vw)
+                    });
+                let tapped = cfg!(target_os = "android")
+                    && released_touch_clicks.iter().any(|(_, p)| {
+                        let g = frame.dp_to_gui([p.x, p.y]);
+                        crate::input::pause_button_hit(g[0], g[1], vw)
+                    });
                 if clicked || tapped {
                     self.sim.world.resource_mut::<MenuEdge>().pause_pressed = true;
                     released_touch_clicks.clear();
@@ -2399,7 +2407,10 @@ impl App {
                 apply_menu_action(&mut self.sim.world, UiAction::SettingsBack);
             } else if rmb_down && overlay == OverlayMenu::Credits {
                 apply_menu_action(&mut self.sim.world, UiAction::CloseOverlay);
-            } else if !slider_click_consumed && let Some(click) = staging_clicks.last().copied() {
+            } else if !cfg!(target_os = "android")
+                && !slider_click_consumed
+                && let Some(click) = staging_clicks.last().copied()
+            {
                 let frame = self.gml_frame();
                 let kind = menu_overlay_kind(
                     state,
@@ -2418,7 +2429,7 @@ impl App {
                     }
                 }
             }
-            if !released_touch_clicks.is_empty() {
+            if cfg!(target_os = "android") && !released_touch_clicks.is_empty() {
                 let frame = self.gml_frame();
                 let kind = menu_overlay_kind(
                     state,
@@ -2450,7 +2461,24 @@ impl App {
                 }
             }
         } else if game_over {
-            if let Some(click) = staging_clicks.last().copied() {
+            if cfg!(target_os = "android") {
+                let frame = self.gml_frame();
+                for (id, point) in released_touch_clicks.drain(..) {
+                    if slider_touch_ids.contains(&id) {
+                        continue;
+                    }
+                    let gui = frame.dp_to_gui([point.x, point.y]);
+                    if let Some(action) = route_menu_click(
+                        &mut self.sim.world,
+                        MenuOverlay::GameOver,
+                        gui,
+                        frame.gui_width(),
+                    ) {
+                        apply_menu_action(&mut self.sim.world, action);
+                        break;
+                    }
+                }
+            } else if let Some(click) = staging_clicks.last().copied() {
                 let frame = self.gml_frame();
                 if let Some(action) = route_menu_click(
                     &mut self.sim.world,
@@ -2470,7 +2498,10 @@ impl App {
                 apply_menu_action(&mut self.sim.world, UiAction::SettingsBack);
             } else if rmb_down && matches!(overlay, OverlayMenu::Credits | OverlayMenu::Stats) {
                 apply_menu_action(&mut self.sim.world, UiAction::CloseOverlay);
-            } else if !slider_click_consumed && let Some(click) = staging_clicks.last().copied() {
+            } else if !cfg!(target_os = "android")
+                && !slider_click_consumed
+                && let Some(click) = staging_clicks.last().copied()
+            {
                 let frame = self.gml_frame();
                 let kind = menu_overlay_kind(
                     state,
@@ -2487,6 +2518,27 @@ impl App {
                 ) {
                     apply_menu_action(&mut self.sim.world, action);
                 }
+            } else if cfg!(target_os = "android") && !released_touch_clicks.is_empty() {
+                let frame = self.gml_frame();
+                let kind = menu_overlay_kind(
+                    state,
+                    overlay,
+                    &self.sim.world.resource::<MenuState>(),
+                    game_over,
+                )
+                .unwrap_or(MenuOverlay::MainMenu);
+                for (id, point) in released_touch_clicks.drain(..) {
+                    if slider_touch_ids.contains(&id) {
+                        continue;
+                    }
+                    let gui = frame.dp_to_gui([point.x, point.y]);
+                    if let Some(action) =
+                        route_menu_click(&mut self.sim.world, kind, gui, frame.gui_width())
+                    {
+                        apply_menu_action(&mut self.sim.world, action);
+                        break;
+                    }
+                }
             }
         } else if state == AppState::Title {
             // Settings/Credits open over the campfire: route those through
@@ -2496,7 +2548,10 @@ impl App {
                 apply_menu_action(&mut self.sim.world, UiAction::SettingsBack);
             } else if rmb_down && overlay == OverlayMenu::Credits {
                 apply_menu_action(&mut self.sim.world, UiAction::CloseOverlay);
-            } else if !slider_click_consumed && let Some(click) = staging_clicks.last().copied() {
+            } else if !cfg!(target_os = "android")
+                && !slider_click_consumed
+                && let Some(click) = staging_clicks.last().copied()
+            {
                 let frame = self.gml_frame();
                 if overlay == OverlayMenu::Settings || overlay == OverlayMenu::Credits {
                     let kind = menu_overlay_kind(
@@ -2520,6 +2575,36 @@ impl App {
                 {
                     apply_menu_action(&mut self.sim.world, action);
                 }
+            } else if cfg!(target_os = "android") && !released_touch_clicks.is_empty() {
+                let frame = self.gml_frame();
+                let kind = if overlay == OverlayMenu::Settings || overlay == OverlayMenu::Credits {
+                    menu_overlay_kind(
+                        state,
+                        overlay,
+                        &self.sim.world.resource::<MenuState>(),
+                        game_over,
+                    )
+                } else {
+                    None
+                };
+                for (id, point) in released_touch_clicks.drain(..) {
+                    if slider_touch_ids.contains(&id) {
+                        continue;
+                    }
+                    let gui = frame.dp_to_gui([point.x, point.y]);
+                    let action =
+                        if overlay == OverlayMenu::Settings || overlay == OverlayMenu::Credits {
+                            kind.and_then(|kind| {
+                                route_menu_click(&mut self.sim.world, kind, gui, frame.gui_width())
+                            })
+                        } else {
+                            self.route_title_click(gui, frame.gui_width())
+                        };
+                    if let Some(action) = action {
+                        apply_menu_action(&mut self.sim.world, action);
+                        break;
+                    }
+                }
             }
         } else if offer_open
             && menu_overlay_kind(
@@ -2541,8 +2626,9 @@ impl App {
             // claims in the same frame (the "mutation collects on the
             // first tap" bug). A touch finger arrives as both a released
             // contact and a pointer click, so the two sources are the
-            // same gesture: route the touches, and only fall through to
-            // the click when there were none.
+            // same gesture: Android routes only the lifts; the press
+            // click is the desktop path (GML `mouse_ui_clicked`:
+            // mobile reads release, desktop reads press).
             let frame = self.gml_frame();
             let mut routed = false;
             for (id, point) in released_touch_clicks.drain(..) {
@@ -2561,7 +2647,10 @@ impl App {
                     break;
                 }
             }
-            if !routed && let Some(click) = staging_clicks.last().copied() {
+            if !routed
+                && !cfg!(target_os = "android")
+                && let Some(click) = staging_clicks.last().copied()
+            {
                 let gui = frame.dp_to_gui(click.dp);
                 if let Some(action) = crate::render::mutation_icon_hit_action(
                     &mut self.sim.world,
@@ -2752,7 +2841,7 @@ impl App {
             &mut self.sim.world,
             crate::audio::AudioCue {
                 name: "sndSlider",
-                volume: 0.5,
+                volume: 1.0,
                 variance: 0.0,
             },
         );
@@ -2777,7 +2866,7 @@ impl App {
                 &mut self.sim.world,
                 crate::audio::AudioCue {
                     name: "sndSliderLetGo",
-                    volume: 0.5,
+                    volume: 1.0,
                     variance: 0.0,
                 },
             );

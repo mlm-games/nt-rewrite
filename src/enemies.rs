@@ -595,14 +595,15 @@ fn ready_timer() -> GTimer {
     t
 }
 
-/// Enemy telegraph cue through the sim audio queue (bevy
-/// `play_enemy_cue` parity: 0.6 vol, 0.05 variance; the bevy build
-/// loaded `audio/{stem}.wav` directly to dodge the 16-param cap — the
+/// Enemy telegraph cue through the sim audio queue (GML `snd_play`/
+/// `snd_play_hit`/`snd_play_hit_big` all hand the instance
+/// `UberCont.opt_sndvol`, so the cue sits at 1.0 vol, 0.05 variance; the bevy
+/// build loaded `audio/{stem}.wav` directly to dodge the 16-param cap — the
 /// queue carries the stem name instead and the audio layer resolves it).
 fn enemy_cue(cues: &mut Queue<AudioCue>, stem: &'static str) {
     cues.push(AudioCue {
         name: stem,
-        volume: 0.6,
+        volume: 1.0,
         variance: 0.05,
     });
 }
@@ -4132,8 +4133,8 @@ pub fn tick_jungle_fly(
             queue_fired_maggot(&mut commands, epos, angle, run.loop_count);
             cues.push(AudioCue {
                 name: "sndFlyFire",
-                volume: 0.3,
-                variance: 0.05,
+                volume: 1.0,
+                variance: 0.3,
             });
             brain.burst_timer = GTimer::from_seconds(2.0 / 30.0, TimerMode::Once);
             brain.fire -= 1;
@@ -5845,7 +5846,7 @@ pub fn spawn_lil_hunter_die(
     ));
     cues.push(AudioCue {
         name: "sndLilHunterBreak",
-        volume: 0.8,
+        volume: 1.0,
         variance: 0.2,
     });
     e

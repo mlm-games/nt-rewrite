@@ -33,8 +33,9 @@ pub struct AudioCue {
     pub variance: f32,
 }
 
-/// Runtime mix buses. Mirrors bevy `AudioChannels` defaults
-/// (master 1, sfx 1, music 0.8, ui 1); the settings->channel sync from
+/// Runtime mix buses. GML option defaults (`scrOptionsUpdate.gml:13-16`:
+/// `save_get_option(..., true)` -> 1.0 for master/sfx/music/ambient;
+/// `ui` is port-only at 1); the settings->channel sync from
 /// the save slice writes here later.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct AudioChannels {
@@ -49,7 +50,7 @@ impl Default for AudioChannels {
         Self {
             master: 1.0,
             sfx: 1.0,
-            music: 0.8,
+            music: 1.0,
             ui: 1.0,
         }
     }
@@ -72,40 +73,30 @@ impl AudioChannels {
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct MainVol {
     value: f32,
-    fired: bool,
 }
 
 impl Default for MainVol {
     fn default() -> Self {
-        Self {
-            value: 1.0,
-            fired: false,
-        }
+        Self { value: 1.0 }
     }
 }
 
 impl MainVol {
     pub fn duck(&mut self, gain: f32) {
         self.value = gain;
-        self.fired = true;
     }
 
     pub fn step(&mut self, dt_secs: f32) -> f32 {
-        if !self.fired {
-            self.value = 1.0 - (1.0 - self.value) * 0.6f32.powf(dt_secs * 30.0);
-            if 1.0 - self.value < 1e-4 {
-                self.value = 1.0;
-            }
+        self.value = 1.0 - (1.0 - self.value) * 0.6f32.powf(dt_secs * 30.0);
+        if 1.0 - self.value < 1e-4 {
+            self.value = 1.0;
         }
-        self.fired = false;
         self.value
     }
 }
 
-pub fn step_mainvol(world: &mut World, dt_secs: f32) -> f32 {
-    world
-        .get_resource_mut::<MainVol>()
-        .map_or(1.0, |mut mv| mv.step(dt_secs))
+pub fn mainvol_gain(world: &World) -> f32 {
+    world.get_resource::<MainVol>().map_or(1.0, |mv| mv.value)
 }
 
 /// Sound bank handle (asset paths resolve platform-side).
@@ -691,7 +682,6 @@ pub fn sync_area_audio(
     run: Res<Run>,
     transition: Res<LoopTransition>,
     floor: Res<FloorTransition>,
-    channels: Res<AudioChannels>,
     mut cues: ResMut<Queue<AudioCue>>,
     mut state: ResMut<AreaAudioState>,
     campfires: Query<(), With<CampfireProp>>,
@@ -733,7 +723,7 @@ pub fn sync_area_audio(
         };
         cues.push(AudioCue {
             name,
-            volume: channels.music,
+            volume: 1.0,
             variance: 0.0,
         });
     }
@@ -850,7 +840,7 @@ pub fn tick_area_audio_fades(
     save: Option<Res<crate::savedata_part::SaveData>>,
     mut state: ResMut<AreaAudioState>,
 ) {
-    let music_on = if state.current_music.is_some() {
+    let music_on = if state.current_music.is_some() || state.jingle_in > 0.0 {
         1.0
     } else {
         0.0
@@ -876,12 +866,18 @@ pub fn reset_area_audio(mut state: ResMut<AreaAudioState>) {
 
 /// Head init for the area-audio resources the schedule's first tick
 /// reads as bare `Res`/`ResMut` (`sync_area_audio`,
-/// `update_amb_filter`, `tick_area_audio_fades`).
+/// `update_amb_filter`, `tick_area_audio_fades`), plus the per-step
+/// mainvol recovery GML runs at `UberCont/Step_0.gml:99-103` before
+/// the step's ducks (`lerp(mainvol, 1, 0.4)` at 30 Hz).
 pub fn init_area_audio_resources(world: &mut World) {
     world.init_resource::<AreaAudioState>();
     world.init_resource::<AmbFilter>();
     world.init_resource::<Queue<AudioCue>>();
     world.init_resource::<MainVol>();
+    let dt = world
+        .get_resource::<SimTime>()
+        .map_or(0.0, |t| t.delta_secs);
+    world.resource_mut::<MainVol>().step(dt);
 }
 
 // --- Menu action enum (bevy `menus::UiAction` mirror) ---

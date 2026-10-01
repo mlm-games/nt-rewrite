@@ -1005,6 +1005,8 @@ pub fn sample_touch_full(
 ) {
     let width = window_width;
     let btn_capture = TOUCH_BUTTON_RADIUS * (scale + 0.5);
+    output.touch_released_swap = false;
+    output.touch_released_fire = false;
 
     // Default stick anchors from the GUI size (`JoystickMove/Create_0`,
     // `JoystickAttack/Create_0`: move `(view-max)/2 + 64, h - 64`,
@@ -1102,13 +1104,9 @@ pub fn sample_touch_full(
     // the shell, so exclude it here — in GML the two never overlap
     // (`ButtonActive` claims within 25 of `(vw - 64, 72)`, 7 px clear of
     // the pause disc) and a pause tap must not double as an ability.
-    let on_pause_button =
-        |c: &TouchContact| pause_button_hit(c.start.x, c.start.y, width);
+    let on_pause_button = |c: &TouchContact| pause_button_hit(c.start.x, c.start.y, width);
     if contacts.iter().any(|c| {
-        c.just_pressed
-            && c.start.y < 96.0
-            && c.start.x >= width - 96.0
-            && !on_pause_button(c)
+        c.just_pressed && c.start.y < 96.0 && c.start.x >= width - 96.0 && !on_pause_button(c)
     }) {
         output.ability_pressed = true;
     }
@@ -1131,10 +1129,7 @@ pub fn sample_touch_full(
     // the button claim are one gesture).
     let swap_idx = nearest_free(swap_home, btn_capture, &held).or_else(|| {
         contacts.iter().position(|c| {
-            c.just_pressed
-                && c.start.y < 96.0
-                && c.start.x >= width - 192.0
-                && !on_pause_button(c)
+            c.just_pressed && c.start.y < 96.0 && c.start.x >= width - 192.0 && !on_pause_button(c)
         })
     });
     if let Some(i) = swap_idx {
@@ -1341,25 +1336,29 @@ pub fn sample_touch_full(
         }
     } else {
         // GML `index = -1` on `!device_mouse_check_button(...)` (the
-        // finger lifted). The lift frame reports `press_fire`
-        // (swapped edges); `fire_held` drops. `vdis` keeps chasing
-        // the now-zero `dis` at 2 px/tick (`approach(vdis, dis, 2)`
-        // runs unconditionally in `Other_10`), so the camera lean
-        // glides home instead of snapping on release.
+        // finger lifted). The lift frame reports `press_fire` only
+        // while the last deflection is past the deadzone — GML keeps
+        // every edge inside that gate (`Other_10:115-125`); the lift
+        // carries no contact, so `dis` is the previous tick's
+        // snapshot. `fire_held` drops. `vdis` keeps chasing the
+        // now-zero `dis` at 2 px/tick (`approach(vdis, dis, 2)` runs
+        // unconditionally in `Other_10`), so the camera lean glides
+        // home instead of snapping on release.
         if attack_stick.touch >= 0 {
             attack_stick.touch = -1;
         }
+        let last_dis = attack_stick.dis;
         attack_stick.dis = 0.0;
         attack_stick.vdis = approach(attack_stick.vdis, 0.0, 2.0);
         output.touch_dis = attack_stick.vdis;
         if attack_lifted {
             output.fire_held = false;
-            output.fire_released = true;
+            if last_dis / TOUCH_STICK_RADIUS > ATTACK_BUTTON_DEADZONE {
+                output.fire_released = true; // GML `press_fire`, `Other_10.gml:115-124`
+            }
         }
     }
     output.attack_stick = Some(attack_stick);
-    output.touch_released_swap = false;
-    output.touch_released_fire = false;
 
     output.move_axis = output.move_axis.clamp_length_max(1.0);
     output.aim_axis = output.aim_axis.clamp_length_max(1.0);
@@ -1541,6 +1540,65 @@ mod keymap_tests {
             sample_touch_full(&[], 320.0, 0.5, false, true, &mut lifted);
         }
         assert_eq!(lifted.touch_dis, 0.0, "vdis must settle at zero");
+    }
+
+    #[test]
+    fn attack_stick_drag_back_below_deadzone_disarms_lift() {
+        let mut out = NtInput::default();
+        sample_touch_full(
+            &[contact([256.0, 176.0], [256.0, 176.0], true)],
+            320.0,
+            0.5,
+            false,
+            true,
+            &mut out,
+        );
+        sample_touch_full(
+            &[contact([256.0, 176.0], [288.0, 176.0], false)],
+            320.0,
+            0.5,
+            false,
+            true,
+            &mut out,
+        );
+        assert!(out.fire_held, "full drag past the deadzone must hold fire");
+        sample_touch_full(
+            &[contact([256.0, 176.0], [259.0, 176.0], false)],
+            320.0,
+            0.5,
+            false,
+            true,
+            &mut out,
+        );
+        let attack_id = out.attack_stick.map(|s| s.touch).unwrap_or(-1);
+        assert!(attack_id >= 0, "drag-back must keep the claim");
+        let mut lifted = NtInput::default();
+        lifted.move_stick = out.move_stick;
+        lifted.attack_stick = out.attack_stick;
+        lifted.note_touch_released(attack_id);
+        sample_touch_full(&[], 320.0, 0.5, false, true, &mut lifted);
+        assert!(
+            !lifted.take_fire_released(),
+            "drag-back below the deadzone must disarm the lift shot"
+        );
+    }
+
+    #[test]
+    fn deadzone_press_edge_latches_touch_released_fire() {
+        let mut out = NtInput::default();
+        sample_touch_full(
+            &[contact([288.0, 176.0], [288.0, 176.0], true)],
+            320.0,
+            0.5,
+            false,
+            true,
+            &mut out,
+        );
+        assert!(out.fire_held, "press past the deadzone must hold fire");
+        assert!(
+            out.take_touch_released_fire(),
+            "release_fire press edge must survive sampling (GML top reset, Other_10:76-79)"
+        );
     }
 
     #[test]

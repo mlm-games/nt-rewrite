@@ -519,7 +519,7 @@ impl Default for SettingsData {
         Self {
             master_volume: 1.0,
             sfx_volume: 1.0,
-            music_volume: 0.8,
+            music_volume: 1.0,
             ambience_volume: 1.0,
             language: "en".to_string(),
             volume_3dsound: true,

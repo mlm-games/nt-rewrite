@@ -1997,7 +1997,7 @@ pub fn spawn_level(
                 for name in idpd_stings {
                     cues.push(crate::audio::AudioCue {
                         name,
-                        volume: 0.7,
+                        volume: 1.0,
                         variance: 0.05,
                     });
                 }

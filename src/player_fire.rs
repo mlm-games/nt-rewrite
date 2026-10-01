@@ -1276,6 +1276,7 @@ fn weapon_fire_cues(fx: &mut FireFx, id: WeaponId, burst: bool, player: &Player,
             104 => gun(&mut out, "sndSuperDiscGun", 0.2),
             106 => gun(&mut out, "sndHeavyMachinegun", 0.2),
             107 => gun(&mut out, "sndBloodCannon", 0.2),
+            108 => gun(&mut out, "sndBigDogSpin", 0.2),
             110 => gun(&mut out, "sndIncinerator", 0.2),
             111 => gun(
                 &mut out,
@@ -1407,7 +1408,6 @@ fn spawn_pellets(commands: &mut Commands, fx: &mut FireFx, shot: &GunShot, playe
     }
 
     if let Some(spin) = archetype.spin {
-        cue(fx.cues, "sndBigDogSpin", 0.6, 0.05);
         spawn_dog_spin_attack(
             commands,
             shot.pos,
