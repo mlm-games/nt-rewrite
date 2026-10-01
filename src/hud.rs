@@ -294,20 +294,27 @@ fn apply_loop_suffix(base: String, lp: u32, hardmode: bool) -> String {
 pub fn sync_hud_state(world: &World) -> HudState {
     let mut hud = HudState::default();
 
-    // Coop downed markers for the fainted-bar draw (GML `TopCont/Draw_0`
-    // `with Revive` block: raw pos + alarms; the renderer clamps to the
-    // view, exactly like GML's `clamp(x, view_xview + 30, ...)`).
-    // GML `:85` requires `instance_exists(Player)`, so markers only
-    // surface while a player is alive.
-    let player_alive = world
-        .iter_entities()
-        .any(|e| e.contains::<crate::comps_a::Player>());
-    if player_alive {
-        for entity_ref in world.iter_entities() {
-            let (Some(pos), Some(revive)) = (entity_ref.get::<Pos>(), entity_ref.get::<Revive>())
-            else {
-                continue;
-            };
+    // One walk over the entities instead of the reference's five (markers,
+    // boss bar, player panel, death mutations, alive-check). Every group
+    // keeps its original per-group rules: `iter_entities` order is stable,
+    // the boss tie still favors the later entity (`>=`), the first Player
+    // with Health+Inventory wins the panel, and the first Player at all
+    // wins the death-mutation ids.
+    let mut player_alive = false;
+    let mut boss_best: Option<(i32, u32, String)> = None;
+    let mut fields_seen = false;
+    let mut death_seen = false;
+    for entity_ref in world.iter_entities() {
+        let player = entity_ref.get::<Player>();
+        if player.is_some() {
+            player_alive = true;
+        }
+
+        // Coop downed markers for the fainted-bar draw (GML
+        // `TopCont/Draw_0` `with Revive` block: raw pos + alarms; the
+        // renderer clamps to the view, exactly like GML's
+        // `clamp(x, view_xview + 30, ...)`).
+        if let (Some(pos), Some(revive)) = (entity_ref.get::<Pos>(), entity_ref.get::<Revive>()) {
             hud.fainted_bars.push(FaintedBar {
                 x: pos.0.x,
                 y: pos.0.y,
@@ -315,21 +322,81 @@ pub fn sync_hud_state(world: &World) -> HudState {
                 alarm5: revive.alarm5,
             });
         }
+
+        // Boss bar: highest-max-HP boss (bevy `max_by_key(health.max)`).
+        if let (Some(enemy), Some(health)) = (entity_ref.get::<Enemy>(), entity_ref.get::<Health>())
+            && entity_ref.contains::<BossBrain>()
+            && boss_best
+                .as_ref()
+                .map(|(m, _, _)| health.max >= *m)
+                .unwrap_or(true)
+        {
+            boss_best = Some((
+                health.max,
+                health.hp.max(0) as u32,
+                enemy_def(enemy.kind).name.to_string(),
+            ));
+        }
+
+        // Player panel: bevy used `single()`; first player entity wins
+        // and headless sims spawn exactly one.
+        if !fields_seen
+            && let (Some(player), Some(health), Some(inv)) = (
+                player,
+                entity_ref.get::<Health>(),
+                entity_ref.get::<Inventory>(),
+            )
+        {
+            fields_seen = true;
+            hud.hp = health.hp.max(0);
+            hud.max_hp = health.max;
+            hud.level = player.level;
+            hud.rads = player.rads;
+            hud.max_rads = player.next_level_rads;
+            hud.weapons = (0..inv.weapon_slots)
+                .map(|i| weapon_id_name(inv.weapons[i]).to_string())
+                .collect();
+            hud.current_weapon = inv.current;
+            hud.weapon_ids = (0..inv.weapon_slots).map(|i| inv.weapons[i]).collect();
+            hud.weapon_cursed = (0..inv.weapon_slots).map(|i| inv.cursed[i]).collect();
+            hud.ammo = inv.ammo;
+
+            hud.weapon_ammo = (0..inv.weapon_slots)
+                .map(|slot| {
+                    let ammo_type = weapon_meta(inv.weapons[slot]).wep_type as usize;
+                    if ammo_type == 0 {
+                        -1
+                    } else {
+                        inv.ammo[ammo_type.min(5)]
+                    }
+                })
+                .collect();
+            hud.ability = ability_name(player.ability).to_string();
+            hud.ability_ready = player.ability_cooldown.is_finished();
+            hud.crown = crown_short_name(player.crown).to_string();
+        }
+
+        if !death_seen && let Some(player) = player {
+            death_seen = true;
+            hud.death_mutation_ids = player
+                .mutations
+                .iter()
+                .map(|m| mutation_skill_index(*m))
+                .collect();
+        }
+    }
+    // GML `:85` requires `instance_exists(Player)`, so markers only
+    // surface while a player is alive.
+    if !player_alive {
+        hud.fainted_bars.clear();
     }
 
     let Some(run) = world.get_resource::<Run>() else {
-        // Bevy early-return: clear run-scoped fields, keep the rest default.
-        hud.game_over = false;
-        hud.mutation_choices.clear();
-        hud.mutation_choice_ids.clear();
-        hud.death_mutation_ids.clear();
-        hud.boss_hp = 0;
-        hud.boss_max = 0;
-        hud.boss_name.clear();
-        hud.loop_count = 0;
-        hud.toast.clear();
-        hud.toast_timer = 0.0;
-        return hud;
+        // Bevy early-return: run-scoped fields back to defaults; the
+        // markers collected above survive, the rest of the walk is dropped.
+        let mut fresh = HudState::default();
+        fresh.fainted_bars = hud.fainted_bars;
+        return fresh;
     };
 
     hud.game_over = run.game_over;
@@ -343,79 +410,9 @@ pub fn sync_hud_state(world: &World) -> HudState {
         };
     }
 
-    // Boss bar: highest-max-HP boss (bevy `max_by_key(health.max)`).
-    hud.boss_hp = 0;
-    hud.boss_max = 0;
-    hud.boss_name.clear();
-    let mut best: Option<(i32, u32, String)> = None;
-    for entity_ref in world.iter_entities() {
-        let (Some(enemy), Some(health)) = (entity_ref.get::<Enemy>(), entity_ref.get::<Health>())
-        else {
-            continue;
-        };
-        if !entity_ref.contains::<BossBrain>() {
-            continue;
-        }
-        if best
-            .as_ref()
-            .map(|(m, _, _)| health.max >= *m)
-            .unwrap_or(true)
-        {
-            best = Some((
-                health.max,
-                health.hp.max(0) as u32,
-                enemy_def(enemy.kind).name.to_string(),
-            ));
-        }
-    }
-    if let Some((max, hp, name)) = best {
-        hud.boss_hp = hp;
-        hud.boss_max = max.max(1) as u32;
-        hud.boss_name = name;
-    }
-
     if let Some(character) = world.get_resource::<SelectedCharacter>() {
         hud.character = character_def(character.0).name.to_string();
         hud.selected_character = character.0 as usize;
-    }
-
-    for entity_ref in world.iter_entities() {
-        let (Some(player), Some(health), Some(inv)) = (
-            entity_ref.get::<Player>(),
-            entity_ref.get::<Health>(),
-            entity_ref.get::<Inventory>(),
-        ) else {
-            continue;
-        };
-        // Bevy used `single()`: first player entity wins; headless sims
-        // spawn exactly one.
-        hud.hp = health.hp.max(0);
-        hud.max_hp = health.max;
-        hud.level = player.level;
-        hud.rads = player.rads;
-        hud.max_rads = player.next_level_rads;
-        hud.weapons = (0..inv.weapon_slots)
-            .map(|i| weapon_id_name(inv.weapons[i]).to_string())
-            .collect();
-        hud.current_weapon = inv.current;
-        hud.weapon_ids = (0..inv.weapon_slots).map(|i| inv.weapons[i]).collect();
-        hud.weapon_cursed = (0..inv.weapon_slots).map(|i| inv.cursed[i]).collect();
-        hud.ammo = inv.ammo;
-
-        hud.weapon_ammo = (0..inv.weapon_slots)
-            .map(|slot| {
-                let ammo_type = weapon_meta(inv.weapons[slot]).wep_type as usize;
-                if ammo_type == 0 {
-                    -1
-                } else {
-                    inv.ammo[ammo_type.min(5)]
-                }
-            })
-            .collect();
-        hud.ability = ability_name(player.ability).to_string();
-        hud.ability_ready = player.ability_cooldown.is_finished();
-        hud.crown = crown_short_name(player.crown).to_string();
-        break;
     }
 
     hud.floor = run.floor;
@@ -477,18 +474,9 @@ pub fn sync_hud_state(world: &World) -> HudState {
     // (reset when the choice list changed length / emptied). Cursor state is
     // UI-phase owned; the canvas resets its own cursor from
     // `mutation_choices.len()`.
-    if run.game_over {
-        for entity_ref in world.iter_entities() {
-            if let Some(player) = entity_ref.get::<Player>() {
-                hud.death_mutation_ids = player
-                    .mutations
-                    .iter()
-                    .map(|m| mutation_skill_index(*m))
-                    .collect();
-                break;
-            }
-        }
-    } else {
+    // Death-mutation ids were collected in the walk above (first Player);
+    // they only surface on the game-over screen.
+    if !run.game_over {
         hud.death_mutation_ids.clear();
     }
 

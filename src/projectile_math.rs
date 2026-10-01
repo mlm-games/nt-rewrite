@@ -123,6 +123,46 @@ pub fn swept_circle_aabb(
 ) -> Option<SweptCircleAabb> {
     let half = half.abs();
     let radius = radius.max(0.0);
+    // Broad phase: any contact needs some point of the path inside the box
+    // grown by `radius` (the narrow phase also tolerates `1e-4` of slack, so
+    // grow a little more). That grown box is a superset of the rounded
+    // region, so a segment miss proves `None` and skips the searches below;
+    // hits fall through untouched.
+    let grow = radius + 1e-3;
+    let end = start + displacement;
+    let mut t_lo = 0.0f32;
+    let mut t_hi = 1.0f32;
+    for (p, d, lo, hi) in [
+        (
+            start.x,
+            end.x - start.x,
+            center.x - half.x - grow,
+            center.x + half.x + grow,
+        ),
+        (
+            start.y,
+            end.y - start.y,
+            center.y - half.y - grow,
+            center.y + half.y + grow,
+        ),
+    ] {
+        if d == 0.0 {
+            if p < lo || p > hi {
+                return None;
+            }
+        } else {
+            let mut a = (lo - p) / d;
+            let mut b = (hi - p) / d;
+            if a > b {
+                std::mem::swap(&mut a, &mut b);
+            }
+            t_lo = t_lo.max(a);
+            t_hi = t_hi.min(b);
+            if t_lo > t_hi {
+                return None;
+            }
+        }
+    }
     let distance = |t: f32| {
         let p = start + displacement * t;
         let closest = Vec2::new(
