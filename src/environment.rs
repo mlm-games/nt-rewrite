@@ -112,7 +112,7 @@ pub struct GroundFlame {
     /// GML `BigGenerator/Destroy_0.gml:17`
     /// `move_contact_solid(random_angle, 8 + random(12))`, in px. GML's
     /// `move_contact_solid` is a one-shot displacement that leaves `speed`
-    /// alone, and `GroundFlame` has no `Step_0` — so this is applied once
+    /// alone, and `GroundFlame` has no `Step_0` - so this is applied once
     /// and cleared, not integrated per tick.
     pub launch: glam::Vec2,
 }
@@ -147,7 +147,7 @@ pub fn spawn_environment_hazard(
 }
 
 /// Bevy `SurfacePulse` verbatim: per-entity alpha throb applied every
-/// frame by `animate_environment` (renderer-side here — same wave law,
+/// frame by `animate_environment` (renderer-side here - same wave law,
 /// driven by the sim clock).
 #[derive(Component, Clone, Copy, Debug)]
 pub struct SurfacePulse {
@@ -352,7 +352,7 @@ pub struct PropDeathEffect {
     pub dust_ring: u8,
     /// GML `BigGenerator/Destroy_0.gml:27-28`: one `PortalL` per dust
     /// mote, `random_range(bbox_left, bbox_right)` x
-    /// `random_range(bbox_top, bbox_bottom)` — sprite-relative and
+    /// `random_range(bbox_top, bbox_bottom)` - sprite-relative and
     /// asymmetric, since `sprBigGenerator` is 96x96 with origin 32.
     pub portal_l_ring: u8,
     pub bbox_min: glam::Vec2,
@@ -421,7 +421,7 @@ pub fn tick_prop_drops(
         crown: player.crown,
         ..Default::default()
     };
-    // GML `instance_number` counts the CALLING instance — proven in-repo by
+    // GML `instance_number` counts the CALLING instance - proven in-repo by
     // `Console/Create_0.gml:4`, which self-destructs when
     // `instance_number(object_index) > 1`. So a `Destroy_0` sees itself and
     // `<= 1` means "this is the last one": with 4 throne generators the
@@ -489,7 +489,7 @@ pub fn apply_throne_weaken(
 }
 
 /// Visual-only petal/leaf/money scatter (GML `Feather` with a tinted
-/// sprite: Bush leaves, MoneyPile bills). Real sprite motes now —
+/// sprite: Bush leaves, MoneyPile bills). Real sprite motes now -
 /// see [`Mote`]. GML rolls `repeat 3 + irandom(3)` (leaves) and
 /// `repeat 7 + irandom(7)` (bills); `irandom(n)` is inclusive, so the
 /// counts are 3..=6 and 7..=14.
@@ -1112,7 +1112,7 @@ pub fn spawn_trap_fire_with_image(
                 damage: 1,
                 // GML `TrapFire/Other_7.gml`: the jet only lives until its
                 // strip runs out, i.e. 7 frames at `image_speed
-                // 0.2 + random(0.1)` — 24..35 steps.
+                // 0.2 + random(0.1)` - 24..35 steps.
                 life: GTimer::from_seconds(
                     frames as f32 / image_speed.max(0.05) / 30.0,
                     TimerMode::Once,
@@ -1319,7 +1319,7 @@ pub fn tick_native_motion(
     }
 }
 
-/// GML `objects/Trap` — the solid, indestructible flamethrower that
+/// GML `objects/Trap` - the solid, indestructible flamethrower that
 /// `scrPopProps.gml:24-28` bolts to a freshly created small wall in the
 /// scrapyards. `Alarm_0.gml:1-4` flips the emitting axis, re-arms at 90
 /// steps and opens the emitter for 45; `Step_0.gml:4-27` launches one
@@ -1673,7 +1673,7 @@ pub fn spawn_motes(
 /// integration (sim half): flat-friction slide + spin + grow/decay on
 /// `MoteScale`, feather fall-sway (`x += 0.35*sin(fall/7)`,
 /// `y += 0.3`, `speed *= 0.9` over 0.2, `image_speed = 0` at rest),
-/// wall bounce (Smoke every 3rd tick, Feather at half speed —
+/// wall bounce (Smoke every 3rd tick, Feather at half speed -
 /// `move_bounce_solid`). `PickupLifetime` expiry is handled by
 /// `tick_hit_effects`; scale <= 0 despawns like GML's
 /// `image_xscale < 0` kill.

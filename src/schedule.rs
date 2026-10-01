@@ -30,7 +30,7 @@ pub enum NtSimSet {
 }
 
 /// Gameplay gate (bevy `gameplay_active` parity, including the
-/// `TransitionBlock` conjunct — the port flips states instantly so the
+/// `TransitionBlock` conjunct - the port flips states instantly so the
 /// resource stays false, but the gate keeps bevy's shape).
 pub fn gameplay_active(
     state: Res<AppState>,
@@ -82,9 +82,9 @@ pub fn in_game(state: Res<AppState>) -> bool {
 /// `player_move`/`enemy_ai`, `recenter_prop_corpse` and
 /// `tick_environment_hazards` after `apply_explosions`, all `Combat`).
 /// NOT registered (audited gaps): presentation-only systems with no
-/// sim state (`face_aim` flip — resolved renderer-side from AimDir;
-/// `blink_player` alpha — resolved renderer-side from invuln;
-/// `animate_environment` alpha — resolved renderer-side from
+/// sim state (`face_aim` flip - resolved renderer-side from AimDir;
+/// `blink_player` alpha - resolved renderer-side from invuln;
+/// `animate_environment` alpha - resolved renderer-side from
 /// `SurfacePulse` via the same wave law; `sprite_from_candidates`
 /// records its pick in `PulseSprite` at spawn)
 /// and `Update`-set HUD systems (the area music/ambience trio
@@ -92,7 +92,7 @@ pub fn in_game(state: Res<AppState>) -> bool {
 /// IS registered, in the transient-FX tail below). `sample_input` IS ported (keyboard/mouse/gamepad/touch
 /// samplers feed `NtInput` through the `App` shell staging).
 /// `hurt_on_damage` / `prop_hurt_on_damage` ARE registered (state half
-/// only — image/rect/anchor/flip resolve renderer-side);
+/// only - image/rect/anchor/flip resolve renderer-side);
 /// `ensure_weapon_visual` / `tick_weapon_visuals` ARE registered
 /// (entity + wkick/wep state; pose/art resolve renderer-side);
 /// `clear_input_pulses`
@@ -579,7 +579,7 @@ pub fn build_sim_schedule() -> Schedule {
                 // GML parity: `PortalClear` is a 5-step wall-blaster
                 // (`MenuGen/Alarm_1` pops one per campfire camper and it
                 // only ever meets `Floor`s, which die to anything), so it
-                // must also tick + despawn on the Title campfire — not
+                // must also tick + despawn on the Title campfire - not
                 // just behind the `InGame` gameplay gate. Without this the
                 // clears never finish and their 64px white discs sit on
                 // the camp forever (the "white circle" bug).
@@ -599,7 +599,7 @@ pub fn build_sim_schedule() -> Schedule {
                 // Bevy `Update clear_input_when_inactive`: drops sampled
                 // pulses/axes when paused or out of game, after all
                 // consumers ran (this also subsumes `OnExit(InGame)
-                // clear_input_pulses` — the next tick outside InGame
+                // clear_input_pulses` - the next tick outside InGame
                 // clears anything left). Live play drains the peek-only
                 // interact pulse in the same system (E tap would latch
                 // forever: `collect_pickups`/`tick_throne_sit` peek it,
@@ -621,7 +621,7 @@ mod schedule_tests {
     /// once removed `LoopTransition` in `reset_menu_room_resources`,
     /// and ungated `Always`-set systems (`tick_campfire` et al take it
     /// as a bare `ResMut`) panicked the schedule every frame on menu
-    /// rooms — the remap-screen panic loop + stutter. Drives a real
+    /// rooms - the remap-screen panic loop + stutter. Drives a real
     /// `App` boot into the Title campfire, then ticks the sim schedule
     /// the way `advance` does.
     #[test]

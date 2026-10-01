@@ -253,7 +253,7 @@ pub const SPLASH_GUN_STEPS: [f32; 7] = [
 ];
 
 /// Headless hold after the gun sequence before auto-advancing (bevy
-/// has none — it waits for a press; applies only with
+/// has none - it waits for a press; applies only with
 /// [`SplashAutoAdvance`] set, see [`tick_splash`]).
 pub const SPLASH_LOGO_HOLD_SECS: f32 = 1.0;
 
@@ -270,7 +270,7 @@ pub struct SplashAutoAdvance(pub bool);
 /// stands on a pickup). `alpha > 0` is the WHOLE visibility law for the
 /// act button and the pickup art riding it
 /// (`scrDrawMobileControls`: `if (!instance_exists(_player)) alpha = 1;
-/// else if (alpha <= 0) continue`) — so the button is lit only near a
+/// else if (alpha <= 0) continue`) - so the button is lit only near a
 /// pickup, plus a ~3 s grace when the run starts.
 #[derive(Debug, Clone, Copy, Resource)]
 pub struct ActButton {
@@ -418,7 +418,7 @@ pub struct QuitRequested(pub bool);
 
 /// Scene-transition input block (bevy `Transition<AppState>.block_input`
 /// parity). The port flips states instantly (`goto_state`), so no system
-/// ever raises this — it exists so `gameplay_active` keeps the bevy
+/// ever raises this - it exists so `gameplay_active` keeps the bevy
 /// gate shape instead of silently dropping a conjunct.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Resource)]
 pub struct TransitionBlock(pub bool);
@@ -427,12 +427,12 @@ pub struct TransitionBlock(pub bool);
 /// effects (paused/overlay/pending cleared; `Run::game_over` cleared
 /// when leaving InGame or entering a menu state; menu transients
 /// cleared). Replaces bevy `NextState` + animated `Transition`
-/// (deferred to the shell — see module docs).
+/// (deferred to the shell - see module docs).
 ///
 /// GML room-restart parity: entering `MainMenu` from anywhere rebuilds
 /// the logo room (the blanket teardown + campfire `Run` reset live in
 /// `setup_title_campfire`; calling it here as well as in the action arms
-/// keeps direct `goto_state(MainMenu)` callers — tests, splash timeout —
+/// keeps direct `goto_state(MainMenu)` callers - tests, splash timeout -
 /// on the same clean-room law, and it is idempotent). Entering `Title`
 /// rebuilds the campfire room the same way. Both are skipped when the
 /// world already reads as a fresh campfire room so repeated enters stay
@@ -470,12 +470,12 @@ pub fn goto_state(world: &mut World, next: AppState) {
         }
         AppState::Loading => {
             // GML `room_restart` parity (bevy `teardown_game` on InGame
-            // exit): the generating room starts empty — `GenCont` draws
+            // exit): the generating room starts empty - `GenCont` draws
             // only the spiral + GENERATING + roadmap. Without this the
             // stale Title camp (fresh runs) or dead run (RETRY) renders
             // through the whole 1.2 s load. `setup_run` re-teardowns at
             // the end of the load; both are idempotent. Run/MenuState
-            // resources survive (setup_run resets them) — only session
+            // resources survive (setup_run resets them) - only session
             // entities + the floor mask go.
             crate::setup::teardown_session_entities(world);
             world.init_resource::<crate::comps_a::FloorMask>();
@@ -595,10 +595,10 @@ pub fn reset_pause_state(world: &mut World) {
 /// button). Only runs in `Splash`; finishing enters `MainMenu`.
 ///
 /// Emits the GML splash cues per event: `sndVlambeer` once when the
-/// reel is created (`Vlambeer/Create_0:139` — the fresh-boot `else`
+/// reel is created (`Vlambeer/Create_0:139` - the fresh-boot `else`
 /// branch; the quit-to-menu and continue-run branches `exit` before
 /// it), `sndRestart` on each of the three `Vlambeer/Alarm_0:13`
-/// `mode++` advances (timer- or press-triggered alike — `Draw_0.gml:5-6`
+/// `mode++` advances (timer- or press-triggered alike - `Draw_0.gml:5-6`
 /// just performs the same alarm; the mode 3 -> 4 arm creates the logo
 /// and plays none), `sndMachinegun` per gun-step increment 1..=6
 /// (`Logo/Alarm_0:18`), and the `Logo/Alarm_0:8-12` finale `sndShovel` +
@@ -690,7 +690,7 @@ pub fn tick_splash(world: &mut World, dt: f32, pressed: bool) {
 
 /// Loading tick (bevy `tick_loading` law: assets at headless-1.0, wait
 /// out the 1.2 s floor, then InGame through the existing `setup_run`
-/// entry — never duplicated here). Only runs in `Loading`.
+/// entry - never duplicated here). Only runs in `Loading`.
 pub fn tick_loading(world: &mut World, dt: f32) {
     if world
         .get_resource::<AppState>()

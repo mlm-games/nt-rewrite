@@ -131,16 +131,16 @@ fn pickup_sprite(kind: PickupKind) -> Option<(&'static str, f32)> {
 // distance): `mskWepPickup` 28x28 origin 14, `mskPickup` 10x10 origin 5,
 // `mskRad` 8x8 origin 4, and the chestprop sprites carry no mask so
 // their 16x16 origin-8 bbox is the box. `PLAYER_MASK_HALF` takes the
-// `mskPlayer` 16x16 FRAME (origin 8), not its `bbox_*` 4..11 x 4..13 —
+// `mskPlayer` 16x16 FRAME (origin 8), not its `bbox_*` 4..11 x 4..13 -
 // the prop prompts below do use that bbox.
 //
 // The prop prompts instead keep GML `place_meeting(x, y, _player)`
 // verbatim as a closed per-axis window of `player - prop`, from the
 // real `bbox_*` + origin (both edge pixels inclusive, `image_xscale =
 // -1` mirrored): the player's box is `mskPlayer` bbox 4..11 x 4..13 at
-// origin (8,8) — 8x10 inside the 16x16 frame, never mirrored (`Player`
+// origin (8,8) - 8x10 inside the 16x16 frame, never mirrored (`Player`
 // draws through `draw_sprite_ext(.., right, ..)`, it never writes
-// `image_xscale`) — against `CarVenusFixed` 0..31 x 3..30 at origin
+// `image_xscale`) - against `CarVenusFixed` 0..31 x 3..30 at origin
 // (16,16) (both car sprites and both hurt strips share that box;
 // `image_xscale = choose(1, -1)` in `Create_0` mirrors it, carried by
 // `PropSprites.flip_x`), `IceFlower` `sprIceFlowerIdle` 1..30 x 2..29 at
@@ -183,7 +183,7 @@ pub fn mask_overlap(a: glam::Vec2, b: glam::Vec2, half_sum: f32) -> bool {
 ///
 /// GML `Player/Collision_WepPickup.gml:6` gates the equip on
 /// `other.id == instance_nearest(x, y, WepPickup)`, so only the NEAREST
-/// ground weapon ever reacts to a press — but the ammo payout at
+/// ground weapon ever reacts to a press - but the ammo payout at
 /// `:90-104` sits OUTSIDE that `if`, so it only needs mask overlap (see
 /// [`weapon_pickup_ammo_pays`] for that separate half-extent).
 pub fn pickup_mask_half(kind: &PickupKind, is_nearest_weapon: bool) -> Option<f32> {
@@ -252,11 +252,11 @@ fn nearest_prompt_hit(
 
 /// GML `ButtonAct` fade: `ButtonAct/Other_10` runs the 30 Hz step, and
 /// `scrDrawPlayerHUD.gml:378-403` raises `active` while the player
-/// stands on a promptable pickup — but only inside its `is_touch`
+/// stands on a promptable pickup - but only inside its `is_touch`
 /// block. The port raises it on every device because the sole reader
 /// is the touch chrome (`render.rs touch_sprites`), which never draws
 /// on keyboard/gamepad, so the raise is unobservable there. The prompt
-/// needs no interact press — it shows whether or not the press landed.
+/// needs no interact press - it shows whether or not the press landed.
 /// Own system so the pickup scan stays query-free of UI state.
 pub fn tick_act_button(
     mut act: ResMut<crate::state::ActButton>,
@@ -331,7 +331,7 @@ pub fn spawn_pickup(
             // GML `CursedPickup/Create_0.gml` verbatim: `blink = 30`,
             // `alarm[0] = ceil((200 + random(30)) * mult)` (the Rush
             // crown's INTEGER `/= 3`), `image_speed = 0`. The alarm
-            // never fires first — `Alarm_0` re-arms every 2 steps and
+            // never fires first - `Alarm_0` re-arms every 2 steps and
             // the detonation is keyed on `blink < 0`.
             let alarm = (200.0_f32 + rng.random_range(0.0_f32..30.0)).ceil();
             let alarm = if hasted { alarm / 3.0 } else { alarm };
@@ -379,7 +379,7 @@ pub fn count_cursed(inv: &Inventory) -> u32 {
 
 /// GML `AmmoPickup/Create_0.gml:14-17`: with 2+ cursed weapons carried,
 /// `random(2) < 1` replaces the pickup with a `CursedPickup` in place
-/// (`instance_destroy(id, false)` — the ammo never exists). `instance_is`/
+/// (`instance_destroy(id, false)` - the ammo never exists). `instance_is`/
 /// `instance_exists(Player)` gates it, so only roll when a player is
 /// present, which every caller already is.
 pub fn spawn_ammo_pickup(
@@ -401,7 +401,7 @@ pub fn spawn_ammo_pickup(
 /// [`spawn_ammo_pickup`] for callers that already resolved the ammo type.
 /// GML decides the type in `AmmoPickup/Collision_Player` via
 /// `scrAmmoDecideType`, so a `CursedPickup` conversion discards the
-/// caller's choice and re-rolls on touch — which is why the converted
+/// caller's choice and re-rolls on touch - which is why the converted
 /// kind carries no pre-decided type.
 pub fn maybe_cursed_ammo(
     commands: &mut Commands,
@@ -422,7 +422,7 @@ pub fn maybe_cursed_ammo(
 
 /// GML `WeaponChest/Create_0.gml:4-11`: the Crown-of-Curses roll, made
 /// ONCE at spawn and read back when the chest opens. GML gates it on
-/// `GameCont.crown > 1 && instance_exists(GenCont)` — any real crown
+/// `GameCont.crown > 1 && instance_exists(GenCont)` - any real crown
 /// (the port's `CrownKind::None` is GML `crwn_none`, so the same test)
 /// AND worldgen only.
 #[derive(Component, Clone, Copy, Debug, Default)]
@@ -603,7 +603,7 @@ pub fn spawn_chest(
 
 /// GML `chestprop/Create_0` plus each subclass's `Create_0`: the
 /// built-in advance is OFF (`image_speed = 0`) and the index is driven
-/// by hand — `random(0.04)` while `image_index < 1`, then `+0.4`
+/// by hand - `random(0.04)` while `image_index < 1`, then `+0.4`
 /// (`chestprop/Step_0.gml:4-7`, the identical `RadChest/Step_1.gml`
 /// ramp, and `RogueChest/Step_1.gml`'s `scrFirstFrameAnim(0.4)` whose
 /// first-frame jitter is `0.4 * 0.05 = 0.02`). `sprite_index` /
@@ -743,7 +743,7 @@ pub fn spawn_rad_burst(
 /// `from_prop` picks the caller's own kick: a `prop` caller (every
 /// `RadChest` descendant, via `prop/Destroy_0.gml:12`) uses
 /// `random_angle` / `16`, any other caller (the Horror death drop) uses
-/// its own `direction` / `speed`, which is 0 for a standing Player —
+/// its own `direction` / `speed`, which is 0 for a standing Player -
 /// so those rads only get the random kick.
 pub fn scr_rad_drop(
     commands: &mut Commands,
@@ -819,7 +819,7 @@ pub fn random_offset() -> glam::Vec2 {
 }
 
 /// GML Chicken throw (`scripts/scrPowers/scrPowers.gml:218-242`): drop
-/// the held weapon as a flung pickup — speed 16 px/step toward
+/// the held weapon as a flung pickup - speed 16 px/step toward
 /// `angle_rad` (gunangle±2), team/creator set, Determination ultra arming
 /// the 60-tick `alarm[1]` return.
 pub fn spawn_flung_weapon_pickup(
@@ -1102,7 +1102,7 @@ pub fn maybe_spawn_drop_ctx(
 
 /// GML `HPPickup/Create_0.gml:8-15` verbatim: `num = 2`, `4` with Second
 /// Stomach, `+1` for the Haste crown. `HPPickup/Collision_Player.gml:11-14`
-/// heals exactly `num` — no multipliers.
+/// heals exactly `num` - no multipliers.
 pub fn hppickup_num(player: &Player) -> i32 {
     let mut num = if player.mutations.contains(&MutationId::SecondStomach) {
         4
@@ -1295,7 +1295,7 @@ pub fn tick_cursed_ammo(
         // timescale)`. Nothing in the GML ever increments `current_frame`
         // (only `UberCont/Create_0.gml:140` resets it), and
         // `MainMenuButton/Step_0.gml:7` compares it against an integer, so
-        // the macro is `0 < 1` — unconditionally true. The roll is every
+        // the macro is `0 < 1` - unconditionally true. The roll is every
         // step, not once per image frame.
         if rng.random::<f32>() < 0.25 {
             spawn_pickup(&mut commands, &catalog, PickupKind::Curse, pos.0, 0, false);
@@ -1307,7 +1307,7 @@ pub fn tick_cursed_ammo(
         blink.alarm += 2.0;
         // GML `Alarm_0.gml` tests `blink < 0` BEFORE decrementing. `blink`
         // starts at 30, so the check sees 30-(k-1) on firing k and first
-        // goes negative at k=32 — step `A + 2*31` = `A + 62`.
+        // goes negative at k=32 - step `A + 2*31` = `A + 62`.
         if blink.blink < 0 {
             crate::spawns::spawn_explosion_with_source_radius_kind(
                 &mut commands,
@@ -1469,8 +1469,8 @@ pub fn collect_pickups(
         0.0
     };
     // GML `scrEyesTelekinesis:35-41` drags `chestprop`, `AmmoPickup`,
-    // `HPPickup`, `WepPickup`, `RadChest` and `Rad` — NOT `Curse`
-    // motes — through this direct-position arm, so chests DO drag and
+    // `HPPickup`, `WepPickup`, `RadChest` and `Rad` - NOT `Curse`
+    // motes - through this direct-position arm, so chests DO drag and
     // must stay out of the ordinary pickup drift below.
     let telek_drag = |pos: &mut Pos, at: glam::Vec2| {
         if telek_step <= 0.0 {
@@ -1518,7 +1518,7 @@ pub fn collect_pickups(
     {
         let pickup_pos_value = pickup_pos.0;
         let dist = player_pos.distance(pickup_pos_value);
-        // GML `Rad/Step_0.gml:6`: `if (speed > 0) exit` — a rad still
+        // GML `Rad/Step_0.gml:6`: `if (speed > 0) exit` - a rad still
         // coasting from its drop kick does not home yet. Read before the
         // ground-physics slide below consumes `ground`.
         let rad_coasting = ground
@@ -1558,7 +1558,7 @@ pub fn collect_pickups(
         if is_rad {
             // GML `Rad/Step_0.gml:18-22`: `d = 80 + 60 *
             // scr_skill_get(mut_plutonium_hunger)`, then
-            // `mp_potential_step(target, 12, 0)` — 12 px/step.
+            // `mp_potential_step(target, 12, 0)` - 12 px/step.
             let has_hunger = player.mutations.contains(&MutationId::PlutoniumHunger);
             let rad_range = 80.0 + if has_hunger { 60.0 } else { 0.0 };
             if !rad_coasting && dist < rad_range {
@@ -1623,7 +1623,7 @@ pub fn collect_pickups(
             // is called at the TOP of every chest's `Collision_Player`,
             // before the loot. The Crown of Hatred burns 1 HP through the
             // normal i-frame check (`scrPlayerProcTakeDamage`, so 1 HP
-            // survives) and drops 16 rads at the PLAYER's position — the
+            // survives) and drops 16 rads at the PLAYER's position - the
             // event runs `with (p)`. The `_amount = 24` line is dead
             // code (`other` in a `Collision_Player` event is the Player,
             // never a `RadChest`), so it is deliberately NOT implemented.
@@ -1780,10 +1780,10 @@ pub fn collect_pickups(
                     // `RadMaggotChest.yy`'s `parentObjectId` is
                     // `RadChest`, so `Create_0`'s `event_inherited()`
                     // runs `RadChest/Create_0.gml:20` and the maggot cache
-                    // INHERITS `raddrop = 25` (it never overrides it) —
+                    // INHERITS `raddrop = 25` (it never overrides it) -
                     // 25 rads, scattered by `scrRadDrop`.
                     // `ExploderExplo/Create_0.gml` is 6 x `Smoke` plus
-                    // `BackCont.shake += 6` — no `damage`, no
+                    // `BackCont.shake += 6` - no `damage`, no
                     // `Collision_Player`, so opening a maggot cache deals 0.
                     //
                     // `RadMaggotExplosion/Create_0.gml:1-14` fires the ring:
@@ -1886,7 +1886,7 @@ pub fn collect_pickups(
                     // verbatim: `scrDecideWep(1 + curse * 2, false)` with
                     // `curse = true` from `Create_0:3`, so `extra = 3`, and
                     // `random_set_seed(dropseed)` runs ONCE before the
-                    // `repeat` — `scrDecideWep` itself reseeds from
+                    // `repeat` - `scrDecideWep` itself reseeds from
                     // `dropseed` and then advances it, so all three guns
                     // come off that fixed chain. `:33` resets `nochest`,
                     // `:17` spawns a `PortalClear` and `Destroy_0:6` a
@@ -1928,7 +1928,7 @@ pub fn collect_pickups(
                 ChestKind::BigWeapon => {
                     // GML `BigWeaponChest/Collision_Player.gml:14-30`:
                     // `random_set_seed(dropseed)` ONCE, then
-                    // `scrDecideWep(1, false)` per drop — so each gun is a
+                    // `scrDecideWep(1, false)` per drop - so each gun is a
                     // fresh roll off the same chain. `:16` a
                     // `PortalClear`, `:30` resets `nochest`.
                     let count = if ambidextrous { 4 } else { 3 };
@@ -2021,7 +2021,7 @@ pub fn collect_pickups(
                 ChestKind::Idpd => {
                     // GML `IDPDChest/Collision_Player.gml:11-13` verbatim:
                     // `repeat (8) instance_create(_player.x, _player.y,
-                    // AmmoPickup)` — all eight land ON the player, so they
+                    // AmmoPickup)` - all eight land ON the player, so they
                     // are collected next tick and each one independently
                     // rolls `scrAmmoDecideType(id, false)`. The chest then
                     // `instance_destroy()`s, and `Destroy_0:11-20` raises
@@ -2170,7 +2170,7 @@ pub fn collect_pickups(
                     pickup_cursed,
                 );
                 // GML `Player/Collision_WepPickup.gml:57-58`:
-                // `can_shoot = true; reload = 0` — a gun picked up
+                // `can_shoot = true; reload = 0` - a gun picked up
                 // mid-reload can fire immediately. The port carries the
                 // reload on `FireCooldown.timer`.
                 if let Some(cd) = fire_cd.as_deref_mut() {
@@ -2494,7 +2494,7 @@ pub const ALL_AMMO_KINDS: [AmmoKind; 5] = [
 /// * the `extra_weps` re-roll replaces the secondary's type at a
 ///   `1 - 1/(_extra_count + 1)` rate (GML indexes 1-based with
 ///   `irandom(_extra_count - 1)`, so index 0 is an empty slot and the
-///   LAST extra weapon is unreachable — kept verbatim);
+///   LAST extra weapon is unreachable - kept verbatim);
 /// * `_prioritize_primary || !bwep` walks primary then secondary, and
 ///   when BOTH are live and the primary is full it splits the choice
 ///   50/50 with `choose(_atype, _btype)`;
@@ -2648,7 +2648,7 @@ fn equip_weapon(
     inv.cursed[slot] = curse;
 }
 
-/// GML `Player/Collision_WepPickup.gml:90-104` verbatim — the block sits
+/// GML `Player/Collision_WepPickup.gml:90-104` verbatim - the block sits
 /// OUTSIDE the pick `if/else`, so mask overlap alone pays it (press or
 /// not, nearest gun or not) and `other.ammo` is always consumed.
 /// The Protection crown converts the payout into a

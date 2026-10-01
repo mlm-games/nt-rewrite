@@ -3,7 +3,7 @@
 /// instead of `Transform.translation` (`Vec3`).
 ///
 /// Render split: `Sprite`/`Anchor`/`Transform.rotation` writes, hurt/fire
-/// strip swaps, `Juice::pop_in`, and `VfxSpawner` bursts stay out — the
+/// strip swaps, `Juice::pop_in`, and `VfxSpawner` bursts stay out - the
 /// render phase resolves visuals from sim state. Gameplay effects are
 /// kept: movement impulses, projectile spawns with full combat traits
 /// (`typ`/fade/friction/bounce/split/homing/fuse), pending-spawn queues,
@@ -15,8 +15,8 @@
 /// Timer adaptation: bevy `Timer` -> [`GTimer`]; `tick()` returns `()`,
 /// then `just_finished()`/`finished()` are queried. The bevy
 /// `ready_timer()` (finished from birth, silent until re-armed) has no
-/// direct `GTimer` equivalent — `GTimer::disarmed()` reports
-/// `just_finished()` on *every* tick — so the local [`ready_timer`]
+/// direct `GTimer` equivalent - `GTimer::disarmed()` reports
+/// `just_finished()` on *every* tick - so the local [`ready_timer`]
 /// double-ticks a 10 ms `Once` timer into the same observable state
 /// (finished, not just-finished).
 ///
@@ -96,7 +96,7 @@ pub fn difficulty_multiplier(floor: u32) -> f32 {
 ///
 /// Boss laws (all `1 + loops/3` except ScrapBoss `/1.2` and
 /// ProtoStatue flat 120): BigBandit, Throne, ThroneII, Hyper+Technomancer
-/// (coop `((pc/2)+0.5)` factor is 1.0 solo — GML `/` is float division,
+/// (coop `((pc/2)+0.5)` factor is 1.0 solo - GML `/` is float division,
 /// so `(1/2)+0.5 = 1.0`), LilHunter, FrogQueen, Last (`Last`: base 1100).
 /// Single-player-only bosses with no loop term stay flat: YV (700 +
 /// coop-only scaling). `Mom`/`Captain`/`OldGuardian`/`PalaceGuardian`
@@ -587,7 +587,7 @@ pub fn random_spawn_pos(rng: &mut impl RngExt, min_from_center: f32) -> glam::Ve
 }
 
 /// Finished-from-birth, silent-until-re-armed timer (bevy `ready_timer`
-/// parity — see module docs for why `GTimer::disarmed()` is wrong here).
+/// parity - see module docs for why `GTimer::disarmed()` is wrong here).
 fn ready_timer() -> GTimer {
     let mut t = GTimer::from_seconds(0.01, TimerMode::Once);
     t.tick(0.01);
@@ -598,7 +598,7 @@ fn ready_timer() -> GTimer {
 /// Enemy telegraph cue through the sim audio queue (GML `snd_play`/
 /// `snd_play_hit`/`snd_play_hit_big` all hand the instance
 /// `UberCont.opt_sndvol`, so the cue sits at 1.0 vol, 0.05 variance; the bevy
-/// build loaded `audio/{stem}.wav` directly to dodge the 16-param cap — the
+/// build loaded `audio/{stem}.wav` directly to dodge the 16-param cap - the
 /// queue carries the stem name instead and the audio layer resolves it).
 fn enemy_cue(cues: &mut Queue<AudioCue>, stem: &'static str) {
     cues.push(AudioCue {
@@ -815,7 +815,7 @@ fn wall_law(kind: EnemyKind) -> EnemyWallLaw {
         // `Maggot/Collision_Wall.gml:4-5`: slide, then push 1 px/frame off the
         // wall it just touched.
         EnemyKind::Maggot => EnemyWallLaw::SlidePush,
-        // `move_bounce_solid(false)` — slide, no bounce.
+        // `move_bounce_solid(false)` - slide, no bounce.
         EnemyKind::Crab | EnemyKind::JungleFly => EnemyWallLaw::Slide,
         // `move_bounce_solid(true)` and nothing else.
         EnemyKind::Ballguy
@@ -1426,8 +1426,8 @@ fn ornd<R: RngExt + ?Sized>(rng: &mut R, n: f32) -> f32 {
 }
 
 /// GML `objects/<kind>/Alarm_2` for the objects whose decide only staged a
-/// volley. Each spends `ammo`, re-arms `alarm[2]` on its own period, and —
-/// where the object has an `else` arm — re-arms the DECIDE at the post-volley
+/// volley. Each spends `ammo`, re-arms `alarm[2]` on its own period, and -
+/// where the object has an `else` arm - re-arms the DECIDE at the post-volley
 /// value. That last part is why these live here rather than inside the
 /// decide: the crab, the turret and the salamander each sit idle for a
 /// different stretch after firing than before it.
@@ -1599,7 +1599,7 @@ fn gml_alarm_2_volley(
 
 /// GML `HostileHorror/Other_10:20-33`: the radial spray. Every step it
 /// re-aims at the player, and once a step it buys `round(charge + 1)` bullets
-/// out of its own `raddrop` and grows `charge` by 0.1 — so the pattern widens
+/// out of its own `raddrop` and grows `charge` by 0.1 - so the pattern widens
 /// quadratically and eventually runs the boss's 90 rads dry. `charge` resets
 /// to 0 whenever `ammo` is 0.
 ///
@@ -1744,7 +1744,7 @@ fn gml_alarm_1_fallback(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized))
 
 /// GML `Freak/Alarm_1:1-9` (impulse `random(80) - 40`) with
 /// `ExploFreak/Alarm_1:1-9` / `RhinoFreak/Alarm_1:1-9`
-/// (`random(180) - 90`) — identical but for that spread.
+/// (`random(180) - 90`) - identical but for that spread.
 fn freak_alarm_1(d: &mut GmlDecide<'_>, spread_n: f32, rng: &mut (impl RngExt + ?Sized)) {
     d.arm(6.0 + rnd(rng, 5.0));
     if d.sees {
@@ -1921,7 +1921,7 @@ fn crab_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
 }
 
 /// GML `Turtle/Alarm_1`: `walk = 0` first, then either `walk = 50` or
-/// `alarm[1] /= 2` — the turtle's long walk is bought with a doubled
+/// `alarm[1] /= 2` - the turtle's long walk is bought with a doubled
 /// cadence, not a longer one. The else arm covers BOTH "no sight" and
 /// "too far", so a blocked turtle still turns and still rolls.
 fn turtle_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
@@ -2270,7 +2270,7 @@ pub struct SnowBotFire {
 }
 
 /// table-driven fire, per bevy `enemy_ai` top to bottom (bosses `continue`
-/// before their first timer tick — boss brains live elsewhere).
+/// before their first timer tick - boss brains live elsewhere).
 #[allow(clippy::too_many_arguments)]
 pub fn enemy_ai(
     time: Res<SimTime>,
@@ -2523,7 +2523,7 @@ pub fn enemy_ai(
                 // raises the sprite WITH `meleedamage` on the charge arm,
                 // but a hit swaps in `spr_hurt` and `enemy/Step_0:27-29`
                 // drops to `spr_idle`/`spr_walk`, never back to `spr_fire`
-                // — so `touch_damage` alone outlives the sprite and the
+                // - so `touch_damage` alone outlives the sprite and the
                 // decide re-arms it instead.
                 if brain.walk > 0.0 {
                     let gun = brain.gunangle;
@@ -2558,7 +2558,7 @@ pub fn enemy_ai(
                     add_gml_motion(&mut brain, &mut vel, heading, impulse_f, dt);
                 }
                 // The walk law's cap is `Other_10`'s own `if (speed > N) speed
-                // = N`, and it sits OUTSIDE the `walk` gate — dropping it let
+                // = N`, and it sits OUTSIDE the `walk` gate - dropping it let
                 // the `separate` push drive these to its 16 px/frame clamp.
                 gml_clamp_speed(&mut brain, &mut vel, enemy.kind, cap_f);
                 // GML `Spider/Other_10:12` caps at `maxspeed`, which
@@ -2659,7 +2659,7 @@ pub fn enemy_ai(
             // the translation happens once, inside `enemy/Collision_Wall`'s
             // `move_bounce_solid` below. Moving here as well integrated
             // `vel * dt` twice, and the second (swept) test started from
-            // the unchecked first position — so a dash into a wall
+            // the unchecked first position - so a dash into a wall
             // resolved from inside geometry and fought the bounce.
         } else {
             // Not gated on live velocity. GML has no such rule: the decide
@@ -5803,7 +5803,7 @@ pub fn tick_frog_eggs(
 /// GML `LilHunter/Destroy_0:13-21` head spawn (`LilHunterDie/Create_0`):
 /// speed 2 px/step toward the nearest player (else random),
 /// `sndLilHunterBreak` + `PortalClear`.
-/// (`scrOnPopoKill` has no port equivalent — skipped with this note;
+/// (`scrOnPopoKill` has no port equivalent - skipped with this note;
 /// its music-cue side effects ride the audio layer.)
 pub fn spawn_lil_hunter_die(
     commands: &mut Commands,
@@ -6398,7 +6398,7 @@ fn gml_right_from_gunangle(gunangle_rad: f32) -> f32 {
     }
 }
 
-/// GML `objects/Grunt` and `objects/EliteGrunt` — the two IDPD units that
+/// GML `objects/Grunt` and `objects/EliteGrunt` - the two IDPD units that
 /// roll. `Alarm_1` chooses between a roll, a shot, a walk and a `PopoNade`
 /// / `IDPDRocket` lob; every aggressive arm is gated on `freeze > 40`.
 ///
@@ -6975,7 +6975,7 @@ pub fn tick_special_props(
     }
 }
 
-/// GML `objects/IceFlower` — the only route into `area_jungle`. The port
+/// GML `objects/IceFlower` - the only route into `area_jungle`. The port
 /// previously had no flower at all, so LAST WISH was spent on nothing.
 ///
 /// `Create_0.gml:7-10` snaps the flower onto the nearest `Floor` and nudges
@@ -7074,7 +7074,7 @@ pub fn tick_ice_flowers(
     }
 }
 
-/// GML `objects/Shielder` and `objects/Inspector` — the two non-rolling
+/// GML `objects/Shielder` and `objects/Inspector` - the two non-rolling
 /// IDPD gunners. `Shielder` alternates an 8-round `IDPDBullet` burst, a
 /// `PopoShield`, and a walk; `Inspector` mind-controls the player, slugs,
 /// and lobs `PopoNade` at the last-seen position.
@@ -7865,7 +7865,7 @@ pub fn tick_elite_inspectors(
         let freeze = brain.freeze;
 
         // GML `EliteInspector/Other_10:10-16`: `target.speed > 0 or
-        // hp < max_hp`, then `if target.can_shoot freeze += 3` — the
+        // hp < max_hp`, then `if target.can_shoot freeze += 3` - the
         // elite gate is the positive form, live during the player's
         // reload window.
         if player_speed_sq > 0.001 || health.hp < health.max {
@@ -8089,7 +8089,7 @@ pub fn tick_elite_shielders(
         let freeze = brain.freeze;
 
         // GML `EliteShielder/Other_10:12-16`: `target.speed > 0 && hp <
-        // max_hp`, then `if target[$ "can_shoot"] freeze += 3` — the
+        // max_hp`, then `if target[$ "can_shoot"] freeze += 3` - the
         // `&&` gate and the positive `can_shoot` form.
         if player_v.0.length_squared() > 0.001 && health.hp < health.max {
             brain.freeze += 1.0;
@@ -8381,7 +8381,7 @@ fn spawn_hit_warning(commands: &mut Commands, pos: glam::Vec2) {
     ));
 }
 
-/// Expire telegraph markers (bonus port — bevy `tick_hit_warnings`
+/// Expire telegraph markers (bonus port - bevy `tick_hit_warnings`
 /// minus the anim-end branch, which has no headless equivalent).
 pub fn tick_hit_warnings(
     time: Res<SimTime>,
@@ -8396,7 +8396,7 @@ pub fn tick_hit_warnings(
     }
 }
 
-/// PopoShield follower tracking (bonus port — bevy
+/// PopoShield follower tracking (bonus port - bevy
 /// `tick_shield_followers` minus the rotation write, which the renderer
 /// derives from the owner's `gunangle`).
 pub fn tick_shield_followers(
@@ -8416,8 +8416,8 @@ pub fn tick_shield_followers(
 }
 
 /// GML `enemy/Collision_enemy`: a 1 px/frame velocity impulse away from each
-/// overlapping enemy, gated on `size <= other.size` and — once
-/// `busycollisions` is false (`GameCont.loops > 3`) — only on frames where
+/// overlapping enemy, gated on `size <= other.size` and - once
+/// `busycollisions` is false (`GameCont.loops > 3`) - only on frames where
 /// `current_frame % 30` is 0. Each contributing pair also draws the two
 /// `orandom(1)` jitters and caps speed at 16 px/frame.
 fn separate(
@@ -8450,7 +8450,7 @@ fn separate(
             continue;
         }
         // GML fires on mask overlap. The port approximates each mask as a
-        // circle, so the test is circle-circle overlap — a flat constant
+        // circle, so the test is circle-circle overlap - a flat constant
         // separated a 16px Maggot pair ~2x too eagerly and pushed
         // wall-hugging enemies back into the wall.
         if epos.distance(*other) >= radius + *other_radius {
@@ -8473,7 +8473,7 @@ fn separate(
 ///
 /// Also slides `GroundPhysics` gibs/debris (player-death blood gibs):
 /// GML gives them flat friction like every ground slide, and nothing
-/// else ticks them — without this they coast at full speed for their
+/// else ticks them - without this they coast at full speed for their
 /// whole 0.9 s life and land ~144 px away.
 pub fn tick_corpses(
     time: Res<SimTime>,
@@ -8662,7 +8662,7 @@ mod gml_volley_cadence_tests {
     }
 
     /// GML `HostileHorror/Other_10:22-31`: the fan is `round(charge + 1)`
-    /// bullets paid for out of `raddrop`, and `charge` grows 0.1 a step — so
+    /// bullets paid for out of `raddrop`, and `charge` grows 0.1 a step - so
     /// the bill is quadratic. The whole 30-round burst must still fit inside
     /// the 90-rar pool (`Create_0:14`), or the tail of the burst would go out
     /// silent and the boss would under-perform.
@@ -8751,7 +8751,7 @@ mod gml_motion_cap_tests {
     }
 
     /// GML `RadMaggot/Other_10:3` applies `motion_add` with no `walk` gate, and
-    /// its `Alarm_1` never arms one — so it needs the constant-drift law, not
+    /// its `Alarm_1` never arms one - so it needs the constant-drift law, not
     /// the walk law that gates on `walk > 0`.
     #[test]
     fn rad_maggot_drifts_without_a_walk_gate() {

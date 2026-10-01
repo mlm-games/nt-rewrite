@@ -378,7 +378,7 @@ fn golden_demo_level_walkthrough() {
 
     // Esc pauses at 180; the resume Esc at 190 starts the delayed
     // Resume path (overlay None, pending timer armed, paused follows
-    // when the 0.2 s timer drains — same as the Resume button).
+    // when the 0.2 s timer drains - same as the Resume button).
     assert!(!snaps[179].paused, "must be live before Esc");
     assert!(snaps[180].paused, "Esc must pause");
     assert!(snaps[189].paused, "must stay paused until resume");

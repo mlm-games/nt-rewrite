@@ -1,9 +1,9 @@
 //! nt portal vortex background pass (SpiralCont/Spiral), game content.
 //!
 //! Layering: the generic fullscreen-pass mechanism lives in
-//! `repame-sprite` (`FullscreenPass`); everything nt-specific — the
+//! `repame-sprite` (`FullscreenPass`); everything nt-specific - the
 //! WGSL (`shaders/vortex.wgsl`, ported from nt's `Material2d`), the
-//! GameMaker spiral laws baked into it, the 30 Hz tick shapes below —
+//! GameMaker spiral laws baked into it, the 30 Hz tick shapes below -
 //! lives here in the main crate next to the [`crate::vortex`] sim state.
 //! (It used to be a separate `repame-vortex` crate; nothing else ever
 //! reused it, so it was folded in to cut workspace friction.)

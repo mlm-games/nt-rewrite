@@ -71,7 +71,7 @@ pub fn player_move(
         // and decay via friction instead of being hard-clamped away.
         let max_speed = player.speed * player.speed_mult;
         // GML `Player/Step_0:101,134` verbatim: any movement input
-        // latches the tutorial Walking step — `KeyCont.moving > 0`,
+        // latches the tutorial Walking step - `KeyCont.moving > 0`,
         // not accel-gated (GML fires even at max speed; the port's
         // old accel-gate stalled Walking until friction bled speed,
         // deadlocking the tutorial for key-held players).
@@ -120,7 +120,7 @@ pub fn player_move(
 // ---------------------------------------------------------------------------
 
 /// Stick aim -> [`AimDir`]. Bevy `player_aim` stick path verbatim: any
-/// nonzero deflection steers (no dead zone — bevy normalizes directly).
+/// nonzero deflection steers (no dead zone - bevy normalizes directly).
 /// The mouse path lives in the shell: every frame
 /// [`App::feed_input`](crate::App::feed_input) steers `aim_axis` at the
 /// latest viewport hover (world coords from the live fit, same role as
@@ -129,11 +129,11 @@ pub fn player_move(
 /// deflection the last aim is kept (bevy only overwrote aim when a
 /// cursor ray hit). `Sprite` flips skipped.
 ///
-/// Touch aim assist (GML `Player/Step_0:334` — `KeyCont.aimassist`,
+/// Touch aim assist (GML `Player/Step_0:334` - `KeyCont.aimassist`,
 /// default on for touch): when the touch attack stick deflects and the
 /// held weapon takes assist (non-melee, `!wep_naim`), the heading snaps
 /// toward the nearest visible enemy within 35° inside the forward
-/// 0.67w × 0.5h window — hard snap while firing, eased otherwise
+/// 0.67w × 0.5h window - hard snap while firing, eased otherwise
 /// (`angle_lerp(gunangle, dir, 1 - diff/35)`). Props count at 4x
 /// distance + 64 (`instance_is(self, prop)` penalty); walls block.
 pub fn player_aim(
@@ -255,7 +255,7 @@ pub fn weapon_switch(
     if cycle != 0 && inv.weapon_slots > 1 {
         // GML `Player/Step_0:22` verbatim: swap needs a held second gun
         // (`bwep != 0`). Without it Space is a no-op (GML never reaches
-        // `scrSwapWeps`, so no tutorial latch either — the old code
+        // `scrSwapWeps`, so no tutorial latch either - the old code
         // cycled onto the same slot, set `switched`, and stalled the
         // tutorial at Swapping with one gun).
         let has_second = (0..inv.weapon_slots)
@@ -805,7 +805,7 @@ pub fn tick_hold_abilities(
 /// Looping one-shots in headless cue form (GML `snd_play_loop` /
 /// `snd_stop`: `scrPowers` Eyes/Horror holds, `Player/Step_0` frog +
 /// chicken-headless, `Portal/Other_7`, `Salamander/Alarm_2`). Backend
-/// wiring is out of scope — start cues carry the loop sound name, stop
+/// wiring is out of scope - start cues carry the loop sound name, stop
 /// cues the same name under `stop_`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LoopSfx {
@@ -1080,4 +1080,3 @@ pub fn steroids_secondary_slot(current: usize, slots: usize) -> usize {
         current
     }
 }
-

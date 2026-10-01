@@ -15,7 +15,7 @@
 //! Area selection goes through [`gml_area_for_area`]
 //! (bevy `gml_area_for_bevy_area` by variant name) into
 //! [`SpiralKind::for_gml_area`]; `AreaId::Loop` maps to GML area 1, i.e.
-//! `Normal` — there is no loop-count branch in the reference.
+//! `Normal` - there is no loop-count branch in the reference.
 
 use crate::vortex_pass::{
     VARD_CELL_SIZES, VARD_FRAME_COUNTS, VORTEX_DEBRIS, VORTEX_VARDS, VORTEX_WISPS, VortexSnapshot,
@@ -41,7 +41,7 @@ const WARMUP_TICKS: u32 = 150;
 
 /// GUI-space size the spiral laws are written in (GML
 /// `game_screen_width/height` base; the HEIGHT is always 240, the WIDTH
-/// is the live view width — `view_width = 240 * aspect` with
+/// is the live view width - `view_width = 240 * aspect` with
 /// `opt_resolution` on (default), 320 portrait-floored. GML
 /// `SpiralCont/Step_0` centers on `view_width div 2`, so the vortex
 /// tracks wide windows; the sim carries the live width in
@@ -238,7 +238,7 @@ impl WispStream {
 }
 
 /// Deterministic [0, 1) draw (splitmix64 over seed/birth/tick/salt:
-/// GML `random()` replacement — stable across platforms and `rand`
+/// GML `random()` replacement - stable across platforms and `rand`
 /// versions, so seeded runs snapshot identically).
 fn stream_hash01(seed: u64, birth: u32, tick: u32, salt: u64) -> f32 {
     let mut z = seed
@@ -313,7 +313,7 @@ impl Debris {
 /// - `image_angle` is stored in RADIANS on each `Spiral` (`other.
 ///   image_angle` is degrees; GML trig takes degrees so the drawn value
 ///   is deg-based, but the stored `image_angle` field itself is the
-///   radian conversion — the shader's `cos/sin(rot)` needs radians).
+///   radian conversion - the shader's `cos/sin(rot)` needs radians).
 /// - `SpiralStar` has NO alpha gate (spirals never despawn either;
 ///   only debris culls offscreen). The star shader pass is additive
 ///   white with `1 - xscale` black; the wisp pass uses real art, never
@@ -353,7 +353,7 @@ pub struct SpiralCtl {
     /// spawns `NothingSpiral` + a fresh `SpiralCont` on throne-II rise,
     /// so the live port condition is a live Throne-II enemy (any phase:
     /// `SpawnThroneII` pending, `ThroneII` fighting, `Nothing2Death`
-    /// pageant) — refreshed per tick by the shell from the live `Enemy`
+    /// pageant) - refreshed per tick by the shell from the live `Enemy`
     /// query. Sim-only warmups default it off.
     pub bossfight_suppressed: bool,
     /// Live GUI view width in px (GML `view_width`: 240 * aspect with
@@ -444,12 +444,12 @@ impl SpiralCtl {
     }
 
     /// Drain finished: every wisp past the kill plane AND every debris
-    /// mote culled AND every star/vard dead. GML has no timer here — the
+    /// mote culled AND every star/vard dead. GML has no timer here - the
     /// `SpiralCont` object destroys itself only via the Step_0 gate, and
     /// `Menu/Draw_0` keeps calling `scrDrawSpiral` (drawing the leftover
     /// motes) for as long as the campfire room lives. A tick-count gate
     /// here unmounted the layer after ~0.9 s while motes were still
-    /// visibly swirling — the "no vortex on the title screen" bug.
+    /// visibly swirling - the "no vortex on the title screen" bug.
     /// `kill()` only freezes births; the layer must stay mounted until
     /// the sky is actually empty.
     pub fn is_done(&self) -> bool {
@@ -575,7 +575,7 @@ impl SpiralCtl {
             // GML `SpiralCont/Step_0` verbatim: IDPD/Venuz lock to the
             // VIEW center (`view_width div 2`, `view_height div 2`);
             // Normal/Proto drift around it on the sine orbit (also
-            // view-centered — `x = _cx + ...`, never camera-centered).
+            // view-centered - `x = _cx + ...`, never camera-centered).
             let (x, y) = if matches!(kind, SpiralKind::Idpd | SpiralKind::Venuz) {
                 (self.view_w / 2.0, GUI_H / 2.0)
             } else {
@@ -589,7 +589,7 @@ impl SpiralCtl {
                 // draws at `image_angle + 45` with GML-degree trig. The
                 // shader samples with radians trig, so the ring stores
                 // `(angle_deg + 45).to_radians()` (rotation only; the `+45`
-                // is wisp-art-only — the bolt pass strips it back out).
+                // is wisp-art-only - the bolt pass strips it back out).
                 let mut rot = (self.angle + 45.0).to_radians();
                 if kind == SpiralKind::Idpd && (self.ticks as i64 % 11) <= 1 {
                     // GML only swaps sprite_index to sprSpiralIDPD2 here;
@@ -662,7 +662,7 @@ impl SpiralCtl {
                             // GML `sprDebrisN` default arm: `image_index =
                             // random(image_number)` is float, but the
                             // ring packs `frame + xscale/32` and the
-                            // shader splits with `floor`/`fract` — so
+                            // shader splits with `floor`/`fract` - so
                             // the frame MUST be integral (bevy floors
                             // + clamps to 0..3 verbatim), else the
                             // frame fraction leaks into `fract` and
@@ -679,7 +679,7 @@ impl SpiralCtl {
         } else {
             // Drain (SpiralCont dead): GML speeds growth (grow*=1.5,
             // destroy at 3.0 not 2.5) but `lanim` keeps realtime cadence.
-            // Do NOT rewind births here — the shader indexes slots by
+            // Do NOT rewind births here - the shader indexes slots by
             // `(birth-1) % N`, so rewinding would orphan live wisps.
             // The CPU snapshot applies the same drain law per birth.
             self.drain_bias += 5.5;
@@ -808,7 +808,7 @@ impl SpiralCtl {
             }
             d.grow *= d.xscale * 0.05 + 1.0;
             d.image_angle += d.rotspeed;
-            // GML `Step_0` cull verbatim: view rect ± 16 — but against
+            // GML `Step_0` cull verbatim: view rect ± 16 - but against
             // the LIVE view width (`view_width`, 426 at 16:9), not the
             // 320 base. The old `GUI_W` bound killed side-drifting motes
             // up to 106px before they left the screen.
@@ -829,7 +829,7 @@ impl SpiralCtl {
         };
         self.debris_ring[i] = if culled {
             // Parked sentinel: x < -100 (the ONLY component the shader
-            // tests). Must be `[-1000, 0, 0, 0]` — `[-1000; 4]`
+            // tests). Must be `[-1000, 0, 0, 0]` - `[-1000; 4]`
             // smuggles `frame=0, xscale=32` into slot 3, which the
             // shader unpacks as a FULL-SIZE rock (the "debris spawns
             // massive" bug).
@@ -910,7 +910,7 @@ impl SpiralCtl {
     /// verbatim (opaque everywhere except the campfire title; see the
     /// `bg_alpha` match at the `VortexPass` mount in `lib.rs`).
     /// Sound flags (`WispStream::sound_played`, `Debris::sound_played`)
-    /// stay sim-side — the snapshot carries no audio, the shell drains
+    /// stay sim-side - the snapshot carries no audio, the shell drains
     /// the flags directly (GML plays them inline in the draw script).
     pub fn snapshot(&self, bg_alpha: f32) -> VortexSnapshot {
         self.snapshot_with_lightning(bg_alpha, true)
@@ -1089,7 +1089,7 @@ mod vortex_ui_parity {
         let mut dead = SpiralCtl::warmed_up_for_gml_area(1);
         dead.kill();
         // Step the drain until the sky is actually empty (GML has no
-        // timer here — motes die on the kill plane / view cull).
+        // timer here - motes die on the kill plane / view cull).
         for _ in 0..400 {
             dead.step(1.0);
             if dead.is_done() {
@@ -1107,7 +1107,7 @@ mod vortex_ui_parity {
 
     /// A freshly killed full spiral is NOT done: the leftover motes are
     /// still swirling (GML `Menu/Draw_0` keeps drawing them). The old
-    /// tick-count gate called this done after ~0.9 s — the "no vortex on
+    /// tick-count gate called this done after ~0.9 s - the "no vortex on
     /// the title screen" bug.
     #[test]
     fn killed_spiral_stays_mounted_while_motes_live() {
@@ -1125,7 +1125,7 @@ mod vortex_ui_parity {
 
     /// GML `Vlambeer/Alarm_0` parity: the boot spiral is LIVE from
     /// construction (warmed cont, births on), so the logo screen can
-    /// mount the vortex layer under the `Logo` — a dead-on-arrival
+    /// mount the vortex layer under the `Logo` - a dead-on-arrival
     /// spiral would leave the reel black (the "no vortex on the logo
     /// screen" bug).
     #[test]
@@ -1137,7 +1137,7 @@ mod vortex_ui_parity {
 
     /// GML `Spiral/Step_0` two-phase drain verbatim: a wisp born 1 tick
     /// before the kill crosses the 3.0 kill plane after ~19 drain ticks
-    /// (not ~110 — the old law applied the 1.5x drain factor from
+    /// (not ~110 - the old law applied the 1.5x drain factor from
     /// birth), and a mid-ring wisp stays visibly live mid-drain.
     #[test]
     fn drain_kill_plane_matches_gml_two_phase_law() {

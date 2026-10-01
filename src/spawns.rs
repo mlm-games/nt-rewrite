@@ -114,19 +114,19 @@ pub fn spawn_hazard_cloud(commands: &mut Commands, pos: glam::Vec2, team: Team, 
 /// `SplitDef` (in `data.rs`) has no child-object field.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SplitChild {
-    /// GML `ClusterNade/Destroy_0.gml:1-13` — `SmallGrenade` on
+    /// GML `ClusterNade/Destroy_0.gml:1-13` - `SmallGrenade` on
     /// `random_angle` at `random_range(3, 5)` px/step, each inheriting
     /// `motion_add(other.direction, 2)`; `friction = 0.4`;
     /// `alarm[0] = irandom_range(10, 20)`; `Collision_Wall` destroys it.
     SmallGrenade,
-    /// GML `FlakBullet/Destroy_0.gml:1-7` — `Bullet2` on `random_angle`
+    /// GML `FlakBullet/Destroy_0.gml:1-7` - `Bullet2` on `random_angle`
     /// at `8 + random(8)` px/step; bounces with cap 16 / decay 0.95.
     Bullet2,
-    /// GML `SuperFlakBullet/Destroy_0.gml:3-11` — a 5-bullet ring
+    /// GML `SuperFlakBullet/Destroy_0.gml:3-11` - a 5-bullet ring
     /// (`_ang += 72`) of `FlakBullet` at `random_range(12, 16)` px/step;
     /// `Collision_Wall` destroys it.
     FlakBullet,
-    /// GML `EnemyFlak/Destroy_0.gml:1-3` — `EnemyBullet3` on
+    /// GML `EnemyFlak/Destroy_0.gml:1-3` - `EnemyBullet3` on
     /// `random_angle` at `random_range(8, 12)` px/step; bounces with
     /// `min(18, speed * 0.8 + wallbounce)` and `wallbounce *= 0.9`.
     EnemyBullet3,
@@ -170,7 +170,7 @@ pub fn spawn_split_projectiles(
     }
 
     // GML `ClusterNade/Destroy_0.gml:10` adds `motion_add(other.direction, 2)`
-    // — 2 px/step along the parent rocket's heading — to every child.
+    // - 2 px/step along the parent rocket's heading - to every child.
     let inherited = match child {
         SplitChild::SmallGrenade => base_dir * 2.0 * 30.0,
         _ => glam::Vec2::ZERO,
@@ -358,7 +358,7 @@ pub fn spawn_sentry_turret(commands: &mut Commands, pos: glam::Vec2, spec: Deplo
 /// `ammo = 24` spent one bullet per 5-frame alarm, `alarm[0] = 30` on the
 /// first pass, `friction = 0.2`, and `scrFire.gml:367` gives it
 /// `motion_add(_gunangle, 6)`. Bullet: `Bullet1` at
-/// `motion_add(gunangle + random(12) - 6, 16)` — 16 px/step = 480 px/s,
+/// `motion_add(gunangle + random(12) - 6, 16)` - 16 px/step = 480 px/s,
 /// damage 3.
 pub fn spawn_sentry_gun(
     commands: &mut Commands,
@@ -510,7 +510,7 @@ pub fn on_projectile_removed(
         let visual = custom_explosion.and_then(|c| c.visual);
         // GML `Explosion/Create_0.gml:3` sets `damage = 5` and
         // `SmallExplosion` inherits it, so a rocket's blast is 5 even
-        // though `Rocket/Create_0.gml:4` gives the projectile 20 — the
+        // though `Rocket/Create_0.gml:4` gives the projectile 20 - the
         // projectile's `damage` only lands on a direct hit. `GreenExplosion`
         // is 12 (`GreenExplosion/Create_0.gml:3`).
         let blast_damage = match visual {
@@ -774,7 +774,7 @@ pub fn damage_destructible_prop_ctx(
     if nest_flags.cocoon {
         let mut rng = rand::rng();
         // GML `Cocoon/Destroy_0.gml:1-2` verbatim: `random(3) < 1` spawns
-        // a `Gator`, otherwise `scrDrop(30, 0)` — a 30% drop that weighs
+        // a `Gator`, otherwise `scrDrop(30, 0)` - a 30% drop that weighs
         // the player's ammo need and can pay a `HealthChest`.
         if rng.random_range(0..3i32) < 1 {
             queue_enemy_spawn(&mut *commands, EnemyKind::Gator, center, 1.0, loops);

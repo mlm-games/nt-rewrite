@@ -47,7 +47,7 @@ pub const GUN_GUN: WeaponId = WeaponId(125);
 pub const FROG_PISTOL: WeaponId = WeaponId(120);
 pub const GOLDEN_FROG_PISTOL: WeaponId = crate::data::WEAPON_GOLDEN_FROG_PISTOL;
 
-/// GML `GameCont.hard` for the current room — the live counter
+/// GML `GameCont.hard` for the current room - the live counter
 /// `scrDecideWep` reads (`_tier_max = GameCont.hard + _extra`).
 /// `GameCont/Create_0:9` seeds it at 0 and `:85-87` at 13 (also
 /// `loops++`) under hardmode; `GameCont/Other_5:136` then adds

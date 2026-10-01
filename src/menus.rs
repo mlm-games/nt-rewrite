@@ -206,7 +206,7 @@ pub enum UnlockPopup {
 /// `scrDeathCauseDefine`s); `Explosion` → `sprExplosion`, `Toxic` →
 /// `sprToxicGas`, `Fire`/`Trap` → `sprTrapGameover`. Everything else
 /// (contact/bullets/crowns/unknown) is not a valid GML cause and draws
-/// nothing — exactly like the `sprite_exists` gate in
+/// nothing - exactly like the `sprite_exists` gate in
 /// `GameOver/Draw_0`.
 pub fn deathcause_sprite_for_hit(
     hit: Option<crate::comps_a::HitId>,
@@ -335,7 +335,7 @@ pub fn capture_game_over(world: &mut World) -> Option<GameOverScreen> {
 #[derive(Debug, Clone, Resource)]
 pub struct MenuState {
     /// Cursor into the visible pod roster ([`visible_roster`], GML
-    /// `_char_list` order — a roster index, not a gml id).
+    /// `_char_list` order - a roster index, not a gml id).
     pub title_cursor: usize,
     /// GO button armed (bevy `title_go_visible`).
     pub title_go_visible: bool,
@@ -372,7 +372,7 @@ pub struct MenuState {
     pub settings_page_stack: Vec<u8>,
     /// Main-menu keyboard cursor over the 5 labels (GML `UberCont.gamepad_sel`
     /// over the live `MainMenuButton` instances, mirrored here for the
-    /// keyboard path; the mouse path never writes it — GML mouse hover
+    /// keyboard path; the mouse path never writes it - GML mouse hover
     /// owns `hover` per instance, gamepad owns `gamepad_sel`).
     pub main_menu_cursor: usize,
     /// PLAY-submenu open (GML `PlayButton` rows replace the main-menu
@@ -384,7 +384,7 @@ pub struct MenuState {
     pub play_cursor: usize,
     /// Settings keyboard cursor over the page's actionable rows
     /// (`settings_hot_rows` order in `render.rs`; GML `pointed_item`
-    /// when `mouse_active` is false — i.e. the keyboard-driven value.
+    /// when `mouse_active` is false - i.e. the keyboard-driven value.
     /// Mouse moves own `pointed_item` directly while `mouse_active` and
     /// never write this; `tick_settings_nav` only runs off it).
     pub settings_cursor: usize,
@@ -508,7 +508,7 @@ pub struct MenuEdge {
 }
 
 /// Push an unlock notification. GML `scrUnlockScreenCreate` verbatim:
-/// dedups on `(race, skin)` — a queued or visible matching popup
+/// dedups on `(race, skin)` - a queued or visible matching popup
 /// returns the existing one instead of queueing a duplicate.
 pub fn push_unlock(menu: &mut MenuState, popup: UnlockPopup) {
     if !menu.unlock_queue.contains(&popup) {
@@ -556,7 +556,7 @@ pub fn route_mutation_digit(menu: &MenuState, idx: usize) -> Option<UiAction> {
 /// `event_user(0)`), so fresh/tutorial profiles skip the submenu.
 /// DAILY/WEEKLY draw `c_uidark`-dimmed when `!can_daily/can_weekly`
 /// (offline: the port has no daily/weekly backend, so both read
-/// unavailable) but STAY clickable — GML opens the Leaderboards
+/// unavailable) but STAY clickable - GML opens the Leaderboards
 /// instead of starting the run. The port has no Leaderboards entity,
 /// so the click stings `sndNoSelect` (same feedback class).
 pub fn play_rows(save: &SaveData) -> Vec<u8> {
@@ -575,7 +575,7 @@ pub fn play_rows(save: &SaveData) -> Vec<u8> {
 /// GML `UberCont.can_daily/can_weekly` verbatim: both gate on the
 /// online daily/weekly fetch (`Other_62`: `daily_seed > 0` /
 /// `weekly_data[? "seed"]`). The port has no online backend, so both
-/// are always false — DAILY/WEEKLY always draw dimmed (GML
+/// are always false - DAILY/WEEKLY always draw dimmed (GML
 /// `image_blend = c_uidark` arm in `MainMenuButton/Other_10`).
 pub fn play_row_available(_save: &SaveData, row: u8) -> bool {
     !matches!(row, 1 | 2)
@@ -807,7 +807,7 @@ pub(crate) fn emit_hover(world: &mut World) {
 }
 
 /// Pause/GameOver hover: GML keeps per-instance `hover` bools, but the
-/// port's rows are stateless — sting only when the pointed label changes.
+/// port's rows are stateless - sting only when the pointed label changes.
 pub(crate) fn emit_hover_if_changed(world: &mut World, label: &str) {
     let changed = world
         .get_resource::<MenuState>()
@@ -1116,7 +1116,7 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
         }
         UiAction::SetLanguage(lang) => {
             // Bevy gates only the live locale; the save write is
-            // unconditional — mirrored here.
+            // unconditional - mirrored here.
             world.init_resource::<SaveData>();
             world.resource_mut::<SaveData>().settings.language = lang.clone();
             mark_dirty(world);
@@ -1204,7 +1204,7 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 emit_cue(world, &UiAction::ConfirmPause(kind));
                 goto_state(world, AppState::MainMenu);
                 // GML `Vlambeer/Create_0` quit branch verbatim: the logo
-                // room rebuilds with a FRESH live `SpiralCont` — never the
+                // room rebuilds with a FRESH live `SpiralCont` - never the
                 // previous run's leftover drain. `setup_logo_room` owns the
                 // world half; the view spiral re-warms here (same call the
                 // MainMenu-entry lifecycle makes, kept explicit so direct
@@ -1266,7 +1266,7 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 if let Some(pos) = pos {
                     menu.title_cursor = pos;
                 }
-                // GML `CharSelect/Mouse_4`: `with GoButton if (!visible)` —
+                // GML `CharSelect/Mouse_4`: `with GoButton if (!visible)` -
                 // the GO reveal fires only on the first pick.
                 if !menu.title_go_visible {
                     menu.title_go_visible = true;
@@ -1966,7 +1966,7 @@ fn tick_title_input(world: &mut World, edge: MenuEdge) {
         )
     };
     // GML `scrMenuDrawLoadout` toggle law: Space (or the splat click)
-    // flips `loadout_open` — but ONLY for races with a panel and outside
+    // flips `loadout_open` - but ONLY for races with a panel and outside
     // event runs (`scr_loadout_is_available_for_race`, `scrGameIsEventRun`
     // gate; the port has no event runs so that half is vacuous). Space
     // does NOT start the run; `SelectCharacter` (pod re-click) does.
@@ -2182,7 +2182,7 @@ fn approach(v: f32, target: f32, delta: f32) -> f32 {
 fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
     // Offer mirror (bevy `sync_hud` order: mirror before input handling;
     // law shared with `tick_mutation_mirror` via `apply_mutation_mirror`
-    // — lens are copied out first for the `World` borrow checker).
+    // - lens are copied out first for the `World` borrow checker).
     let choice_pending = world
         .get_resource::<MutationChoice>()
         .is_some_and(|choice| choice.0.is_some());
@@ -2252,7 +2252,7 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
     let game_over = game_over_visible(world);
 
     // GML `Portal/Alarm_1` tutorial arm verbatim: the tutorial exit
-    // portal restarts the run (`game_restart()` — same path as the
+    // portal restarts the run (`game_restart()` - same path as the
     // death RETRY: immediate restart through Loading). Consumed here
     // (not in the portal system: the state transition lives with the
     // other `goto_state(Loading)` paths).
@@ -2271,7 +2271,7 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
     }
 
     // Escape toggles pause (bevy `handle_pause_input`; transitions never
-    // block headless — no `Transition` resource exists here). GML
+    // block headless - no `Transition` resource exists here). GML
     // `UberCont/Step_1` swallows the pause request while a generation
     // cover runs (`GenCont`/`LevCont` rooms: floor transition or
     // mutation/ultra offer).
@@ -2385,7 +2385,7 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
         // later in the schedule (`weapon_switch` takes cycle/slot,
         // `collect_pickups` takes interact, weapons/abilities take spec;
         // bevy has no menu consumer for these). Only take when a menu is
-        // actually open — otherwise E / 1-4 / right-click would be
+        // actually open - otherwise E / 1-4 / right-click would be
         // swallowed every tick and weapons could never be picked up.
         // `spec` is taken and dropped: ability lives in gameplay (gated),
         let menu_open = run_over
@@ -2421,7 +2421,7 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
         return;
     }
     // GML `Player/Keyboard_17` verbatim: R restarts the run mid-play
-    // (`game_restart()` — same path as the death RETRY: immediate
+    // (`game_restart()` - same path as the death RETRY: immediate
     // restart through Loading). GML gates only on typing/console/
     // public lobbies, none of which the port implements.
     if edge.restart_pressed

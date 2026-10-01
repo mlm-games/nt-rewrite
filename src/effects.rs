@@ -1,7 +1,7 @@
 //! Screen/game feel sinks: flash, trauma, rumble, particle bursts.
 //!
 //! Split by ownership: `Trauma` reuses `repame_fx` verbatim (its `add`
-//! matches nt's law exactly); `FlashWhite` ports verbatim instead —
+//! matches nt's law exactly); `FlashWhite` ports verbatim instead -
 //! `repame_fx::Flash` counts in ticks while nt's flash is seconds-based,
 //! and the renderer reads `amount` directly. Bursts spawn
 //! `repame_fx::Particle`s with nt's exact size/lifetime dice.
@@ -52,7 +52,7 @@ pub fn rumble(queue: &mut Queue<RumbleRequest>, weak: f32, strong: f32, duration
 /// seed it (the bevy build used thread rng).
 ///
 /// GML parity (`BloodStreak`: `friction = 0.4`, `Dust`: 0.3, `Smoke`:
-/// 0.1 — all flat px/step² decays): bursts carry exponential drag so
+/// 0.1 - all flat px/step² decays): bursts carry exponential drag so
 /// dots settle near the corpse instead of coasting at full speed for
 /// their whole life. 4/s halves a dot every ~0.17 s, matching the feel
 /// of GML's flat friction over a ~0.6 s life.
@@ -297,7 +297,7 @@ pub fn tick_hitstop_slowmo(
 #[derive(Resource, Clone, Copy, Debug, Default)]
 pub struct ChromaticAberration(pub f32);
 
-/// Raise the aberration floor (never lowers — decay is renderer-side).
+/// Raise the aberration floor (never lowers - decay is renderer-side).
 pub fn chromatic_pulse(chrom: &mut ChromaticAberration, strength: f32) {
     chrom.0 = chrom.0.max(strength);
 }

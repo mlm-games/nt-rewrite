@@ -167,7 +167,7 @@ pub fn roll_idpd_dir(
     }
 }
 
-/// GML `objects/IDPDSpawn/Create_0.gml` — the popo portal, distinct from
+/// GML `objects/IDPDSpawn/Create_0.gml` - the popo portal, distinct from
 /// the `Portal` object. `alarm[0]` fires at `40 + instance_number * 3`
 /// frames, arms `alarm[1]` 12 frames later, and `alarm[1]` raises the
 /// wave; `Other_7` destroys the instance when the close strip ends.
@@ -390,7 +390,7 @@ pub fn idpd_spawn_site(
         let dist = 96.0 + rng.float(96.0);
         p = player_pos + glam::Vec2::from_angle(ang.to_radians()) * dist;
         // GML `var dir = instance_nearest(x, y, Floor); if dir { x = dir.x
-        // + 16; y = dir.y + 16 }` — snap to the nearest floor tile centre.
+        // + 16; y = dir.y + 16 }` - snap to the nearest floor tile centre.
         if let Some(tile) = nearest_floor_tile(p, mask) {
             p = tile;
         }
@@ -416,7 +416,7 @@ fn nearest_floor_tile(p: glam::Vec2, mask: &FloorMask) -> Option<glam::Vec2> {
 /// GML `IDPDSpawn/Alarm_1.gml:18-46`. Every child is born at
 /// `x + random(4) - 2, y + random(4) - 2`; the non-elite ones only then
 /// get `motion_add(point_direction(x, y, player.x, player.y) + random(90) - 45, 4)`
-/// — a 4 px/frame charge at the player, +/-45 degrees of jitter. The
+/// - a 4 px/frame charge at the player, +/-45 degrees of jitter. The
 /// elite branch (`:27`, `:37`, `:47`) spawns with no `motion_add` at all.
 fn spawn_idpd_child(
     commands: &mut Commands,
@@ -960,7 +960,7 @@ fn spawn_van(
 
 /// GML `objects/Van/Alarm_1.gml` in full: `drive = 0`, the freak
 /// self-destruct, then `repeat 3 + GameCont.loops` grunts at
-/// `x - 55 * right, y + orandom(5)` and a 50/50 second wave —
+/// `x - 55 * right, y + orandom(5)` and a 50/50 second wave -
 /// `1 + loops` of one `{Inspector, Shielder}` or `loops` of one
 /// `{EliteGrunt, EliteInspector, EliteShielder}`, all at
 /// `x - 50 * right, y + orandom(5)`. It fires ONCE, 50 frames after

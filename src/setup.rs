@@ -206,7 +206,7 @@ pub struct RunLoadout {
 /// 99-128, plus the GML `scrCreatePlayers` race rules bevy skips:
 /// a golden-frog-pistol start forces Frog, a locked Skeleton falls back
 /// to Melting, and an empty start falls back to the race starter from
-/// `scrRaceGetStarterWeapon` — not bare revolver).
+/// `scrRaceGetStarterWeapon` - not bare revolver).
 pub fn resolve_run_loadout(save: &SaveData, race: RaceId) -> RunLoadout {
     // GML `scrCreatePlayers`: `cwep == wep_golden_frog_pistol` forces Frog
     // (skin/crown then come from the Frog loadout below).
@@ -411,7 +411,7 @@ pub fn build_player_bundle(race: RaceId, loadout: &RunLoadout) -> PlayerBundle {
 }
 
 /// Spawn a loadout-built player (tags + aim + position; shared by
-/// `setup_run` so spawn code is not duplicated). `GameCleanup` only —
+/// `setup_run` so spawn code is not duplicated). `GameCleanup` only -
 /// same portal-survival reason as [`spawn_player`]. Bevy parity: the
 /// idle `SpriteAnim` rides along so `player_anim_switch`/`hurt_on_damage`
 /// match (without it the `&mut SpriteAnim` queries never fire and the
@@ -456,7 +456,7 @@ pub fn spawn_player_loaded(
 /// == UberCont || == CoopController || == Console) continue;
 /// instance_destroy(id, false) }`. The port's persistent controllers carry
 /// no entities (resources own that state), so this despawns every live
-/// entity — the `scrGameRestart` quit/restart path destroys the whole
+/// entity - the `scrGameRestart` quit/restart path destroys the whole
 /// session before rebuilding. `setup_run_with_seed` and
 /// `setup_title_campfire` both funnel through here so menu transitions
 /// can never inherit a dead run's world.
@@ -540,7 +540,7 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
         // GML run start with hardmode (`hard = 13`, `loops++`).
         // `UberCont.hardmode` persists once set (PlayButton image 3);
         // `scrGameRestart` never clears it, so retries keep it. The
-        // port likewise consumes without clearing — the menu re-arms
+        // port likewise consumes without clearing - the menu re-arms
         // the flag on every PLAY path into Title.
         let hardmode = world
             .get_resource::<crate::state::menus::MenuState>()
@@ -2129,12 +2129,12 @@ pub fn spawn_level(
 /// Title campfire backdrop (GML `MenuGen/Create_0` + `Alarm_1` +
 /// GML `Vlambeer` logo-room branch verbatim (`Vlambeer/Create_0` with
 /// `want_quit_to_menu` and no `CoopController`): the room restarts with
-/// no gameplay instances — just `Logo` + `SpiralCont` over the black
+/// no gameplay instances - just `Logo` + `SpiralCont` over the black
 /// clear color. The port has no room primitive, so this is the blanket
 /// teardown plus the resource half of the room restart (empty campfire
 /// `Run` for the spiral variant, silenced area audio, cleared
 /// transition/offer covers). The campfire floor itself is NOT built here
-/// (GML builds it only in `MenuGen`, i.e. on PLAY into the title) — the
+/// (GML builds it only in `MenuGen`, i.e. on PLAY into the title) - the
 /// logo menu sits over black, and `world_instances` emits nothing with
 /// an empty mask.
 pub fn setup_logo_room(world: &mut World) {
@@ -2262,7 +2262,7 @@ pub fn setup_title_campfire(world: &mut World) {
     // `choose(0,32,64,96,128)` px each axis, `goal = 50` under MenuGen.
     // The 12 patches + fill already exceed 50 floors, so every maker
     // lays exactly its spawn cell on the first step (`Floor > goal`
-    // arm) — up to 4 satellite cells, duplicates popping themselves
+    // arm) - up to 4 satellite cells, duplicates popping themselves
     // (`Floor/Create_0` overlap arm, matched by `seen` here).
     for _ in 0..4 {
         let c = (rng.random_range(0..=4), rng.random_range(0..=4));
@@ -2375,10 +2375,10 @@ pub fn setup_title_campfire(world: &mut World) {
     }
 
     // `MenuGen/Alarm_1` dressing verbatim: per floor `random(6)<1`, then
-    // `irandom(21)` — nonzero rolls a NightCactus, zero rolls a
+    // `irandom(21)` - nonzero rolls a NightCactus, zero rolls a
     // TopDecalNightDesert. GML gates the cactus on
     // `distance_to_object(CampChar)>24 && distance_to_object(NightCactus)>16`
-    // against the live actors — Alarm_1 runs after ALL campers
+    // against the live actors - Alarm_1 runs after ALL campers
     // (fixed + scattered) are placed, so the port gates on the full
     // `campers` list too. Floors are dressed in plan order so the fixed
     // stream matches.
@@ -2982,7 +2982,7 @@ mod verbatim_title_to_first_level {
     /// Reported bug verbatim: dying then clicking MENU must not leave
     /// the previous game's background over the title screen. GML
     /// `scrGameRestart(true)` destroys the session and restarts the
-    /// room, so the logo menu rebuilds over an empty campfire — never
+    /// room, so the logo menu rebuilds over an empty campfire - never
     /// over the dead run's floor.
     #[test]
     fn menu_after_death_clears_run_world() {
@@ -3094,7 +3094,7 @@ mod verbatim_title_to_first_level {
     ///   bars off (TopCont draws no HUD in the `MenuGen` room).
     /// The composer expresses this as three gates in `App::view`
     /// (`generation_screen`, `loading_cover`/`cover_chrome_off`,
-    /// `bg_alpha`) — this test pins the gate inputs per screen so a
+    /// `bg_alpha`) - this test pins the gate inputs per screen so a
     /// future gate edit must keep all four screens exact.
     #[test]
     fn transition_cover_law_matches_gml_per_screen() {
@@ -3141,7 +3141,7 @@ mod verbatim_title_to_first_level {
         assert!(is_cover && opaque && kind == Some(MenuOverlay::Loading));
         // Offer path: `menu_overlay_kind` reads the `mutation_count`
         // mirror, which `tick_ingame_menu` syncs from `Pending*` at the
-        // head of the same schedule tick — so a freshly inserted offer
+        // head of the same schedule tick - so a freshly inserted offer
         // reads live play until the mirror runs. Mirror it here the way
         // the schedule does, then the cover must hold.
         let mut offer = World::new();

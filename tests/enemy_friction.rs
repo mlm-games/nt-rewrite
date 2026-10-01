@@ -111,7 +111,7 @@ fn enemy_speed_decays_by_gml_friction_each_step() {
             .expect("the enemy must survive the decay");
         assert!(
             (speed - want).abs() < 0.02,
-            "frame {frame}: speed {speed:.3} != {want:.3} — GML friction is not being applied"
+            "frame {frame}: speed {speed:.3} != {want:.3} - GML friction is not being applied"
         );
         if speed > 0.0 {
             assert!(

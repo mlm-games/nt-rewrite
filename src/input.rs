@@ -100,7 +100,7 @@ pub const TOUCH_BUTTON_RADIUS: f32 = 25.0;
 /// GML in-run pause button center, `UberCont/Draw_64:47`
 /// (`_pause_x = view_width - 24, _pause_y = 16`) in GUI/view px.
 pub const PAUSE_BUTTON_GUI: [f32; 2] = [-24.0, 16.0];
-/// GML `UberCont/Draw_64:56` hit circle — a raw 24, deliberately NOT
+/// GML `UberCont/Draw_64:56` hit circle - a raw 24, deliberately NOT
 /// `get_touch_radius` (that scaling applies to the `MobileUI` claims,
 /// and this test is a plain `point_in_circle`).
 pub const PAUSE_BUTTON_RADIUS: f32 = 24.0;
@@ -123,7 +123,7 @@ pub fn pause_button_hit(gx: f32, gy: f32, vw: f32) -> bool {
 /// OS-change forces it false (`scrOptionsUpdate`), so the persisted
 /// setting only ever decides the desktop preview. Reading it straight
 /// off the save is what hid the touch chrome on a phone whose save had
-/// been written before that force existed — while the touch INPUT kept
+/// been written before that force existed - while the touch INPUT kept
 /// working, because the sampler gates on fingers-down, not on the flag.
 pub fn gml_input_device(save: Option<&crate::savedata_part::SaveData>) -> (bool, bool) {
     let gamepad = save.is_some_and(|s| s.settings.gamepad_enabled);
@@ -178,7 +178,7 @@ impl NtInput {
     /// Take the latched touch-release fire edge. `sample_touch` latches
     /// it two ways: the attack stick's swapped press frame writes
     /// `touch_released_fire` itself, and the finger-lift path stages
-    /// `fire_released` directly — so consumers take both.
+    /// `fire_released` directly - so consumers take both.
     pub fn take_touch_released_fire(&mut self) -> bool {
         self.fire_released || std::mem::take(&mut self.touch_released_fire)
     }
@@ -407,7 +407,7 @@ pub use repame_input::{GamepadState, MouseState, TouchContact, apply_stick};
 
 /// WASD/arrows move vector in world space. The world is y-down
 /// (GML convention: north is −y, see `worldgen::Maker::step_delta`),
-/// so W/Up is −y and S/Down is +y — the bevy build's y-up signs
+/// so W/Up is −y and S/Down is +y - the bevy build's y-up signs
 /// flipped for this port's [`Pos`](crate::spatial::Pos) space.
 /// Opposing pairs cancel, diagonals normalize.
 pub fn keyboard_move(held: &HashSet<KeyCode>) -> Vec2 {
@@ -437,7 +437,7 @@ pub fn keyboard_move(held: &HashSet<KeyCode>) -> Vec2 {
 ///
 /// Not covered here (different layers): mouse-cursor aim (bevy computed
 /// that from a viewport ray in the render layer, never in `sample_input`
-/// — keyboard/mouse leaves `aim_axis` zero, same as bevy; the `App`
+/// - keyboard/mouse leaves `aim_axis` zero, same as bevy; the `App`
 /// hover block replicates it), gamepad sticks/triggers/d-pad (see
 /// `sample_gamepad`), touch zones (see `sample_touch`).
 pub fn sample_keyboard(
@@ -580,7 +580,7 @@ pub fn sample_keyboard_mapped(
 }
 
 /// Remapped move vector: each direction row reads its rebound entry by
-/// position (key entries) — arrows always count on top (menu nav shares
+/// position (key entries) - arrows always count on top (menu nav shares
 /// them; GML reads `vk_*` on top of the rebinds). World space is y-down
 /// (see [`keyboard_move`]), so north rows steer −y. Opposing pairs
 /// cancel, diagonals normalize (same law as [`keyboard_move`]).
@@ -643,7 +643,7 @@ fn keycode_for_chord(key: &repose_core::input::Key) -> Option<KeyCode> {
 
 /// NT glyph coverage: the rebound chord alphabet is letters, digits
 /// and backquote (see `default_keymap` + `chord_for_physical`). Chords
-/// outside it (punctuation, F-keys) are unstageable by design —
+/// outside it (punctuation, F-keys) are unstageable by design -
 // `keycode_for_entry` maps them to `None` and the sampler skips them.
 fn keycode_for_glyph(c: char) -> Option<KeyCode> {
     Some(match c {
@@ -691,7 +691,7 @@ fn keycode_for_glyph(c: char) -> Option<KeyCode> {
 /// Physical keys driving one [`KeyCode`] (`Scheduler::held_keys`
 /// entries). Derived from the W3C `name()`: single letters/digits map
 /// to their own positions, the rest by name. Used only to drop stuck
-/// levels in the polled repair — never to stage edges.
+/// levels in the polled repair - never to stage edges.
 pub fn physical_key_for_code(code: KeyCode) -> Option<PhysicalKey> {
     physical_keys_for_code(&code).and_then(|keys| keys.first().copied())
 }
@@ -793,7 +793,7 @@ fn entry_pressed(
 /// replace the weapon slot. Triggers keep their hardcoded bevy role
 /// (RT = fire, LT = spec/ability) alongside the rows. Returns this
 /// pad's cycle step (North = +1); the caller applies the bevy overwrite
-/// law (last pad wins, added once — see `sample_gamepads`).
+/// law (last pad wins, added once - see `sample_gamepads`).
 ///
 /// Stick Y arrives screen-down (gilrs/SDL convention matches this
 /// port's y-down world), so unlike the y-up bevy build no flip is
@@ -955,7 +955,7 @@ fn pad_pressed(entry: &repame_input::KeymapEntry, pad: &GamepadState) -> bool {
 ///   (`get_nearest_touch` exclusion).
 /// - Move stick snaps to a free touch anywhere in the left half;
 ///   attack stick repositions toward its press point once, at claim
-///   time only (`scrStickRegions`, 0.8 lerp on the press edge — never
+///   time only (`scrStickRegions`, 0.8 lerp on the press edge - never
 ///   a per-tick chase).
 /// - Move: `moving = min(1, hold_ramp + dis/rad)`, direction hold ramp
 ///   `current_move_direction_time` (+1/tick within 10° of the held
@@ -972,14 +972,14 @@ fn pad_pressed(entry: &repame_input::KeymapEntry, pad: &GamepadState) -> bool {
 ///   `ButtonAttack` (splitfire) mirrors held/press/release raw.
 /// - Unclaimed taps stage NOTHING (no fire edge): GML menus advance
 ///   on `mouse_ui_clicked` and gameplay fires only through the stick
-///   deadzone — a bare tap only ever steers aim (lib.rs), never fires.
+///   deadzone - a bare tap only ever steers aim (lib.rs), never fires.
 ///
 /// Port adaptations: `TouchContact` carries the stable shell finger id
 /// (GML touch slot), so stick claims key on it; lift edges arrive via
 /// `note_touch_released` (the shell drops contacts on lift). `output`
 ///'s stick anchors, claim ids, and hidden claim-state persist across
 /// ticks (GML `x/y` + `index` on the stick objects). The caller must
-/// run this every tick — even with zero contacts — so claims release
+/// run this every tick - even with zero contacts - so claims release
 /// and lift edges fire on the lift frame.
 pub fn sample_touch(
     contacts: &[TouchContact],
@@ -1011,14 +1011,14 @@ pub fn sample_touch_full(
     // Default stick anchors from the GUI size (`JoystickMove/Create_0`,
     // `JoystickAttack/Create_0`: move `(view-max)/2 + 64, h - 64`,
     // attack `w + (max-w)/2 - 64, h - 64`). The view here is the GUI
-    // width; `global.view_width_max` is the widened cap — the port
+    // width; `global.view_width_max` is the widened cap - the port
     // centers on `width` directly (no widen split).
     let gui_h = 240.0;
     let move_home = Vec2::new(64.0, gui_h - 64.0);
     let attack_home = Vec2::new(width - 64.0, gui_h - 64.0);
     // `ButtonAct` (w/2, 48), `ButtonSwap` ((w-max)/2+64, h/2-48),
     // `ButtonActive` (w+(max-w)/2-64, h/2-48), `ButtonAttack`
-    // (w+(max-w)/2-48, h/2) — same centering simplification.
+    // (w+(max-w)/2-48, h/2) - same centering simplification.
     let act_home = Vec2::new(width * 0.5, 48.0);
     let swap_home = Vec2::new(64.0, gui_h * 0.5 - 48.0);
     let active_home = Vec2::new(width - 64.0, gui_h * 0.5 - 48.0);
@@ -1101,7 +1101,7 @@ pub fn sample_touch_full(
 
     // Ability corner (outer top-right): press edge only. The in-run pause
     // button owns its own circle at `(vw - 24, 16)` and is checked by
-    // the shell, so exclude it here — in GML the two never overlap
+    // the shell, so exclude it here - in GML the two never overlap
     // (`ButtonActive` claims within 25 of `(vw - 64, 72)`, 7 px clear of
     // the pause disc) and a pause tap must not double as an ability.
     let on_pause_button = |c: &TouchContact| pause_button_hit(c.start.x, c.start.y, width);
@@ -1122,10 +1122,10 @@ pub fn sample_touch_full(
     }
     // Swap button (`ButtonSwap/Other_10`): press edge only. GML swaps
     // on `press_swap` (`Player/Step_0:22`); `release_swap` feeds the
-    // disabled wepstick handoff, never the swap itself — so the lift
+    // disabled wepstick handoff, never the swap itself - so the lift
     // latch must NOT cycle here (one tap = one swap).
     // The top-right cycle corner counts as a swap-button tap (same
-    // `get_nearest_touch(rad)` claim in GML — the corner tap below and
+    // `get_nearest_touch(rad)` claim in GML - the corner tap below and
     // the button claim are one gesture).
     let swap_idx = nearest_free(swap_home, btn_capture, &held).or_else(|| {
         contacts.iter().position(|c| {
@@ -1177,7 +1177,7 @@ pub fn sample_touch_full(
     // Move stick (`JoystickMove/Other_10`): claims the press-edge
     // touch nearest the anchor within the GML capture radius
     // (`get_touch_radius`: sticks x1.75, then x(scale+0.5)).
-    // Without `opt_stickregions` the anchor never moves — but ANY
+    // Without `opt_stickregions` the anchor never moves - but ANY
     // press on the correct half still claims by proximity to the
     // anchor, exactly like GML `index = get_nearest_touch(rad)`.
     // With `opt_stickregions`, `scrStickRegions` first snaps the
@@ -1243,7 +1243,7 @@ pub fn sample_touch_full(
             move_stick.dir = dir_deg;
             // GML `KeyCont.moving = min(1, same + dis / rad)`: `same`
             // is a direction-hold bonus, but `dis / rad` alone drives
-            // from the first frame — no 10-tick wait before walking.
+            // from the first frame - no 10-tick wait before walking.
             let moving = (dis / TOUCH_STICK_RADIUS).min(1.0);
             if moving > 0.0 {
                 output.move_axis = d.normalize_or_zero() * moving;
@@ -1267,13 +1267,13 @@ pub fn sample_touch_full(
     // reposition on the press edge (`scrStickRegions` attack arm runs
     // only under `device_mouse_check_button_pressed`: anchor chases
     // the press point once, `x = lerp(x, mx, 0.8)`). After that the
-    // anchor stays fixed — the deflection is measured from it every
+    // anchor stays fixed - the deflection is measured from it every
     // tick (`dis = min(rad, mdis) * 2`, fires past the 0.4125
     // deadzone with swapped press/release edges). Aim follows the
     // stick heading; `touch_dis` carries the deflection for spread.
     // In splitfire the stick keeps aiming while the separate button
     // fires (`ButtonAttack` owns `hold_fire`; the stick is the AIM
-    // JOYSTICK there) — only the fire block is gated below.
+    // JOYSTICK there) - only the fire block is gated below.
     // `scrStickRegions` only repositions under `opt_stickregions`:
     // without it the attack stick stays at home and claims only
     // touches already within the capture radius of the home anchor.
@@ -1337,7 +1337,7 @@ pub fn sample_touch_full(
     } else {
         // GML `index = -1` on `!device_mouse_check_button(...)` (the
         // finger lifted). The lift frame reports `press_fire` only
-        // while the last deflection is past the deadzone — GML keeps
+        // while the last deflection is past the deadzone - GML keeps
         // every edge inside that gate (`Other_10:115-125`); the lift
         // carries no contact, so `dis` is the previous tick's
         // snapshot. `fire_held` drops. `vdis` keeps chasing the
@@ -1365,14 +1365,14 @@ pub fn sample_touch_full(
     // GML `scrCreateMobileControls` parity: the sticks always exist
     // (`JoystickMove/Create_0`, `JoystickAttack/Create_0`), so keep
     // idle homes in the resource for the renderer even with no finger
-    // down. `touch` stays -1 (free) and `dis` 0 — this never fires,
+    // down. `touch` stays -1 (free) and `dis` 0 - this never fires,
     // it only anchors the drawn homes.
     output.move_stick = Some(move_stick);
     output.attack_stick = Some(attack_stick);
 }
 
 /// Drop everything when the sim isn't live (paused, overlay open, or out
-/// of game — bevy `clear_input_when_inactive` parity plus the overlay
+/// of game - bevy `clear_input_when_inactive` parity plus the overlay
 /// conjunct: an overlay opened without the `Paused` flag must still
 /// swallow gameplay pulses like ability/spec).
 ///
@@ -1490,7 +1490,7 @@ mod keymap_tests {
         assert!(!out.fire_held, "grazing the stick must not fire");
         assert!(out.aim_axis.x > 0.0);
         // Full 32px drag fires; the deflection persists while held
-        // (GML measures from the fixed anchor — no per-tick chase).
+        // (GML measures from the fixed anchor - no per-tick chase).
         sample_touch_full(
             &[contact([256.0, 176.0], [288.0, 176.0], false)],
             320.0,
@@ -1515,7 +1515,7 @@ mod keymap_tests {
         assert!(out.touch_dis > 0.0);
         // Lift: claim releases and the swapped press edge fires (the
         // finger id stages through `note_touch_released`, like the
-        // shell `TouchUp` path — the contact itself is already gone).
+        // shell `TouchUp` path - the contact itself is already gone).
         // `vdis` keeps chasing zero at 2 px/tick (GML `approach`), so
         // the camera lean glides home instead of snapping.
         let attack_id = out.attack_stick.map(|s| s.touch).unwrap_or(-1);
@@ -1707,7 +1707,7 @@ mod keymap_tests {
     fn act_button_tap_picks_up_while_sticks_held() {
         let mut out = NtInput::default();
         // Both sticks claimed and held deflected (same frames the
-        // staggered test covers): the act tap still pulses interact —
+        // staggered test covers): the act tap still pulses interact -
         // the weapon-pickup press the player reports missing while
         // both sticks are held.
         sample_touch_full(

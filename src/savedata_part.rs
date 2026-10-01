@@ -816,7 +816,7 @@ pub fn check_kill_unlocks(
 
 /// Fresh unlocks from [`check_kill_unlocks`]: newly-unlocked races
 /// (toast + popup) plus newly-unlocked `(race, skin-index)` pairs
-/// (popup only — GML skins surface as `UnlockScreen` panels, and the
+/// (popup only - GML skins surface as `UnlockScreen` panels, and the
 /// port previously dropped them on the floor).
 pub struct CheckKillUnlocks {
     pub races: Vec<crate::data::RaceId>,
@@ -1322,7 +1322,7 @@ pub fn is_race_unlocked(save: &SaveData, race: RaceId) -> bool {
 /// entirely; loadout races count crowns 1..=13 (`crownmax`) plus the
 /// race unlock (no max bump, verbatim) plus skins 1..max-1; hardmode
 /// adds one each side. The `crownmax + 1` stored-weapon slot only feeds
-/// the per-race tally (`race_prog_max`), never the global one —
+/// the per-race tally (`race_prog_max`), never the global one -
 /// mirrored by ignoring it here, as do stored weapons. Skin maxima
 /// come from [`race_max_skin_count`] (`scrRaceGetMaxSkinCount(race,
 /// false)` verbatim: BigDog/Frog hold 1, everything else 3 without
@@ -1600,7 +1600,7 @@ fn save_store(path: &Path) -> Result<SaveStore<FsStorage>, String> {
 /// Area-gated race/skin unlocks (called when the run enters an area).
 /// GML `scrUnlocks` area switch verbatim: race unlocks are unconditional
 /// (single-player: the current run's race is the only present player),
-/// Chicken/B needs hardmode (not modeled — stays locked), HQ Horror/C
+/// Chicken/B needs hardmode (not modeled - stays locked), HQ Horror/C
 /// needs ≤3 mutations held. Fresh unlocks also queue the GML
 /// `UnlockScreen` popup (race or skin); pass the live menu when the
 /// caller owns it.

@@ -6,17 +6,17 @@
 //! `spawn_pellets`, `slash_life_secs`, `flip_melee_angle`, `melee_attack`,
 //! `pay_fire_cost`, `spawn_beam_shot`, `spawn_player_projectile`,
 //! `spawn_player_projectile_with_source`, `hammerhead_chew`,
-//! `move_swing_fx` (lifetime tick only — see below), `tick_snare_zones`,
+//! `move_swing_fx` (lifetime tick only - see below), `tick_snare_zones`,
 //! `tick_slowed`, `tick_portal_strikes`, `tick_hazard_clouds`,
 //! `player_ability`.
 //!
 //! Deferred (already ported or render-only, per the task):
 //! - `player_move`, `face_aim`, `player_aim`, `weapon_switch`,
-//!   `tick_player_timers`, `blink_player` — live in `crate::player` or
+//!   `tick_player_timers`, `blink_player` - live in `crate::player` or
 //!   are render-only; not duplicated here.
 //! - `ally_ai`, `tick_hold_abilities` (Eyes/Horror/Frog hold), weapon
 //!   visuals (`ensure_weapon_visual`, `tick_weapon_visuals`,
-//!   `held_weapon_angle`) — render or a separate slice; not ported.
+//!   `held_weapon_angle`) - render or a separate slice; not ported.
 //! - `move_swing_fx` has no hitbox motion in bevy (slash hitboxes ride
 //!   `Velocity` integration in `move_projectiles`); the port keeps the
 //!   `SwingFx` lifetime tick so the marker cannot leak.
@@ -1395,7 +1395,7 @@ fn spawn_pellets(commands: &mut Commands, fx: &mut FireFx, shot: &GunShot, playe
     }
 
     // GML `scrFire.gml:361-370`: the sentry gun is not a projectile at
-    // all — `instance_create(x, y, SentryGun) { motion_add(_gunangle, 6) }`
+    // all - `instance_create(x, y, SentryGun) { motion_add(_gunangle, 6) }`
     // deploys the turret body on the spot.
     if base_weapon_name(def.name) == "SENTRY GUN" {
         crate::spawns::spawn_sentry_gun(
@@ -1637,7 +1637,7 @@ fn melee_attack(
     }
 
     // Bevy reads the fired strip (`anim_opt.def.frames`, mega sprite
-    // when applicable), defaulting to 3 — never a per-kind constant.
+    // when applicable), defaulting to 3 - never a per-kind constant.
     let slash_path = if mega {
         spec.mega_sprite.unwrap_or(spec.sprite)
     } else {
@@ -2375,7 +2375,7 @@ pub struct SnareSeed {
     pub trapper: bool,
 }
 
-/// GML `objects/Tangle/*`: the snare body. No lifetime and no timer — it
+/// GML `objects/Tangle/*`: the snare body. No lifetime and no timer - it
 /// persists until the Plant's next ability press runs
 /// `instance_destroy(Tangle)` (`scrPowers.gml:128`).
 #[derive(Component, Clone, Copy, Debug)]
@@ -2386,7 +2386,7 @@ pub struct Tangle {
 
 /// `sprTangle` collision box is 47x33; the overlap test is a circle at
 /// half the shorter side. GML gives `Tangle` a real mask (its sprite has
-/// no `spriteMaskId`), so `TrapFire/Collision_Tangle` can see it — the
+/// no `spriteMaskId`), so `TrapFire/Collision_Tangle` can see it - the
 /// port carries the same circle as a [`Hitbox`].
 pub const TANGLE_RADIUS: f32 = 16.0;
 
@@ -2542,7 +2542,7 @@ pub fn tick_snare_zones(
                     epos.0 -= step;
                 }
             }
-            // GML :13-21 — float compare against `max_hp * 0.33`, a
+            // GML :13-21 - float compare against `max_hp * 0.33`, a
             // 5 px/step shove away from the tangle, then `hp = 0`.
             if throne_butt && (health.hp as f32) <= health.max as f32 * 0.33 {
                 if let Some(vel) = vel.as_mut() {
@@ -2659,7 +2659,7 @@ pub fn refresh_cuz_ammo_max(player: &mut Player) {
 /// `choose(WeaponChest,AmmoChest,AmmoChest)`; then `repeat(1+throne_butt)`
 /// HP/ammo by the same hurt rule. With `auto_collect`, HP/ammo apply
 /// directly (GML `event_perform(ev_collision, Player)`); chests stay on
-/// the ground. (Rads/curse handling lives in the active arm — GML keeps
+/// the ground. (Rads/curse handling lives in the active arm - GML keeps
 /// it in `scrPowers`, not `scrRobotEat`.)
 pub fn robot_eat_drops(
     commands: &mut Commands,
@@ -2677,7 +2677,7 @@ pub fn robot_eat_drops(
     let life_crown = player.crown == CrownKind::Life;
     let ammo_cap = |player: &Player, kind: AmmoKind| player.ammo_cap(kind);
     // GML `HPPickup/Collision_Player.gml:11-14` heals exactly `num`
-    // (2, 4 with Second Stomach, +1 with Haste) — no crown or ultra
+    // (2, 4 with Second Stomach, +1 with Haste) - no crown or ultra
     // multiplier exists on this path.
     let medkit_num = crate::pickups::hppickup_num(player);
     let mut rng = rand::rng();
@@ -2722,7 +2722,7 @@ pub fn robot_eat_drops(
                 // GML `scrPowers.gml:637,655` `__spawn_pickup(AmmoPickup,
                 // _auto_collect)` creates a real `AmmoPickup`, so
                 // `AmmoPickup/Create_0.gml:13-18`'s `CursedPickup`
-                // conversion applies — its gate is `instance_exists(Player)`,
+                // conversion applies - its gate is `instance_exists(Player)`,
                 // not `GenCont`. A conversion discards the type resolved
                 // here, exactly as GML re-rolls it in
                 // `AmmoPickup/Collision_Player`.
@@ -2750,7 +2750,7 @@ pub fn robot_eat_drops(
         // GML Regurgitate roll (no life-crown gate on this branch).
         // `__spawn_pickup` creates at the caller's own `x, y` with no
         // offset, and it spawns CHESTS (`scrPowers.gml:639-648`), so no
-        // `CursedPickup` conversion is involved — but the area/ultra art
+        // `CursedPickup` conversion is involved - but the area/ultra art
         // variants still apply.
         let ctx = crate::pickups::ChestCtx {
             worldgen: false,
@@ -2860,7 +2860,7 @@ pub fn player_ability(
     // this tick and the next `player_aim` pass re-steers from live
     // input. Touch routes through the same take-once `fire_pressed`
     // (press edge) / `fire_released` (attack-finger lift) channels as
-    // desktop, so this covers touch AND desktop identically — no
+    // desktop, so this covers touch AND desktop identically - no
     // touch-only latch needed here. (No `scr_player_pref(my_player,
     // "plant")` gate in the port: no per-race pref store exists; Plant
     // always snares.)

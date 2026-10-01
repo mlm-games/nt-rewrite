@@ -19,7 +19,7 @@ pub const PLAYER_FRICTION: f32 = 0.45;
 /// GML reference view scale, no zoom: at a 1280x720 window the view
 /// shows 426x240 world px (GML `macros_general`: base 320x240 GUI/view,
 /// `scrSetViewSize` widens to `view_width_max = 240 * aspect` when
-/// `opt_resolution`, which defaults on — so the visible height is always
+/// `opt_resolution`, which defaults on - so the visible height is always
 /// 240 world px). The live frame resolves the scale per window through
 /// [`crate::render::gml_frame`] (the engine contain-fit over
 /// [`crate::render::gml_view_size`]); this const is the 720p reference
@@ -110,7 +110,7 @@ pub fn floor_cell_for_wall(wx: i32, wy: i32) -> (i32, i32) {
 /// neighbours (`mcr_floor_create_tops`, `GenCont/Alarm_0:50` plus the
 /// `call_after(5, ...)` second pass) and each `Top` splits into 4
 /// `TopSmall`s (`Top/Create_0:11-14`). `TopSmall/Create_0:1-4` kills the
-/// ones meeting a `Wall` or a `Floor` **at that instant** — nothing ever
+/// ones meeting a `Wall` or a `Floor` **at that instant** - nothing ever
 /// re-evaluates them, so a destroyed wall does NOT grow its Trans tile
 /// back. The only later growth is `FloorExplo/Create_0:43-50`, which
 /// spawns 8 more `Top`s per broken wall.
@@ -169,7 +169,7 @@ impl TopSmalls {
 
     /// GML `FloorExplo/Create_0:43-50`: the 8 `Top`s the explosion spawns
     /// cover a 6x6 block of 16px cells centred on the broken wall, MINUS the
-    /// centre 2x2 — `instance_create(x, y, Top)` is absent from that list,
+    /// centre 2x2 - `instance_create(x, y, Top)` is absent from that list,
     /// so the hole itself never regains a Trans tile. `walls` must be the
     /// post-break set (broken walls removed, re-seal walls added), because
     /// `TopSmall/Create_0` tests the live instances.
@@ -414,7 +414,7 @@ pub struct Run {
     pub protocurse: bool,
     /// Tutorial level flag (GML `GenCont/Create_0`: `save game.tutorial`
     /// forces `goal = 5` + `TutCont` + safespawn; the port sets it at run
-    /// setup for first-ever runs and clears it on floor advance — the
+    /// setup for first-ever runs and clears it on floor advance - the
     /// tutorial never recurs mid-run). Read by worldgen only.
     pub tutorial: bool,
     /// Live Blood-crown flag for worldgen (GML `scrPopulate` `_coblood =
@@ -940,7 +940,7 @@ pub struct ProjectileFriction(pub f32);
 
 /// GML `Rocket/Create_0.gml:12-15` + `Step_0.gml:4-5`: once `active`
 /// (set by `alarm[1]`) the body runs
-/// `motion_add_m(direction, accel, maxspeed)` every step — accelerate
+/// `motion_add_m(direction, accel, maxspeed)` every step - accelerate
 /// along the current heading, then clamp the total speed to `max`.
 /// `arm` is the `alarm[1]` countdown; it is `finished()` only after the
 /// alarm has actually fired, so acceleration starts on the next step.
@@ -1249,7 +1249,7 @@ mod gml_top_small_tests {
     }
 
     /// GML `TopSmall/Create_0:1-4` tests the live instances, so the block a
-    /// break adds depends on the wall set as it stands after the re-seal —
+    /// break adds depends on the wall set as it stands after the re-seal -
     /// and on nothing else, since GML never deletes a `TopSmall`.
     #[test]
     fn break_respects_the_live_wall_set() {

@@ -1,6 +1,6 @@
 //! Sprite animation state + switching. Sim-side only: systems advance
 //! `frame` and select `path`; the render phase maps `(path, frame)` to
-//! atlas uvs through `repame-anim` (no sprite handles here — the bevy
+//! atlas uvs through `repame-anim` (no sprite handles here - the bevy
 //! build wrote `Sprite.image/rect` inline, which belongs to rendering).
 //!
 //! Ported from nt's `game/anim.rs` (frame laws byte-identical).
@@ -23,7 +23,7 @@ use crate::time::{GTimer, TimerMode};
 /// `fps` is the *effective* rate. `assets/images/anims.ron` carries a
 /// hand-authored per-strip rate, not the GML `image_speed`, so any
 /// object whose GML source states an `image_speed` must build its
-/// `SpriteAnim` with [`SpriteAnim::with_image_speed`] — the reference
+/// `SpriteAnim` with [`SpriteAnim::with_image_speed`] - the reference
 /// project runs every sprite at one frame per step (all `.yy` have
 /// `playbackSpeed: 1`), so the verbatim rate is
 /// `image_speed * SIM_HZ` frames per second.
@@ -170,7 +170,7 @@ pub struct PlayerAnim {
 }
 
 /// Swap player idle/walk strips on the movement threshold (render
-/// writes — image handle, rect, anchor — happen renderer-side from the
+/// writes - image handle, rect, anchor - happen renderer-side from the
 /// new path).
 pub fn player_anim_switch(
     catalog: Res<AnimCatalog>,
@@ -419,7 +419,7 @@ pub fn prop_hurt_on_damage(
 /// Restore idle when the hurt strip lapses (GML verbatim:
 /// `Player/Step_0.gml:199-202`, `enemy/Step_0.gml:27-29,39-41`,
 /// `prop/Step_1.gml:8-10`: `if (sprite_index == spr_hurt &&
-/// image_index > 2) sprite_index = spr_idle` — always idle, never walk,
+/// image_index > 2) sprite_index = spr_idle` - always idle, never walk,
 /// no timer; GML's only `+5` is i-frames in `scr_hit`, not a visual
 /// timer). `anim.frame > 2` is the `image_index > 2` equivalent; the
 /// finished-oneshot arm is a safety net for strips shorter than 3
@@ -461,8 +461,8 @@ pub fn tick_hurt_anims(
 }
 
 /// Interrupt with the muzzle-flash strip (oneshot, 0.25 s approximation:
-/// GML uses per-enemy alarm periods — Guardian 12 steps, Wolf ~30+rand,
-/// Crab 1-frame re-fire loop — not a global duration; 0.25 s keeps the
+/// GML uses per-enemy alarm periods - Guardian 12 steps, Wolf ~30+rand,
+/// Crab 1-frame re-fire loop - not a global duration; 0.25 s keeps the
 /// bevy parity until per-enemy alarm data is modeled).
 pub fn play_fire(
     commands: &mut Commands,
@@ -508,7 +508,7 @@ pub fn tick_fire_anims(
 }
 
 /// Death-knell drain (bevy `anim.rs:1059` parity: the `PlayerDying`
-/// timer ticks and the husk despawns on lapse — pure logic, no strips).
+/// timer ticks and the husk despawns on lapse - pure logic, no strips).
 pub fn tick_player_dying(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -523,8 +523,8 @@ pub fn tick_player_dying(
 }
 
 /// Backfill strip state for pre-asset spawns (headless `setup_run` runs
-/// against the empty catalog, so actors spawn with no `SpriteAnim` and —
-/// for enemies — no `EnemySprites` table; without them the switch/hurt
+/// against the empty catalog, so actors spawn with no `SpriteAnim` and -
+/// for enemies - no `EnemySprites` table; without them the switch/hurt
 /// queries never match and actors stick on the render fallback frame 0).
 /// Runs once from `App::load_assets_from` after the full catalog lands;
 /// post-asset spawns already carry both and are skipped.

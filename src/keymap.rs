@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Actions match the GML `Key` struct rows (`fire`, `spec`, `swap`,
 /// `pick`, `north`, `south`, `west`, `east`); `chat`/`console` stay
-/// out — chat has no co-op peer in this build and the debug console
+/// out - chat has no co-op peer in this build and the debug console
 /// keeps its hardcoded backtick. Each action carries the GML default
 /// keyboard/mouse entry plus the gamepad fallback
 /// (`fire: [mb_left, gp_shoulderr]`, ...). Overrides persist per

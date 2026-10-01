@@ -25,7 +25,7 @@ pub struct SecretTriggers {
     /// no kills; taking damage is not part of it, so `oasis_eligible`
     /// only gates the per-floor snapshot.
     pub oasis_eligible: bool,
-    /// Recorded for the HUD/debug pass only — GML has no damage
+    /// Recorded for the HUD/debug pass only - GML has no damage
     /// condition on any secret route.
     pub damage_taken_this_floor: bool,
 
@@ -140,7 +140,7 @@ pub fn observe_oasis_floor_start(
 /// Flag the floor as oasis-ready once every chest is opened while
 /// (nearly) nothing was killed. GML `WantBoss/Step_0:14-24` (the
 /// `CanOasis` marker: at least one `ChestOpen`, no unopened `chestprop`
-/// or rad/rogue chest, and fewer than 2% of the enemies dead — 10% on
+/// or rad/rogue chest, and fewer than 2% of the enemies dead - 10% on
 /// the area's last subarea).
 pub fn detect_oasis_eligibility(
     run: Res<Run>,
@@ -184,7 +184,7 @@ pub fn detect_oasis_eligibility(
 /// Arm the 10 s bandit window once Big Bandit spawns on a ready floor;
 /// killing him in time queues the Oasis. GML: the window is
 /// `CanOasis/Alarm_0` (300 ticks) and the trigger is
-/// `BanditBoss/Destroy_0:13-21` — no damage condition.
+/// `BanditBoss/Destroy_0:13-21` - no damage condition.
 pub fn tick_oasis_bandit_window(
     time: Res<SimTime>,
     mut triggers: ResMut<SecretTriggers>,
@@ -284,4 +284,3 @@ pub fn secret_debug_toast(triggers: Res<SecretTriggers>, mut toast: ResMut<Toast
         toast.show(&format!("SECRET ROUTE: {}", target.name()));
     }
 }
-

@@ -46,7 +46,7 @@ pub use crate::comps_a::floor_cell_for_wall;
 /// (one marker can break several walls, bevy parity).
 ///
 /// GML `scrWallDestroy` destroys the wall and creates a 16x16 `FloorExplo` at
-/// its position — so the hole is one wall cell wide, and any sibling `Wall`s
+/// its position - so the hole is one wall cell wide, and any sibling `Wall`s
 /// inside the same 32x32 `Floor` neighbour stay solid. `FloorExplo/Create_0:19-27`
 /// then re-closes the hole: for each of the 8 neighbours at +/-16 px it creates
 /// a new `Wall` wherever there is neither a `Floor` nor a `Wall`, which is what
@@ -368,7 +368,7 @@ pub fn handle_throne_room_props(
             commands.entity(e).insert(CountedGenerator);
             // GML `ThroneStatue/Destroy_0.gml:5-7` verbatim:
             // `repeat (1 + GameCont.loops) { instance_create(x, y, Guardian) }`
-            // — uncapped, all at the statue's exact position.
+            // - uncapped, all at the statue's exact position.
             for _ in 0..1 + run.loop_count {
                 queue_enemy_spawn(
                     &mut commands,

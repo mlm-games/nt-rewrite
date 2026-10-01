@@ -4,7 +4,7 @@
 //!
 //! Render split: `Sprite`/`Anchor`/`Transform.rotation`/`Transform.scale`
 //! writes, fire-strip swaps (`play_fire`), and `VfxSpawner` bursts stay
-//! out — the render phase resolves visuals from sim state. Gameplay
+//! out - the render phase resolves visuals from sim state. Gameplay
 //! effects are kept: movement impulses, fan/ring volleys with full combat
 //! traits, `Explosion` + `Beam` spawns, pending-spawn queues, trauma, and
 //! wall-break queues. Muzzle markers ride [`show_enemy_fire`] exactly like
@@ -117,7 +117,7 @@ fn limit_velocity(vel: &mut Velocity, max: f32) {
 }
 
 /// Finished-from-birth, silent-until-re-armed timer (bevy
-/// `short_ready_timer` parity — see module docs).
+/// `short_ready_timer` parity - see module docs).
 fn ready_timer() -> GTimer {
     let mut t = GTimer::from_seconds(0.01, TimerMode::Once);
     t.tick(0.01);
@@ -1500,7 +1500,7 @@ pub fn lil_hunter_fire_ring(commands: &mut Commands, at: glam::Vec2) {
     }
 }
 
-/// Per-kind taunt line (`snd<Kind>Taunt`, GML-verbatim names — e.g.
+/// Per-kind taunt line (`snd<Kind>Taunt`, GML-verbatim names - e.g.
 /// FrogQueen taunts `sndBallMamaTaunt`, YV `sndGunGodTaunt`). Kinds
 /// without a GML taunt return `None`.
 pub fn taunt_cue_name(kind: EnemyKind) -> Option<&'static str> {
@@ -1580,9 +1580,9 @@ pub fn tick_boss_taunts(
 /// `if other.object_index != BigGenerator { other.hp = 0 }`. The Throne
 /// body annihilates every prop it overlaps, which is what makes a barrel
 /// chain-explode when it walks through one. Statues take the
-/// `ThroneStatue/Step_1.gml:11` route instead — a direct
+/// `ThroneStatue/Step_1.gml:11` route instead - a direct
 /// `instance_destroy` on `place_meeting(x, y, Nothing)`, because they are
-/// `canbreak = 0` and so immune to damage — and their `Destroy_0` spawns
+/// `canbreak = 0` and so immune to damage - and their `Destroy_0` spawns
 /// the guardians. The generators are exempt under the `object_index`
 /// test, which also covers `BigGeneratorInactive` (it converts to a
 /// `BigGenerator` in place via `Nothing/Create_0.gml:5-11`).
@@ -1813,7 +1813,7 @@ fn throne_ai(
                     commands.entity(statue).despawn();
                     // GML `ThroneStatue/Destroy_0.gml:5-7`:
                     // `repeat (1 + GameCont.loops) { instance_create(x, y, Guardian) }`
-                    // — the plain `Guardian`, at the statue's exact position.
+                    // - the plain `Guardian`, at the statue's exact position.
                     for _ in 0..1 + loop_count {
                         queue_enemy_spawn(
                             &mut *commands,
@@ -2204,7 +2204,7 @@ pub fn hyper_search_detonate(
 }
 
 /// Seed the orbit-crystal shell (GML: `cnumber = 3 + loops*2` real
-/// `LaserCrystal` enemies — `InvLaserCrystal`/invariants in area 104 —
+/// `LaserCrystal` enemies - `InvLaserCrystal`/invariants in area 104 -
 /// which the core then herds; each spawn decrements the kill count).
 pub fn hyper_ensure_orbit(
     commands: &mut Commands,
@@ -2649,7 +2649,7 @@ fn captain_ai(
     if boss.attack_timer.just_finished() {
         let dist = epos.distance(player_pos);
         let blocked = crate::walls::segment_hits_wall(epos, player_pos, mask);
-        // GML `Alarm_1:5` — `CrystalShield` has no GML object in this
+        // GML `Alarm_1:5` - `CrystalShield` has no GML object in this
         // rewrite, so that disjunct is dropped.
         let dash = brain.fire == 0
             || (rng.random_range(0.0..3.0) < 1.0
@@ -3244,7 +3244,7 @@ fn yv_boss_ai(
                 boss.special_timer = gml_alarm(7.0);
             }
             // GML `Alarm_1:74-77`: `alarm[4]` is never -1 here, so the brain
-            // always re-arms at 5-15 and `walk` is zeroed — YV stands still
+            // always re-arms at 5-15 and `walk` is zeroed - YV stands still
             // through the wall-adjacent branch too.
             boss.attack_timer = gml_alarm(rng.random_range(5.0..=15.0));
             brain.walk = 0.0;

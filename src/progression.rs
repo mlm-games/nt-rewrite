@@ -1,7 +1,7 @@
 //! Level/mutation/portal progression. Port of
 //! `progression.rs` GML port minus the three deferred
 //! items (`setup_run`, `begin_between_floor_skill_picks` as a public
-//! system, `starting_ammo_for` — reasons in the module docs below).
+//! system, `starting_ammo_for` - reasons in the module docs below).
 //!
 //! Render split: bursts stay (sim-side `Particle` spawns, deaths.rs
 //! parity); sprite strips, anchors, flips, portal deco sprites, hurt
@@ -96,7 +96,7 @@ pub const ALL_MUTATIONS: [MutationId; 28] = [
 
 /// GML mutation display name + description verbatim
 /// (`scripts/scrSkills/scrSkills.gml`: `skill_name[]`/`skill_text[]`,
-/// ids 1-29): unlocalized defaults, `@`-color tags included — the
+/// ids 1-29): unlocalized defaults, `@`-color tags included - the
 /// `draw_text_nt` backend resolves them. `mutation_skill_index`
 /// (`hud.rs`) maps these ids to the same 1-29 frames GML uses.
 pub fn mutation_name(id: MutationId) -> (&'static str, &'static str) {
@@ -373,7 +373,7 @@ pub struct DeferredFloorGen(pub bool);
 
 /// GML `GenCont/Destroy_0:112-124`: entering `area_city` (`FrozenCity`)
 /// subarea 1 with `mut_last_wish` seeds that room's generation with an
-/// `IceFlower` — the furthest `prop` is `instance_change`d into one, or
+/// `IceFlower` - the furthest `prop` is `instance_change`d into one, or
 /// (no props) a random `enemy` is replaced by one. `IceFlower/Create_0`:
 /// `max_hp = 450`, `size = 3`, `name = "FEED"`, `feed = 0`.
 /// `setup::spawn_level` reads the flag; the floor transition clears it.
@@ -980,7 +980,7 @@ pub fn handle_mutation_choice(
 }
 
 /// Apply a mutation's stat effects (bevy `apply_mutation` verbatim,
-/// minus sprite code — there was none — and minus the `Commands` param;
+/// minus sprite code - there was none - and minus the `Commands` param;
 /// the GML `SkillIcon/Other_10` select sound rides `cues` instead).
 pub fn apply_mutation(
     player_q: &mut Query<(&mut Player, &mut Health, &mut Inventory, &RaceState), With<Player>>,
@@ -1595,7 +1595,7 @@ pub fn portal_check(
     }
     if !portals.is_empty() {
         // GML `Corpse/Alarm_0:2`: the corpse-clear portal only spawns
-        // when no `Portal` lives — a statue or pedestal portal already
+        // when no `Portal` lives - a statue or pedestal portal already
         // opens the floor.
         run.portal_open = true;
         return;
@@ -1714,7 +1714,7 @@ pub fn portal_attract(
 /// of it off `self` / `GameCont` / the nearest `Player` at open time.
 pub(crate) struct ChestLootCtx {
     pub race: RaceId,
-    /// `pickups::decide_ctx_for` — `GameCont.hard` plus the target player.
+    /// `pickups::decide_ctx_for` - `GameCont.hard` plus the target player.
     pub decide: crate::decide_wep::DecideCtx,
     /// `chestprop/curse`, frozen in the chest's `Create_0`.
     pub curse: bool,
@@ -1723,7 +1723,7 @@ pub(crate) struct ChestLootCtx {
     pub underwater: bool,
     /// Steroids Ambidextrous (`UltraSkill.Ambidextrous`).
     pub ambidextrous: bool,
-    /// `scrPlayerCountCursed` — gates `AmmoPickup/Create_0.gml:16`'s
+    /// `scrPlayerCountCursed` - gates `AmmoPickup/Create_0.gml:16`'s
     /// `CursedPickup` conversion.
     pub cursed_count: u32,
 }
@@ -1753,8 +1753,8 @@ fn shock_rad_drop(
 }
 
 /// GML `event_perform(ev_collision, Player)` on `WeaponChest`,
-/// `BigWeaponChest`, `CursedBigChest`, `GoldChest` and `IDPDChest` — every
-/// one of those `Collision_PortalShock.gml:4` files is that one line — so a
+/// `BigWeaponChest`, `CursedBigChest`, `GoldChest` and `IDPDChest` - every
+/// one of those `Collision_PortalShock.gml:4` files is that one line - so a
 /// portal shock must hand out EXACTLY the touch-open payout. The kinds that
 /// hand-roll their own shock loot (`AmmoChest`, `AmmoChestMystery`,
 /// `HealthChest`, `RogueChest`) and the `prop`-based rad chests
@@ -2473,7 +2473,7 @@ pub fn tick_portal_suck(
         return;
     }
 
-    // GML `Portal/Alarm_1`: ground `WepPickup` only — visible and
+    // GML `Portal/Alarm_1`: ground `WepPickup` only - visible and
     // non-persistent (portal-vacuumed `carried` guns are already
     // persistent/invisible in GML and never counted), desert subarea 1.
     if run.floor == 1 && run.floor_in_area == 1 && run.area == AreaId::Desert {

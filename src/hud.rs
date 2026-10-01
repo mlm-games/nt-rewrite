@@ -94,7 +94,7 @@ pub struct HudState {
     pub mutation_choice_ids: Vec<u8>,
     pub death_mutation_ids: Vec<u8>,
     /// Live coop downed markers (GML `TopCont/Draw_0` fainted bars;
-    /// empty in single-player — the port never spawns [`Revive`]).
+    /// empty in single-player - the port never spawns [`Revive`]).
     pub fainted_bars: Vec<FaintedBar>,
 }
 
@@ -165,7 +165,7 @@ pub const AMMO_GAUGE_ICONS: [(&str, &str); 5] = [
 pub const PICKUP_BUTTON_ART: &str = "images/sprEPickup.png";
 
 /// Cleared flags (bevy `reset_hud_flags` parity: game over off,
-/// mutation picks/toast/boss/loop cleared IN PLACE — hp, weapons,
+/// mutation picks/toast/boss/loop cleared IN PLACE - hp, weapons,
 /// ammo, level and the rest are preserved).
 pub fn reset_hud_state(hud: &mut HudState) {
     hud.game_over = false;
@@ -207,7 +207,7 @@ pub fn scr_time(total_secs: u64) -> String {
 
 /// GML `scrTimeSpeedrun` verbatim: `HH:MM.CC` from 30Hz steps, quirk
 /// included (the centis derive from the whole seconds, not the
-/// fraction — `round(_seconds / 30 * 100)` on the floored value).
+/// fraction - `round(_seconds / 30 * 100)` on the floored value).
 pub fn scr_time_speedrun(steps: u32) -> String {
     let nsecs = steps / 30;
     let hours = nsecs / 3600;

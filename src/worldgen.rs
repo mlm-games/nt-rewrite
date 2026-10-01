@@ -962,7 +962,7 @@ fn apply_safespawn_shift(plan: &mut LevelPlan, run: &Run, gen_rng: &mut StdRng) 
     let delta_px = Vec2::new(dx as f32 * TILE, dy as f32 * TILE);
     // GML counts live `Floor` instances (duplicates stack); the port's
     // deduped cells track the surplus in `stacked`. Verbatim exit law:
-    // `if (_numfloors < _maxfloors) exit` — thin rings do nothing, full
+    // `if (_numfloors < _maxfloors) exit` - thin rings do nothing, full
     // rings shift.
     let mut stacked = 0usize;
     for _ in 0..16 {
@@ -1396,7 +1396,7 @@ pub struct ChestPermuteCtx {
     pub hardmode: bool,
     /// GML raises the tutorial's weapon chest from `TutCont/Alarm_0:53`
     /// (`if (!_any) instance_create(10016, 10016, WeaponChest)`), and
-    /// `scrPopChests` — the only caller of the trim, `scrPopulate:224` —
+    /// `scrPopChests` - the only caller of the trim, `scrPopulate:224` -
     /// never runs for the 5-floor `TutCont` arena. Its `do…until` removes the
     /// last chest of a kind, so trimming the tutorial would delete the only
     /// gun pickup in the level.
@@ -1478,7 +1478,7 @@ fn replace_prop_with_chest(
 /// Verbatim `scripts/scrPopChests/scrPopChests.gml`: vault proto-chest +
 /// chestless areas, Open-Mind bonus counts, trim to 1 + bonus per base
 /// kind (GML destroys nearest-to-`10016+orandom(250)`; the port shuffles
-/// with the seeded stream then truncates — same count law, stable order),
+/// with the seeded stream then truncates - same count law, stable order),
 /// rad permutations (Rogue / noradch horror-or-big / half-health /
 /// desert styleb maggot), crown Life/Love conversions, mimic rolls, and
 /// the hardmode desert 1-1 `BigWeaponChest` arm.

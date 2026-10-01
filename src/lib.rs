@@ -29,8 +29,8 @@
 //!
 //! Input-event mapping (keys arrive via `Modifier::on_key_event` on the
 //! focused root, pointer clicks via the viewport `on_event`
-//! [`PickEvent`] — whose `Press`/`Click` now carry their
-//! [`PointerButton`], so no parallel root button handlers are needed —
+//! [`PickEvent`] - whose `Press`/`Click` now carry their
+//! [`PointerButton`], so no parallel root button handlers are needed -
 //! staged into the sim through `feed_input`):
 //! - WASD/arrows -> move, mouse cursor position -> aim (every frame),
 //!   Space / left-click -> fire, Shift / right-click -> ability+spec
@@ -230,9 +230,9 @@ pub struct App {
     accum: Duration,
     /// Disk path the save was loaded from (`load_save` records it;
     /// `save_now` flushes here on every dirty write, GML `scrSave`
-    /// parity — without it a restart shows the old mappings).
+    /// parity - without it a restart shows the old mappings).
     save_path: Option<PathBuf>,
-    /// Smoothed follow camera (VIEW layer only — sim stays fixed-step pure).
+    /// Smoothed follow camera (VIEW layer only - sim stays fixed-step pure).
     pub cam: Camera2d,
     /// GML `BackCont` camera state verbatim (view-layer state).
     gml_cam: GmlCamera,
@@ -244,7 +244,7 @@ pub struct App {
     last_splash_mode: u8,
     letterbox_frame: f32,
     /// Previous fixed step's app state (drives the spiral lifecycle in
-    /// [`App::advance`]: Loading entry re-warms, InGame entry kills —
+    /// [`App::advance`]: Loading entry re-warms, InGame entry kills -
     /// separate from the view-side `was_state`, which updates a frame
     /// later in [`App::view`]).
     adv_state: AppState,
@@ -289,10 +289,10 @@ pub struct App {
     // in `staging.held` (layout-independent positions, GML
     // `keyboard_check` parity), mouse levels in
     // `staging.lmb_held/rmb_held`, edges in `staging.edges`. Nothing
-    // key/mouse lives on `App` itself anymore — `feed_polled` repairs
+    // key/mouse lives on `App` itself anymore - `feed_polled` repairs
     // into staging and `feed_input` samples it, one store both ways.
     /// Whether the window currently has focus. `false` (set by the
-    /// shell's focus handler) drops `held` outright — winit delivers
+    /// shell's focus handler) drops `held` outright - winit delivers
     /// no key-ups across an alt-tab.
     window_focused: bool,
     staging: std::rc::Rc<std::cell::RefCell<repame_shell::Staging>>,
@@ -471,7 +471,7 @@ impl App {
         // Future spawns (next floors, portal waves) resolve art variants
         // against the full catalog. Entities spawned pre-assets (headless
         // `setup_run` runs against the empty catalog) carry no `SpriteAnim`
-        // and, for enemies, no `EnemySprites` table — backfill both here so
+        // and, for enemies, no `EnemySprites` table - backfill both here so
         // `player_anim_switch` / `enemy_anim_switch` / `hurt_on_damage`
         // match exactly like post-asset spawns (bevy parity: every actor
         // spawns with its strip table + seeded idle anim).
@@ -505,7 +505,7 @@ impl App {
             decode_png(&dir.join("images").join(format!("{name}.png"))).ok()
         }
         // GML `SpiralDebris/Create_0` verbatim: the mote strip is
-        // `sprDebris + GameCont.area` — the FULL GML area number, not the
+        // `sprDebris + GameCont.area` - the FULL GML area number, not the
         // art variant. Campfire (area 0) reuses `sprDebris0`; secret areas
         // use their own (`sprDebris101` …). Never `sprDebris1` here.
         let debris = decode(dir, &format!("sprDebris{gml_area}"))
@@ -572,7 +572,7 @@ impl App {
 
     /// Flush the live save to disk when dirty (GML `scrSave` on every
     /// rebind/option change: `scrOptionsSaveKeymaps` + `scrSave`). The
-    /// dirty flag alone never reaches disk — without this a restart
+    /// dirty flag alone never reaches disk - without this a restart
     /// shows the old mappings. Called from `persist_keymap`.
     fn save_now(&mut self) {
         let dirty = self
@@ -696,7 +696,7 @@ impl App {
             self.step_camera_fixed();
             // GML `Nothing2/Create_0` sets `bossfight` on its fresh
             // `SpiralCont`: no debris births while Throne II runs (any
-            // phase — pending spawn, live fight, death pageant).
+            // phase - pending spawn, live fight, death pageant).
             let throne_ii_active = self
                 .sim
                 .world
@@ -775,18 +775,18 @@ impl App {
 
     /// Spiral lifecycle per fixed step (GML `SpiralCont` create/destroy
     /// parity, bevy `mark_vortex_dead` / `ensure_spiral_for_levelup`
-    /// parity — the view-layer half; the sim `SpiralCtl` resource that
+    /// parity - the view-layer half; the sim `SpiralCtl` resource that
     /// the ambience duck keys off is untouched):
     /// - Entering Loading warms a FRESH spiral for the run (`Vlambeer`
     ///   builds a fresh `SpiralCont` + `GenCont` on every `room_restart`,
-    ///   including RETRY — a continued mid-flight spiral would jump).
+    ///   including RETRY - a continued mid-flight spiral would jump).
     /// - Entering InGame kills it (`GenCont/Destroy` destroys the cont
     ///   at generation end; the 26-tick drain plays out like bevy's).
     /// - A rising generation cover (floor transition or mutation/ultra
     ///   offer) re-warms (`GenCont`/`LevCont` rooms build theirs); the
     ///   falling edge kills (`GenCont/Destroy` at the end of the
     ///   transition). Live gameplay, Title (no `SpiralCont` in the
-    ///   `MenuGen` room) and GameOver therefore show no spiral — just
+    ///   `MenuGen` room) and GameOver therefore show no spiral - just
     ///   the flat area colour, exactly like GML.
     fn step_spiral_lifecycle(&mut self) {
         let state = self
@@ -802,7 +802,7 @@ impl App {
         // Bevy `mark_vortex_dead` is a one-way latch per tick: a kill
         // and a rewarm must NEVER both fire in one call. On the
         // `setup_run` tick the fresh seed arms the entry kill below AND
-        // a pending pick raises the cover edge further down — without
+        // a pending pick raises the cover edge further down - without
         // the latch the cover rewarm rebuilds a live 150-tick spiral in
         // the same tick the kill just drained (the load-end double
         // start, ticks 185→150 over live play).
@@ -888,14 +888,14 @@ impl App {
         // GML `Vlambeer/Create_0` `want_quit_to_menu` branch verbatim:
         // quitting to the logo menu builds a FRESH live `SpiralCont`
         // (`instance_create(x, y, SpiralCont)` with its `repeat 150`
-        // warmup) — never the previous run's leftover drain. That fresh
+        // warmup) - never the previous run's leftover drain. That fresh
         // cont is already built by the quit ACTION arms
         // (`ConfirmPause(0)` / `QuitToTitle` call `rewarm_view_spiral`
         // before `goto_state`); the lifecycle only covers direct
         // `goto_state(MainMenu)` shells like tests. It must NOT fire on
         // the boot Splash→MainMenu edge: the boot spiral has stepped
         // since launch and GML's logo-room cont (created once in
-        // `Vlambeer/Alarm_0`) is the same object still swirling — a
+        // `Vlambeer/Alarm_0`) is the same object still swirling - a
         // rewarm here restarts the vortex under the PLAY rows (the
         // "vortex starts twice" bug).
         if state == AppState::MainMenu
@@ -921,7 +921,7 @@ impl App {
         // char-select DESTROYS the `SpiralCont` (`instance_destroy`) while
         // the leftover `Spiral/SpiralDebris/SpiralStar` motes keep stepping
         // in a cont-less room (drain growth 1.5x, wisp kill-plane 3.0, no
-        // new births — but `lanim` keeps realtime cadence, so bolts keep
+        // new births - but `lanim` keeps realtime cadence, so bolts keep
         // flashing). The `Menu/Draw_0` `scrDrawSpiral` call draws that
         // still-live remnant transparently (no `draw_clear`) over the
         // campfire camp. Only once every mote is culled does the flat
@@ -1043,7 +1043,7 @@ impl App {
             let aim_dis = aim_dis.min(crate::render::CAM_MAX_LOOK);
             // GML POI chain: Portal, then victory/sit markers (the
             // `BecomeNothing`/`NothingDeath` kinds have no port counterpart
-            // yet) — nearest instance wins, cap only for portals.
+            // yet) - nearest instance wins, cap only for portals.
             let poi = nearest_poi(world, player);
             let shake_scale = world
                 .get_resource::<crate::savedata_part::SaveData>()
@@ -1109,7 +1109,7 @@ impl App {
 
     fn maybe_rewarm_spiral(&mut self) {
         // GML `room_restart` parity: a LIVE gameplay area/seed change
-        // (portal, new run) re-warms the spiral for the new room —
+        // (portal, new run) re-warms the spiral for the new room -
         // `Vlambeer/Create_0` builds a fresh `SpiralCont` on every
         // gameplay restart. Menu rooms never restart the vortex: the
         // logo-room cont is created once (`Vlambeer/Alarm_0`) and the
@@ -1117,7 +1117,7 @@ impl App {
         // destroys the cont; `Menu/Draw_0` draws the leftovers). So a
         // menu-room resource reset (`setup_logo_room` on the
         // Splash→MainMenu edge rewriting Desert/seed into
-        // Campfire/seed-0) must NOT read as area/seed drift — that
+        // Campfire/seed-0) must NOT read as area/seed drift - that
         // restarted the vortex under the PLAY rows (the "vortex starts
         // twice" bug). The lifecycle step owns the menu transitions;
         // this only tracks live gameplay drift.
@@ -1161,7 +1161,7 @@ impl App {
     /// Drain the spiral one-shots after each fixed step (GML
     /// `scrDrawSpiral` plays them inline while drawing): bolt
     /// `sndPortalLightning{1..8}` once per wisp (the draw script gates
-    /// on `!_is_menu`, i.e. every state but the campfire title — the
+    /// on `!_is_menu`, i.e. every state but the campfire title - the
     /// same `bg_alpha == 1` set the snapshot uses), flyby
     /// `sndPortalFlyby{1..4}` once per debris mote at `xscale > 1.3`.
     /// Variant/stem rolls use the spiral's deterministic stream off the
@@ -1603,7 +1603,7 @@ impl App {
     /// settings reads, file IO, and the `cursor_img` cache. GML draws
     /// the raw strip cell at GUI mouse (`Draw_75`, no lerp, alpha 1);
     /// the hotspot is the catalog origin (crosshair strips center on
-    /// (8,8)). Missing assets clear the payload — callers fall back to
+    /// (8,8)). Missing assets clear the payload - callers fall back to
     /// `Hidden` (the old software path is gone).
     ///
     /// Size law: GML draws the cell at scale 1 in GUI space
@@ -1611,7 +1611,7 @@ impl App {
     /// 16px cell covers `16 * window_w / view_w` screen px (48 at
     /// 1280x720). The OS cursor buffer is physical px while
     /// `units_per_pixel` is dp, so magnification is
-    /// `density / units_per_pixel` — not `1 / units_per_pixel`, which
+    /// `density / units_per_pixel` - not `1 / units_per_pixel`, which
     /// undersizes the cursor on fractional display scales. The scale
     /// rides the cache key so resizes and monitor moves re-decode.
     fn refresh_cursor_img(&mut self, frame: i32, tint: [f32; 4]) {
@@ -1714,7 +1714,7 @@ impl App {
 
     pub fn touch_up(&mut self, id: u64) {
         // GML reads press/release edges off the live touch slot, but
-        // the shell drops contacts on lift — latch the lifted finger's
+        // the shell drops contacts on lift - latch the lifted finger's
         // id here and consume it next `sample_touch` (swapped attack
         // edges, release-driven consumers like the Plant auto-snare).
         // Lift routing reads `NtInput`'s claims: the attack finger id
@@ -1737,7 +1737,7 @@ impl App {
     pub fn feed_polled(&mut self, sched: &Scheduler) {
         // Single store: staging owns held keys + mouse levels; repair
         // runs into it directly. The old parallel `App.held/lmb_held`
-        // copies are gone — sampling and repair read the same fields.
+        // copies are gone - sampling and repair read the same fields.
         self.staging.borrow_mut().feed_polled(sched);
         self.window_focused = self.staging.borrow().window_focused;
     }
@@ -1794,7 +1794,7 @@ impl App {
         nt_shortcuts::drain(self);
         // Staging owns held levels; translate physical edges into the
         // sampler's `KeyCode` space here. The old `App.held` level set
-        // is gone — levels below read staging directly.
+        // is gone - levels below read staging directly.
         let mut staging = self.staging.borrow_mut();
         let mut staged_held: HashSet<KeyCode> = HashSet::new();
         for key in staging.held.iter() {
@@ -1816,7 +1816,7 @@ impl App {
         // Touch contacts MUST be snapshotted in the same borrow as the
         // clicks: `touch_contacts` clears `touch_new` (the sampler's
         // `just_pressed` edge). The sampler runs ~40 lines below but a
-        // second `touch_contacts` call there would see cleared edges —
+        // second `touch_contacts` call there would see cleared edges -
         // every press would arrive one frame late as a hold with no
         // edge, so sticks never claimed and buttons never pulsed.
         let touch_contacts_snap = staging.touch_contacts();
@@ -1934,7 +1934,7 @@ impl App {
         }
         // Read the pending offer directly, not the `MenuState` mirror
         // (the mirror updates inside the schedule, a frame after the
-        // offer opens/closes — the stale frame fired the gun on level-up
+        // offer opens/closes - the stale frame fired the gun on level-up
         // and let one aim frame through).
         let offer_open = state == AppState::InGame
             && (self
@@ -2120,7 +2120,7 @@ impl App {
                 // GML `BackButton/Step_0:22`: `gp_face2` is one of the
                 // four triggers feeding the single back event (with Esc,
                 // Backspace and the keyboard RMB), so it travels the same
-                // law the port's RMB back already takes — `SettingsBack`
+                // law the port's RMB back already takes - `SettingsBack`
                 // on options, `CloseOverlay` on `Credits`/`DrawStats`
                 // (`BackButton/Other_10`), resume off the pause screen,
                 // and the `PlayButton` list closes (`Other_10`'s
@@ -2192,7 +2192,7 @@ impl App {
                 // hand the sampler dead `just_pressed` edges.
                 // Viewport lifts bypass `App::touch_up` (staging-only
                 // closure): any contact count drop since last frame is
-                // a lift — latch the missing finger ids against the
+                // a lift - latch the missing finger ids against the
                 // stick claims (`note_touch_released` drops stale ids)
                 // and run the sampler on every tick, empty or not, so
                 // claims release and lift edges fire on the lift frame.
@@ -2200,7 +2200,7 @@ impl App {
                 let live: std::collections::HashSet<i64> =
                     contacts.iter().map(|c| c.id as i64).collect();
                 // GML spawns touch objects on mobile only: on desktop
-                // there are no sticks, so the sampler must not run —
+                // there are no sticks, so the sampler must not run -
                 // it zeroes `move_axis`/`aim_axis` and would eat the
                 // keyboard vote every frame. Run only while fingers
                 // are down, a claim is live, or a lift edge is
@@ -2264,7 +2264,7 @@ impl App {
         // Right-click and Shift share the `spec` action (GML `spec`
         // on `mb_right` plus the Shift keyboard fallback); on Title
         // that action toggles loadout/hardmode, so a right-click
-        // would toggle panels as a side effect. Drop the pulse —
+        // would toggle panels as a side effect. Drop the pulse -
         // Back only travels via Esc here.
         if rmb_down && state == AppState::Title {
             self.sim.world.resource_mut::<NtInput>().take_spec_pressed();
@@ -2291,7 +2291,7 @@ impl App {
         // Splash advances on any key/mouse edge (bevy `boot_intro` law):
         // arrows/WASD/digits never stage fire/interact/spec pulses, so
         // without this a keyboard-only shell stalls on the logo until the
-        // timeout. Any `just` key, pad edge, or tap counts — edge split
+        // timeout. Any `just` key, pad edge, or tap counts - edge split
         // like GML `mouse_ui_clicked`: Android on the lift, desktop on
         // the press.
         if state == AppState::Splash
@@ -2335,7 +2335,7 @@ impl App {
                 // Live cursor, unprojected through this frame's camera
                 // (see `cursor_px`): valid even when the pointer hasn't
                 // moved since the camera did. Desktop-only: on Android
-                // there is no cursor — aim comes from the attack stick
+                // there is no cursor - aim comes from the attack stick
                 // (sampler above), and any staged hover is a finger
                 // drag, not a pointer.
                 if !cfg!(target_os = "android") {
@@ -2372,8 +2372,8 @@ impl App {
             // In-run pause button (GML `UberCont/Draw_64:51-60`): the
             // only pause route a touch device has (no Esc key), and the
             // only one a mouse gets either. GML loops
-            // `device_mouse_check_button_released` over touches 0..4 —
-            // released contacts on every platform — so a press that
+            // `device_mouse_check_button_released` over touches 0..4 -
+            // released contacts on every platform - so a press that
             // lands in the circle and lifts pauses. The port splits the
             // edge like GML `mouse_ui_clicked`: Android reads the lifts
             // (`released_touch_clicks`); desktop stays on
@@ -2399,7 +2399,7 @@ impl App {
             }
         } else if menu_open && !offer_open {
             // Open menu over a live run: right-click steps back (GML
-            // `BackButton` `mb_right` parity — Settings pops one level
+            // `BackButton` `mb_right` parity - Settings pops one level
             // via `SettingsBack`, Credits closes), left clicks route at
             // the menu buttons, then drop either way. A coincident left
             // click still routes (RMB never eats it).
@@ -2621,7 +2621,7 @@ impl App {
             // select when unselected, commit (`event_user(0)`) when
             // already selected. The port models that as
             // `SelectMutation`/`PickMutation`, and the two-stage law
-            // reads live `mutation_selected` — so routing ONE gesture
+            // reads live `mutation_selected` - so routing ONE gesture
             // through the hit-test twice selects and then instantly
             // claims in the same frame (the "mutation collects on the
             // first tap" bug). A touch finger arrives as both a released
@@ -2727,8 +2727,8 @@ impl App {
     /// window-physical px mapped into the GML view. `None` until the
     /// first mouse move, or while a touch holds the device (GML
     /// `mouse_ui_hovered` is a bare collision test: the pointer keeps
-    /// driving `pointed_item` under the GAMEPAD switch too — only
-    /// `MainMenuButton`'s hover flag is `!is_gamepad()`-gated — and
+    /// driving `pointed_item` under the GAMEPAD switch too - only
+    /// `MainMenuButton`'s hover flag is `!is_gamepad()`-gated - and
     /// touch has no cursor).
     fn menu_gui_point(&self) -> Option<[f32; 2]> {
         if !self.staging.borrow().touch_active.is_empty() {
@@ -2882,7 +2882,7 @@ impl App {
     /// `pointed_item`). The render layer already highlights the live
     /// cursor, so visual hover follows the mouse with no click needed;
     /// clicks then confirm whatever is pointed. Keyboard/gamepad paths
-    /// never write here — gamepad owns `gamepad_sel` via
+    /// never write here - gamepad owns `gamepad_sel` via
     /// `scrGamepadUIControl`, keyboard owns the `*_cursor` fields.
     fn tick_menu_hover(&mut self) {
         let Some([gx, gy]) = self.menu_gui_point() else {
@@ -2914,7 +2914,7 @@ impl App {
             // (one per label); the PLAY submenu swaps them for
             // `PlayButton` instances. The mouse points rows by collision
             // (`mouse_ui_hovered`), the keyboard mirrors `gamepad_sel`
-            // into the cursor — both highlight through the same color.
+            // into the cursor - both highlight through the same color.
             MenuOverlay::MainMenu => {
                 let in_submenu = self
                     .sim
@@ -3232,8 +3232,8 @@ impl App {
         // post-tick sim state: keyboard mode hides the OS cursor (the
         // game draws its own crosshair at the live cursor position),
         // mouse mode shows it. The GML branch reads raw `opt_keyboard`
-        // — the `opt_gamepad` switch never restores the pointer. Touch
-        // frames always show it — fingers need no cursor and the GML
+        // - the `opt_gamepad` switch never restores the pointer. Touch
+        // frames always show it - fingers need no cursor and the GML
         // `opt_keyboard` branch draws nothing on touch either.
         let keyboard_mode = {
             let keyboard = self
@@ -3260,7 +3260,7 @@ impl App {
         // desktop and nothing in boot/menus/death clears it), and the
         // game crosshair (`UberCont/Draw_75`, gated only on
         // `window_get_cursor() == cr_none` + `show_crosshair`) draws
-        // over everything — splash reel, menus, campfire, death
+        // over everything - splash reel, menus, campfire, death
         // screen alike. Pause/overlay are the only hides (GML
         // `PauseImage` / `MenuOptions` take over the pointer there).
         let hide_os_cursor = keyboard_mode && !paused_now && overlay_now == OverlayMenu::None;
@@ -3293,7 +3293,7 @@ impl App {
         // GML `scrSetViewSize` + `display_set_gui_size`: the GUI IS the
         // view, so there is ONE rect. The viewport gets the GML view in
         // world units and a 1:1 camera, and the engine's contain-fit
-        // scales it into the canvas and centres the remainder — that is
+        // scales it into the canvas and centres the remainder - that is
         // the letterbox/pillarbox. The old shape (whole canvas + a scaled
         // camera) always filled the window, which is why portrait showed
         // 320x668 of world under a 320x240 GUI.
@@ -3413,7 +3413,7 @@ impl App {
         // Hardware cursor request: computed inside the sprite borrow
         // (save reads only), refreshed after it ends (`refresh_cursor_img`
         // needs `&mut self`). `None` when assets are absent or the gate
-        // is off — the refresh then clears the payload.
+        // is off - the refresh then clears the payload.
         let mut cursor_req: Option<(i32, [f32; 4])> = None;
         let mut chrome_sprites: Vec<SpriteInstance> = Vec::new();
         let mut front_chrome_sprites: Vec<SpriteInstance> = Vec::new();
@@ -3439,13 +3439,13 @@ impl App {
             // GML `scrGameIsGenerationScreen` verbatim: while the
             // generation conts own the draw (`GenCont` behind Loading,
             // `LevCont` behind the mutation/ultra offer) the room draws
-            // NOTHING but the spiral + cover text — the old floor sits
+            // NOTHING but the spiral + cover text - the old floor sits
             // under an opaque vortex backdrop and would paint straight
             // through the fullscreen pass (the "tiles over the vortex"
             // bug). The campfire title is NOT a generation screen for
             // draw purposes: `MenuGen` builds the camp, then `Menu`
             // draws spiral remnant + camp + pods + portraits (`Menu`
-            // draw scripts own that chrome, not `TopCont` — so the
+            // draw scripts own that chrome, not `TopCont` - so the
             // TopCont-sourced HUD bars stay off but the Menu chrome
             // stays on).
             let generation_screen = spiral_cover
@@ -3515,7 +3515,7 @@ impl App {
             // local: keyboard mode on, gamepad mode off). No live-pad
             // half here: GML's `is_gamepad(index)` is the sticky
             // `opt_gamepad` setting (`scrHandleInputsGeneral`), not
-            // per-frame pad activity — an idle-but-enabled pad still
+            // per-frame pad activity - an idle-but-enabled pad still
             // draws the lerped crosshair.
             let mut cross = if playing {
                 crosshair_sprites(&mut self.sim.world, assets, hud_dt)
@@ -3547,7 +3547,7 @@ impl App {
             s.extend(portal);
             // Spiral CPU layer (GML `scrDrawSpiral` center figures):
             // crown orbit + player hurt figures ride every spiral
-            // caller — `GenCont`, `LevCont`, `NothingSpiral` and the
+            // caller - `GenCont`, `LevCont`, `NothingSpiral` and the
             // logo spirals alike. NOT the campfire `Menu`
             // (`PlayButton` destroys the `SpiralCont` on entry, so the
             // `with SpiralCont` figure block has no instance) and NOT
@@ -3573,7 +3573,7 @@ impl App {
             }
             // View-anchored HUD bars (Draw-GUI-64: above all world-space
             // layers). GML `GenCont/Draw_0` draws ONLY spiral +
-            // GENERATING + roadmap — no PlayerHUD/MiscHUD — and the
+            // GENERATING + roadmap - no PlayerHUD/MiscHUD - and the
             // Loading room's run is pre-`setup_run` (no live run actors
             // yet), so the HUD stays off while Loading like GML (TopCont
             // draws the HUD only once the run's actors exist). LevCont's
@@ -3738,7 +3738,7 @@ impl App {
             }
             // Hardware cursor (GML `UberCont/Draw_75` verbatim): while
             // the OS pointer is hidden the game hands it
-            // `sprCrosshair[opt_crosshair]` (`opt_cursorcol`, alpha 1) —
+            // `sprCrosshair[opt_crosshair]` (`opt_cursorcol`, alpha 1) -
             // composited by the OS, so it sits above every sprite and UI
             // layer with zero frame lag, on EVERY screen (gameplay
             // included). GML gates only on
@@ -3773,7 +3773,7 @@ impl App {
                 None
             };
             // Sideart chrome around the view (GML `UberCont/Draw_74`:
-            // GUI Begin — before the GUI-64 HUD/menus and the Draw_75
+            // GUI Begin - before the GUI-64 HUD/menus and the Draw_75
             // cursor, so it rungs above the room chrome but below every
             // HUD/menu/cursor sprite; never over a generation screen,
             // whose draw scripts own the full frame).
@@ -3832,7 +3832,7 @@ impl App {
 
         // Vortex snapshot -> mounted background pass. `bg_alpha` is
         // GML `scrDrawSpiral` verbatim: `draw_clear(c_black)` runs in
-        // every caller EXCEPT `Menu` — i.e. opaque black behind the
+        // every caller EXCEPT `Menu` - i.e. opaque black behind the
         // logo spiral, MainMenu, Loading, and run covers; transparent
         // over the campfire camp on Title. InGame mounts the pass only
         // while a floor transition or mutation/ultra cover runs (the
@@ -3897,8 +3897,8 @@ impl App {
         // GML depth law: LOWER depth draws IN FRONT (manual: "-1000 is
         // drawn on top of -100, which is drawn on top of 0"), and
         // `scrDrawSpiral` opens with `draw_clear(c_black)` at
-        // `SpiralCont` depth -101. `Logo` sits at -10000 — the frontmost
-        // rung, shared with `MainMenuButton` — so the boot-reel logo
+        // `SpiralCont` depth -101. `Logo` sits at -10000 - the frontmost
+        // rung, shared with `MainMenuButton` - so the boot-reel logo
         // paints OVER the cleared spiral, not under it. Only the logo
         // needs the pass underneath: it is the sole sprite in the
         // viewport then, and `Z_SPIRAL_FIGURES` < `Z_SPLASH` keeps the
@@ -3913,7 +3913,7 @@ impl App {
         // the same call via `MenuGen`. But the fill must NEVER sit under
         // a mounted vortex pass as a fullscreen quad: GML's
         // `Menu/Draw_0` calls `scrDrawSpiral()` FIRST (transparent, no
-        // `draw_clear`) and draws the camp floors OVER it — the spiral
+        // `draw_clear`) and draws the camp floors OVER it - the spiral
         // shows through the gaps between floor tiles. A fullscreen fill
         // quad in the sprite viewport would bury the vortex layer
         // underneath (the "no vortex on the title screen" bug). So:
@@ -3983,7 +3983,7 @@ impl App {
             menu_kind.map(|k| menu_gui_texts_dp(k, &mut self.sim.world, viewport_dp))
         };
         // GML `TutCont/Draw_64` verbatim: the step instruction bar draws
-        // at the letterbox bottom until the exit portal exists — over
+        // at the letterbox bottom until the exit portal exists - over
         // live HUD, never instead of it.
         if state == AppState::InGame
             && self
@@ -4182,7 +4182,7 @@ impl App {
         // pointer). GML `UberCont/Step_0:175-183`: keyboard mode hides
         // the OS cursor, menus/mouse mode shows it. When the hardware
         // cursor art is live (`cursor_img`, same gate as the decode
-        // above), the OS composites the crosshair itself — topmost,
+        // above), the OS composites the crosshair itself - topmost,
         // zero lag, no sprite needed.
         sched.cursor_override = Some(if hide_os_cursor {
             match &self.cursor_img {
@@ -4231,7 +4231,7 @@ impl App {
             });
         // Right mouse button (GML `mb_right` ability / menu Back): the
         // viewport `PickEvent` button stages `rmb_down`/`lmb_down`
-        // directly, so nothing else is needed here — the runtime-owned
+        // directly, so nothing else is needed here - the runtime-owned
         // `Scheduler::pointer_pos_px` already tracks the cursor every
         // frame outside focus dispatch.
 
@@ -4284,7 +4284,7 @@ impl App {
             );
         }
         // GML `scrLetterbox` (36 px bars): cinematic chrome over menus,
-        // transitions, game over, and boss intros — but NOT the
+        // transitions, game over, and boss intros - but NOT the
         // campfire title (`Menu/Create_0`: `scrLetterbox(false, 0)`).
         let boss_intro = self
             .sim
@@ -4308,7 +4308,7 @@ impl App {
         }
         // GML `room_restart` parity (`Vlambeer/Create_0` logo branch):
         // the quit-to-menu room recenters the camera (0,0) over black
-        // with a fresh live spiral — the previous run's look point and
+        // with a fresh live spiral - the previous run's look point and
         // drain never carry over.
         if matches!(state, AppState::MainMenu) && !matches!(self.was_state, AppState::MainMenu) {
             self.gml_cam.snap = true;
@@ -4697,7 +4697,7 @@ fn player_pos(world: &mut World) -> Option<Vec2> {
 }
 
 /// GML `BackCont` POI chain for the camera (`objects/BackCont/Step_0`):
-/// Portal first, then the victory/sit markers — nearest instance of the
+/// Portal first, then the victory/sit markers - nearest instance of the
 /// first non-empty kind wins. Only portals carry the 72 px cap here;
 /// the `BecomeNothing` / `NothingDeath` kinds and the `TutCont` +
 /// `WeaponChest` override have no port counterpart (no tutorial).
@@ -4856,7 +4856,7 @@ pub fn hud_overlay_lines(world: &mut World, canvas_dp: [f32; 2]) -> Vec<crate::r
             let t = segs[0].0.as_str();
             // `LOW HP` + the whole low-ammo block share the GML
             // `sin(wave) > 0` blink gate. `SkillText` toasts blink on
-            // `disappear % 2` — same shell beat. (Toast text arrives
+            // `disappear % 2` - same shell beat. (Toast text arrives
             // `@d`-tagged; strip the tag for the match.)
             let plain = t.strip_prefix("@d").unwrap_or(t);
             if plain == "LOW HP"
@@ -5035,7 +5035,7 @@ fn menu_button_action(
 
 /// Menu-owned keys (Godot `_gui_input`-before-`_unhandled_input`
 /// parity): while a menu owns the screen, Space/arrows/Tab drive nav
-/// and confirm only — `feed_input` strips them before the gameplay
+/// and confirm only - `feed_input` strips them before the gameplay
 /// sampler so one press can't both confirm a row and pulse a gameplay
 /// action. Gameplay keeps them via `held`/`just` on `live_play`.
 fn menu_owned_key(code: KeyCode) -> bool {
@@ -5256,7 +5256,7 @@ mod cursor_staging_tests {
     }
 
     /// Reported bug verbatim: the crosshair drifted across the screen
-    /// as the camera moved even with the pointer still — the world
+    /// as the camera moved even with the pointer still - the world
     /// point was baked through an old camera and the hover screen px
     /// was dropped (`_screen`). GML draws the raw cursor at GUI mouse
     /// coords (screen-anchored, never camera-following). Regression:
@@ -5365,7 +5365,7 @@ mod cursor_staging_tests {
     }
 
     /// Reported bug verbatim: on the REMAP page, pressing most keys
-    /// did nothing — the physical capture table only mapped ~20 names
+    /// did nothing - the physical capture table only mapped ~20 names
     /// (WASD/arrows/digits/space/tab) and silently swallowed the rest.
     /// GML captures any pressed input, so the table now derives every
     /// `KeyX`/`DigitN` name generically.
@@ -5645,7 +5645,7 @@ mod cursor_staging_tests {
     }
     /// Live click-to-arm chain: a click on the REMAP page's first row
     /// (through `route_menu_click` → `settings_click_action` → hot
-    /// row → `RemapControl` → `begin_capture`) must arm the capture —
+    /// row → `RemapControl` → `begin_capture`) must arm the capture -
     /// the link between the drawn rows and the key handler above. The
     /// click dp comes from the row's own GUI box (as the viewport
     /// stages it), so this also proves the drawn rows and the hot
@@ -5731,11 +5731,11 @@ pub extern "C" fn android_main(android_app: winit::platform::android::activity::
     if let Err(e) = repame_shell::run_android(android_app, move |sched, ctx| {
         // `App::view` runs the poll/store/feed pipeline (keyboard repair,
         // menu actions, click routing, pad sampling, touch zones) around
-        // the fixed-step advance, then builds the sprite/HUD/menu view —
+        // the fixed-step advance, then builds the sprite/HUD/menu view -
         // same order as desktop. Android controller buttons land in the
         // runner's pad map via the platform `AndroidBackend`, which
         // forwards South/East/Start/DPad as synthetic keys (Space, Esc,
-        // Enter, arrows) into the normal key path — repadio-shaped, no
+        // Enter, arrows) into the normal key path - repadio-shaped, no
         // game-side pad bridge needed.
         let now = std::time::Instant::now();
         let dt = now

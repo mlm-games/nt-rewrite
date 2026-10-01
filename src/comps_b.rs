@@ -183,7 +183,7 @@ pub struct CampfireProp;
 /// exist); when it fires the 30-step hurt pulse starts (`Alarm_4`
 /// performs `Alarm_5`: every player takes 1, `alarm[5] = 30`).
 /// The port has no coop downing (single-player only), so nothing
-/// spawns or damages through this yet — the comp carries the timer
+/// spawns or damages through this yet - the comp carries the timer
 /// law for the HUD draw below.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct Revive {
@@ -388,7 +388,7 @@ impl LoopTransition {
     }
 }
 
-/// GML `WantBoss` — the marker that arms the Big Bandit. `WantBoss/Step_0`
+/// GML `WantBoss` - the marker that arms the Big Bandit. `WantBoss/Step_0`
 /// compares the **surviving** enemy count against `enemies` (captured in
 /// `WantBoss/Create_0` at generation time) scaled by `treshhold`, which is
 /// `0.98` normally and `0.9` on the area's last subarea, so the bandit arms
@@ -405,7 +405,7 @@ pub struct PendingDelayedBoss {
     /// secret instead of a routine boss.
     pub require_open_chests: bool,
     /// GML `WantBoss/Step_0:16-17`: `alarm[0] = 120` (4 s) once the threshold
-    /// clears on the last subarea. Zero everywhere else — there the chest
+    /// clears on the last subarea. Zero everywhere else - there the chest
     /// condition sets `alarm[0] = 1` instead.
     pub arm_delay: f32,
 
@@ -429,7 +429,7 @@ pub struct HyperOrbitCrystal {
 
 #[derive(Component, Clone, Debug)]
 pub struct SentryTurret {
-    /// GML has no generic lifetime — `spawn_sentry_turret` is the port's
+    /// GML has no generic lifetime - `spawn_sentry_turret` is the port's
     /// weapon deployable and keeps one; the GML `SentryGun` body has
     /// `None` and lives on `ammo` / `hp` alone.
     pub life: Option<Timer>,
@@ -539,7 +539,7 @@ pub struct EnemyBrain {
     /// EliteGrunt 4).
     pub grenades: u8,
 
-    /// GML `lastx, lasty` — the target's last seen position, which the
+    /// GML `lastx, lasty` - the target's last seen position, which the
     /// `PopoNade` lob is aimed at.
     pub last_seen: glam::Vec2,
 
@@ -796,7 +796,7 @@ pub enum PickupKind {
     Weapon(WeaponId),
     Chest(ChestKind),
     /// GML `Curse` mote (Robot's cursed-weapon eat spills 10; ambient,
-    /// no pickup effect — collected by despawn).
+    /// no pickup effect - collected by despawn).
     Curse,
 }
 
@@ -964,7 +964,7 @@ pub struct LilHunterDie {
 }
 
 /// GML `objects/TrapFire`: the short-lived fire jet. `lil_hunter` is the
-/// `sprite_index != sprFireLilHunter` gate on `Collision_hitme.gml:4` —
+/// `sprite_index != sprFireLilHunter` gate on `Collision_hitme.gml:4` -
 /// only the LilHunterDie death ring flies through a body it cannot hurt,
 /// every other jet reverts in place.
 #[derive(Component, Clone, Copy, Debug, Default)]
@@ -1070,7 +1070,7 @@ impl GmlImage {
     }
 
     /// GML `chestprop/Step_0.gml:4-7` verbatim ramp: `image_speed = 0`
-    /// (the built-in advance is off) and the index is driven by hand —
+    /// (the built-in advance is off) and the index is driven by hand -
     /// `random(0.04)` while `image_index < 1`, else `+0.4`.
     pub fn ramped(path: &'static str, frames: u32, image_speed: f32, first_jitter: f32) -> Self {
         Self {
@@ -1677,7 +1677,7 @@ pub struct TitleCampfire;
 /// sits far away (`Walk`/`GoSit`/`Sit`: `menu` doubles as the sit end,
 /// `from` is unused). Skeleton/Frog ship no `Select`/`Selected`
 /// strips, so their selected half falls back to `sprMutant<gml>Idle`
-/// — the `_default` arg of `scr_race_get_sprite` (`scrRaces.gml:74`).
+/// - the `_default` arg of `scr_race_get_sprite` (`scrRaces.gml:74`).
 /// Ends loop, transitions are oneshots.
 pub struct CamperStrips {
     pub slct: &'static str,
@@ -1812,7 +1812,7 @@ pub fn camper_strips(gml: usize, frog_far: bool) -> CamperStrips {
 }
 
 /// GML camper menu-strip name verbatim (`scrCampfireMenuCreate`:
-/// `spr<Name>Menu`, `_name` from `scrRaceGetStringID(race, true)` —
+/// `spr<Name>Menu`, `_name` from `scrRaceGetStringID(race, true)` -
 /// capitalized race name + `Menu`). Falls back to `sprMutant<gml>Menu`
 /// then `sprDefault` per `scr_race_get_sprite`. BigDog campers sleep
 /// (`sprScrapBossSleep`, set inline in `scrCampfireMenuCreate`).
@@ -1851,7 +1851,7 @@ pub struct TitleLogMenu;
 /// toward `spr_menu` (selected), `Some(false)` = playing `spr_from`
 /// toward `spr_slct` (deselected). The render arm flips `swap` on
 /// selection change and holds the transition strip until the oneshot
-/// finishes, then parks on the end strip — verbatim two-step.
+/// finishes, then parks on the end strip - verbatim two-step.
 pub struct TitleCampChar {
     pub race_gml: usize,
     pub fixed: bool,

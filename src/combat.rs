@@ -313,7 +313,7 @@ pub struct Explosion {
 pub struct ExplosionFeelApplied;
 
 /// GML lingering blast: the explosion re-scans every 1/30 s for 0.75 s,
-/// hitting each victim once (bevy `LingeringBlast` parity — walk-ins
+/// hitting each victim once (bevy `LingeringBlast` parity - walk-ins
 /// caught like GML).
 #[derive(Component, Clone, Debug)]
 pub struct LingeringBlast {
@@ -804,7 +804,7 @@ pub fn resolve_enemy_deaths(
                 crate::boss_ai::lil_hunter_fire_ring(&mut commands, pos);
                 // GML `LilHunter/Destroy_0:13-21`: the head skitters on
                 // (`LilHunterDie` inherits team) plus the 80-`TrapFire`
-                // ring. `scrOnPopoKill` has no port equivalent — skipped
+                // ring. `scrOnPopoKill` has no port equivalent - skipped
                 // (its music-cue side effects ride the audio layer).
                 crate::enemies::spawn_lil_hunter_die(
                     &mut commands,
@@ -1388,7 +1388,7 @@ pub fn resolve_death_drops(
     mut fire_q: Query<&mut FireCooldown, (With<Player>, Without<Enemy>)>,
 ) {
     // NOTE: `mut pinv` trips a bogus `unused_mut` (removing it trips
-    // E0596 on the reborrow in the lucky-shot branch instead) — allowed,
+    // E0596 on the reborrow in the lucky-shot branch instead) - allowed,
     // not worked around.
     #[allow(unused_mut)]
     let Ok((_, player_pos, player, mut phealth, mut pinv, mut race_state)) = player_q.single_mut()
@@ -1677,7 +1677,7 @@ pub fn resolve_death_drops(
 /// `move_projectiles` with positions as [`Pos`].
 ///
 /// Render split: rotation writes (`tf.rotation` orienting sprites along
-/// velocity) are dropped — the renderer orients from `Velocity`
+/// velocity) are dropped - the renderer orients from `Velocity`
 /// directly. Everything else (bounce math, fuses, cascades) is
 /// byte-identical, including call order into the removal cascade.
 #[allow(clippy::too_many_arguments)]
@@ -1897,7 +1897,7 @@ pub fn move_projectiles(
             hit_normal = Some(n);
         }
 
-        // GML `TrapFire/Collision_hitme.gml:1` — the jet flies straight
+        // GML `TrapFire/Collision_hitme.gml:1` - the jet flies straight
         // through props, so they neither take damage nor stop it.
         if !trap_fire {
             for (prop_e, prop, prop_pos, death, _, _, _) in props.iter() {
@@ -1917,7 +1917,7 @@ pub fn move_projectiles(
             let disc_dist = aux.p0().get(e).ok().map(|d| d.dist);
             // Plasma shrink (bevy order: prop damage with NO re-hit
             // gate, then unconditional shrink + burst + rollback, then
-            // despawn at <= 0.5 — never bounces).
+            // despawn at <= 0.5 - never bounces).
             if let Ok(mut ps) = aux.p1().get_mut(e) {
                 if let Some((prop_e, center, true, _)) = hit_prop {
                     let dmg = ((p.damage as f32 * ps.0).floor() as i32).max(1);
@@ -1981,7 +1981,7 @@ pub fn move_projectiles(
                 }
                 continue;
             }
-            // Disc: gated prop damage, then range despawn past 50 —
+            // Disc: gated prop damage, then range despawn past 50 -
             // otherwise falls through to sticky/bounce.
             if aux.p0().get(e).is_ok() {
                 if let Some((prop_e, center, true, _)) = hit_prop {
@@ -2214,7 +2214,7 @@ pub fn move_projectiles(
                 );
 
                 // Wall-impact dust (GML `Bullet1/Collision_Wall`: plain
-                // `instance_create(x, y, Dust)` — `Dust/Create_0` law is
+                // `instance_create(x, y, Dust)` - `Dust/Create_0` law is
                 // `image_angle = random_angle` per puff).
                 if let Some(def) = catalog.def("images/sprDust.png") {
                     let mut anim = SpriteAnim::oneshot("images/sprDust.png", def);
@@ -2538,7 +2538,7 @@ pub fn projectile_hits(
 
         // Bevy reads/mutates the projectile `Transform` in place here
         // (notably the plasma victim rollback writes back); keep the
-        // `&mut Pos` binding live — no Vec2 shadow copy.
+        // `&mut Pos` binding live - no Vec2 shadow copy.
         let mut hit = false;
         let mut damaged = false;
         let mut hit_player = false;
@@ -2587,7 +2587,7 @@ pub fn projectile_hits(
                 continue;
             }
 
-            // GML `TrapFire/Collision_hitme.gml:1` — the jet skips `enemy`
+            // GML `TrapFire/Collision_hitme.gml:1` - the jet skips `enemy`
             // and `prop`, so it can only hurt the player and allies.
             if jet.is_some() && *target_team != Team::Player {
                 continue;
@@ -2785,7 +2785,7 @@ pub fn projectile_hits(
             }
 
             {
-                // GML flesh hits spawn no BulletHit (`scr_hit` has none —
+                // GML flesh hits spawn no BulletHit (`scr_hit` has none -
                 // the visible burst is the destroy-path fade). The extra
                 // impact star here is game feel, so it inherits the
                 // projectile heading like `scrBulletHitFX` instead of a
@@ -2864,7 +2864,7 @@ pub fn projectile_hits(
 
         // GML `TrapFire/Collision_hitme.gml:2-7`: the flame hit never
         // destroys the jet (it only ever dies on `Wall` or `Other_7`), and
-        // a hit the flame could not land — i-frame or shield — rewinds it
+        // a hit the flame could not land - i-frame or shield - rewinds it
         // in place unless it is the `sprFireLilHunter` death ring.
         if let Some(jet) = jet {
             if !damaged && !jet.lil_hunter {
@@ -3197,7 +3197,7 @@ pub fn tick_sentry_turrets(
             continue;
         };
 
-        // GML `SentryGun/Alarm_0.gml:32,34` — `gunangle` first, then the
+        // GML `SentryGun/Alarm_0.gml:32,34` - `gunangle` first, then the
         // round is spent, and the shot is still created on the alarm that
         // empties the magazine (`ammo <= 0` only lands at :56).
         let dir = (target - pos).normalize_or_zero();
@@ -3708,7 +3708,7 @@ const ELECTRIC_GUITAR_HIT_STEMS: [&str; 6] = [
 /// Render split: bevy oriented `Transform.rotation` along velocity and
 /// spawned the MeleeHitWall sprite; here the slash direction derives
 /// from `Velocity` directly (fallback +X once stopped) and the wall-hit
-/// FX is skipped — trauma/audio/latch carry the sim effect.
+/// FX is skipped - trauma/audio/latch carry the sim effect.
 #[allow(clippy::too_many_arguments)]
 pub fn tick_slash_projectiles(
     time: Res<SimTime>,

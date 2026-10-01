@@ -48,9 +48,9 @@ pub fn begin_throne_campfire(
         Pos(pos),
     ));
     // Yung Venuz watches the fire from his couch (GML `YungVenuzCouch`,
-    // crib: idle `sprYVBossGamingIdle`). Offset is a port choice — GML
+    // crib: idle `sprYVBossGamingIdle`). Offset is a port choice - GML
     // places it in the crib room layout, which has no fixed anchor to
-    // the fire here — kept clear of the flames on +x.
+    // the fire here - kept clear of the flames on +x.
     commands.spawn((
         GameCleanup,
         LevelCleanup,

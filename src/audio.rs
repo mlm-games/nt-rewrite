@@ -113,7 +113,7 @@ impl GameAudio {
     }
 
     /// Hit thock (GML `Bullet1/Collision_Wall.gml:7` and 15 sibling
-    /// `*/Collision_Wall.gml` sites — `snd_play_hit(sndHitWall, 0.2)`,
+    /// `*/Collision_Wall.gml` sites - `snd_play_hit(sndHitWall, 0.2)`,
     /// with `WepPickup/Collision_Wall.gml:6` on the script's `0.2`
     /// default).
     pub fn play_hit(&self, cues: &mut Queue<AudioCue>) {
@@ -253,7 +253,7 @@ impl GameAudio {
     }
 
     /// GML `RadChest/Destroy_0.gml:11-12` / `RadMaggotChest/Destroy_0.gml:11`
-    /// `snd_play(sndEXPChest)` — the rad-chest family, never the
+    /// `snd_play(sndEXPChest)` - the rad-chest family, never the
     /// generic pickup blip.
     pub fn play_exp_chest(&self, cues: &mut Queue<AudioCue>) {
         Self::cue(cues, "sndEXPChest", 1.0, 0.0);
@@ -261,7 +261,7 @@ impl GameAudio {
 
     /// GML `CursedPickup/Create_0.gml:8` `snd_play_hit(sndCursedPickup, 0.2)`.
     /// `snd_play_hit`'s 2nd arg is random PITCH and `_gain` is
-    /// `UberCont.opt_sndvol` (1.0) — see `scripts/snd_play_hit`; the port's
+    /// `UberCont.opt_sndvol` (1.0) - see `scripts/snd_play_hit`; the port's
     /// 4th field is the same pitch jitter law, so it carries `0.2` as-is.
     pub fn play_cursed_pickup(&self, cues: &mut Queue<AudioCue>) {
         Self::cue(cues, "sndCursedPickup", 1.0, 0.2);
@@ -319,7 +319,7 @@ impl GameAudio {
     }
 
     /// GML `Player/Collision_WepPickup.gml:67` `snd_play(wep_swap[wep])`
-    /// — the per-weapon swap stem.
+    /// - the per-weapon swap stem.
     pub fn play_weapon_swap(&self, cues: &mut Queue<AudioCue>, weapon: crate::data::WeaponId) {
         let swap = crate::weapon_runtime::weapon_meta(weapon).wep_swap;
         if !swap.is_empty() {
@@ -384,9 +384,9 @@ pub enum AmbienceCue {
     Menu,
     /// GML `Logo/Alarm_0.gml:8` boot-logo bed `sndLogoLoop`
     /// (`snd_play_ambience`, looped until `Logo/Destroy_0.gml:1`
-    /// `snd_stop(sndLogoLoop)` — the Splash -> MainMenu handoff).
+    /// `snd_stop(sndLogoLoop)` - the Splash -> MainMenu handoff).
     LogoLoop,
-    /// GML `MusCont/Alarm_11.gml:49,55` `amb0b` — the `audio_exists`
+    /// GML `MusCont/Alarm_11.gml:49,55` `amb0b` - the `audio_exists`
     /// fallback for any area whose `amb<area>` asset is missing (the
     /// crib) and the campfire special case.
     Rest,
@@ -961,7 +961,7 @@ pub enum UiAction {
 pub struct UiBridgeAction(pub UiAction);
 
 /// UI one-shot map (stems from bevy `app.rs`; every GML site behind
-/// these arms is a plain `snd_play(stem)` — gain 1.0, no pitch jitter).
+/// these arms is a plain `snd_play(stem)` - gain 1.0, no pitch jitter).
 /// Context-free actions only; character/skin/crown/mutation picks need
 /// site context (see the `*_sfx` helpers below) and sliders commit per
 /// change.
@@ -1014,7 +1014,7 @@ pub fn ui_action_sfx(action: &UiAction) -> Vec<AudioCue> {
         }
         // GML `PauseButton/Other_10` plays NO transition sound on
         // MENU/RETRY/SETTINGS/CONTINUE/BACK/QUIT (hover `sndHover`
-        // only) — the confirm swap is silent.
+        // only) - the confirm swap is silent.
         UiAction::ShowPauseConfirm(_)
         | UiAction::CancelPauseConfirm
         | UiAction::ConfirmPause(_) => {}
@@ -1039,7 +1039,7 @@ pub fn ui_action_sfx(action: &UiAction) -> Vec<AudioCue> {
             push("sndMenuCredits");
         }
         // GML `BackButton/Other_10.gml:201` unconditional tail
-        // `snd_play(sndClickBack)` — the close path either way.
+        // `snd_play(sndClickBack)` - the close path either way.
         UiAction::SettingsBack | UiAction::CloseOverlay | UiAction::SaveSettings => {
             push("sndClickBack");
         }
@@ -1145,7 +1145,7 @@ pub fn race_confirm_sfx(race: crate::data::RaceId) -> AudioCue {
 /// GML `scrCampfireMenuCreate.gml:887-892` skin pick: `sndMenuCSkin`
 /// at `random_range(0.95, 1.05)`, `sndMenuBSkin` at exactly 1
 /// (`_skin_id == SkinLetter.B`), `sndMenuASkin` at `0.95 + random(0.1)`
-/// — pitch jitter of ±0.05 either way, i.e. variance 0.1.
+/// - pitch jitter of ±0.05 either way, i.e. variance 0.1.
 pub fn skin_select_sfx(skin: u8) -> AudioCue {
     let (name, variance) = match skin {
         2 => ("sndMenuCSkin", 0.1),
@@ -1180,7 +1180,7 @@ pub fn hover_sfx() -> AudioCue {
 }
 
 /// Crown pick sting (GML `scrCampfireMenuCreate.gml:822`
-/// `snd_play(sndMenuCrown, 0.95 + random(0.1))` — ±0.05 pitch jitter).
+/// `snd_play(sndMenuCrown, 0.95 + random(0.1))` - ±0.05 pitch jitter).
 pub fn crown_select_sfx() -> AudioCue {
     AudioCue {
         name: "sndMenuCrown",

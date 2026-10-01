@@ -312,7 +312,7 @@ pub fn base_weapon_name(name: &str) -> &str {
 /// GML `scr_weapon_post` 5th arg (`_knockback`, px/frame) per weapon,
 /// converted to px/s (×30). Positive = shoved backwards
 /// (`motion_add(_gunangle + 180, kb)`), negative = lunged forwards (melee).
-/// Omitted 5th arg defaults to 0 — most guns (incl. grenade launcher,
+/// Omitted 5th arg defaults to 0 - most guns (incl. grenade launcher,
 /// bazooka, sticky) have NO self-push.
 pub fn gml_fire_push_px_s(full_name: &str) -> f32 {
     let key = if full_name.starts_with("ULTRA ") {
@@ -1060,7 +1060,7 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
                 [1.0, 0.72, 0.3], Vec2::splat(11.0));
 
             // GML `FlakBullet/Destroy_0.gml:1-7`: 16 `Bullet2` at
-            // `motion_add(random_angle, 8 + random(8))` — speed 8..16
+            // `motion_add(random_angle, 8 + random(8))` - speed 8..16
             // px/step, `Bullet2` damage 2 / knockback_speed 2.
             set_split(def, 16, std::f32::consts::PI, 360.0, 2, 0.32, 3.0, 60.0,
                 [1.0, 0.88, 0.55], Vec2::new(8.0, 3.0));
@@ -1258,7 +1258,7 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
             // `scr_projectile_spread(8)`; `ClusterNade/Create_0.gml:3-8`
             // sets `alarm[0] = 30` (1.0 s fuse), `damage = 7`,
             // `knockback_speed = 10` (300 px/s) and inherits
-            // `Grenade/Collision_Wall.gml:18-19` — it bounces at `speed *= 0.6`
+            // `Grenade/Collision_Wall.gml:18-19` - it bounces at `speed *= 0.6`
             // instead of detonating.
             set_explosive(def, 7, 1, 240.0, 1.0, 0.14, 9.0, 7.0, 300.0,
                 [1.0, 0.62, 0.22], Vec2::splat(11.0));
@@ -1372,7 +1372,7 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
         "DOG SPIN ATTACK" => {
             // GML `scrFire.gml:789-796`: the arm is only
             // `instance_create(x, y, DogSpinAttack) { team; creator; ammo = 15 }`
-            // — no projectile, no `scr_weapon_post`, no screen shake.
+            // - no projectile, no `scr_weapon_post`, no screen shake.
             set_ranged(def, 0, 1, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0,
                 [0.9, 0.9, 0.9], Vec2::splat(1.0));
             def.shake = 0.0;
@@ -1959,4 +1959,3 @@ fn set_split(
         size,
     });
 }
-

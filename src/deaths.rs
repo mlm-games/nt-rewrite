@@ -154,7 +154,7 @@ pub fn resolve_player_revives(
 /// Coop downed timers (GML `Revive/Step_0` + `Alarm_4/5`): generation
 /// (`FloorTransition.active`, the `GenCont`/`LevCont` stand-in) holds
 /// every grace at 300, otherwise each [`Revive`] steps its alarms.
-/// Hurt pulses only re-arm the timer here — applying the 1-damage
+/// Hurt pulses only re-arm the timer here - applying the 1-damage
 /// `Alarm_5` hit and spawning/despawning downed markers need coop
 /// downing, which the port does not simulate yet (single-player).
 pub fn tick_revive(
@@ -311,7 +311,7 @@ pub fn resolve_player_gameover(
     }
     if race_state.race == RaceId::Horror && player.rads > 0 {
         // GML `Player/Destroy_0.gml:112-115` verbatim:
-        // `scrRadDrop(x, y, GameCont.rad); GameCont.rad = 0` — a scatter
+        // `scrRadDrop(x, y, GameCont.rad); GameCont.rad = 0` - a scatter
         // of individual `Rad` pickups, not one lump. A standing Player is
         // not a `prop`, so `scrRadDrop` takes its `direction`/`speed`
         // (both 0) and only the random kick moves each rad.

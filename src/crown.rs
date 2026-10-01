@@ -29,7 +29,7 @@ use crate::spatial::Pos;
 use crate::time::{GTimer, TimerMode};
 
 /// GML `VaultStatue` (`objects/VaultStatue/Create_0.gml:1-3`: `max_hp
-/// = 50`, `size = 2`, `rad = 0`) — the crown-vault guard. The body is a
+/// = 50`, `size = 2`, `rad = 0`) - the crown-vault guard. The body is a
 /// `Prop`; this marker is the `instance_exists(VaultStatue)` test that
 /// `CrownPickup/Collision_Player:18,24` gates the type-3 portal and the
 /// statue kill on.
@@ -79,7 +79,7 @@ pub fn vault_statue_angles(
 }
 
 /// GML `VaultStatue/Create_0.gml:1-16`: a 50 hp, `size = 2` `Prop`.
-/// `rad = 0` (`:3`) is not `raddrop` — `prop/Create_0.gml:7` already pins
+/// `rad = 0` (`:3`) is not `raddrop` - `prop/Create_0.gml:7` already pins
 /// `raddrop = 0`, so the statue drops nothing and the `ProtoStatue`
 /// rad-charging branch never applies to it. Lines 18-51 stamp the statue's
 /// own floor tiles, which the port builds once in `setup::spawn_level`.
@@ -468,7 +468,7 @@ pub fn crown_name_for_toast(crown: CrownKind) -> &'static str {
 }
 
 /// GML runs the crown chest conversions ONCE inside `scrPopChests` (the
-/// crowns region, lines 124-143), i.e. once per generated room — never per
+/// crowns region, lines 124-143), i.e. once per generated room - never per
 /// frame. This keys the pass off `Run.gen_seed`, which changes exactly when
 /// a new level is generated, so a mid-floor chest is NOT converted and a
 /// generated one always is.
@@ -480,7 +480,7 @@ fn claim_crown_convert(run: &Run, done: &mut Local<Option<u64>>) -> bool {
     true
 }
 
-/// Crown of Love: `scripts/scrPopChests.gml:131-143` verbatim — `with
+/// Crown of Love: `scripts/scrPopChests.gml:131-143` verbatim - `with
 /// chestprop { if object_index != ProtoChest && object_index !=
 /// RogueChest { -> AmmoChest } }` plus a second `with RadChest` arm.
 /// `chestprop` is hierarchy-inclusive, so the set is every chest kind
@@ -530,7 +530,7 @@ pub fn tick_crown_love_convert(
     }
 }
 
-/// Crown of Life: `scripts/scrPopChests.gml:124-129` verbatim — `with
+/// Crown of Life: `scripts/scrPopChests.gml:124-129` verbatim - `with
 /// RadChest { -> HealthChest }`, hierarchy-inclusive over `RadChest`,
 /// `RadChestBig` and `RadMaggotChest`.
 pub fn tick_crown_life_convert(
@@ -709,4 +709,3 @@ pub fn tick_crown_pedestal(
         ));
     }
 }
-
