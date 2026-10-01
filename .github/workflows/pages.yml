@@ -1,0 +1,17 @@
+name: Deploy to GH Pages
+on:
+  push:
+    branches: ["master"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    uses: mlm-games/ci/.github/workflows/pages.yml@main
+    with:
+      working-directory: "."
+      dist-dir: dist
