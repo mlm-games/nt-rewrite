@@ -644,7 +644,7 @@ impl BigDogMissileState {
     }
 
     pub fn hit_enemy(&mut self) {
-        self.fuse = Timer::from_seconds(30.0 / 30.0, TimerMode::Once);
+        self.fuse = Timer::from_seconds(1.0, TimerMode::Once);
     }
 }
 

@@ -10,7 +10,7 @@
 //! This drives the live schedule and pins the decay, so the law cannot be
 //! dropped from the pipeline again without this failing.
 
-use std::time::Duration;
+use web_time::Duration;
 
 use nt_rewrite::App;
 use nt_rewrite::comps_a::{FloorMask, Velocity};

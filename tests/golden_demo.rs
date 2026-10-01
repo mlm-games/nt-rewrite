@@ -33,7 +33,7 @@
 //! - tick 180: Escape (pause), tick 190: Escape (resume)
 
 use std::collections::HashSet;
-use std::time::Duration;
+use web_time::Duration;
 
 use bevy_ecs::prelude::World;
 use nt_rewrite::App;

@@ -344,12 +344,21 @@ pub(crate) fn read_asset_catalog(assets_dir: &Path) -> anyhow::Result<String> {
     }
 }
 
-/// Asset bytes, portable across desktop (plain files) and Android
-/// (APK `assets/`, read through the NDK `AAssetManager` - plain
-/// `std::fs` paths never resolve inside the APK). Paths are matched by
-/// their `images/…` / `fonts/…` tail so both the dev checkout layout
-/// (`<dir>/images/anims.ron`) and the APK layout (`assets/…`)
-/// resolve to the same entry.
+/// Asset bytes, portable across desktop (plain files), Android
+/// (APK `assets/`, read through the NDK `AAssetManager`. Plain
+/// `std::fs` paths never resolve inside the APK) and web (the
+/// installed assets zip). The in-memory store wins when present; each
+/// platform then falls back to its own source. Paths are matched by
+/// their `images/…` / `fonts/…` tail so the dev checkout layout
+/// (`<dir>/images/anims.ron`), the APK layout (`assets/…`) and the
+/// zip layout all resolve to the same entry.
+fn read_asset_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
+    if let Some(bytes) = crate::assetfs::get(path) {
+        return Ok(bytes);
+    }
+    read_platform_asset_bytes(path)
+}
+
 #[cfg(target_os = "android")]
 struct SendPtr(*mut std::ffi::c_void);
 #[cfg(target_os = "android")]
@@ -373,12 +382,12 @@ pub fn init_apk_assets(mgr: ndk::asset::AssetManager) {
 }
 
 #[cfg(target_os = "android")]
-fn read_asset_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
+fn read_platform_asset_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
     use std::ffi::CString;
     if let Some(holder) = APK_ASSET_MGR.get() {
         let mgr_ptr = holder.0;
         if !mgr_ptr.is_null() {
-            let tail = asset_tail(path);
+            let tail = crate::assetfs::tail(path);
             let mgr = unsafe {
                 ndk::asset::AssetManager::from_ptr(
                     std::ptr::NonNull::new(mgr_ptr.cast())
@@ -407,25 +416,16 @@ fn read_asset_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
 
 /// Fs read on desktop; on Android falls back to fs too (covers
 /// `NT_ASSETS`-style absolute overrides when present).
-#[cfg(not(target_os = "android"))]
-fn read_asset_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+fn read_platform_asset_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
     Ok(std::fs::read(path)?)
 }
 
-/// Tail of an asset path from the first `images`/`fonts` segment, so
-/// `…/assets/images/anims.ron` and `images/anims.ron` both address
-/// the APK's `assets/images/anims.ron` entry.
-#[cfg(target_os = "android")]
-fn asset_tail(path: &Path) -> String {
-    let parts: Vec<String> = path
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-        .collect();
-    let start = parts
-        .iter()
-        .position(|p| p == "images" || p == "fonts")
-        .unwrap_or(0);
-    parts[start..].join("/")
+/// Web reads only from the installed assets zip; a miss here means
+/// the shell's zip lacked the file.
+#[cfg(target_arch = "wasm32")]
+fn read_platform_asset_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
+    anyhow::bail!("missing web asset: {}", path.display())
 }
 
 /// Crop one horizontal-strip cell `[x, y, w, h]` out of a full strip.

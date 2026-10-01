@@ -56,7 +56,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use web_time::Duration;
 
 use crate::vortex_pass::{VARD_VARIANTS, VortexPass, VortexTexture};
 use bevy_ecs::prelude::*;
@@ -105,6 +105,7 @@ use crate::state::{AppState, OverlayMenu};
 use crate::vortex::{SpiralCtl, gml_area_for_area};
 
 pub mod anim;
+pub mod assetfs;
 pub mod audio;
 pub mod audio_host;
 pub mod boss_ai;
@@ -144,6 +145,8 @@ pub mod state;
 pub mod time;
 pub mod vortex;
 pub mod vortex_pass;
+#[cfg(target_arch = "wasm32")]
+pub mod web;
 pub mod walls;
 pub mod weapon_runtime;
 pub mod weapons_data;
@@ -4638,10 +4641,13 @@ fn init_schedule_resources(world: &mut World) {
     world.init_resource::<crate::keymap::InputMapState>();
 }
 
-/// Resolve the art dir: `$NT_ASSETS` -> exe-dir `assets` -> cwd `assets`.
-/// Returns `None` when no dir holds an animation catalog (placeholder
-/// path stays active).
+/// Resolve the art dir: installed assets zip -> `$NT_ASSETS` -> exe-dir
+/// `assets` -> cwd `assets`. Returns `None` when no source holds an
+/// animation catalog (placeholder path stays active).
 pub fn resolve_assets_dir() -> Option<PathBuf> {
+    if crate::assetfs::installed() {
+        return Some(PathBuf::from("/nt-assets"));
+    }
     let has_catalog = |p: &Path| {
         p.join("images").join("anims.ron").is_file()
             || p.join("images").join("anims.json").is_file()
@@ -5727,7 +5733,7 @@ pub extern "C" fn android_main(android_app: winit::platform::android::activity::
         save.version
     );
     let mut audio = crate::audio_host::AudioHost::new();
-    let mut last = std::time::Instant::now();
+    let mut last = web_time::Instant::now();
     if let Err(e) = repame_shell::run_android(android_app, move |sched, ctx| {
         // `App::view` runs the poll/store/feed pipeline (keyboard repair,
         // menu actions, click routing, pad sampling, touch zones) around
@@ -5737,10 +5743,10 @@ pub extern "C" fn android_main(android_app: winit::platform::android::activity::
         // forwards South/East/Start/DPad as synthetic keys (Space, Esc,
         // Enter, arrows) into the normal key path - repadio-shaped, no
         // game-side pad bridge needed.
-        let now = std::time::Instant::now();
+        let now = web_time::Instant::now();
         let dt = now
             .duration_since(last)
-            .min(std::time::Duration::from_secs_f32(0.25));
+            .min(web_time::Duration::from_secs_f32(0.25));
         last = now;
         let view = root_view(sched, ctx, &mut app, dt);
         audio.pump(dt.as_secs_f32(), &mut app);
@@ -5748,7 +5754,7 @@ pub extern "C" fn android_main(android_app: winit::platform::android::activity::
         // frame + touch batch size + state. Proves the sticks/buttons
         // drew without a screenshot.
         {
-            use std::time::{Duration, Instant};
+            use web_time::{Duration, Instant};
             static LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
             let tick = LAST.lock().map(|mut g| {
                 let now = Instant::now();

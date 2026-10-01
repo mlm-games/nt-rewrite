@@ -38,11 +38,19 @@ wgpu = "30"
 repose-text = "0.31"
 anyhow = "1"
 log = "0.4"
+zip = { version = "8", default-features = false, features = ["deflate"] }
+web-time = "1"
 
 [target.'cfg(target_os = "android")'.dependencies]
 winit = "0.30"
 ndk = "0.9"
 rlobkit-app-events = { version = "0.5", features = ["jni-bridge"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [patch.crates-io]
 # Sibling checkouts win over the published crates above; their versions must

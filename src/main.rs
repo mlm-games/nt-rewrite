@@ -5,14 +5,18 @@
 //! snapshots (bevy `sample_input` pad-section parity); touch arrives as
 //! viewport `PickEvent`s.
 
-use std::time::{Duration, Instant};
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+use web_time::{Duration, Instant};
 
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 use nt_rewrite::{App, audio_host::AudioHost, root_view};
 
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 fn boot() -> App {
     boot_at(None)
 }
 
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 fn boot_at(files_dir: Option<std::path::PathBuf>) -> App {
     let mut app = App::new();
     if let Ok(st) = std::env::var("NT_DEBUG_STATE") {
@@ -53,7 +57,7 @@ fn boot_at(files_dir: Option<std::path::PathBuf>) -> App {
     app
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 fn main() -> anyhow::Result<()> {
     use repame_shell::{GamepadPoller, PadBank};
 
@@ -83,5 +87,5 @@ fn main() -> anyhow::Result<()> {
     })
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_arch = "wasm32"))]
 fn main() {}

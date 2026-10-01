@@ -7726,7 +7726,7 @@ pub fn tick_ratking(
                 if brain.ratking_spawns > 24.0 && rng.random_range(0.0..4.0) < 3.0 {
                     brain.ratking_rage = true;
                     brain.walk = 0.0;
-                    brain.attack = GTimer::from_seconds(30.0 / 30.0, TimerMode::Once);
+                    brain.attack = GTimer::from_seconds(1.0, TimerMode::Once);
                 }
             }
         }

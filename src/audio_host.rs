@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+
+use web_time::{Duration, Instant};
 
 use rand::RngExt;
 use repame_audio::{Audio, AudioChannel, CueDef, Variation};
@@ -261,7 +262,7 @@ impl AudioHost {
     }
 
     fn read_stem(&self, stem: &str) -> Option<Vec<u8>> {
-        std::fs::read(self.stem_path(stem)?).ok()
+        read_stem_bytes(&self.stem_path(stem)?)
     }
 
     fn stem_path(&self, stem: &str) -> Option<PathBuf> {
@@ -271,13 +272,13 @@ impl AudioHost {
         let root = self.sounds.as_ref()?;
         for ext in EXTS {
             let path = root.join(stem).join(format!("{stem}.{ext}"));
-            if path.is_file() {
+            if file_exists(&path) {
                 return Some(path);
             }
         }
         for ext in EXTS {
             let path = root.join(format!("{stem}.{ext}"));
-            if path.is_file() {
+            if file_exists(&path) {
                 return Some(path);
             }
         }
@@ -700,6 +701,7 @@ fn sfx_slider_power(stem: &str) -> i32 {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn scan_stems(root: &Path) -> HashSet<String> {
     let mut stems = HashSet::new();
     let Ok(entries) = std::fs::read_dir(root) else {
@@ -725,4 +727,59 @@ fn scan_stems(root: &Path) -> HashSet<String> {
         }
     }
     stems
+}
+
+/// Web: the sounds dir lives in the installed assets zip, so scan the
+/// store's `sounds/` keys with the same top-level shape as `read_dir`.
+#[cfg(target_arch = "wasm32")]
+fn scan_stems(root: &Path) -> HashSet<String> {
+    let Some(prefix) = root.file_name().and_then(|n| n.to_str()) else {
+        return HashSet::new();
+    };
+    let prefix = format!("{prefix}/");
+    let mut stems = HashSet::new();
+    for key in crate::assetfs::keys() {
+        let Some(rel) = key.strip_prefix(prefix.as_str()) else {
+            continue;
+        };
+        let mut parts = rel.split('/');
+        let Some(first) = parts.next() else {
+            continue;
+        };
+        if parts.next().is_some() {
+            stems.insert(first.to_owned());
+            continue;
+        }
+        let ext = Path::new(first)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default();
+        if !EXTS.contains(&ext) {
+            continue;
+        }
+        if let Some(name) = Path::new(first).file_stem().and_then(|s| s.to_str()) {
+            stems.insert(name.to_owned());
+        }
+    }
+    stems
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn file_exists(path: &Path) -> bool {
+    path.is_file()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn file_exists(path: &Path) -> bool {
+    crate::assetfs::has(path)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_stem_bytes(path: &Path) -> Option<Vec<u8>> {
+    std::fs::read(path).ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn read_stem_bytes(path: &Path) -> Option<Vec<u8>> {
+    crate::assetfs::get(path)
 }

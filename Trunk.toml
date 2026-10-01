@@ -1,0 +1,10 @@
+[build]
+target = "web/game.html"
+
+[[hooks]]
+stage = "post_build"
+command = "sh"
+command_arguments = [
+    "-c",
+    "mv \"$TRUNK_STAGING_DIR/index.html\" \"$TRUNK_STAGING_DIR/game.html\" && cp web/shell/index.html \"$TRUNK_STAGING_DIR/index.html\"",
+]
