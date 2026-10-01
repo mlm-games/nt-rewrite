@@ -1,6 +1,10 @@
 [build]
 target = "web/game.html"
 
+[serve]
+port = 8823
+headers = { "Cross-Origin-Opener-Policy" = "same-origin", "Cross-Origin-Embedder-Policy" = "require-corp" }
+
 [[hooks]]
 stage = "post_build"
 command = "sh"
