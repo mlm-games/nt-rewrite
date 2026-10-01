@@ -1698,14 +1698,14 @@ dependencies = [
 
 [[package]]
 name = "game-utils"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9fe9ad3bf12c10230a0d84f74d7f350ad01a25f9624d81393bb6358f4acba693"
+checksum = "f1da9663e8a7e5fbcd04018ee34deb0a72d1f9bfabb77738904bb5a2fcae6000"
 dependencies = [
  "directories",
  "fluent-bundle",
  "getrandom 0.4.3",
- "glam 0.33.11",
+ "glam 0.33.12",
  "js-sys",
  "rand 0.10.3",
  "ron",
@@ -1822,9 +1822,9 @@ dependencies = [
 
 [[package]]
 name = "glam"
-version = "0.33.11"
+version = "0.33.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35b4e837a1d133645d1dcf283e146a4b9901e390a1c13545f959cfed3a72f24f"
+checksum = "37bfe73dc8ec21f54d181e5a60554327ec3f1c600c455a75ccbfc65d2106a6c4"
 
 [[package]]
 name = "glob"
@@ -2812,7 +2812,7 @@ dependencies = [
  "bevy_ecs",
  "game-utils",
  "getrandom 0.4.3",
- "glam 0.33.11",
+ "glam 0.33.12",
  "image",
  "insta",
  "js-sys",
@@ -4074,7 +4074,7 @@ checksum = "eb93c95a10a835705b92bd99324a8f390ee74b7e6b67cdf066e4eb01ec5003dc"
 dependencies = [
  "bevy_ecs",
  "getrandom 0.4.3",
- "glam 0.33.11",
+ "glam 0.33.12",
  "noise",
  "rand 0.10.3",
  "repame-atlas",
@@ -4092,7 +4092,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3f256df33141e76f0eabf50bb5bf2728af5e68cb9e37632d9759a2f9203b24"
 dependencies = [
  "bevy_ecs",
- "glam 0.33.11",
+ "glam 0.33.12",
  "repame-sim",
  "repose-core",
  "serde",
@@ -4105,7 +4105,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e2a492fdc95ba0ead61d525aecdeb62866c6c83049da5ba70f869e3fc0ab9ac"
 dependencies = [
  "anyhow",
- "glam 0.33.11",
+ "glam 0.33.12",
  "log",
  "repame-audio",
  "repame-input",
@@ -4127,7 +4127,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "12db9ff60c7b448f833b6a31665c49c211dc94c312bfc0f96ca4d4be6198ed81"
 dependencies = [
  "bevy_ecs",
- "glam 0.33.11",
+ "glam 0.33.12",
  "log",
  "web-time",
 ]
@@ -4140,7 +4140,7 @@ checksum = "2e3e4dd5773962c0b93119a60dd8fdee37cf8ba3ca4586bbf823c740bfd20afc"
 dependencies = [
  "anyhow",
  "bytemuck",
- "glam 0.33.11",
+ "glam 0.33.12",
  "log",
  "repame-atlas",
  "repose-canvas",
@@ -4157,7 +4157,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec24a865640dafe0694222d8f60cc93703cacd70b71e79bc03a3731cd550535f"
 dependencies = [
  "bytemuck",
- "glam 0.33.11",
+ "glam 0.33.12",
  "gltf",
  "image",
  "log",
