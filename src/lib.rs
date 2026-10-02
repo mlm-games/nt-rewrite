@@ -2037,7 +2037,12 @@ impl App {
             .get_resource::<AppState>()
             .copied()
             .unwrap_or_default();
-        let touch_only_device = cfg!(target_os = "android");
+        let (keyboard_mode, gamepad_mode) = crate::input::gml_input_device(
+            self.sim
+                .world
+                .get_resource::<crate::savedata_part::SaveData>(),
+        );
+        let touch_only_device = cfg!(target_os = "android") || !(keyboard_mode || gamepad_mode);
         let mouse_down_edge = !staging_clicks.is_empty() && !touch_only_device;
         let mouse_down = (mouse_down_edge || (staging_lmb && !touch_only_device))
             && !menu_open
@@ -2337,11 +2342,11 @@ impl App {
             if let Some(pp) = player_pos {
                 // Live cursor, unprojected through this frame's camera
                 // (see `cursor_px`): valid even when the pointer hasn't
-                // moved since the camera did. Desktop-only: on Android
-                // there is no cursor - aim comes from the attack stick
-                // (sampler above), and any staged hover is a finger
-                // drag, not a pointer.
-                if !cfg!(target_os = "android") {
+                // moved since the camera did. Desktop-only: on a touch
+                // device there is no cursor - aim comes from the attack
+                // stick (sampler above), and any staged hover is a
+                // finger drag, not a pointer.
+                if !touch_only_device {
                     let aim_hover = self.live_cursor_world();
                     if let Some(hover) = aim_hover {
                         let mut input = self.sim.world.resource_mut::<NtInput>();
@@ -2354,14 +2359,14 @@ impl App {
                     }
                 }
                 if let Some(click) = staging_clicks.last().copied() {
-                    // Desktop click-to-fire only. On Android a bare tap
-                    // is NOTHING: GML gameplay never reads a tap point
-                    // (`JoystickAttack` aims/fires solely off its claimed
-                    // stick; taps advance only splash/menus via
-                    // `mouse_ui_clicked`). The tap already fed the
+                    // Desktop click-to-fire only. On a touch device a
+                    // bare tap is NOTHING: GML gameplay never reads a
+                    // tap point (`JoystickAttack` aims/fires solely off
+                    // its claimed stick; taps advance only splash/menus
+                    // via `mouse_ui_clicked`). The tap already fed the
                     // sampler as a rebuilt contact above, so stick zones
                     // still claim taps that land on them.
-                    if !cfg!(target_os = "android") {
+                    if !touch_only_device {
                         let mut input = self.sim.world.resource_mut::<NtInput>();
                         let dir = click.world - pp;
                         if dir.length_squared() > 1e-6 {
@@ -2634,20 +2639,22 @@ impl App {
             // mobile reads release, desktop reads press).
             let frame = self.gml_frame();
             let mut routed = false;
-            for (id, point) in released_touch_clicks.drain(..) {
-                if slider_touch_ids.contains(&id) {
-                    continue;
-                }
-                let gui = frame.dp_to_gui([point.x, point.y]);
-                if let Some(action) = crate::render::mutation_icon_hit_action(
-                    &mut self.sim.world,
-                    gui[0],
-                    gui[1],
-                    frame.gui_width(),
-                ) {
-                    apply_menu_action(&mut self.sim.world, action);
-                    routed = true;
-                    break;
+            if cfg!(target_os = "android") {
+                for (id, point) in released_touch_clicks.drain(..) {
+                    if slider_touch_ids.contains(&id) {
+                        continue;
+                    }
+                    let gui = frame.dp_to_gui([point.x, point.y]);
+                    if let Some(action) = crate::render::mutation_icon_hit_action(
+                        &mut self.sim.world,
+                        gui[0],
+                        gui[1],
+                        frame.gui_width(),
+                    ) {
+                        apply_menu_action(&mut self.sim.world, action);
+                        routed = true;
+                        break;
+                    }
                 }
             }
             if !routed
