@@ -266,6 +266,61 @@ impl FloorMask {
         }
     }
 
+    /// Centre of the nearest walkable cell, scanning outward in
+    /// Chebyshev rings so the search order is deterministic. 32x32
+    /// floor tiles win over cells `scrWallDestroy` opened, because a
+    /// tile centre sits 16 px clear of the ring.
+    pub fn nearest_walkable_center(&self, p: Vec2) -> Option<Vec2> {
+        let (ox, oy) = self.world_to_cell(p);
+        let tile_ring = (ARENA_W.max(ARENA_H) * 0.5 / TILE) as i32;
+        for ring in 0..=tile_ring {
+            for dy in -ring..=ring {
+                for dx in -ring..=ring {
+                    if dx.abs().max(dy.abs()) != ring {
+                        continue;
+                    }
+                    let cell = (ox + dx, oy + dy);
+                    if self.cells.contains(&cell) {
+                        return Some(self.cell_center(cell));
+                    }
+                }
+            }
+        }
+        let (ox, oy) = self.world_to_wall_cell(p);
+        let wall_ring = (ARENA_W.max(ARENA_H) * 0.5 / WALL_TILE) as i32;
+        for ring in 0..=wall_ring {
+            for dy in -ring..=ring {
+                for dx in -ring..=ring {
+                    if dx.abs().max(dy.abs()) != ring {
+                        continue;
+                    }
+                    let cell = (ox + dx, oy + dy);
+                    if self.opened.contains(&cell) {
+                        return Some(self.wall_cell_center(cell));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Drop a circle that sits in a solid cell onto the nearest
+    /// walkable cell centre. `move_contact_solid` only resolves the
+    /// movement, so a body that starts in contact walks out along the
+    /// contact normal and the separation jitter then flings it;
+    /// snapping lands it on floor instead.
+    pub fn snap_inside(&self, pos: &mut Vec2) -> bool {
+        if self.is_walkable(*pos) {
+            return false;
+        }
+        if let Some(center) = self.nearest_walkable_center(*pos) {
+            *pos = center;
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn random_floor_pos(&self, rng: &mut impl rand::RngExt, min_from_origin: f32) -> Vec2 {
         if self.cells.is_empty() {
             return Vec2::ZERO;

@@ -572,6 +572,20 @@ pub fn flush_pending_enemy_spawns(
     }
 }
 
+/// Enemies that spawned inside a solid cell (the hardcoded
+/// secret-entrance guard ring in `setup::spawn_secret_entrances`,
+/// the vault-statue bandits, the boss coordinates) start in
+/// contact, so `move_contact_solid` walks them out along the contact
+/// normal while `separate`'s random jitter flings them. Snap them
+/// onto the nearest walkable cell and kill the stored velocity.
+pub fn unstuck_enemies(mask: Res<FloorMask>, mut q: Query<(&mut Pos, &mut Velocity), With<Enemy>>) {
+    for (mut pos, mut vel) in &mut q {
+        if mask.snap_inside(&mut pos.0) {
+            vel.0 = glam::Vec2::ZERO;
+        }
+    }
+}
+
 /// Random arena point at least `min_from_center` from the origin
 /// (bevy parity, including the corner fallback).
 pub fn random_spawn_pos(rng: &mut impl RngExt, min_from_center: f32) -> glam::Vec2 {
