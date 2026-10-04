@@ -38,7 +38,7 @@ use rand::RngExt;
 use repame_fx::Trauma;
 use repame_sim::SimTime;
 
-use crate::audio::{AudioCue, MainVol};
+use crate::audio::{AudioCue, GameAudio, MainVol};
 use crate::combat::Explosion;
 use crate::comps_a::{
     AbilityHazard, AimDir, BouncesLeft, ChainLightning, CurrentFrame, DamageSource, DiscFlight,
@@ -2185,6 +2185,9 @@ pub fn hammerhead_chew(
     mut budget: ResMut<HammerheadBudget>,
     catalog: Res<repame_anim::AnimCatalog>,
     save: Res<crate::savedata_part::SaveData>,
+    run: Res<Run>,
+    audio: Res<GameAudio>,
+    mut cues: ResMut<Queue<AudioCue>>,
     player_q: Query<(Entity, &Pos, &Player, &Velocity), With<Player>>,
     mut props: Query<
         (
@@ -2259,8 +2262,9 @@ pub fn hammerhead_chew(
         }
 
         *cooldown = 0.25;
+        let hp_before = prop.hp;
         prop.hp -= 1;
-        if prop.hp <= 0 {
+        if hp_before > 0 && prop.hp <= 0 {
             if let Some(ps) = sprites.copied() {
                 spawn_prop_corpse(&mut commands, &catalog, center, &ps);
             }
@@ -2277,6 +2281,10 @@ pub fn hammerhead_chew(
                     hit_id: HitId::Other(301),
                     enemy_kind: None,
                 }),
+                run.loop_count,
+                crate::pickups::haste_crown(player) > 0,
+                &audio,
+                &mut cues,
             );
             if let Ok(entrance) = entrances.get(prop_e) {
                 secrets.queue(entrance.target);

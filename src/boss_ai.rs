@@ -45,7 +45,7 @@ use crate::comps_a::{
 use crate::comps_b::{
     Beam, BigGenerator, BossBrain, BossPhase, CustomExplosion, Enemy, EnemyBrain, HitWarning,
     HurtAnim, HyperOrbitCrystal, InvisiWall, MomShot, Portal, PortalClear, Prop, PropNestMarkers,
-    PropSprites, RadChestContainer, SecretEntrance, ThroneBall, ThroneStatueProp,
+    PropSprites, SecretEntrance, ThroneBall, ThroneStatueProp,
 };
 use crate::data::{AreaId, EnemyKind};
 use crate::enemies::show_enemy_fire;
@@ -1599,7 +1599,7 @@ pub fn throne_annihilate_props(
     >,
     entrances: Query<&SecretEntrance>,
     nests: Query<&PropNestMarkers, With<Prop>>,
-    rad_chests: Query<&RadChestContainer>,
+    player_q: Query<&Player, With<Player>>,
 ) {
     let Some((throne_pos, _)) = throne_q.iter().find(|(_, e)| e.kind == EnemyKind::Throne) else {
         return;
@@ -1628,6 +1628,9 @@ pub fn throne_annihilate_props(
     }
 
     let mut crushed: Vec<(Entity, glam::Vec2, i32)> = Vec::new();
+    let hasted = player_q
+        .single()
+        .is_ok_and(|p| crate::pickups::haste_crown(p) > 0);
     for (prop_e, prop, ppos, _, _, _, _) in props.iter() {
         if !prop.destructible || generators.contains(prop_e) {
             continue;
@@ -1649,7 +1652,6 @@ pub fn throne_annihilate_props(
             &mut props,
             &entrances,
             &nests,
-            &rad_chests,
             &mut secrets,
             &audio,
             &mut cues,
@@ -1660,6 +1662,7 @@ pub fn throne_annihilate_props(
             None,
             None,
             run.loop_count,
+            hasted,
         );
     }
 }

@@ -364,6 +364,10 @@ pub struct PropDeathEffect {
     /// `if !GameCont.loops && instance_number(BigGenerator) <= 1`.
     pub weaken_nothing: bool,
     pub feather_burst: Option<FeatherBurst>,
+    /// GML `RadChest/Destroy_0.gml:4-12` (also `RadMaggotChest`'s inherited
+    /// tail): 4 x `Smoke`, one `ExploderExplo` and `sndEXPChest`, plus the
+    /// `prop/Destroy_0.gml:12` `scrRadDrop` taking `_high = 26`.
+    pub rad_chest: bool,
 }
 
 /// GML `scrDrop(_pickup_chance, _weapon_chance)`, kept as two
@@ -595,6 +599,17 @@ impl PropDeathEffect {
         }
     }
 
+    /// GML `RadChest/Create_0.gml:20` `raddrop = 25` plus the
+    /// `RadChest/Destroy_0.gml` body. `RadChestBig` overrides only `Create_0`
+    /// (`raddrop = 45`).
+    pub fn rad_chest(raddrop: u32) -> Self {
+        Self {
+            rad_drop: raddrop,
+            rad_chest: true,
+            ..Default::default()
+        }
+    }
+
     /// GML `BigSkull/Destroy_0.gml:3-11` / `Anchor/Destroy_0.gml:3-9`
     /// verbatim: 10 `Dust` motes on a directed 36-degree ring at
     /// speed 3 from a random start angle.
@@ -700,6 +715,10 @@ pub fn spawn_prop_death_effect(
     explicit: Option<PropDeathEffect>,
     legacy_explosive: bool,
     source: Option<DamageSource>,
+    loops: u32,
+    hasted: bool,
+    audio: &crate::audio::GameAudio,
+    cues: &mut crate::msg::Queue<crate::audio::AudioCue>,
 ) {
     let effect = explicit.or_else(|| legacy_explosive.then_some(PropDeathEffect::legacy_barrel()));
 
@@ -708,6 +727,11 @@ pub fn spawn_prop_death_effect(
     let Some(effect) = effect else {
         return;
     };
+
+    if effect.rad_chest {
+        spawn_rad_chest_burst(commands, particles_on, pos);
+        audio.play_exp_chest(cues);
+    }
 
     if let Some(explosion) = effect.explosion {
         let mut rng = rand::rng();
@@ -846,7 +870,16 @@ pub fn spawn_prop_death_effect(
 
     for _ in 0..effect.rad_drop_repeats.max(1) {
         if effect.rad_drop > 0 {
-            crate::pickups::spawn_rad_burst(commands, catalog, pos, effect.rad_drop);
+            crate::pickups::scr_rad_drop(
+                commands,
+                catalog,
+                pos,
+                effect.rad_drop,
+                loops,
+                hasted,
+                effect.rad_chest,
+                true,
+            );
         }
     }
 
@@ -862,6 +895,26 @@ pub fn spawn_prop_death_effect(
             count as usize,
         );
     }
+}
+
+/// GML `RadChest/Destroy_0.gml:4-9`: 4 x `Smoke` with
+/// `motion_add(random_angle, random(3))`, then one `ExploderExplo`
+/// (6 more `Smoke` plus `BackCont.shake += 6`; no `damage`, no
+/// `Collision_Player`, so opening a rad cache never hurts the player).
+pub fn spawn_rad_chest_burst(commands: &mut Commands, particles_on: bool, pos: glam::Vec2) {
+    let mut rng = rand::rng();
+    for _ in 0..4 {
+        let ang = rng.random_range(0.0..std::f32::consts::TAU);
+        let speed = rng.random_range(0.0..3.0);
+        spawn_native_smoke_mote(
+            commands,
+            particles_on,
+            pos,
+            glam::Vec2::from_angle(ang),
+            speed,
+        );
+    }
+    spawn_exploder_explo(commands, particles_on, pos, glam::Vec2::ZERO, 0.0);
 }
 
 pub fn spawn_native_smoke_mote(

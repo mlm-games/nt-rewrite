@@ -26,7 +26,7 @@ use crate::comps_b::{
     Beam, BigDogMissileState, ChestKind, Corpse, CorpseCollision, CustomExplosion, DeploysSentry,
     Dying, Enemy, EnemyBrain, ExplosionVisual, GmlImage, HazardCloud, HurtAnim, LoopTransition,
     NativeAngle, NativeDepth, NativeExplosionKind, Pickup, PickupLifetime, PlasmaBurst, Portal,
-    PortalPhase, PortalShock, PortalState, Prop, PropNestMarkers, PropSprites, RadChestContainer,
+    PortalPhase, PortalShock, PortalState, Prop, PropNestMarkers, PropSprites,
     SecretEntrance, SentryTurret, Shield, SpawnsWeaponPickup, StaticFx, ThroneRoomState, TrapFire,
 };
 use crate::data::{AreaId, CrownKind, EnemyKind, HazardKind, MutationId, RaceId, WeaponId};
@@ -41,8 +41,7 @@ use crate::environment::{
 };
 use crate::msg::Queue;
 use crate::pickups::{
-    give_ammo, maybe_spawn_drop, random_offset, spawn_chest, spawn_pickup, spawn_rad,
-    spawn_rad_burst,
+    give_ammo, maybe_spawn_drop, random_offset, spawn_chest, spawn_rad, spawn_rad_burst,
 };
 use crate::projectile_math::{
     arena_wall_normal, bounce_velocity, circle_aabb_normal, record_hit, should_despawn_after_hit,
@@ -1732,7 +1731,6 @@ pub fn move_projectiles(
     >,
     entrances: Query<&SecretEntrance>,
     nests: Query<&PropNestMarkers, With<Prop>>,
-    rad_chests: Query<&RadChestContainer>,
     frame: Res<CurrentFrame>,
     run: Res<Run>,
     mut secrets: ResMut<SecretTriggers>,
@@ -1743,6 +1741,9 @@ pub fn move_projectiles(
 ) {
     let dt = time.delta_secs;
     let gun_decide = decide.ctx.clone();
+    let hasted = player_ctx
+        .single()
+        .is_ok_and(|(p, _, _)| crate::pickups::haste_crown(p) > 0);
 
     for (
         e,
@@ -1923,7 +1924,6 @@ pub fn move_projectiles(
                         &mut props,
                         &entrances,
                         &nests,
-                        &rad_chests,
                         &mut secrets,
                         &audio,
                         &mut cues,
@@ -1934,6 +1934,7 @@ pub fn move_projectiles(
                         p.source,
                         None,
                         run.loop_count,
+                        hasted,
                         player_ctx
                             .single()
                             .ok()
@@ -1996,7 +1997,6 @@ pub fn move_projectiles(
                             &mut props,
                             &entrances,
                             &nests,
-                            &rad_chests,
                             &mut secrets,
                             &audio,
                             &mut cues,
@@ -2007,6 +2007,7 @@ pub fn move_projectiles(
                             p.source,
                             Some(frame.0 + 5),
                             run.loop_count,
+                            hasted,
                             player_ctx
                                 .single()
                                 .ok()
@@ -2068,7 +2069,6 @@ pub fn move_projectiles(
                         &mut props,
                         &entrances,
                         &nests,
-                        &rad_chests,
                         &mut secrets,
                         &audio,
                         &mut cues,
@@ -2079,6 +2079,7 @@ pub fn move_projectiles(
                         p.source,
                         None,
                         run.loop_count,
+                        hasted,
                         player_ctx
                             .single()
                             .ok()
@@ -2187,7 +2188,6 @@ pub fn move_projectiles(
                     &mut props,
                     &entrances,
                     &nests,
-                    &rad_chests,
                     &mut secrets,
                     &audio,
                     &mut cues,
@@ -2198,6 +2198,7 @@ pub fn move_projectiles(
                     p.source,
                     None,
                     run.loop_count,
+                    hasted,
                     player_ctx
                         .single()
                         .ok()
@@ -4006,13 +4007,14 @@ pub fn tick_slash_projectiles(
             ) {
                 continue;
             }
+            let hp_before = prop.hp;
             prop.hp -= proj.damage.max(1);
             if let Some(mut nh) = nexthurt {
                 nh.0 = frame.0 + 5;
             }
             audio.play_hit(&mut cues);
             slash.hit = true;
-            if prop.hp <= 0 {
+            if hp_before > 0 && prop.hp <= 0 {
                 dead_props.push((
                     pe,
                     center,
@@ -4035,6 +4037,13 @@ pub fn tick_slash_projectiles(
                 death,
                 explosive,
                 proj.source,
+                run.loop_count,
+                // No player query fits: this system is already at bevy's
+                // 16-system-param cap, so the Haste crown's rad-lifetime
+                // divisor cannot be read here.
+                false,
+                &audio,
+                &mut cues,
             );
             if let Some(target) = entrance {
                 secrets.queue(target);
@@ -4337,7 +4346,6 @@ pub fn apply_explosions(
             Option<&PropSprites>,
             Option<&SecretEntrance>,
             Option<&PropNestMarkers>,
-            Option<&RadChestContainer>,
         ),
         (With<Prop>, Without<Player>),
     >,
@@ -4349,6 +4357,9 @@ pub fn apply_explosions(
         .single()
         .map(|(_, _, _, p, _, _, _)| p.crown == CrownKind::Death)
         .unwrap_or(false);
+    let hasted = player_q
+        .single()
+        .is_ok_and(|(_, _, _, p, _, _, _)| crate::pickups::haste_crown(p) > 0);
     for (e, mut boom, pos, feel_applied, visual) in &mut q {
         boom.timer.tick(time.delta_secs);
         let fused = boom.timer.just_finished();
@@ -4445,7 +4456,7 @@ pub fn apply_explosions(
                 }
             }
             let mut destroyed_props = Vec::new();
-            for (prop_e, mut prop, ppos, death_effect, sprites, entrance, nest, rad) in &mut props {
+            for (prop_e, mut prop, ppos, death_effect, sprites, entrance, nest) in &mut props {
                 if !prop.destructible {
                     continue;
                 }
@@ -4457,8 +4468,9 @@ pub fn apply_explosions(
                     pos.y.clamp(center.y - half.y, center.y + half.y),
                 );
                 if fused && pos.distance(closest) < boom.radius {
+                    let hp_before = prop.hp;
                     prop.hp -= boom.damage.max(1);
-                    if prop.hp <= 0 {
+                    if hp_before > 0 && prop.hp <= 0 {
                         destroyed_props.push((
                             prop_e,
                             center,
@@ -4467,7 +4479,6 @@ pub fn apply_explosions(
                             sprites.copied(),
                             entrance.map(|s| s.target),
                             nest.map(|n| n.snowman).unwrap_or(false),
-                            rad.is_some(),
                         ));
                     }
                 }
@@ -4481,7 +4492,6 @@ pub fn apply_explosions(
                 sprites,
                 entrance,
                 is_snowman,
-                is_rad,
             ) in destroyed_props
             {
                 if let Some(ps) = sprites {
@@ -4495,6 +4505,10 @@ pub fn apply_explosions(
                     death_effect,
                     legacy_explosive,
                     boom.source,
+                    run.loop_count,
+                    hasted,
+                    &audio,
+                    &mut cues,
                 );
 
                 if let Some(target) = entrance {
@@ -4518,22 +4532,6 @@ pub fn apply_explosions(
                     }
                     for _ in 0..6 {
                         spawn_rad(&mut commands, &catalog, center, 1);
-                    }
-                }
-
-                if is_rad {
-                    let mut rng = rand::rng();
-                    for _ in 0..25 {
-                        let ang = rng.random_range(0.0..std::f32::consts::TAU);
-                        let d = rng.random_range(6.0..26.0);
-                        spawn_pickup(
-                            &mut commands,
-                            &catalog,
-                            crate::comps_b::PickupKind::Rad(1),
-                            center + glam::Vec2::new(ang.cos() * d, ang.sin() * d),
-                            0,
-                            false,
-                        );
                     }
                 }
 

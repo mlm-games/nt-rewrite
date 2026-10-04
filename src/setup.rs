@@ -1539,6 +1539,7 @@ pub fn spawn_rad_container(
             flip_x: prop_hash_flip(seed, pos, 0x54),
         },
         RadChestContainer,
+        PropDeathEffect::rad_chest(25),
         Pos(pos),
     ));
     if let Some(def) = catalog.def(idle_path) {

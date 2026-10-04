@@ -280,6 +280,7 @@ pub fn apply_run(world: &mut World, save: &RunSave) {
     world.resource_mut::<PortalCarriedWeapons>().0 = save.player.portal_carried_weapons.clone();
     world.insert_resource(crate::state::CurrentFrame(save.globals.current_frame));
     {
+        world.init_resource::<crate::state::BootFlags>();
         let mut flags = world.resource_mut::<crate::state::BootFlags>();
         flags.recontinued_times = save.globals.recontinued_times;
         flags.continued_run = true;
@@ -490,15 +491,39 @@ mod tests {
             run.floor = 9;
             run.gen_seed = 4242;
         }
-        let mut save = capture(&mut world).expect("capture");
-        save.player.player.rads = 77;
-        save.player.health.hp = 3;
-        save.player.inventory.current = 1;
-        save.player.race = RaceId::Rogue;
-        save.session.unlockscreens = vec![UnlockScreenSave {
-            race: RaceId::Fish,
-            bskin: 0,
-        }];
+        {
+            let mut player = world
+                .query_filtered::<&mut crate::comps_a::Player, With<crate::comps_a::Player>>()
+                .iter_mut(&mut world)
+                .next()
+                .expect("player");
+            player.rads = 77;
+        }
+        if let Some(mut health) = world
+            .query_filtered::<&mut Health, With<crate::comps_a::Player>>()
+            .iter_mut(&mut world)
+            .next()
+        {
+            health.hp = 3;
+        }
+        if let Some(mut inv) = world
+            .query_filtered::<&mut Inventory, With<crate::comps_a::Player>>()
+            .iter_mut(&mut world)
+            .next()
+        {
+            inv.current = 1;
+        }
+        if let Some(mut race) = world
+            .query_filtered::<&mut RaceState, With<crate::comps_a::Player>>()
+            .iter_mut(&mut world)
+            .next()
+        {
+            race.race = RaceId::Rogue;
+        }
+        world
+            .resource_mut::<crate::state::menus::MenuState>()
+            .unlock_queue
+            .push(UnlockPopup::Race(RaceId::Fish));
         save_run_in(&mut world, &dir).expect("write");
         let on_disk = load_run_in(&dir).expect("load");
 

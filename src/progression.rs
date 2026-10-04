@@ -1936,7 +1936,6 @@ pub fn tick_portal_shock(
         ),
         With<Prop>,
     >,
-    rad_containers: Query<(), With<RadChestContainer>>,
     mut chests: Query<
         (
             Entity,
@@ -1979,7 +1978,6 @@ pub fn tick_portal_shock(
             bool,
             Option<PropDeathEffect>,
             Option<PropSprites>,
-            bool,
         )> = Vec::new();
         for (prop_e, mut prop, prop_pos, death, ps) in &mut props {
             if !prop.destructible || prop.hp <= 0 {
@@ -2001,12 +1999,9 @@ pub fn tick_portal_shock(
                 prop.explosive,
                 death.copied(),
                 ps.copied(),
-                // GML `prop/Destroy_0.gml:12` pays `raddrop` on the way
-                // out; a `RadChest` prop is the 25-rad case.
-                rad_containers.get(prop_e).is_ok(),
             ));
         }
-        for (prop_e, ppos, explosive, death, ps, rad_drop) in killed {
+        for (prop_e, ppos, explosive, death, ps) in killed {
             if let Some(sprites) = ps {
                 spawn_prop_corpse(&mut commands, &catalog, ppos, &sprites);
             }
@@ -2018,10 +2013,11 @@ pub fn tick_portal_shock(
                 death,
                 explosive,
                 None,
+                run.loop_count,
+                hasted,
+                &audio,
+                &mut cues,
             );
-            if rad_drop {
-                shock_rad_drop(&mut commands, &catalog, ppos, 25, &run, hasted);
-            }
             if let Ok(entrance) = entrances.get(prop_e) {
                 secrets.queue(entrance.target);
             }

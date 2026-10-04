@@ -19,7 +19,7 @@ use crate::comps_a::{
 use crate::comps_b::SpecialPropDeath;
 use crate::comps_b::{
     CustomExplosion, DeploysSentry, ExplosionVisual, NativeExplosionKind, PlasmaBurst, PortalClear,
-    Prop, PropNestMarkers, PropSprites, RadChestContainer, SecretEntrance, SentryTurret,
+    Prop, PropNestMarkers, PropSprites, SecretEntrance, SentryTurret,
     SpawnsWeaponPickup,
 };
 use crate::data::{EnemyKind, HazardDef, SplitDef};
@@ -642,7 +642,6 @@ pub fn damage_destructible_prop(
     >,
     entrances: &Query<&SecretEntrance>,
     nests: &Query<&PropNestMarkers, With<Prop>>,
-    rad_chests: &Query<&RadChestContainer>,
     secrets: &mut SecretTriggers,
     audio: &GameAudio,
     cues: &mut Queue<AudioCue>,
@@ -653,6 +652,7 @@ pub fn damage_destructible_prop(
     source: Option<DamageSource>,
     nexthurt_window: Option<u64>,
     loops: u32,
+    hasted: bool,
 ) {
     damage_destructible_prop_ctx(
         commands,
@@ -660,7 +660,6 @@ pub fn damage_destructible_prop(
         props,
         entrances,
         nests,
-        rad_chests,
         secrets,
         audio,
         cues,
@@ -671,6 +670,7 @@ pub fn damage_destructible_prop(
         source,
         nexthurt_window,
         loops,
+        hasted,
         None,
     );
 }
@@ -695,7 +695,6 @@ pub fn damage_destructible_prop_ctx(
     >,
     entrances: &Query<&SecretEntrance>,
     nests: &Query<&PropNestMarkers, With<Prop>>,
-    rad_chests: &Query<&RadChestContainer>,
     secrets: &mut SecretTriggers,
     audio: &GameAudio,
     cues: &mut Queue<AudioCue>,
@@ -706,6 +705,7 @@ pub fn damage_destructible_prop_ctx(
     source: Option<DamageSource>,
     nexthurt_window: Option<u64>,
     loops: u32,
+    hasted: bool,
     drop: Option<DropCtx<'_>>,
 ) {
     let mut dead = false;
@@ -713,13 +713,16 @@ pub fn damage_destructible_prop_ctx(
     let mut death_copy: Option<PropDeathEffect> = None;
     let mut sprites_copy: Option<PropSprites> = None;
     if let Ok((_, mut prop, _, de, sprites, special, nexthurt)) = props.get_mut(prop_e) {
+        let hp_before = prop.hp;
         prop.hp -= damage.max(1);
         if let Some(window) = nexthurt_window
             && let Some(mut nh) = nexthurt
         {
             nh.0 = window;
         }
-        if prop.hp <= 0 {
+        // `try_despawn` is deferred, so a second killer in the same frame
+        // still matches this entity; GML destroys an instance once.
+        if prop.hp <= 0 && hp_before > 0 {
             // `VaultStatue` and `VenuzTV` own their death: both raise other
             // objects, which the generic path has no queries to do.
             if special.is_none() {
@@ -745,6 +748,10 @@ pub fn damage_destructible_prop_ctx(
         death_copy,
         legacy_explosive,
         source,
+        loops,
+        hasted,
+        audio,
+        cues,
     );
     commands.entity(prop_e).try_despawn();
     if let Ok(entrance) = entrances.get(prop_e) {
@@ -832,20 +839,5 @@ pub fn damage_destructible_prop_ctx(
         // GML `SmallGenerator/Create_0.gml:13` `raddrop = 5`, paid by
         // `prop/Destroy_0.gml:12`.
         spawn_rad_burst(commands, catalog, center, 5);
-    }
-    if rad_chests.get(prop_e).is_ok() {
-        let mut rng = rand::rng();
-        for _ in 0..25 {
-            let ang = rng.random_range(0.0..std::f32::consts::TAU);
-            let d = rng.random_range(6.0..26.0);
-            spawn_pickup(
-                commands,
-                catalog,
-                crate::comps_b::PickupKind::Rad(1),
-                center + glam::Vec2::new(ang.cos() * d, ang.sin() * d),
-                0,
-                false,
-            );
-        }
     }
 }

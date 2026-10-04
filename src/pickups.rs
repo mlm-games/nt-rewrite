@@ -705,7 +705,8 @@ pub fn spawn_rad_burst(
     pos: glam::Vec2,
     amount: u32,
 ) {
-    // `spawn_prop_death_effect` is the `prop/Destroy_0.gml:12` caller, so
+    // Generic `prop/Destroy_0.gml:12` and enemy-death `raddrop` caller (a
+    // `RadChest` now goes through `spawn_prop_death_effect`), so
     // `scrRadDrop.gml:10-13` takes its `instance_is(self, prop)` branch:
     // `_direction = random_angle`, `_speed = 16`.
     scr_rad_drop(commands, catalog, pos, amount, 0, false, false, true);
@@ -855,26 +856,6 @@ pub fn tick_flung_weapons(
             variance: 0.0,
         });
     }
-}
-
-/// GML `RadChest/Destroy_0.gml:4-9`: 4 x `Smoke` with
-/// `motion_add(random_angle, random(3))`, then one `ExploderExplo`
-/// (6 more `Smoke` plus `BackCont.shake += 6`; no `damage`, no
-/// `Collision_Player`, so opening a rad cache never hurts the player).
-fn rad_chest_burst(commands: &mut Commands, pos: glam::Vec2) {
-    let mut rng = rand::rng();
-    for _ in 0..4 {
-        let ang = rng.random_range(0.0..std::f32::consts::TAU);
-        let speed = rng.random_range(0.0..3.0);
-        crate::environment::spawn_native_smoke_mote(
-            commands,
-            true,
-            pos,
-            glam::Vec2::from_angle(ang),
-            speed,
-        );
-    }
-    crate::environment::spawn_exploder_explo(commands, true, pos, glam::Vec2::ZERO, 0.0);
 }
 
 /// Cached per-tick gun-decide context (built once in a PreUpdate-ish
@@ -1702,7 +1683,7 @@ pub fn collect_pickups(
                     // `prop/Destroy_0.gml:12` to turn the inherited `raddrop =
                     // 25` (`RadChest/Create_0.gml:20`) into 25 rads.
                     run.noradch = 0;
-                    rad_chest_burst(&mut commands, pickup_pos_value);
+                    crate::environment::spawn_rad_chest_burst(&mut commands, true, pickup_pos_value);
                     scr_rad_drop(
                         &mut commands,
                         &catalog,
@@ -1719,7 +1700,7 @@ pub fn collect_pickups(
                     // GML `RadChestBig` overrides only `Create_0`
                     // (`raddrop = 45`, `max_hp = 20`), so it runs the
                     // inherited `RadChest/Destroy_0` body verbatim.
-                    rad_chest_burst(&mut commands, pickup_pos_value);
+                    crate::environment::spawn_rad_chest_burst(&mut commands, true, pickup_pos_value);
                     scr_rad_drop(
                         &mut commands,
                         &catalog,
@@ -1807,9 +1788,9 @@ pub fn collect_pickups(
                     // `RadChest/Destroy_0.gml:4-12`, which repeats the same 4 x `Smoke`
                     // + `ExploderExplo` + `sndEXPChest` before its own
                     // `event_inherited()` reaches `prop/Destroy_0.gml:12`.
-                    rad_chest_burst(&mut commands, pickup_pos_value);
+                    crate::environment::spawn_rad_chest_burst(&mut commands, true, pickup_pos_value);
                     audio.play_exp_chest(&mut cues);
-                    rad_chest_burst(&mut commands, pickup_pos_value);
+                    crate::environment::spawn_rad_chest_burst(&mut commands, true, pickup_pos_value);
                     scr_rad_drop(
                         &mut commands,
                         &catalog,
@@ -2646,17 +2627,27 @@ fn pay_weapon_pickup_ammo(
 }
 
 /// Rad-container contact. GML `RadChest/Collision_Player.gml` verbatim
-/// is `if !scrChestOpened() { GameCont.noradch = 0; hp = 0 }`, and
-/// `prop/Destroy_0.gml:12` turns the inherited `raddrop = 25`
-/// (`RadChest/Create_0.gml:20`) into `scrRadDrop(x, y, 25)`.
+/// is `if !scrChestOpened() { GameCont.noradch = 0; hp = 0 }`, and the
+/// resulting `instance_destroy()` (`RadChest/Step_1.gml:1`) runs the same
+/// `RadChest/Destroy_0.gml` body every other death path takes.
 pub fn tick_rad_container_contact(
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
     audio: Res<GameAudio>,
     mut cues: ResMut<Queue<AudioCue>>,
     mut run: ResMut<Run>,
+    save: Res<crate::savedata_part::SaveData>,
     player_q: Query<(&Pos, &Player), With<Player>>,
-    mut rad_q: Query<(Entity, &Pos, &Prop), With<RadChestContainer>>,
+    rad_q: Query<
+        (
+            Entity,
+            &Pos,
+            &Prop,
+            &PropSprites,
+            &crate::environment::PropDeathEffect,
+        ),
+        With<RadChestContainer>,
+    >,
 ) {
     let Ok((player_pos, player)) = player_q.single() else {
         return;
@@ -2664,7 +2655,7 @@ pub fn tick_rad_container_contact(
     let player_pos = player_pos.0;
     let loops = run.loop_count;
     let hasted = haste_crown(player) > 0;
-    for (e, pos, prop) in &mut rad_q {
+    for (e, pos, prop, sprites, effect) in &rad_q {
         let center = pos.0;
         let half = prop.size * 0.5;
 
@@ -2678,20 +2669,21 @@ pub fn tick_rad_container_contact(
             }
         }
 
-        commands.entity(e).try_despawn();
-        run.noradch = 0;
-        scr_rad_drop(
+        crate::environment::spawn_prop_corpse(&mut commands, &catalog, center, sprites);
+        crate::environment::spawn_prop_death_effect(
             &mut commands,
             &catalog,
+            save.settings.particles,
             center,
-            25,
+            Some(*effect),
+            false,
+            None,
             loops,
             hasted,
-            true,
-            true,
+            &audio,
+            &mut cues,
         );
-        // GML `RadChest/Destroy_0.gml:11-12`: `sndEXPChest`, never the
-        // generic pickup blip.
-        audio.play_exp_chest(&mut cues);
+        commands.entity(e).try_despawn();
+        run.noradch = 0;
     }
 }
