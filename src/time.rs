@@ -127,4 +127,3 @@ impl GTimer {
         self.dur = dur.max(0.0);
     }
 }
-

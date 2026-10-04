@@ -2122,9 +2122,7 @@ pub fn collect_pickups(
                     );
                     commands
                         .entity(e2)
-                        .insert(WepPickupAmmo(
-                            wep_ammo.as_deref().is_some_and(|f| f.0),
-                        ));
+                        .insert(WepPickupAmmo(wep_ammo.as_deref().is_some_and(|f| f.0)));
                     continue;
                 }
 

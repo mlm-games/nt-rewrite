@@ -176,7 +176,11 @@ fn boss_friction_slide(
                 break;
             }
         }
-        if horizontal { vel.x = current } else { vel.y = current }
+        if horizontal {
+            vel.x = current
+        } else {
+            vel.y = current
+        }
     }
 }
 
@@ -1034,7 +1038,15 @@ fn big_bandit_ai(
         pos.0 += vel.0 * dt;
         queue_wall_breaks_along_segment(commands, walls, before, pos.0, def.radius * 0.9);
     } else {
-        move_bounce_solid(&mut pos.0, &mut vel.0, def.radius, dt, props, Some(mask), true);
+        move_bounce_solid(
+            &mut pos.0,
+            &mut vel.0,
+            def.radius,
+            dt,
+            props,
+            Some(mask),
+            true,
+        );
     }
     resolve_prop_collision(&mut pos.0, def.radius, props.iter().copied());
     fired
@@ -1589,10 +1601,7 @@ pub fn throne_annihilate_props(
     nests: Query<&PropNestMarkers, With<Prop>>,
     rad_chests: Query<&RadChestContainer>,
 ) {
-    let Some((throne_pos, _)) = throne_q
-        .iter()
-        .find(|(_, e)| e.kind == EnemyKind::Throne)
-    else {
+    let Some((throne_pos, _)) = throne_q.iter().find(|(_, e)| e.kind == EnemyKind::Throne) else {
         return;
     };
     let tpos = throne_pos.0;
@@ -2785,7 +2794,15 @@ fn captain_ai(
         pos.0 += vel.0 * dt;
         queue_wall_breaks_along_segment(commands, walls, before, pos.0, def.radius * 0.9);
     } else {
-        move_bounce_solid(&mut pos.0, &mut vel.0, def.radius, dt, props, Some(mask), true);
+        move_bounce_solid(
+            &mut pos.0,
+            &mut vel.0,
+            def.radius,
+            dt,
+            props,
+            Some(mask),
+            true,
+        );
     }
     resolve_prop_collision(&mut pos.0, def.radius, props.iter().copied());
     fired

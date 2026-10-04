@@ -389,94 +389,229 @@ pub fn melee_projectile_spec(weapon_name: &str) -> MeleeProjectileSpec {
     };
     match key {
         "WRENCH" => MeleeProjectileSpec {
-            sprite: "images/sprSlash.png", speed_f: 2.0, damage_override: Some(8),
-            typ: 0, shank: false, pellets: 1, shift_deg: 0.0,
-            guitar: false, electric_guitar: false, blood: false, lightning: false,
-            hammer_wallbreak: false, mega_sprite: None,
+            sprite: "images/sprSlash.png",
+            speed_f: 2.0,
+            damage_override: Some(8),
+            typ: 0,
+            shank: false,
+            pellets: 1,
+            shift_deg: 0.0,
+            guitar: false,
+            electric_guitar: false,
+            blood: false,
+            lightning: false,
+            hammer_wallbreak: false,
+            mega_sprite: None,
         },
         "SHOVEL" => MeleeProjectileSpec {
-            sprite: "images/sprHeavySlash.png", speed_f: 3.0, damage_override: Some(16),
-            typ: 0, shank: false, pellets: 3, shift_deg: 60.0,
-            guitar: false, electric_guitar: false, blood: false, lightning: false,
-            hammer_wallbreak: false, mega_sprite: None,
+            sprite: "images/sprHeavySlash.png",
+            speed_f: 3.0,
+            damage_override: Some(16),
+            typ: 0,
+            shank: false,
+            pellets: 3,
+            shift_deg: 60.0,
+            guitar: false,
+            electric_guitar: false,
+            blood: false,
+            lightning: false,
+            hammer_wallbreak: false,
+            mega_sprite: None,
         },
         "CHICKEN SWORD" => MeleeProjectileSpec {
-            sprite: "images/sprSlash.png", speed_f: 0.0, damage_override: Some(6),
-            typ: 0, shank: false, pellets: 1, shift_deg: 0.0,
-            guitar: false, electric_guitar: false, blood: false, lightning: false,
-            hammer_wallbreak: false, mega_sprite: None,
+            sprite: "images/sprSlash.png",
+            speed_f: 0.0,
+            damage_override: Some(6),
+            typ: 0,
+            shank: false,
+            pellets: 1,
+            shift_deg: 0.0,
+            guitar: false,
+            electric_guitar: false,
+            blood: false,
+            lightning: false,
+            hammer_wallbreak: false,
+            mega_sprite: None,
         },
         "SCREWDRIVER" => MeleeProjectileSpec {
-            sprite: "images/sprShank.png", speed_f: 3.0, damage_override: Some(6),
-            typ: 0, shank: true, pellets: 1, shift_deg: 0.0,
-            guitar: false, electric_guitar: false, blood: false, lightning: false,
-            hammer_wallbreak: false, mega_sprite: None,
+            sprite: "images/sprShank.png",
+            speed_f: 3.0,
+            damage_override: Some(6),
+            typ: 0,
+            shank: true,
+            pellets: 1,
+            shift_deg: 0.0,
+            guitar: false,
+            electric_guitar: false,
+            blood: false,
+            lightning: false,
+            hammer_wallbreak: false,
+            mega_sprite: None,
         },
         "ENERGY SCREWDRIVER" => MeleeProjectileSpec {
-            sprite: "images/sprEnergyShank.png", speed_f: 3.0, damage_override: Some(22),
-            typ: 0, shank: true, pellets: 1, shift_deg: 0.0,
-            guitar: false, electric_guitar: false, blood: false, lightning: false,
-            hammer_wallbreak: false, mega_sprite: None,
+            sprite: "images/sprEnergyShank.png",
+            speed_f: 3.0,
+            damage_override: Some(22),
+            typ: 0,
+            shank: true,
+            pellets: 1,
+            shift_deg: 0.0,
+            guitar: false,
+            electric_guitar: false,
+            blood: false,
+            lightning: false,
+            hammer_wallbreak: false,
+            mega_sprite: None,
         },
         "ENERGY SWORD" => MeleeProjectileSpec {
-            sprite: "images/sprEnergySlash.png", speed_f: 0.0, damage_override: Some(22),
-            typ: 0, shank: false, pellets: 1, shift_deg: 0.0,
-            guitar: false, electric_guitar: false, blood: false, lightning: false,
-            hammer_wallbreak: false, mega_sprite: None,
+            sprite: "images/sprEnergySlash.png",
+            speed_f: 0.0,
+            damage_override: Some(22),
+            typ: 0,
+            shank: false,
+            pellets: 1,
+            shift_deg: 0.0,
+            guitar: false,
+            electric_guitar: false,
+            blood: false,
+            lightning: false,
+            hammer_wallbreak: false,
+            mega_sprite: None,
         },
         "ENERGY HAMMER" => MeleeProjectileSpec {
-            sprite: "images/sprEnergyHammerSlash.png", speed_f: 2.0, damage_override: Some(44),
-            typ: 0, shank: false, pellets: 1, shift_deg: 0.0,
-            guitar: false, electric_guitar: false, blood: false, lightning: false,
-            hammer_wallbreak: true, mega_sprite: None,
+            sprite: "images/sprEnergyHammerSlash.png",
+            speed_f: 2.0,
+            damage_override: Some(44),
+            typ: 0,
+            shank: false,
+            pellets: 1,
+            shift_deg: 0.0,
+            guitar: false,
+            electric_guitar: false,
+            blood: false,
+            lightning: false,
+            hammer_wallbreak: true,
+            mega_sprite: None,
         },
         "BLOOD HAMMER" => MeleeProjectileSpec {
-            sprite: "images/sprBloodSlash.png", speed_f: 2.0, damage_override: Some(14),
-            typ: 0, shank: false, pellets: 1, shift_deg: 0.0,
-            guitar: false, electric_guitar: false, blood: true, lightning: false,
-            hammer_wallbreak: false, mega_sprite: None,
+            sprite: "images/sprBloodSlash.png",
+            speed_f: 2.0,
+            damage_override: Some(14),
+            typ: 0,
+            shank: false,
+            pellets: 1,
+            shift_deg: 0.0,
+            guitar: false,
+            electric_guitar: false,
+            blood: true,
+            lightning: false,
+            hammer_wallbreak: false,
+            mega_sprite: None,
         },
         "LIGHTNING HAMMER" => MeleeProjectileSpec {
-            sprite: "images/sprLightningSlash.png", speed_f: 2.0, damage_override: Some(12),
-            typ: 0, shank: false, pellets: 1, shift_deg: 0.0,
-            guitar: false, electric_guitar: false, blood: false, lightning: true,
-            hammer_wallbreak: false, mega_sprite: None,
+            sprite: "images/sprLightningSlash.png",
+            speed_f: 2.0,
+            damage_override: Some(12),
+            typ: 0,
+            shank: false,
+            pellets: 1,
+            shift_deg: 0.0,
+            guitar: false,
+            electric_guitar: false,
+            blood: false,
+            lightning: true,
+            hammer_wallbreak: false,
+            mega_sprite: None,
         },
         "SLEDGEHAMMER" => MeleeProjectileSpec {
-            sprite: "images/sprHeavySlash.png", speed_f: 2.0, damage_override: Some(24),
-            typ: 0, shank: false, pellets: 1, shift_deg: 0.0,
-            guitar: false, electric_guitar: false, blood: false, lightning: false,
-            hammer_wallbreak: false, mega_sprite: None,
+            sprite: "images/sprHeavySlash.png",
+            speed_f: 2.0,
+            damage_override: Some(24),
+            typ: 0,
+            shank: false,
+            pellets: 1,
+            shift_deg: 0.0,
+            guitar: false,
+            electric_guitar: false,
+            blood: false,
+            lightning: false,
+            hammer_wallbreak: false,
+            mega_sprite: None,
         },
         "GUITAR" => MeleeProjectileSpec {
-            sprite: "images/sprHeavySlash.png", speed_f: 2.0, damage_override: Some(26),
-            typ: 0, shank: false, pellets: 1, shift_deg: 0.0,
-            guitar: true, electric_guitar: false, blood: false, lightning: false,
-            hammer_wallbreak: false, mega_sprite: None,
+            sprite: "images/sprHeavySlash.png",
+            speed_f: 2.0,
+            damage_override: Some(26),
+            typ: 0,
+            shank: false,
+            pellets: 1,
+            shift_deg: 0.0,
+            guitar: true,
+            electric_guitar: false,
+            blood: false,
+            lightning: false,
+            hammer_wallbreak: false,
+            mega_sprite: None,
         },
         "ELECTRIC GUITAR" => MeleeProjectileSpec {
-            sprite: "images/sprHeavySlash.png", speed_f: 2.0, damage_override: Some(26),
-            typ: 0, shank: false, pellets: 1, shift_deg: 0.0,
-            guitar: false, electric_guitar: true, blood: false, lightning: false,
-            hammer_wallbreak: false, mega_sprite: None,
+            sprite: "images/sprHeavySlash.png",
+            speed_f: 2.0,
+            damage_override: Some(26),
+            typ: 0,
+            shank: false,
+            pellets: 1,
+            shift_deg: 0.0,
+            guitar: false,
+            electric_guitar: true,
+            blood: false,
+            lightning: false,
+            hammer_wallbreak: false,
+            mega_sprite: None,
         },
         "ULTRA SHOVEL" => MeleeProjectileSpec {
-            sprite: "images/sprUltraSlash.png", speed_f: 3.0, damage_override: Some(30),
-            typ: 0, shank: false, pellets: 3, shift_deg: 60.0,
-            guitar: false, electric_guitar: false, blood: false, lightning: false,
-            hammer_wallbreak: false, mega_sprite: None,
+            sprite: "images/sprUltraSlash.png",
+            speed_f: 3.0,
+            damage_override: Some(30),
+            typ: 0,
+            shank: false,
+            pellets: 3,
+            shift_deg: 60.0,
+            guitar: false,
+            electric_guitar: false,
+            blood: false,
+            lightning: false,
+            hammer_wallbreak: false,
+            mega_sprite: None,
         },
         "BLACK SWORD" => MeleeProjectileSpec {
-            sprite: "images/sprSlash.png", speed_f: 2.0, damage_override: Some(12),
-            typ: 0, shank: false, pellets: 1, shift_deg: 0.0,
-            guitar: false, electric_guitar: false, blood: false, lightning: false,
-            hammer_wallbreak: false, mega_sprite: Some("images/sprMegaSlash.png"),
+            sprite: "images/sprSlash.png",
+            speed_f: 2.0,
+            damage_override: Some(12),
+            typ: 0,
+            shank: false,
+            pellets: 1,
+            shift_deg: 0.0,
+            guitar: false,
+            electric_guitar: false,
+            blood: false,
+            lightning: false,
+            hammer_wallbreak: false,
+            mega_sprite: Some("images/sprMegaSlash.png"),
         },
         _ => MeleeProjectileSpec {
-            sprite: "images/sprSlash.png", speed_f: 2.0, damage_override: None,
-            typ: 0, shank: false, pellets: 1, shift_deg: 0.0,
-            guitar: false, electric_guitar: false, blood: false, lightning: false,
-            hammer_wallbreak: false, mega_sprite: None,
+            sprite: "images/sprSlash.png",
+            speed_f: 2.0,
+            damage_override: None,
+            typ: 0,
+            shank: false,
+            pellets: 1,
+            shift_deg: 0.0,
+            guitar: false,
+            electric_guitar: false,
+            blood: false,
+            lightning: false,
+            hammer_wallbreak: false,
+            mega_sprite: None,
         },
     }
 }
@@ -654,26 +789,73 @@ fn apply_family_profile(def: &mut WeaponDef, family: WeaponFamily, meta: &Weapon
         WeaponFamily::Empty => {}
 
         WeaponFamily::MeleeLight => {
-            set_melee(def, 7 + cost * 2 + area / 5, 66.0, 2.05, 2.5, [0.82, 0.84, 0.88]);
+            set_melee(
+                def,
+                7 + cost * 2 + area / 5,
+                66.0,
+                2.05,
+                2.5,
+                [0.82, 0.84, 0.88],
+            );
         }
 
         WeaponFamily::MeleeHeavy => {
-            set_melee(def, 14 + cost * 3 + area / 4, 80.0, 2.45, 5.5, [0.88, 0.78, 0.48]);
+            set_melee(
+                def,
+                14 + cost * 3 + area / 4,
+                80.0,
+                2.45,
+                5.5,
+                [0.88, 0.78, 0.48],
+            );
         }
 
         WeaponFamily::Pistol => {
-            set_ranged(def, 3 + cost / 2, 1, 560.0, 0.85, 0.06, 3.0, 4.0, 75.0,
-                [0.95, 0.9, 0.65], Vec2::new(10.0, 3.0));
+            set_ranged(
+                def,
+                3 + cost / 2,
+                1,
+                560.0,
+                0.85,
+                0.06,
+                3.0,
+                4.0,
+                75.0,
+                [0.95, 0.9, 0.65],
+                Vec2::new(10.0, 3.0),
+            );
         }
 
         WeaponFamily::Automatic => {
-            set_ranged(def, 3, 1, 610.0, 0.72, 0.11, 2.2, 3.5, 48.0,
-                [1.0, 0.88, 0.5], Vec2::new(10.0, 3.0));
+            set_ranged(
+                def,
+                3,
+                1,
+                610.0,
+                0.72,
+                0.11,
+                2.2,
+                3.5,
+                48.0,
+                [1.0, 0.88, 0.5],
+                Vec2::new(10.0, 3.0),
+            );
         }
 
         WeaponFamily::BurstRifle => {
-            set_ranged(def, 4 + cost / 3, 1, 650.0, 0.82, 0.055, 4.0, 4.0, 72.0,
-                [1.0, 0.9, 0.52], Vec2::new(13.0, 3.0));
+            set_ranged(
+                def,
+                4 + cost / 3,
+                1,
+                650.0,
+                0.82,
+                0.055,
+                4.0,
+                4.0,
+                72.0,
+                [1.0, 0.9, 0.52],
+                Vec2::new(13.0, 3.0),
+            );
 
             if cost >= 3 {
                 def.burst_shots = 3;
@@ -682,78 +864,220 @@ fn apply_family_profile(def: &mut WeaponDef, family: WeaponFamily, meta: &Weapon
         }
 
         WeaponFamily::Shotgun => {
-            set_ranged(def, 2, (6 + cost * 2) as usize, 400.0, 0.34, 0.31, 7.0, 3.5, 30.0,
-                [1.0, 0.82, 0.36], Vec2::new(8.0, 3.0));
+            set_ranged(
+                def,
+                2,
+                (6 + cost * 2) as usize,
+                400.0,
+                0.34,
+                0.31,
+                7.0,
+                3.5,
+                30.0,
+                [1.0, 0.82, 0.36],
+                Vec2::new(8.0, 3.0),
+            );
         }
 
         WeaponFamily::Slugger => {
-            set_ranged(def, 14 + cost * 2, 1, 510.0, 0.7, 0.07, 9.0, 6.0, 170.0,
-                [0.95, 0.83, 0.42], Vec2::new(14.0, 5.0));
+            set_ranged(
+                def,
+                14 + cost * 2,
+                1,
+                510.0,
+                0.7,
+                0.07,
+                9.0,
+                6.0,
+                170.0,
+                [0.95, 0.83, 0.42],
+                Vec2::new(14.0, 5.0),
+            );
         }
 
         WeaponFamily::Crossbow => {
-            set_ranged(def, 10 + cost * 2, 1, 660.0, 1.05, 0.025, 6.0, 4.0, 135.0,
-                [0.96, 0.84, 0.45], Vec2::new(17.0, 4.0));
+            set_ranged(
+                def,
+                10 + cost * 2,
+                1,
+                660.0,
+                1.05,
+                0.025,
+                6.0,
+                4.0,
+                135.0,
+                [0.96, 0.84, 0.45],
+                Vec2::new(17.0, 4.0),
+            );
 
             def.pierce = cost.saturating_sub(1).min(5) as u8;
         }
 
         WeaponFamily::Splinter => {
-            set_ranged(def, 3, (4 + cost).clamp(4, 10) as usize, 600.0, 0.58, 0.18, 4.0, 3.0, 42.0,
-                [0.68, 0.48, 0.32], Vec2::new(10.0, 3.0));
+            set_ranged(
+                def,
+                3,
+                (4 + cost).clamp(4, 10) as usize,
+                600.0,
+                0.58,
+                0.18,
+                4.0,
+                3.0,
+                42.0,
+                [0.68, 0.48, 0.32],
+                Vec2::new(10.0, 3.0),
+            );
         }
 
         WeaponFamily::Disc => {
-            set_ranged(def, 7 + cost, 1, 430.0, 2.4, 0.025, 3.5, 8.0, 125.0,
-                [0.68, 0.94, 1.0], Vec2::splat(14.0));
+            set_ranged(
+                def,
+                7 + cost,
+                1,
+                430.0,
+                2.4,
+                0.025,
+                3.5,
+                8.0,
+                125.0,
+                [0.68, 0.94, 1.0],
+                Vec2::splat(14.0),
+            );
 
             def.bounces = (5 + cost).clamp(6, 14) as u8;
             def.muzzle_burst = 0;
         }
 
         WeaponFamily::Explosive => {
-            set_explosive(def, 6 + cost * 3, 1, 330.0, 0.9, 0.07, 8.0, 7.0, 165.0,
-                [1.0, 0.57, 0.2], Vec2::splat(11.0));
+            set_explosive(
+                def,
+                6 + cost * 3,
+                1,
+                330.0,
+                0.9,
+                0.07,
+                8.0,
+                7.0,
+                165.0,
+                [1.0, 0.57, 0.2],
+                Vec2::splat(11.0),
+            );
         }
 
         WeaponFamily::Flame => {
-            set_ranged(def, 2 + cost, (2 + cost).clamp(2, 8) as usize, 285.0, 0.35, 0.28, 3.0, 5.0, 28.0,
-                [1.0, 0.48, 0.14], Vec2::new(10.0, 6.0));
+            set_ranged(
+                def,
+                2 + cost,
+                (2 + cost).clamp(2, 8) as usize,
+                285.0,
+                0.35,
+                0.28,
+                3.0,
+                5.0,
+                28.0,
+                [1.0, 0.48, 0.14],
+                Vec2::new(10.0, 6.0),
+            );
 
-            set_fire_hazard(def, 32.0 + cost as f32 * 3.0, 1 + cost / 3,
-                0.75 + cost as f32 * 0.08, 0.13);
+            set_fire_hazard(
+                def,
+                32.0 + cost as f32 * 3.0,
+                1 + cost / 3,
+                0.75 + cost as f32 * 0.08,
+                0.13,
+            );
         }
 
         WeaponFamily::Laser => {
-            set_ranged(def, 3 + cost, 1, 880.0, 0.42, 0.025, 2.5, 3.5, 35.0,
-                [1.0, 0.24, 0.2], Vec2::new(18.0, 3.0));
+            set_ranged(
+                def,
+                3 + cost,
+                1,
+                880.0,
+                0.42,
+                0.025,
+                2.5,
+                3.5,
+                35.0,
+                [1.0, 0.24, 0.2],
+                Vec2::new(18.0, 3.0),
+            );
 
             def.pierce = cost.saturating_sub(1).min(5) as u8;
         }
 
         WeaponFamily::Plasma => {
-            set_explosive(def, 7 + cost * 2, 1, 300.0, 1.0, 0.055, 6.0, 8.0, 135.0,
-                [0.3, 1.0, 0.35], Vec2::splat(13.0));
+            set_explosive(
+                def,
+                7 + cost * 2,
+                1,
+                300.0,
+                1.0,
+                0.055,
+                6.0,
+                8.0,
+                135.0,
+                [0.3, 1.0, 0.35],
+                Vec2::splat(13.0),
+            );
         }
 
         WeaponFamily::Lightning => {
-            set_ranged(def, 3 + cost, 1, 940.0, 0.38, 0.04, 3.0, 4.0, 30.0,
-                [0.72, 0.92, 1.0], Vec2::new(18.0, 4.0));
+            set_ranged(
+                def,
+                3 + cost,
+                1,
+                940.0,
+                0.38,
+                0.04,
+                3.0,
+                4.0,
+                30.0,
+                [0.72, 0.92, 1.0],
+                Vec2::new(18.0, 4.0),
+            );
 
             def.pierce = cost.clamp(1, 5) as u8;
         }
 
         WeaponFamily::Toxic => {
-            set_ranged(def, 5 + cost, 1, 410.0, 0.82, 0.045, 5.0, 6.0, 95.0,
-                [0.42, 0.88, 0.38], Vec2::new(13.0, 5.0));
+            set_ranged(
+                def,
+                5 + cost,
+                1,
+                410.0,
+                0.82,
+                0.045,
+                5.0,
+                6.0,
+                95.0,
+                [0.42, 0.88, 0.38],
+                Vec2::new(13.0, 5.0),
+            );
 
-            set_toxic_hazard(def, 45.0 + cost as f32 * 4.0, 1 + cost / 3,
-                1.8 + cost as f32 * 0.15, 0.24);
+            set_toxic_hazard(
+                def,
+                45.0 + cost as f32 * 4.0,
+                1 + cost / 3,
+                1.8 + cost as f32 * 0.15,
+                0.24,
+            );
         }
 
         WeaponFamily::Deployable => {
-            set_ranged(def, 3, 8, 620.0, 0.72, 0.2, 2.0, 3.5, 40.0,
-                [0.65, 0.7, 0.76], Vec2::new(9.0, 3.0));
+            set_ranged(
+                def,
+                3,
+                8,
+                620.0,
+                0.72,
+                0.2,
+                2.0,
+                3.5,
+                40.0,
+                [0.65, 0.7, 0.76],
+                Vec2::new(9.0, 3.0),
+            );
 
             def.burst_shots = 3;
             def.burst_interval = 2.0 / 30.0;
@@ -764,24 +1088,79 @@ fn apply_family_profile(def: &mut WeaponDef, family: WeaponFamily, meta: &Weapon
                 set_melee(def, 10 + area / 3, 70.0, 2.1, 3.0, [0.9, 0.65, 0.85]);
             }
             AmmoType::Bullets => {
-                set_ranged(def, 3, 1, 540.0, 0.75, 0.12, 3.0, 4.0, 55.0,
-                    [0.95, 0.62, 0.82], Vec2::new(10.0, 4.0));
+                set_ranged(
+                    def,
+                    3,
+                    1,
+                    540.0,
+                    0.75,
+                    0.12,
+                    3.0,
+                    4.0,
+                    55.0,
+                    [0.95, 0.62, 0.82],
+                    Vec2::new(10.0, 4.0),
+                );
             }
             AmmoType::Shells => {
-                set_ranged(def, 2, 6, 390.0, 0.35, 0.32, 6.0, 4.0, 30.0,
-                    [0.95, 0.62, 0.82], Vec2::new(8.0, 4.0));
+                set_ranged(
+                    def,
+                    2,
+                    6,
+                    390.0,
+                    0.35,
+                    0.32,
+                    6.0,
+                    4.0,
+                    30.0,
+                    [0.95, 0.62, 0.82],
+                    Vec2::new(8.0, 4.0),
+                );
             }
             AmmoType::Bolts => {
-                set_ranged(def, 9, 1, 590.0, 0.9, 0.08, 5.0, 4.0, 100.0,
-                    [0.95, 0.62, 0.82], Vec2::new(14.0, 4.0));
+                set_ranged(
+                    def,
+                    9,
+                    1,
+                    590.0,
+                    0.9,
+                    0.08,
+                    5.0,
+                    4.0,
+                    100.0,
+                    [0.95, 0.62, 0.82],
+                    Vec2::new(14.0, 4.0),
+                );
             }
             AmmoType::Explosives => {
-                set_explosive(def, 8, 1, 320.0, 0.8, 0.1, 7.0, 6.0, 130.0,
-                    [0.95, 0.62, 0.82], Vec2::splat(10.0));
+                set_explosive(
+                    def,
+                    8,
+                    1,
+                    320.0,
+                    0.8,
+                    0.1,
+                    7.0,
+                    6.0,
+                    130.0,
+                    [0.95, 0.62, 0.82],
+                    Vec2::splat(10.0),
+                );
             }
             AmmoType::Energy => {
-                set_ranged(def, 5, 1, 760.0, 0.48, 0.06, 3.0, 4.0, 45.0,
-                    [0.95, 0.62, 0.82], Vec2::new(16.0, 4.0));
+                set_ranged(
+                    def,
+                    5,
+                    1,
+                    760.0,
+                    0.48,
+                    0.06,
+                    3.0,
+                    4.0,
+                    45.0,
+                    [0.95, 0.62, 0.82],
+                    Vec2::new(16.0, 4.0),
+                );
             }
         },
     }
@@ -797,13 +1176,35 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
 
     match name {
         "REVOLVER" => {
-            set_ranged(def, 3, 1, 480.0, 0.82, 0.07, 3.0, 4.0, 75.0,
-                [0.95, 0.9, 0.65], Vec2::new(10.0, 3.0));
+            set_ranged(
+                def,
+                3,
+                1,
+                480.0,
+                0.82,
+                0.07,
+                3.0,
+                4.0,
+                75.0,
+                [0.95, 0.9, 0.65],
+                Vec2::new(10.0, 3.0),
+            );
         }
 
         "TRIPLE MACHINEGUN" => {
-            set_ranged(def, 3, 3, 610.0, 0.7, 0.2, 4.0, 3.5, 45.0,
-                [1.0, 0.86, 0.45], Vec2::new(10.0, 3.0));
+            set_ranged(
+                def,
+                3,
+                3,
+                610.0,
+                0.7,
+                0.2,
+                4.0,
+                3.5,
+                45.0,
+                [1.0, 0.86, 0.45],
+                Vec2::new(10.0, 3.0),
+            );
         }
 
         "WRENCH" => {
@@ -811,49 +1212,148 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
         }
 
         "MACHINEGUN" => {
-            set_ranged(def, 3, 1, 610.0, 0.72, 0.105, 2.6, 3.5, 48.0,
-                [1.0, 0.86, 0.45], Vec2::new(10.0, 3.0));
+            set_ranged(
+                def,
+                3,
+                1,
+                610.0,
+                0.72,
+                0.105,
+                2.6,
+                3.5,
+                48.0,
+                [1.0, 0.86, 0.45],
+                Vec2::new(10.0, 3.0),
+            );
         }
 
         "SHOTGUN" => {
-            set_ranged(def, 2, 7, 410.0, 0.34, 0.35, 7.0, 3.5, 28.0,
-                [1.0, 0.8, 0.3], Vec2::new(8.0, 3.0));
+            set_ranged(
+                def,
+                2,
+                7,
+                410.0,
+                0.34,
+                0.35,
+                7.0,
+                3.5,
+                28.0,
+                [1.0, 0.8, 0.3],
+                Vec2::new(8.0, 3.0),
+            );
         }
 
         "CROSSBOW" => {
-            set_ranged(def, 20, 1, 720.0, 1.0, 0.025, 6.0, 4.0, 130.0,
-                [0.95, 0.84, 0.45], Vec2::new(17.0, 4.0));
+            set_ranged(
+                def,
+                20,
+                1,
+                720.0,
+                1.0,
+                0.025,
+                6.0,
+                4.0,
+                130.0,
+                [0.95, 0.84, 0.45],
+                Vec2::new(17.0, 4.0),
+            );
         }
 
         "GRENADE LAUNCHER" => {
-            set_explosive(def, 15, 1, 300.0, 2.0, 0.052, 5.0, 4.0, 200.0,
-                [1.0, 0.58, 0.2], Vec2::splat(6.0));
+            set_explosive(
+                def,
+                15,
+                1,
+                300.0,
+                2.0,
+                0.052,
+                5.0,
+                4.0,
+                200.0,
+                [1.0, 0.58, 0.2],
+                Vec2::splat(6.0),
+            );
             def.bounces = 4;
         }
 
         "DOUBLE SHOTGUN" => {
-            set_ranged(def, 2, 14, 410.0, 0.34, 0.52, 12.0, 3.5, 32.0,
-                [1.0, 0.78, 0.27], Vec2::new(8.0, 3.0));
+            set_ranged(
+                def,
+                2,
+                14,
+                410.0,
+                0.34,
+                0.52,
+                12.0,
+                3.5,
+                32.0,
+                [1.0, 0.78, 0.27],
+                Vec2::new(8.0, 3.0),
+            );
         }
 
         "MINIGUN" => {
-            set_ranged(def, 3, 1, 640.0, 0.68, 0.23, 1.8, 3.0, 38.0,
-                [1.0, 0.88, 0.48], Vec2::new(10.0, 3.0));
+            set_ranged(
+                def,
+                3,
+                1,
+                640.0,
+                0.68,
+                0.23,
+                1.8,
+                3.0,
+                38.0,
+                [1.0, 0.88, 0.48],
+                Vec2::new(10.0, 3.0),
+            );
         }
 
         "AUTO SHOTGUN" => {
-            set_ranged(def, 2, 6, 430.0, 0.32, 0.26, 5.0, 3.5, 24.0,
-                [1.0, 0.8, 0.3], Vec2::new(8.0, 3.0));
+            set_ranged(
+                def,
+                2,
+                6,
+                430.0,
+                0.32,
+                0.26,
+                5.0,
+                3.5,
+                24.0,
+                [1.0, 0.8, 0.3],
+                Vec2::new(8.0, 3.0),
+            );
         }
 
         "AUTO CROSSBOW" => {
-            set_ranged(def, 20, 1, 720.0, 1.0, 0.085, 4.0, 4.0, 100.0,
-                [0.95, 0.84, 0.45], Vec2::new(15.0, 4.0));
+            set_ranged(
+                def,
+                20,
+                1,
+                720.0,
+                1.0,
+                0.085,
+                4.0,
+                4.0,
+                100.0,
+                [0.95, 0.84, 0.45],
+                Vec2::new(15.0, 4.0),
+            );
         }
 
         "SUPER CROSSBOW" => {
-            set_ranged(def, 20, 5, 720.0, 1.05, 0.17, 14.0, 4.5, 130.0,
-                [1.0, 0.9, 0.55], Vec2::new(18.0, 5.0));
+            set_ranged(
+                def,
+                20,
+                5,
+                720.0,
+                1.05,
+                0.17,
+                14.0,
+                4.5,
+                130.0,
+                [1.0, 0.9, 0.55],
+                Vec2::new(18.0, 5.0),
+            );
 
             def.pierce = 1;
         }
@@ -865,78 +1365,210 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
         }
 
         "BAZOOKA" => {
-            set_explosive(def, 20, 1, 250.0, 1.4, 0.05, 13.0, 7.0, 220.0,
-                [1.0, 0.45, 0.13], Vec2::new(14.0, 8.0));
+            set_explosive(
+                def,
+                20,
+                1,
+                250.0,
+                1.4,
+                0.05,
+                13.0,
+                7.0,
+                220.0,
+                [1.0, 0.45, 0.13],
+                Vec2::new(14.0, 8.0),
+            );
         }
 
         "STICKY LAUNCHER" => {
-            set_explosive(def, 15, 1, 350.0, 1.7, 0.055, 7.0, 7.0, 145.0,
-                [1.0, 0.6, 0.22], Vec2::splat(10.0));
+            set_explosive(
+                def,
+                15,
+                1,
+                350.0,
+                1.7,
+                0.055,
+                7.0,
+                7.0,
+                145.0,
+                [1.0, 0.6, 0.22],
+                Vec2::splat(10.0),
+            );
         }
 
         "SMG" => {
-            set_ranged(def, 3, 1, 480.0, 0.65, 0.28, 1.7, 3.5, 35.0,
-                [1.0, 0.85, 0.47], Vec2::new(9.0, 3.0));
+            set_ranged(
+                def,
+                3,
+                1,
+                480.0,
+                0.65,
+                0.28,
+                1.7,
+                3.5,
+                35.0,
+                [1.0, 0.85, 0.47],
+                Vec2::new(9.0, 3.0),
+            );
         }
 
         "ASSAULT RIFLE" => {
-            set_ranged(def, 3, 1, 480.0, 0.78, 0.035, 4.0, 4.0, 65.0,
-                [1.0, 0.88, 0.47], Vec2::new(12.0, 3.0));
+            set_ranged(
+                def,
+                3,
+                1,
+                480.0,
+                0.78,
+                0.035,
+                4.0,
+                4.0,
+                65.0,
+                [1.0, 0.88, 0.47],
+                Vec2::new(12.0, 3.0),
+            );
 
             def.burst_shots = 3;
             def.burst_interval = 2.0 / 30.0;
         }
 
         "DISC GUN" => {
-            set_ranged(def, 6, 1, 150.0, 2.2, 0.087, 3.0, 8.0, 120.0,
-                [0.7, 0.95, 1.0], Vec2::splat(14.0));
+            set_ranged(
+                def,
+                6,
+                1,
+                150.0,
+                2.2,
+                0.087,
+                3.0,
+                8.0,
+                120.0,
+                [0.7, 0.95, 1.0],
+                Vec2::splat(14.0),
+            );
 
             def.bounces = 6;
             def.muzzle_burst = 0;
         }
 
         "SUPER DISC GUN" => {
-            set_ranged(def, 6, 5, 150.0, 2.8, 0.035, 4.0, 10.0, 180.0,
-                [0.75, 1.0, 1.0], Vec2::splat(18.0));
+            set_ranged(
+                def,
+                6,
+                5,
+                150.0,
+                2.8,
+                0.035,
+                4.0,
+                10.0,
+                180.0,
+                [0.75, 1.0, 1.0],
+                Vec2::splat(18.0),
+            );
 
             def.bounces = 12;
             def.muzzle_burst = 0;
         }
 
         "LASER PISTOL" => {
-            set_ranged(def, 2, 1, 850.0, 0.42, 0.018, 2.5, 3.5, 30.0,
-                [1.0, 0.22, 0.18], Vec2::new(18.0, 3.0));
+            set_ranged(
+                def,
+                2,
+                1,
+                850.0,
+                0.42,
+                0.018,
+                2.5,
+                3.5,
+                30.0,
+                [1.0, 0.22, 0.18],
+                Vec2::new(18.0, 3.0),
+            );
 
             def.pierce = 1;
         }
 
         "LASER RIFLE" => {
-            set_ranged(def, 2, 1, 900.0, 0.48, 0.05, 3.5, 3.5, 35.0,
-                [1.0, 0.2, 0.16], Vec2::new(21.0, 3.0));
+            set_ranged(
+                def,
+                2,
+                1,
+                900.0,
+                0.48,
+                0.05,
+                3.5,
+                3.5,
+                35.0,
+                [1.0, 0.2, 0.16],
+                Vec2::new(21.0, 3.0),
+            );
 
             def.pierce = 2;
         }
 
         "LASER MINIGUN" => {
-            set_ranged(def, 2, 1, 820.0, 0.38, 0.21, 1.6, 3.0, 24.0,
-                [1.0, 0.22, 0.17], Vec2::new(15.0, 3.0));
+            set_ranged(
+                def,
+                2,
+                1,
+                820.0,
+                0.38,
+                0.21,
+                1.6,
+                3.0,
+                24.0,
+                [1.0, 0.22, 0.17],
+                Vec2::new(15.0, 3.0),
+            );
 
             def.pierce = 1;
         }
 
         "SLUGGER" => {
-            set_ranged(def, 22, 1, 500.0, 0.66, 0.085, 9.0, 6.0, 170.0,
-                [0.95, 0.82, 0.42], Vec2::new(14.0, 5.0));
+            set_ranged(
+                def,
+                22,
+                1,
+                500.0,
+                0.66,
+                0.085,
+                9.0,
+                6.0,
+                170.0,
+                [0.95, 0.82, 0.42],
+                Vec2::new(14.0, 5.0),
+            );
         }
 
         "GATLING SLUGGER" => {
-            set_ranged(def, 22, 1, 560.0, 0.62, 0.105, 5.0, 6.0, 135.0,
-                [0.95, 0.8, 0.38], Vec2::new(14.0, 5.0));
+            set_ranged(
+                def,
+                22,
+                1,
+                560.0,
+                0.62,
+                0.105,
+                5.0,
+                6.0,
+                135.0,
+                [0.95, 0.8, 0.38],
+                Vec2::new(14.0, 5.0),
+            );
         }
 
         "ASSAULT SLUGGER" => {
-            set_ranged(def, 22, 1, 540.0, 0.62, 0.07, 8.0, 6.0, 150.0,
-                [0.96, 0.81, 0.4], Vec2::new(14.0, 5.0));
+            set_ranged(
+                def,
+                22,
+                1,
+                540.0,
+                0.62,
+                0.07,
+                8.0,
+                6.0,
+                150.0,
+                [0.96, 0.81, 0.4],
+                Vec2::new(14.0, 5.0),
+            );
 
             def.burst_shots = 3;
             def.burst_interval = 3.0 / 30.0;
@@ -947,13 +1579,35 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
         }
 
         "SUPER SLUGGER" => {
-            set_ranged(def, 22, 5, 560.0, 0.68, 0.18, 15.0, 6.0, 160.0,
-                [1.0, 0.86, 0.44], Vec2::new(14.0, 5.0));
+            set_ranged(
+                def,
+                22,
+                5,
+                560.0,
+                0.68,
+                0.18,
+                15.0,
+                6.0,
+                160.0,
+                [1.0, 0.86, 0.44],
+                Vec2::new(14.0, 5.0),
+            );
         }
 
         "HYPER RIFLE" => {
-            set_ranged(def, 3, 1, 600.0, 0.55, 0.033, 2.0, 3.0, 40.0,
-                [1.0, 0.95, 0.6], Vec2::new(16.0, 3.0));
+            set_ranged(
+                def,
+                3,
+                1,
+                600.0,
+                0.55,
+                0.033,
+                2.0,
+                3.0,
+                40.0,
+                [1.0, 0.95, 0.6],
+                Vec2::new(16.0, 3.0),
+            );
 
             def.burst_shots = 6;
             def.burst_interval = 1.0 / 30.0;
@@ -968,71 +1622,213 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
         }
 
         "BLOOD LAUNCHER" => {
-            set_explosive(def, 10, 1, 330.0, 0.85, 0.105, 7.0, 7.0, 150.0,
-                [0.9, 0.16, 0.18], Vec2::splat(11.0));
+            set_explosive(
+                def,
+                10,
+                1,
+                330.0,
+                0.85,
+                0.105,
+                7.0,
+                7.0,
+                150.0,
+                [0.9, 0.16, 0.18],
+                Vec2::splat(11.0),
+            );
         }
 
         "BLOOD CANNON" => {
-            set_explosive(def, 45, 1, 320.0, 0.62, 0.08, 10.0, 8.0, 220.0,
-                [0.9, 0.18, 0.18], Vec2::splat(12.0));
+            set_explosive(
+                def,
+                45,
+                1,
+                320.0,
+                0.62,
+                0.08,
+                10.0,
+                8.0,
+                220.0,
+                [0.9, 0.18, 0.18],
+                Vec2::splat(12.0),
+            );
 
-            set_split(def, 6, 0.7, 380.0, 2, 0.34, 3.0, 30.0,
-                [1.0, 0.3, 0.3], Vec2::new(7.0, 3.0));
+            set_split(
+                def,
+                6,
+                0.7,
+                380.0,
+                2,
+                0.34,
+                3.0,
+                30.0,
+                [1.0, 0.3, 0.3],
+                Vec2::new(7.0, 3.0),
+            );
         }
 
         "SPLINTER GUN" => {
-            set_ranged(def, 4, 5, 620.0, 0.58, 0.18, 4.0, 3.0, 38.0,
-                [0.68, 0.47, 0.3], Vec2::new(10.0, 3.0));
+            set_ranged(
+                def,
+                4,
+                5,
+                620.0,
+                0.58,
+                0.18,
+                4.0,
+                3.0,
+                38.0,
+                [0.68, 0.47, 0.3],
+                Vec2::new(10.0, 3.0),
+            );
         }
 
         "SPLINTER PISTOL" => {
-            set_ranged(def, 4, 4, 580.0, 0.52, 0.09, 3.0, 3.0, 34.0,
-                [0.68, 0.47, 0.3], Vec2::new(9.0, 3.0));
+            set_ranged(
+                def,
+                4,
+                4,
+                580.0,
+                0.52,
+                0.09,
+                3.0,
+                3.0,
+                34.0,
+                [0.68, 0.47, 0.3],
+                Vec2::new(9.0, 3.0),
+            );
         }
 
         "SUPER SPLINTER GUN" => {
-            set_ranged(def, 4, 10, 650.0, 0.62, 0.26, 7.0, 3.5, 45.0,
-                [0.72, 0.5, 0.32], Vec2::new(11.0, 3.0));
+            set_ranged(
+                def,
+                4,
+                10,
+                650.0,
+                0.62,
+                0.26,
+                7.0,
+                3.5,
+                45.0,
+                [0.72, 0.5, 0.32],
+                Vec2::new(11.0, 3.0),
+            );
         }
 
         "TOXIC BOW" => {
-            set_ranged(def, 16, 1, 620.0, 1.0, 0.02, 6.0, 4.5, 120.0,
-                [0.42, 0.9, 0.37], Vec2::new(17.0, 4.0));
+            set_ranged(
+                def,
+                16,
+                1,
+                620.0,
+                1.0,
+                0.02,
+                6.0,
+                4.5,
+                120.0,
+                [0.42, 0.9, 0.37],
+                Vec2::new(17.0, 4.0),
+            );
 
             set_toxic_hazard(def, 46.0, 1, 2.0, 0.24);
         }
 
         "SENTRY GUN" => {
-            set_ranged(def, 3, 8, 620.0, 0.72, 0.2, 2.0, 3.5, 40.0,
-                [0.62, 0.68, 0.76], Vec2::new(9.0, 3.0));
+            set_ranged(
+                def,
+                3,
+                8,
+                620.0,
+                0.72,
+                0.2,
+                2.0,
+                3.5,
+                40.0,
+                [0.62, 0.68, 0.76],
+                Vec2::new(9.0, 3.0),
+            );
 
             def.burst_shots = 3;
             def.burst_interval = 2.0 / 30.0;
         }
 
         "WAVE GUN" => {
-            set_ranged(def, 3, 2, 430.0, 0.5, 0.5, 7.0, 4.0, 42.0,
-                [0.55, 0.86, 1.0], Vec2::new(10.0, 4.0));
+            set_ranged(
+                def,
+                3,
+                2,
+                430.0,
+                0.5,
+                0.5,
+                7.0,
+                4.0,
+                42.0,
+                [0.55, 0.86, 1.0],
+                Vec2::new(10.0, 4.0),
+            );
         }
 
         "PLASMA GUN" => {
-            set_explosive(def, 4, 1, 300.0, 1.1, 0.07, 5.0, 8.0, 120.0,
-                [0.3, 1.0, 0.36], Vec2::splat(13.0));
+            set_explosive(
+                def,
+                4,
+                1,
+                300.0,
+                1.1,
+                0.07,
+                5.0,
+                8.0,
+                120.0,
+                [0.3, 1.0, 0.36],
+                Vec2::splat(13.0),
+            );
         }
 
         "PLASMA RIFLE" => {
-            set_explosive(def, 4, 1, 330.0, 1.0, 0.05, 4.0, 7.0, 105.0,
-                [0.28, 1.0, 0.34], Vec2::splat(12.0));
+            set_explosive(
+                def,
+                4,
+                1,
+                330.0,
+                1.0,
+                0.05,
+                4.0,
+                7.0,
+                105.0,
+                [0.28, 1.0, 0.34],
+                Vec2::splat(12.0),
+            );
         }
 
         "PLASMA MINIGUN" => {
-            set_explosive(def, 4, 1, 350.0, 0.85, 0.13, 2.5, 6.0, 75.0,
-                [0.28, 1.0, 0.34], Vec2::splat(10.0));
+            set_explosive(
+                def,
+                4,
+                1,
+                350.0,
+                0.85,
+                0.13,
+                2.5,
+                6.0,
+                75.0,
+                [0.28, 1.0, 0.34],
+                Vec2::splat(10.0),
+            );
         }
 
         "PLASMA CANNON" | "DEVASTATOR" => {
-            set_explosive(def, 15, 1, 260.0, 1.45, 0.035, 14.0, 11.0, 260.0,
-                [0.35, 1.0, 0.4], Vec2::splat(18.0));
+            set_explosive(
+                def,
+                15,
+                1,
+                260.0,
+                1.45,
+                0.035,
+                14.0,
+                11.0,
+                260.0,
+                [0.35, 1.0, 0.4],
+                Vec2::splat(18.0),
+            );
         }
 
         "ENERGY HAMMER" => {
@@ -1044,27 +1840,68 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
         }
 
         "FLAK CANNON" => {
-            set_explosive(def, 8, 1, 340.0,
+            set_explosive(
+                def,
+                8,
+                1,
+                340.0,
                 // GML FlakBullet has no lifetime: friction slows it to a
                 // stop, then it splits. Long cap here; stop-detonate governs.
-                1.2, 0.07, 10.0, 7.0, 200.0,
-                [1.0, 0.72, 0.3], Vec2::splat(11.0));
+                1.2,
+                0.07,
+                10.0,
+                7.0,
+                200.0,
+                [1.0, 0.72, 0.3],
+                Vec2::splat(11.0),
+            );
 
             // GML `FlakBullet/Destroy_0.gml:1-7`: 16 `Bullet2` at
             // `motion_add(random_angle, 8 + random(8))` - speed 8..16
             // px/step, `Bullet2` damage 2 / knockback_speed 2.
-            set_split(def, 16, std::f32::consts::PI, 360.0, 2, 0.32, 3.0, 60.0,
-                [1.0, 0.88, 0.55], Vec2::new(8.0, 3.0));
+            set_split(
+                def,
+                16,
+                std::f32::consts::PI,
+                360.0,
+                2,
+                0.32,
+                3.0,
+                60.0,
+                [1.0, 0.88, 0.55],
+                Vec2::new(8.0, 3.0),
+            );
         }
 
         "SUPER FLAK CANNON" => {
-            set_explosive(def, 45, 1, 360.0, 1.2, 0.05, 12.0, 8.0, 240.0,
-                [1.0, 0.66, 0.22], Vec2::splat(12.0));
+            set_explosive(
+                def,
+                45,
+                1,
+                360.0,
+                1.2,
+                0.05,
+                12.0,
+                8.0,
+                240.0,
+                [1.0, 0.66, 0.22],
+                Vec2::splat(12.0),
+            );
 
             // GML `SuperFlakBullet/Destroy_0.gml:3-11`: a 5-bullet ring
             // (`_ang += 72`) of `FlakBullet` at `random_range(12, 16)`.
-            set_split(def, 5, std::f32::consts::PI, 420.0, 8, 0.32, 3.5, 180.0,
-                [1.0, 0.9, 0.6], Vec2::new(8.0, 3.0));
+            set_split(
+                def,
+                5,
+                std::f32::consts::PI,
+                420.0,
+                8,
+                0.32,
+                3.5,
+                180.0,
+                [1.0, 0.9, 0.6],
+                Vec2::new(8.0, 3.0),
+            );
         }
 
         "CHICKEN SWORD" => {
@@ -1072,91 +1909,245 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
         }
 
         "NUKE LAUNCHER" => {
-            set_explosive(def, 50, 1, 220.0, 1.7, 0.035, 18.0, 12.0, 320.0,
-                [1.0, 0.38, 0.1], Vec2::splat(20.0));
+            set_explosive(
+                def,
+                50,
+                1,
+                220.0,
+                1.7,
+                0.035,
+                18.0,
+                12.0,
+                320.0,
+                [1.0, 0.38, 0.1],
+                Vec2::splat(20.0),
+            );
         }
 
         "ION CANNON" => {
-            set_ranged(def, 18, 1, 820.0, 0.7, 0.02, 9.0, 7.0, 150.0,
-                [0.52, 0.85, 1.0], Vec2::new(25.0, 6.0));
+            set_ranged(
+                def,
+                18,
+                1,
+                820.0,
+                0.7,
+                0.02,
+                9.0,
+                7.0,
+                150.0,
+                [0.52, 0.85, 1.0],
+                Vec2::new(25.0, 6.0),
+            );
 
             def.pierce = 5;
         }
 
         "QUADRUPLE MACHINEGUN" => {
-            set_ranged(def, 3, 4, 650.0, 0.72, 0.16, 6.0, 3.5, 45.0,
-                [1.0, 0.88, 0.48], Vec2::new(10.0, 3.0));
+            set_ranged(
+                def,
+                3,
+                4,
+                650.0,
+                0.72,
+                0.16,
+                6.0,
+                3.5,
+                45.0,
+                [1.0, 0.88, 0.48],
+                Vec2::new(10.0, 3.0),
+            );
         }
 
         "FLAMETHROWER" => {
-            set_ranged(def, 2, 5, 250.0, 0.22, 0.35, 1.2, 5.0, 18.0,
-                [1.0, 0.55, 0.15], Vec2::new(10.0, 6.0));
+            set_ranged(
+                def,
+                2,
+                5,
+                250.0,
+                0.22,
+                0.35,
+                1.2,
+                5.0,
+                18.0,
+                [1.0, 0.55, 0.15],
+                Vec2::new(10.0, 6.0),
+            );
 
             set_fire_hazard(def, 34.0, 1, 0.8, 0.12);
         }
 
         "DRAGON" => {
-            set_ranged(def, 3, 7, 280.0, 0.28, 0.42, 2.0, 6.0, 25.0,
-                [1.0, 0.4, 0.08], Vec2::new(12.0, 7.0));
+            set_ranged(
+                def,
+                3,
+                7,
+                280.0,
+                0.28,
+                0.42,
+                2.0,
+                6.0,
+                25.0,
+                [1.0, 0.4, 0.08],
+                Vec2::new(12.0, 7.0),
+            );
 
             set_fire_hazard(def, 40.0, 1, 1.0, 0.12);
         }
 
         "FLARE GUN" => {
-            set_ranged(def, 10, 1, 300.0, 1.1, 0.12, 6.0, 6.0, 90.0,
-                [1.0, 0.32, 0.1], Vec2::splat(10.0));
+            set_ranged(
+                def,
+                10,
+                1,
+                300.0,
+                1.1,
+                0.12,
+                6.0,
+                6.0,
+                90.0,
+                [1.0, 0.32, 0.1],
+                Vec2::splat(10.0),
+            );
 
             set_fire_hazard(def, 42.0, 2, 1.5, 0.18);
         }
 
         "HYPER LAUNCHER" => {
-            set_explosive(def, 7, 2, 480.0, 0.65, 0.05, 6.0, 6.0, 100.0,
-                [1.0, 0.5, 0.16], Vec2::splat(9.0));
+            set_explosive(
+                def,
+                7,
+                2,
+                480.0,
+                0.65,
+                0.05,
+                6.0,
+                6.0,
+                100.0,
+                [1.0, 0.5, 0.16],
+                Vec2::splat(9.0),
+            );
         }
 
         "LASER CANNON" => {
-            set_ranged(def, 18, 1, 980.0, 0.7, 0.012, 10.0, 6.0, 130.0,
-                [1.0, 0.16, 0.12], Vec2::new(28.0, 5.0));
+            set_ranged(
+                def,
+                18,
+                1,
+                980.0,
+                0.7,
+                0.012,
+                10.0,
+                6.0,
+                130.0,
+                [1.0, 0.16, 0.12],
+                Vec2::new(28.0, 5.0),
+            );
 
             def.pierce = 6;
         }
 
         "RUSTY REVOLVER" => {
-            set_ranged(def, 2, 1, 510.0, 0.8, 0.12, 3.0, 4.0, 55.0,
-                [0.67, 0.48, 0.31], Vec2::new(9.0, 3.0));
+            set_ranged(
+                def,
+                2,
+                1,
+                510.0,
+                0.8,
+                0.12,
+                3.0,
+                4.0,
+                55.0,
+                [0.67, 0.48, 0.31],
+                Vec2::new(9.0, 3.0),
+            );
         }
 
         "LIGHTNING PISTOL" => {
-            set_ranged(def, 4, 1, 920.0, 0.35, 0.06, 2.5, 4.0, 25.0,
-                [0.75, 0.9, 1.0], Vec2::new(18.0, 4.0));
+            set_ranged(
+                def,
+                4,
+                1,
+                920.0,
+                0.35,
+                0.06,
+                2.5,
+                4.0,
+                25.0,
+                [0.75, 0.9, 1.0],
+                Vec2::new(18.0, 4.0),
+            );
 
             def.pierce = 1;
         }
 
         "LIGHTNING RIFLE" => {
-            set_ranged(def, 6, 1, 980.0, 0.42, 0.05, 4.0, 4.0, 35.0,
-                [0.7, 0.95, 1.0], Vec2::new(22.0, 4.0));
+            set_ranged(
+                def,
+                6,
+                1,
+                980.0,
+                0.42,
+                0.05,
+                4.0,
+                4.0,
+                35.0,
+                [0.7, 0.95, 1.0],
+                Vec2::new(22.0, 4.0),
+            );
 
             def.pierce = 2;
         }
 
         "LIGHTNING SHOTGUN" => {
-            set_ranged(def, 3, 8, 860.0, 0.26, 0.3, 7.0, 3.0, 20.0,
-                [0.75, 0.95, 1.0], Vec2::new(14.0, 3.0));
+            set_ranged(
+                def,
+                3,
+                8,
+                860.0,
+                0.26,
+                0.3,
+                7.0,
+                3.0,
+                20.0,
+                [0.75, 0.95, 1.0],
+                Vec2::new(14.0, 3.0),
+            );
 
             def.pierce = 1;
         }
 
         "LIGHTNING SMG" => {
-            set_ranged(def, 3, 1, 900.0, 0.32, 0.2, 2.0, 3.0, 18.0,
-                [0.72, 0.93, 1.0], Vec2::new(14.0, 3.0));
+            set_ranged(
+                def,
+                3,
+                1,
+                900.0,
+                0.32,
+                0.2,
+                2.0,
+                3.0,
+                18.0,
+                [0.72, 0.93, 1.0],
+                Vec2::new(14.0, 3.0),
+            );
 
             def.pierce = 1;
         }
 
         "LIGHTNING CANNON" => {
-            set_ranged(def, 15, 1, 520.0, 1.1, 0.08, 10.0, 9.0, 140.0,
-                [0.65, 0.9, 1.0], Vec2::splat(17.0));
+            set_ranged(
+                def,
+                15,
+                1,
+                520.0,
+                1.1,
+                0.08,
+                10.0,
+                9.0,
+                140.0,
+                [0.65, 0.9, 1.0],
+                Vec2::splat(17.0),
+            );
 
             def.pierce = 4;
         }
@@ -1169,25 +2160,69 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
         }
 
         "SAWED-OFF SHOTGUN" => {
-            set_ranged(def, 2, 20, 390.0, 0.28, 0.78, 14.0, 3.0, 35.0,
-                [1.0, 0.78, 0.28], Vec2::new(8.0, 3.0));
+            set_ranged(
+                def,
+                2,
+                20,
+                390.0,
+                0.28,
+                0.78,
+                14.0,
+                3.0,
+                35.0,
+                [1.0, 0.78, 0.28],
+                Vec2::new(8.0, 3.0),
+            );
         }
 
         "SMART GUN" => {
-            set_ranged(def, 3, 1, 480.0, 0.78, 0.087, 2.0, 4.0, 60.0,
-                [0.45, 0.85, 1.0], Vec2::new(12.0, 3.0));
+            set_ranged(
+                def,
+                3,
+                1,
+                480.0,
+                0.78,
+                0.087,
+                2.0,
+                4.0,
+                60.0,
+                [0.45, 0.85, 1.0],
+                Vec2::new(12.0, 3.0),
+            );
         }
 
         "HEAVY CROSSBOW" => {
-            set_ranged(def, 50, 1, 480.0, 1.3, 0.015, 10.0, 6.0, 250.0,
-                [0.84, 0.72, 0.3], Vec2::new(24.0, 6.0));
+            set_ranged(
+                def,
+                50,
+                1,
+                480.0,
+                1.3,
+                0.015,
+                10.0,
+                6.0,
+                250.0,
+                [0.84, 0.72, 0.3],
+                Vec2::new(24.0, 6.0),
+            );
 
             def.pierce = 5;
         }
 
         "HEAVY AUTO CROSSBOW" => {
-            set_ranged(def, 50, 1, 480.0, 1.0, 0.12, 6.5, 5.0, 140.0,
-                [1.0, 0.88, 0.5], Vec2::new(16.0, 5.0));
+            set_ranged(
+                def,
+                50,
+                1,
+                480.0,
+                1.0,
+                0.12,
+                6.5,
+                5.0,
+                140.0,
+                [1.0, 0.88, 0.5],
+                Vec2::new(16.0, 5.0),
+            );
 
             def.pierce = 2;
         }
@@ -1197,49 +2232,126 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
         }
 
         "POP GUN" => {
-            set_ranged(def, 2, 1, 560.0, 0.52, 0.07, 2.0, 3.0, 20.0,
-                [1.0, 0.72, 0.85], Vec2::new(8.0, 3.0));
+            set_ranged(
+                def,
+                2,
+                1,
+                560.0,
+                0.52,
+                0.07,
+                2.0,
+                3.0,
+                20.0,
+                [1.0, 0.72, 0.85],
+                Vec2::new(8.0, 3.0),
+            );
         }
 
         "POP RIFLE" => {
-            set_ranged(def, 2, 1, 610.0, 0.6, 0.08, 3.0, 3.0, 30.0,
-                [1.0, 0.72, 0.85], Vec2::new(10.0, 3.0));
+            set_ranged(
+                def,
+                2,
+                1,
+                610.0,
+                0.6,
+                0.08,
+                3.0,
+                3.0,
+                30.0,
+                [1.0, 0.72, 0.85],
+                Vec2::new(10.0, 3.0),
+            );
 
             def.burst_shots = 3;
             def.burst_interval = 2.0 / 30.0;
         }
 
         "TOXIC LAUNCHER" => {
-            set_explosive(def, 7, 1, 340.0, 0.7, 0.05, 9.0, 7.0, 170.0,
-                [0.45, 0.9, 0.4], Vec2::splat(11.0));
+            set_explosive(
+                def,
+                7,
+                1,
+                340.0,
+                0.7,
+                0.05,
+                9.0,
+                7.0,
+                170.0,
+                [0.45, 0.9, 0.4],
+                Vec2::splat(11.0),
+            );
 
             set_toxic_hazard(def, 56.0, 1, 2.4, 0.25);
         }
 
         "FLAME CANNON" => {
-            set_ranged(def, 9, 1, 300.0, 0.45, 0.14, 8.0, 7.0, 110.0,
-                [1.0, 0.5, 0.18], Vec2::splat(12.0));
+            set_ranged(
+                def,
+                9,
+                1,
+                300.0,
+                0.45,
+                0.14,
+                8.0,
+                7.0,
+                110.0,
+                [1.0, 0.5, 0.18],
+                Vec2::splat(12.0),
+            );
 
             set_fire_hazard(def, 48.0, 1, 1.1, 0.15);
         }
 
         "FLAME SHOTGUN" => {
-            set_ranged(def, 2, 6, 300.0, 0.24, 0.42, 4.0, 4.0, 22.0,
-                [1.0, 0.55, 0.18], Vec2::new(9.0, 5.0));
+            set_ranged(
+                def,
+                2,
+                6,
+                300.0,
+                0.24,
+                0.42,
+                4.0,
+                4.0,
+                22.0,
+                [1.0, 0.55, 0.18],
+                Vec2::new(9.0, 5.0),
+            );
 
             set_fire_hazard(def, 32.0, 1, 0.8, 0.12);
         }
 
         "DOUBLE FLAME SHOTGUN" => {
-            set_ranged(def, 2, 14, 300.0, 0.24, 0.5, 6.5, 4.0, 25.0,
-                [1.0, 0.55, 0.2], Vec2::new(9.0, 5.0));
+            set_ranged(
+                def,
+                2,
+                14,
+                300.0,
+                0.24,
+                0.5,
+                6.5,
+                4.0,
+                25.0,
+                [1.0, 0.55, 0.2],
+                Vec2::new(9.0, 5.0),
+            );
 
             set_fire_hazard(def, 34.0, 1, 0.9, 0.12);
         }
 
         "AUTO FLAME SHOTGUN" => {
-            set_ranged(def, 2, 6, 300.0, 0.22, 0.35, 3.5, 4.0, 20.0,
-                [1.0, 0.58, 0.2], Vec2::new(9.0, 5.0));
+            set_ranged(
+                def,
+                2,
+                6,
+                300.0,
+                0.22,
+                0.35,
+                3.5,
+                4.0,
+                20.0,
+                [1.0, 0.58, 0.2],
+                Vec2::new(9.0, 5.0),
+            );
 
             set_fire_hazard(def, 30.0, 1, 0.75, 0.12);
         }
@@ -1250,8 +2362,19 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
             // `alarm[0] = 30` (1.0 s fuse), `damage = 7`, `knockback_speed = 10`
             // (300 px/s) and inherits `Grenade/Collision_Wall.gml:18-19` - it bounces
             // at `speed *= 0.6` instead of detonating.
-            set_explosive(def, 7, 1, 240.0, 1.0, 0.14, 9.0, 7.0, 300.0,
-                [1.0, 0.62, 0.22], Vec2::splat(11.0));
+            set_explosive(
+                def,
+                7,
+                1,
+                240.0,
+                1.0,
+                0.14,
+                9.0,
+                7.0,
+                300.0,
+                [1.0, 0.62, 0.22],
+                Vec2::splat(11.0),
+            );
             def.bounces = 255;
 
             // GML `ClusterNade/Destroy_0.gml:1-13`: `8 + Death-crown`
@@ -1260,23 +2383,66 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
             // `SmallGrenade/Create_0.gml` is a `Grenade` child: damage 5,
             // `alarm[0] = irandom_range(10, 20)`, `knockback_speed = 10` (300 px/s),
             // `Collision_Wall` destroys it outright.
-            set_split(def, 8, std::f32::consts::PI, 120.0, 5, 15.0 / 30.0, 3.0, 300.0,
-                [1.0, 0.78, 0.38], Vec2::splat(7.0));
+            set_split(
+                def,
+                8,
+                std::f32::consts::PI,
+                120.0,
+                5,
+                15.0 / 30.0,
+                3.0,
+                300.0,
+                [1.0, 0.78, 0.38],
+                Vec2::splat(7.0),
+            );
         }
 
         "GRENADE SHOTGUN" => {
-            set_explosive(def, 4, 4, 360.0, 0.5, 0.3, 9.0, 5.0, 70.0,
-                [1.0, 0.62, 0.22], Vec2::splat(8.0));
+            set_explosive(
+                def,
+                4,
+                4,
+                360.0,
+                0.5,
+                0.3,
+                9.0,
+                5.0,
+                70.0,
+                [1.0, 0.62, 0.22],
+                Vec2::splat(8.0),
+            );
         }
 
         "AUTO GRENADE SHOTGUN" => {
-            set_explosive(def, 4, 3, 360.0, 0.46, 0.26, 6.0, 5.0, 65.0,
-                [1.0, 0.62, 0.22], Vec2::splat(8.0));
+            set_explosive(
+                def,
+                4,
+                3,
+                360.0,
+                0.46,
+                0.26,
+                6.0,
+                5.0,
+                65.0,
+                [1.0, 0.62, 0.22],
+                Vec2::splat(8.0),
+            );
         }
 
         "GRENADE RIFLE" => {
-            set_explosive(def, 5, 1, 405.0, 0.65, 0.07, 5.0, 5.0, 85.0,
-                [1.0, 0.61, 0.2], Vec2::splat(9.0));
+            set_explosive(
+                def,
+                5,
+                1,
+                405.0,
+                0.65,
+                0.07,
+                5.0,
+                5.0,
+                85.0,
+                [1.0, 0.61, 0.2],
+                Vec2::splat(9.0),
+            );
 
             // GML `NadeBurst`: 3 volleys (+Death-crown, resolved in the
             // fire path) at 2-tick intervals.
@@ -1285,73 +2451,205 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
         }
 
         "ROGUE RIFLE" => {
-            set_ranged(def, 3, 1, 480.0, 0.75, 0.033, 4.0, 4.0, 70.0,
-                [0.45, 0.8, 1.0], Vec2::new(14.0, 3.0));
+            set_ranged(
+                def,
+                3,
+                1,
+                480.0,
+                0.75,
+                0.033,
+                4.0,
+                4.0,
+                70.0,
+                [0.45, 0.8, 1.0],
+                Vec2::new(14.0, 3.0),
+            );
 
             def.burst_shots = 2;
             def.burst_interval = 2.0 / 30.0;
         }
 
         "PARTY GUN" => {
-            set_ranged(def, 4, 1, 240.0, 0.7, 0.14, 3.0, 4.0, 35.0,
-                [1.0, 0.38, 0.86], Vec2::splat(8.0));
+            set_ranged(
+                def,
+                4,
+                1,
+                240.0,
+                0.7,
+                0.14,
+                3.0,
+                4.0,
+                35.0,
+                [1.0, 0.38, 0.86],
+                Vec2::splat(8.0),
+            );
         }
 
         "DOUBLE MINIGUN" => {
-            set_ranged(def, 3, 2, 650.0, 0.68, 0.25, 3.0, 3.0, 38.0,
-                [1.0, 0.88, 0.48], Vec2::new(10.0, 3.0));
+            set_ranged(
+                def,
+                3,
+                2,
+                650.0,
+                0.68,
+                0.25,
+                3.0,
+                3.0,
+                38.0,
+                [1.0, 0.88, 0.48],
+                Vec2::new(10.0, 3.0),
+            );
         }
 
         "GATLING BAZOOKA" => {
-            set_explosive(def, 10, 1, 280.0, 1.2, 0.2, 8.0, 7.0, 180.0,
-                [1.0, 0.46, 0.13], Vec2::new(13.0, 7.0));
+            set_explosive(
+                def,
+                10,
+                1,
+                280.0,
+                1.2,
+                0.2,
+                8.0,
+                7.0,
+                180.0,
+                [1.0, 0.46, 0.13],
+                Vec2::new(13.0, 7.0),
+            );
         }
 
         "SEEKER PISTOL" => {
-            set_ranged(def, 9, 2, 240.0, 1.9, 0.52, 4.0, 4.0, 60.0,
-                [1.0, 0.55, 0.85], Vec2::new(11.0, 4.0));
+            set_ranged(
+                def,
+                9,
+                2,
+                240.0,
+                1.9,
+                0.52,
+                4.0,
+                4.0,
+                60.0,
+                [1.0, 0.55, 0.85],
+                Vec2::new(11.0, 4.0),
+            );
 
             def.pierce = 1;
         }
 
         "SEEKER SHOTGUN" => {
-            set_ranged(def, 9, 6, 240.0, 1.9, 1.22, 7.0, 4.0, 90.0,
-                [1.0, 0.55, 0.85], Vec2::new(11.0, 4.0));
+            set_ranged(
+                def,
+                9,
+                6,
+                240.0,
+                1.9,
+                1.22,
+                7.0,
+                4.0,
+                90.0,
+                [1.0, 0.55, 0.85],
+                Vec2::new(11.0, 4.0),
+            );
 
             def.pierce = 1;
         }
 
         "FROG PISTOL" | "GOLDEN FROG PISTOL" => {
-            set_ranged(def, 2, 3, 360.0, 1.0, 0.105, 4.0, 4.0, 60.0,
-                [0.5, 0.9, 0.4], Vec2::new(8.0, 4.0));
+            set_ranged(
+                def,
+                2,
+                3,
+                360.0,
+                1.0,
+                0.105,
+                4.0,
+                4.0,
+                60.0,
+                [0.5, 0.9, 0.4],
+                Vec2::new(8.0, 4.0),
+            );
         }
 
         "HYPER SLUGGER" => {
-            set_ranged(def, 26, 1, 360.0, 0.7, 0.035, 16.0, 11.0, 260.0,
-                [1.0, 0.85, 0.4], Vec2::new(16.0, 6.0));
+            set_ranged(
+                def,
+                26,
+                1,
+                360.0,
+                0.7,
+                0.035,
+                16.0,
+                11.0,
+                260.0,
+                [1.0, 0.85, 0.4],
+                Vec2::new(16.0, 6.0),
+            );
         }
 
         "HEAVY ASSAULT RIFLE" => {
-            set_ranged(def, 7, 1, 480.0, 0.85, 0.018, 7.0, 4.5, 140.0,
-                [1.0, 0.88, 0.35], Vec2::new(12.0, 3.5));
+            set_ranged(
+                def,
+                7,
+                1,
+                480.0,
+                0.85,
+                0.018,
+                7.0,
+                4.5,
+                140.0,
+                [1.0, 0.88, 0.35],
+                Vec2::new(12.0, 3.5),
+            );
 
             def.burst_shots = 3;
             def.burst_interval = 2.0 / 30.0;
         }
 
         "ERASER" => {
-            set_ranged(def, 2, 17, 420.0, 0.35, 0.017, 7.0, 3.0, 40.0,
-                [0.9, 0.95, 1.0], Vec2::new(14.0, 3.0));
+            set_ranged(
+                def,
+                2,
+                17,
+                420.0,
+                0.35,
+                0.017,
+                7.0,
+                3.0,
+                40.0,
+                [0.9, 0.95, 1.0],
+                Vec2::new(14.0, 3.0),
+            );
         }
 
         "HEAVY REVOLVER" => {
-            set_ranged(def, 7, 1, 720.0, 0.95, 0.02, 9.0, 4.5, 140.0,
-                [1.0, 0.9, 0.4], Vec2::new(12.0, 4.0));
+            set_ranged(
+                def,
+                7,
+                1,
+                720.0,
+                0.95,
+                0.02,
+                9.0,
+                4.5,
+                140.0,
+                [1.0, 0.9, 0.4],
+                Vec2::new(12.0, 4.0),
+            );
         }
 
         "HEAVY MACHINEGUN" => {
-            set_ranged(def, 7, 1, 700.0, 0.85, 0.07, 4.5, 4.0, 70.0,
-                [1.0, 0.88, 0.35], Vec2::new(12.0, 3.5));
+            set_ranged(
+                def,
+                7,
+                1,
+                700.0,
+                0.85,
+                0.07,
+                4.5,
+                4.0,
+                70.0,
+                [1.0, 0.88, 0.35],
+                Vec2::new(12.0, 3.5),
+            );
         }
 
         "SLEDGEHAMMER" => {
@@ -1362,8 +2660,19 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
             // GML `scrFire.gml:789-796`: the arm is only
             // `instance_create(x, y, DogSpinAttack) { team; creator; ammo = 15 }`
             // - no projectile, no `scr_weapon_post`, no screen shake.
-            set_ranged(def, 0, 1, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0,
-                [0.9, 0.9, 0.9], Vec2::splat(1.0));
+            set_ranged(
+                def,
+                0,
+                1,
+                1.0,
+                1.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                [0.9, 0.9, 0.9],
+                Vec2::splat(1.0),
+            );
             def.shake = 0.0;
         }
 
@@ -1376,29 +2685,84 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
         }
 
         "HEAVY SLUGGER" => {
-            set_ranged(def, 60, 1, 390.0, 0.7, 0.07, 34.0, 14.0, 320.0,
-                [1.0, 0.85, 0.4], Vec2::new(16.0, 6.0));
+            set_ranged(
+                def,
+                60,
+                1,
+                390.0,
+                0.7,
+                0.07,
+                34.0,
+                14.0,
+                320.0,
+                [1.0, 0.85, 0.4],
+                Vec2::new(16.0, 6.0),
+            );
         }
 
         "HEAVY CROSSBOW" | "HEAVY AUTO CROSSBOW" => {
-            set_ranged(def, 50, 1, 480.0, 1.1, 0.025, 50.0, 6.0, 220.0,
-                [1.0, 0.9, 0.5], Vec2::new(18.0, 5.0));
+            set_ranged(
+                def,
+                50,
+                1,
+                480.0,
+                1.1,
+                0.025,
+                50.0,
+                6.0,
+                220.0,
+                [1.0, 0.9, 0.5],
+                Vec2::new(18.0, 5.0),
+            );
             def.pierce = 5;
         }
 
         "ULTRA REVOLVER" => {
-            set_ranged(def, 18, 1, 720.0, 0.8, 0.05, 12.0, 6.0, 160.0,
-                [0.95, 0.4, 1.0], Vec2::new(12.0, 4.0));
+            set_ranged(
+                def,
+                18,
+                1,
+                720.0,
+                0.8,
+                0.05,
+                12.0,
+                6.0,
+                160.0,
+                [0.95, 0.4, 1.0],
+                Vec2::new(12.0, 4.0),
+            );
         }
 
         "ULTRA SHOTGUN" => {
-            set_ranged(def, 6, 9, 450.0, 0.34, 0.38, 44.0, 5.0, 90.0,
-                [0.95, 0.5, 1.0], Vec2::new(8.0, 3.0));
+            set_ranged(
+                def,
+                6,
+                9,
+                450.0,
+                0.34,
+                0.38,
+                44.0,
+                5.0,
+                90.0,
+                [0.95, 0.5, 1.0],
+                Vec2::new(8.0, 3.0),
+            );
         }
 
         "SUPER PLASMA CANNON" => {
-            set_explosive(def, 25, 1, 120.0, 2.5, 0.02, 40.0, 15.0, 400.0,
-                [0.4, 1.0, 0.5], Vec2::splat(24.0));
+            set_explosive(
+                def,
+                25,
+                1,
+                120.0,
+                2.5,
+                0.02,
+                40.0,
+                15.0,
+                400.0,
+                [0.4, 1.0, 0.5],
+                Vec2::splat(24.0),
+            );
         }
 
         _ => {}
@@ -1737,7 +3101,10 @@ pub fn weapon_def(kind: WeaponKind) -> WeaponDef {
             explosive: false,
             burst_shots: 1,
             burst_interval: 0.0,
-            melee: Some(MeleeDef { range: 70.0, arc: 2.2 }),
+            melee: Some(MeleeDef {
+                range: 70.0,
+                arc: 2.2,
+            }),
             color: [0.7, 0.7, 0.75],
             size: Vec2::splat(20.0),
             muzzle_burst: 0,
@@ -1765,7 +3132,10 @@ pub fn weapon_def(kind: WeaponKind) -> WeaponDef {
             explosive: false,
             burst_shots: 1,
             burst_interval: 0.0,
-            melee: Some(MeleeDef { range: 96.0, arc: 2.6 }),
+            melee: Some(MeleeDef {
+                range: 96.0,
+                arc: 2.6,
+            }),
             color: [0.55, 0.5, 0.6],
             size: Vec2::splat(26.0),
             muzzle_burst: 0,

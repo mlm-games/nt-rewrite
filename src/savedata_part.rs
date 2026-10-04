@@ -604,10 +604,7 @@ impl Default for SaveData {
                 RaceLoadout {
                     // GML `scrInit.gml:162-163` verbatim: fresh saves hold
                     // Random, Fish and Crystal (`cgot` for all three).
-                    unlocked: matches!(
-                        r,
-                        crate::data::RaceId::Fish | crate::data::RaceId::Crystal
-                    ),
+                    unlocked: matches!(r, crate::data::RaceId::Fish | crate::data::RaceId::Crystal),
                     unlocked_skins: [true, false, false, false],
                     preferred_skin: 0,
                     stored_weapon: crate::data::WeaponId(0),
@@ -1537,8 +1534,7 @@ pub fn load_save_from_file(path: &Path) -> Result<SaveData, String> {
         .read(&legacy_path)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("save unavailable: {:?}", result.status))?;
-    let legacy_text =
-        std::str::from_utf8(&legacy_bytes).map_err(|e| e.to_string())?;
+    let legacy_text = std::str::from_utf8(&legacy_bytes).map_err(|e| e.to_string())?;
     let mut save: SaveData = serde_json::from_str(legacy_text).map_err(|e| e.to_string())?;
     save.sanitize_loadouts();
     save.version = SAVE_VERSION;
@@ -1565,8 +1561,7 @@ fn save_store(path: &Path) -> Result<SaveStore<FsStorage>, String> {
         .and_then(|name| name.to_str())
         .ok_or_else(|| "save path has no file name".to_string())?;
     let directory = path.parent().unwrap_or_else(|| Path::new("."));
-    Ok(SaveStore::new(directory, file_name)
-        .with_validator(SaveStore::<FsStorage>::is_intact_ron))
+    Ok(SaveStore::new(directory, file_name).with_validator(SaveStore::<FsStorage>::is_intact_ron))
 }
 
 // Skin unlocks: port of the GML skin-unlock scripts (all 8 items) - area,
@@ -1612,12 +1607,7 @@ pub fn check_area_skins(
             try_unlock_race_with_menu(save, RaceId::Venuz, menu.as_deref_mut());
         }
         AreaId::CursedCaves => {
-            try_unlock_letter_with_menu(
-                save,
-                RaceId::Crystal,
-                SkinLetter::B,
-                menu.as_deref_mut(),
-            );
+            try_unlock_letter_with_menu(save, RaceId::Crystal, SkinLetter::B, menu.as_deref_mut());
         }
         // Port `FrozenCity` is GML city (route floors 9-11): Robot.
         AreaId::FrozenCity => {
@@ -1633,12 +1623,7 @@ pub fn check_area_skins(
             try_unlock_race_with_menu(save, RaceId::Rebel, menu.as_deref_mut());
         }
         AreaId::HQ if skills_len <= 3 => {
-            try_unlock_letter_with_menu(
-                save,
-                RaceId::Horror,
-                SkinLetter::C,
-                menu.as_deref_mut(),
-            );
+            try_unlock_letter_with_menu(save, RaceId::Horror, SkinLetter::C, menu.as_deref_mut());
         }
         _ => {}
     }

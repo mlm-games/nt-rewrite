@@ -816,11 +816,8 @@ pub fn spawn_prop_death_effect(
         let mut rng = rand::rng();
         let (lo, hi) = (effect.bbox_min, effect.bbox_max);
         for _ in 0..effect.portal_l_ring {
-            let at = pos
-                + glam::Vec2::new(
-                    rng.random_range(lo.x..hi.x),
-                    rng.random_range(lo.y..hi.y),
-                );
+            let at =
+                pos + glam::Vec2::new(rng.random_range(lo.x..hi.x), rng.random_range(lo.y..hi.y));
             spawn_motes(commands, catalog, particles_on, at, MoteStrip::PortalL, 1);
         }
     }
@@ -925,7 +922,10 @@ fn spawn_native_dust_mote_vel(
     commands.spawn((
         GameCleanup,
         LevelCleanup,
-        GroundPhysics { vel, rotspeed: spin },
+        GroundPhysics {
+            vel,
+            rotspeed: spin,
+        },
         FxAngle(rng.random_range(0.0..std::f32::consts::TAU)),
         Mote {
             friction: 0.3,
@@ -1430,13 +1430,7 @@ pub fn tick_ground_flames(
         .collect();
     for (mut flame, mut image, mut pos) in &mut sets.p0() {
         if flame.launch != glam::Vec2::ZERO {
-            crate::spatial::move_contact_solid(
-                &mut pos.0,
-                flame.launch,
-                0.0,
-                &wall_shapes,
-                None,
-            );
+            crate::spatial::move_contact_solid(&mut pos.0, flame.launch, 0.0, &wall_shapes, None);
             flame.launch = glam::Vec2::ZERO;
         }
         if flame.disappearing {

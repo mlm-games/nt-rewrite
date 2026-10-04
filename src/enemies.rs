@@ -27,20 +27,18 @@ use crate::combat::{
 };
 use crate::comps_a::{
     ARENA_H, ARENA_W, BossIntro, BouncesLeft, CurrentFrame, DamageSource, DogGuardianLeap,
-    DogGuardianPose, Euphoria, FireCooldown,
-    FloorMask, GameCleanup, Health, HeavyHeart, Hitbox, Homing, LevelCleanup, NextHurt, Player,
-    Projectile, ProjectileFade, ProjectileFriction, ProjectileTyp, ProjectileVisual, Run,
-    ScarierFace, ShellWallBounce, SplitOnDeath, Team, Toast, Velocity, WallCell, WallTile,
-    apply_gml_friction, gml_motion_add_clamp,
+    DogGuardianPose, Euphoria, FireCooldown, FloorMask, GameCleanup, Health, HeavyHeart, Hitbox,
+    Homing, LevelCleanup, NextHurt, Player, Projectile, ProjectileFade, ProjectileFriction,
+    ProjectileTyp, ProjectileVisual, Run, ScarierFace, ShellWallBounce, SplitOnDeath, Team, Toast,
+    Velocity, WallCell, WallTile, apply_gml_friction, gml_motion_add_clamp,
 };
 use crate::comps_b::{
     BossBrain, Corpse, CorpseCollision, CrownPedestal, EliteBlocker, Enemy, EnemyBrain, FxAngle,
-    GmlImage,
-    HitWarning, HurtAnim, IdpdShieldUnit, IdpdVanBrain, LilHunterDie, MaggotSpawnCharge,
+    GmlImage, HitWarning, HurtAnim, IdpdShieldUnit, IdpdVanBrain, LilHunterDie, MaggotSpawnCharge,
     MaggotSpawnInternalDrain, MomShot, NativeAngle, NativeDepth, PendingDelayedBoss, Pickup,
     PickupLifetime, PopoNadeM, PopoShieldM, PortalClear, Prop, PropSprites, ProtoGuardian,
-    SCRAP_BOSS_MISSILE_RADIUS, SpecialPropDeath, YvCouch,
-    ScrapBossMissileState, ShieldFollower, StaticFx, ThroneBall, ToxicGasState,
+    SCRAP_BOSS_MISSILE_RADIUS, ScrapBossMissileState, ShieldFollower, SpecialPropDeath, StaticFx,
+    ThroneBall, ToxicGasState, YvCouch,
 };
 use crate::data::{AreaId, EnemyKind, SplitDef};
 use crate::effects::{HitStop, spawn_burst};
@@ -278,11 +276,14 @@ fn spawn_enemy_impl(
     // GML `Create_0` `alarm[1]`, in frames. `random(n)` yields 0..n-1.
     let attack_frames = match kind {
         EnemyKind::MaggotSpawn | EnemyKind::FiredMaggot => 0.0,
-        EnemyKind::Rat | EnemyKind::Bandit | EnemyKind::SnowBandit
-        | EnemyKind::JungleBandit => 30.0 + rng.random_range(0.0..90.0),
+        EnemyKind::Rat | EnemyKind::Bandit | EnemyKind::SnowBandit | EnemyKind::JungleBandit => {
+            30.0 + rng.random_range(0.0..90.0)
+        }
         EnemyKind::FastRat | EnemyKind::Ratking => 1.0 + rng.random_range(0.0..90.0),
         EnemyKind::RobotGuard => 80.0,
-        EnemyKind::Maggot | EnemyKind::RadMaggot | EnemyKind::FireBaller
+        EnemyKind::Maggot
+        | EnemyKind::RadMaggot
+        | EnemyKind::FireBaller
         | EnemyKind::SuperFireBaller => 10.0 + rng.random_range(0.0..10.0),
         EnemyKind::BigMaggot => 45.0 + rng.random_range(0.0..10.0),
         EnemyKind::JungleFly => 50.0 + rng.random_range(0.0..10.0),
@@ -355,7 +356,11 @@ fn spawn_enemy_impl(
         strafe_timer: GTimer::from_seconds(rng.random_range(0.8..1.6), TimerMode::Once),
         melee: ready_timer(),
         wkick: 0.0,
-        walk: if kind == EnemyKind::IdpdElite { 30.0 } else { 0.0 },
+        walk: if kind == EnemyKind::IdpdElite {
+            30.0
+        } else {
+            0.0
+        },
         slash_delay: 0.0,
         ammo: match kind {
             EnemyKind::Scorpion | EnemyKind::GoldScorpion => 10,
@@ -380,7 +385,11 @@ fn spawn_enemy_impl(
         fuel: 100.0,
         // GML `Create_0` `freeze`: Grunt/EliteGrunt/Inspector 0,
         // Shielder 20.
-        freeze: if kind == EnemyKind::IdpdShield { 20.0 } else { 0.0 },
+        freeze: if kind == EnemyKind::IdpdShield {
+            20.0
+        } else {
+            0.0
+        },
         last_seen: pos,
         right: if rng.random_bool(0.5) { 1.0 } else { -1.0 },
         control: false,
@@ -629,12 +638,7 @@ fn has_dedicated_tick(kind: EnemyKind) -> bool {
 /// GML `collision_line(x, y, target.x, target.y, Wall, 0, 0) < 0` plus each
 /// object's own `Alarm_1` fire condition, in GML short-circuit order so the
 /// roll sequence matches.
-fn gml_wants_fire(
-    kind: EnemyKind,
-    los: bool,
-    dist: f32,
-    rng: &mut rand::rngs::ThreadRng,
-) -> bool {
+fn gml_wants_fire(kind: EnemyKind, los: bool, dist: f32, rng: &mut rand::rngs::ThreadRng) -> bool {
     if !los {
         return false;
     }
@@ -1014,10 +1018,7 @@ fn gml_drift_stops_while_firing(kind: EnemyKind) -> bool {
 fn gml_walk_never_decrements(kind: EnemyKind) -> bool {
     matches!(
         kind,
-        EnemyKind::Freak
-            | EnemyKind::ExploFreak
-            | EnemyKind::RhinoFreak
-            | EnemyKind::ExploGuardian
+        EnemyKind::Freak | EnemyKind::ExploFreak | EnemyKind::RhinoFreak | EnemyKind::ExploGuardian
     )
 }
 
@@ -1097,7 +1098,15 @@ fn integrate_verbatim(
     // normal component, which is what `Maggot/Collision_Wall.gml:4` and
     // `JungleFly/Collision_Wall.gml:4` ask for. Every other law passes `true`.
     let bounce = matches!(law, EnemyWallLaw::Parent | EnemyWallLaw::PlainBounce);
-    let contact = move_bounce_solid(&mut pos.0, &mut vel.0, radius, dt, solids, Some(mask), bounce);
+    let contact = move_bounce_solid(
+        &mut pos.0,
+        &mut vel.0,
+        radius,
+        dt,
+        solids,
+        Some(mask),
+        bounce,
+    );
 
     if parent && contact.is_some() {
         let post_speed = vel.0.length();
@@ -1447,7 +1456,8 @@ fn gml_alarm_2_volley(
                         entity,
                         kind,
                         epos,
-                        glam::Vec2::from_angle(ang) * ((5.0 + rnd(rng, 2.0)) * crate::SIM_HZ as f32),
+                        glam::Vec2::from_angle(ang)
+                            * ((5.0 + rnd(rng, 2.0)) * crate::SIM_HZ as f32),
                         2,
                         3.0,
                         4.0,
@@ -1561,7 +1571,8 @@ fn gml_alarm_2_volley(
                         entity,
                         kind,
                         epos,
-                        glam::Vec2::from_angle(ang) * ((4.0 + rnd(rng, 3.0)) * crate::SIM_HZ as f32),
+                        glam::Vec2::from_angle(ang)
+                            * ((4.0 + rnd(rng, 3.0)) * crate::SIM_HZ as f32),
                         3,
                         3.0,
                         4.0,
@@ -1610,8 +1621,10 @@ fn hostile_horror_spray(
         brain.charge = 0.0;
         return;
     }
-    brain.gunangle =
-        (player_pos.y - epos.y).atan2(player_pos.x - epos.x).to_degrees() + brain.gunoffset;
+    brain.gunangle = (player_pos.y - epos.y)
+        .atan2(player_pos.x - epos.x)
+        .to_degrees()
+        + brain.gunoffset;
     let cost = (brain.charge + 1.0).round() as usize;
     if enemy.rad_drop >= cost {
         enemy.rad_drop -= cost;
@@ -2035,12 +2048,7 @@ fn hostile_horror_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized
 
 /// GML `Maggot/Alarm_1` / `RadMaggot/Alarm_1` / `SuperFrog/Alarm_1`: turn on
 /// sight, otherwise scatter. The maggot's own ticker uses the same shape.
-fn maggot_alarm_1(
-    d: &mut GmlDecide<'_>,
-    rng: &mut (impl RngExt + ?Sized),
-    base: f32,
-    spread: f32,
-) {
+fn maggot_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized), base: f32, spread: f32) {
     d.arm(base + rnd(rng, spread));
     if d.sees {
         d.direction(d.toward() + (rnd(rng, 20.0) - 10.0).to_radians());
@@ -2320,7 +2328,16 @@ pub fn enemy_ai(
     dog_leaps.retain(|e, _| positions.iter().any(|(pe, ..)| pe == e));
 
     for (
-        entity, mut enemy, mut brain, mut vel, mut pos, health, boss, mut anim, hurt, mut dog_pose,
+        entity,
+        mut enemy,
+        mut brain,
+        mut vel,
+        mut pos,
+        health,
+        boss,
+        mut anim,
+        hurt,
+        mut dog_pose,
         mut next_hurt,
     ) in &mut enemies
     {
@@ -2728,8 +2745,24 @@ pub fn enemy_ai(
                 vel.0 = glam::Vec2::ZERO;
             }
             if brain.friction > 0.0 {
-                vel.0.x = wall_probe_axis(pos.0, def.radius, vel.0.x, true, brain.friction, &solids, &mask);
-                vel.0.y = wall_probe_axis(pos.0, def.radius, vel.0.y, false, brain.friction, &solids, &mask);
+                vel.0.x = wall_probe_axis(
+                    pos.0,
+                    def.radius,
+                    vel.0.x,
+                    true,
+                    brain.friction,
+                    &solids,
+                    &mask,
+                );
+                vel.0.y = wall_probe_axis(
+                    pos.0,
+                    def.radius,
+                    vel.0.y,
+                    false,
+                    brain.friction,
+                    &solids,
+                    &mask,
+                );
             }
         } else if matches!(law, EnemyWallLaw::SlidePush)
             && let Some(contact) = contact
@@ -2847,10 +2880,7 @@ pub fn enemy_ai(
                         brain.burst_left = 16;
                         brain.burst_timer = GTimer::from_seconds(2.0 / 30.0, TimerMode::Once);
                         brain.strafe_dir = 0.0;
-                    } else if matches!(
-                        enemy.kind,
-                        EnemyKind::Guardian | EnemyKind::ExploGuardian
-                    ) {
+                    } else if matches!(enemy.kind, EnemyKind::Guardian | EnemyKind::ExploGuardian) {
                         // GML creates the whole volley in the alarm itself:
                         // Guardian 3 bullets (centre + 40 deg pair), ExploGuardian
                         // 14 bullets 24 deg apart.
@@ -4758,8 +4788,8 @@ pub fn tick_jungle_bandit(
                             &mut brain,
                             &mut vel,
                             target_dir
-                            + std::f32::consts::PI
-                            + rng.random_range(-10.0_f32..10.0).to_radians(),
+                                + std::f32::consts::PI
+                                + rng.random_range(-10.0_f32..10.0).to_radians(),
                         );
                         set_gml_speed(&mut brain, &mut vel, 0.4);
                         brain.walk = 40.0 + rng.random_range(0.0..10.0);
@@ -6026,11 +6056,7 @@ pub fn tick_scrap_missiles(
                 hurt: "images/sprScrapBossMissileHurt.png",
                 timer: GTimer::from_seconds(50.0 / 30.0, TimerMode::Once),
                 was_moving: false,
-                rate: anim
-                    .as_deref()
-                    .map(|a| a.fps)
-                    .unwrap_or(1.0)
-                    .max(1.0),
+                rate: anim.as_deref().map(|a| a.fps).unwrap_or(1.0).max(1.0),
             });
         }
 
@@ -6514,8 +6540,7 @@ pub fn tick_popo_rolls(
                         2.0,
                     );
                     brain.ammo -= 1;
-                    brain.burst_timer =
-                        GTimer::from_seconds(3.0 / 30.0, TimerMode::Once);
+                    brain.burst_timer = GTimer::from_seconds(3.0 / 30.0, TimerMode::Once);
                 } else {
                     brain.burst_timer = GTimer::disarmed();
                 }
@@ -6559,13 +6584,7 @@ pub fn tick_popo_rolls(
                 if dist < 64.0 && rng.random_range(0.0..4.0) < 3.0 {
                     brain.gunangle = aim;
                     brain.roll = false;
-                    gml_motion_add_clamp(
-                        &mut vel.0,
-                        glam::Vec2::from_angle(aim),
-                        10.0,
-                        3.0,
-                        dt,
-                    );
+                    gml_motion_add_clamp(&mut vel.0, glam::Vec2::from_angle(aim), 10.0, 3.0, dt);
                     brain.walk = 20.0 + rng.random_range(0.0..10.0);
                     brain.right = gml_right_from_hspeed(vel.0);
                     next /= 3.0;
@@ -6576,7 +6595,8 @@ pub fn tick_popo_rolls(
                         rng.random_range(70.0..=130.0)
                             * if rng.random_bool(0.5) { 1.0 } else { -1.0 }
                     };
-                    *headings.get_mut(&entity).unwrap() = glam::Vec2::from_angle(aim + turn.to_radians());
+                    *headings.get_mut(&entity).unwrap() =
+                        glam::Vec2::from_angle(aim + turn.to_radians());
                     vel.0 = glam::Vec2::from_angle(aim + turn.to_radians()) * 4.0 * 30.0;
                     brain.roll = true;
                     brain.roll_angle = 0.0;
@@ -6599,7 +6619,8 @@ pub fn tick_popo_rolls(
                         (70.0 + rng.random_range(0.0..60.0))
                             * if rng.random_bool(0.5) { 1.0 } else { -1.0 }
                     };
-                    *headings.get_mut(&entity).unwrap() = glam::Vec2::from_angle(aim + turn.to_radians());
+                    *headings.get_mut(&entity).unwrap() =
+                        glam::Vec2::from_angle(aim + turn.to_radians());
                     vel.0 = glam::Vec2::from_angle(aim + turn.to_radians()) * 4.0 * 30.0;
                     brain.roll = true;
                     brain.roll_angle = 0.0;
@@ -6661,7 +6682,8 @@ pub fn tick_popo_rolls(
                 } else {
                     180.0 + rng.random_range(-25.0..=25.0)
                 };
-                *headings.get_mut(&entity).unwrap() = glam::Vec2::from_angle(aim + turn.to_radians());
+                *headings.get_mut(&entity).unwrap() =
+                    glam::Vec2::from_angle(aim + turn.to_radians());
                 vel.0 = glam::Vec2::from_angle(aim + turn.to_radians()) * 0.4 * 30.0;
                 brain.walk = 10.0 + rng.random_range(0.0..10.0);
                 if brain.freeze < 40.0 {
@@ -6881,7 +6903,9 @@ pub fn tick_special_props(
     let dying: Vec<(Entity, glam::Vec2, SpecialPropDeath)> = props
         .iter()
         .filter_map(|(e, prop, pos, kind, _, _)| {
-            (prop.hp <= 0).then(|| kind.map(|k| (e, pos.0, *k))).flatten()
+            (prop.hp <= 0)
+                .then(|| kind.map(|k| (e, pos.0, *k)))
+                .flatten()
         })
         .collect();
     for (entity, at, kind) in dying {
@@ -6952,10 +6976,7 @@ pub fn tick_ice_flowers(
     mask: Res<FloorMask>,
     input: Res<crate::input::NtInput>,
     mut triggers: ResMut<crate::secrets::SecretTriggers>,
-    mut player_q: Query<
-        (&mut Player, &mut Pos, &mut Health),
-        (With<Player>, Without<Enemy>),
-    >,
+    mut player_q: Query<(&mut Player, &mut Pos, &mut Health), (With<Player>, Without<Enemy>)>,
     mut flowers: Query<
         (Entity, &mut Pos, &mut crate::progression::IceFlowerFeed),
         (With<Enemy>, Without<Player>),
@@ -7083,8 +7104,7 @@ pub fn tick_popo_gunners(
     males.retain(|e, _| enemies.contains(*e));
     let nades_live = nades.iter().count() as f32;
     // `Shielder/Alarm_2` opens fire only when it has no shield up.
-    let shielded: std::collections::HashSet<Entity> =
-        shields.iter().map(|s| s.creator).collect();
+    let shielded: std::collections::HashSet<Entity> = shields.iter().map(|s| s.creator).collect();
 
     for (entity, enemy, mut brain, mut vel, pos, health) in &mut enemies {
         let shielder = enemy.kind == EnemyKind::IdpdShield;
@@ -7104,7 +7124,13 @@ pub fn tick_popo_gunners(
 
         // GML `Other_10`
         if brain.walk > 0.0 {
-            gml_motion_add_clamp(&mut vel.0, heading, 0.8, if shielder { 3.5 } else { 3.0 }, dt);
+            gml_motion_add_clamp(
+                &mut vel.0,
+                heading,
+                0.8,
+                if shielder { 3.5 } else { 3.0 },
+                dt,
+            );
             brain.walk -= frames;
             if brain.walk < 0.0 {
                 brain.walk = 0.0;
@@ -7136,10 +7162,7 @@ pub fn tick_popo_gunners(
         // GML `Shielder/Alarm_2`
         if shielder {
             brain.burst_timer.tick(dt);
-            if brain.burst_timer.just_finished()
-                && brain.ammo > 0
-                && !shielded.contains(&entity)
-            {
+            if brain.burst_timer.just_finished() && brain.ammo > 0 && !shielded.contains(&entity) {
                 brain.wkick = 5.0;
                 gml_motion_add_clamp(
                     &mut vel.0,
@@ -7180,10 +7203,7 @@ pub fn tick_popo_gunners(
                 } else {
                     brain.right
                 };
-                if rng.random_range(0.0..2.0) < 1.0
-                    && brain.freeze > 40.0
-                    && dist <= 250.0
-                {
+                if rng.random_range(0.0..2.0) < 1.0 && brain.freeze > 40.0 && dist <= 250.0 {
                     brain.burst_timer = GTimer::from_seconds(2.0 / 30.0, TimerMode::Once);
                     brain.ammo = 8;
                     next = 50.0;
@@ -7220,10 +7240,7 @@ pub fn tick_popo_gunners(
                 brain.walk = 20.0 + rng.random_range(0.0..10.0);
                 brain.gunangle = a;
                 brain.right = gml_right_from_hspeed(vel.0);
-            } else if brain.freeze > 40.0
-                && rng.random_range(0.0..4.0) < 1.0
-                && dist < 96.0
-            {
+            } else if brain.freeze > 40.0 && rng.random_range(0.0..4.0) < 1.0 && dist < 96.0 {
                 enemy_cue(
                     &mut cues,
                     if male {
@@ -7305,8 +7322,8 @@ pub fn tick_popo_gunners(
             brain.right = gml_right_from_hspeed(vel.0);
         } else {
             let gate = rng.random_range(0.0..(5.0 + nades_live * 3.0)) < 1.0;
-            let near_last = brain.last_seen.distance(player_at) < 96.0
-                && epos.distance(brain.last_seen) > 64.0;
+            let near_last =
+                brain.last_seen.distance(player_at) < 96.0 && epos.distance(brain.last_seen) > 64.0;
             if gate
                 && brain.grenades > 0
                 && brain.freeze > 40.0
@@ -7383,7 +7400,13 @@ pub fn tick_popo_shields(
     mut owners: Query<&mut Pos, (With<Enemy>, Without<PopoShieldM>)>,
     mut timers: Query<&mut EnemyBrain, (With<Enemy>, Without<PopoShieldM>)>,
     mut shots: Query<
-        (Entity, &Pos, &mut Team, &mut Velocity, Option<&ProjectileTyp>),
+        (
+            Entity,
+            &Pos,
+            &mut Team,
+            &mut Velocity,
+            Option<&ProjectileTyp>,
+        ),
         (With<Projectile>, Without<Enemy>, Without<Player>),
     >,
 ) {
@@ -7403,8 +7426,7 @@ pub fn tick_popo_shields(
                 match typ.map(|t| t.0).unwrap_or(0) {
                     1 => {
                         *team = Team::Enemy;
-                        vel.0 = (ppos.0 - spos.0).normalize_or_zero()
-                            * vel.0.length().max(60.0);
+                        vel.0 = (ppos.0 - spos.0).normalize_or_zero() * vel.0.length().max(60.0);
                     }
                     2 => {
                         commands.entity(s).despawn();
@@ -7416,8 +7438,10 @@ pub fn tick_popo_shields(
         }
         // GML `Other_7`: the pop charges its owner's next decision.
         if let Ok(mut brain) = timers.get_mut(shield.creator) {
-            brain.attack =
-                GTimer::from_seconds((brain.attack.duration() + 20.0 / 30.0).max(0.0), TimerMode::Once);
+            brain.attack = GTimer::from_seconds(
+                (brain.attack.duration() + 20.0 / 30.0).max(0.0),
+                TimerMode::Once,
+            );
         }
         commands.entity(entity).despawn();
     }
@@ -7448,10 +7472,8 @@ pub fn tick_turrets(
     let dt = time.delta_secs;
     let mut rng = rand::rng();
     inited.retain(|e| enemies.contains(*e));
-    let wall_snapshot: Vec<(glam::Vec2, (i32, i32))> = walls
-        .iter()
-        .map(|(p, c)| (p.0, (c.0, c.1)))
-        .collect();
+    let wall_snapshot: Vec<(glam::Vec2, (i32, i32))> =
+        walls.iter().map(|(p, c)| (p.0, (c.0, c.1))).collect();
 
     for (entity, enemy, mut brain, mut vel, pos) in &mut enemies {
         if enemy.kind != EnemyKind::Turret {
@@ -7465,12 +7487,7 @@ pub fn tick_turrets(
             // the turret is embedded in, and it lands on this first step.
             brain.ammo = 0;
             brain.gunangle = rng.random_range(0.0..std::f32::consts::TAU);
-            crate::walls::queue_wall_breaks_in_radius(
-                &mut commands,
-                &wall_snapshot,
-                epos,
-                32.0,
-            );
+            crate::walls::queue_wall_breaks_in_radius(&mut commands, &wall_snapshot, epos, 32.0);
         }
 
         // GML `Other_10`: pinned in place, and dies off-floor.
@@ -7487,23 +7504,12 @@ pub fn tick_turrets(
                 brain.ammo -= 1;
                 brain.burst_timer = GTimer::from_seconds(3.0 / 30.0, TimerMode::Once);
                 let a = brain.gunangle + rng.random_range(-4.0..=4.0_f32).to_radians();
-                fire_popo_bullet(
-                    &mut commands,
-                    entity,
-                    enemy.kind,
-                    epos,
-                    a,
-                    8.0,
-                    0.0,
-                    0.0,
-                );
+                fire_popo_bullet(&mut commands, entity, enemy.kind, epos, a, 8.0, 0.0, 0.0);
                 enemy_cue(&mut cues, "sndTurretFire");
             } else {
                 // GML `Alarm_2:12-13`: back to idle and poll again soon.
-                brain.attack = GTimer::from_seconds(
-                    rng.random_range(10.0..=15.0) / 30.0,
-                    TimerMode::Once,
-                );
+                brain.attack =
+                    GTimer::from_seconds(rng.random_range(10.0..=15.0) / 30.0, TimerMode::Once);
             }
         }
 
@@ -7541,10 +7547,7 @@ pub fn tick_melee_fakes(
     mask: Res<FloorMask>,
     player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
     enemies: Query<&Pos, (With<Enemy>, Without<Player>)>,
-    fakes: Query<
-        (Entity, &Enemy, &Pos, &Health),
-        (With<Enemy>, Without<Player>, Without<Prop>),
-    >,
+    fakes: Query<(Entity, &Enemy, &Pos, &Health), (With<Enemy>, Without<Player>, Without<Prop>)>,
     portals: Query<(), (With<crate::comps_b::Portal>, Without<Enemy>)>,
 ) {
     if fakes.is_empty() {
@@ -7633,7 +7636,13 @@ pub fn tick_ratking(
         // GML `Other_10`
         if brain.walk > 0.0 {
             let cap = if brain.ratking_rage { 6.0 } else { 2.0 };
-            gml_motion_add_clamp(&mut vel.0, heading, if brain.ratking_rage { 1.5 } else { 0.5 }, cap, dt);
+            gml_motion_add_clamp(
+                &mut vel.0,
+                heading,
+                if brain.ratking_rage { 1.5 } else { 0.5 },
+                cap,
+                dt,
+            );
             brain.walk -= frames;
             if brain.walk < 0.0 {
                 brain.walk = 0.0;
@@ -7695,9 +7704,8 @@ pub fn tick_ratking(
                 // GML `RatkingRage/Alarm_1:11` `meleedamage = 4`.
                 enemy.touch_damage = 4;
                 brain.walk = 40.0 + rng.random_range(0.0..10.0);
-                let d = glam::Vec2::from_angle(
-                    aim + rng.random_range(-10.0..=10.0_f32).to_radians(),
-                );
+                let d =
+                    glam::Vec2::from_angle(aim + rng.random_range(-10.0..=10.0_f32).to_radians());
                 *headings.get_mut(&entity).unwrap() = d;
                 vel.0 = d * 0.4 * 30.0;
                 if player_pos.0.x < epos.x {
@@ -7722,7 +7730,11 @@ pub fn tick_ratking(
             vel.0 = glam::Vec2::ZERO;
             if dist < 64.0 {
                 brain.walk = 40.0 + rng.random_range(0.0..10.0);
-                let flip: f32 = if rng.random_range(0.0..3.0) < 2.0 { 180.0 } else { 0.0 };
+                let flip: f32 = if rng.random_range(0.0..3.0) < 2.0 {
+                    180.0
+                } else {
+                    0.0
+                };
                 d = away + rng.random_range(-20.0..=20.0_f32).to_radians() + flip.to_radians();
             }
             set_heading(&mut headings, entity, d);
@@ -8405,10 +8417,7 @@ fn separate(
         if epos.distance(*other) >= radius + *other_radius {
             continue;
         }
-        let jitter = glam::Vec2::new(
-            rng.random_range(-1.0..1.0),
-            rng.random_range(-1.0..1.0),
-        );
+        let jitter = glam::Vec2::new(rng.random_range(-1.0..1.0), rng.random_range(-1.0..1.0));
         let away = (epos - (*other + jitter)).normalize_or_zero();
         *vel += away * crate::SIM_HZ as f32;
     }
@@ -8645,22 +8654,22 @@ mod gml_motion_cap_tests {
     fn walk_law_caps_match_gml_other_10() {
         // (kind, GML `Other_10` `motion_add`, GML `if speed > N`)
         let table = [
-            (EnemyKind::Rat, 0.8, 4.0),          // `Rat/Other_10:3-5,8`
-            (EnemyKind::BigRat, 0.8, 4.0),       // port-scaled `Rat`
-            (EnemyKind::FastRat, 0.8, 4.5),      // `FastRat/Other_10:3-5,8`
-            (EnemyKind::BoneFish, 0.8, 4.0),     // `BoneFish/Other_10:3-5,8`
-            (EnemyKind::Raven, 0.8, 3.5),        // `Raven/Other_10:3-5,7`
-            (EnemyKind::Freak, 0.55, 4.0),       // `Freak/Other_10:5-7,9`
-            (EnemyKind::ExploFreak, 0.6, 3.0),   // `ExploFreak/Other_10:6-8,10`
-            (EnemyKind::RhinoFreak, 0.8, 1.0),   // `RhinoFreak/Other_10:6-8,10`
-            (EnemyKind::PopoFreak, 0.55, 4.5),   // `PopoFreak/Other_10:5-9`
-            (EnemyKind::Crab, 1.5, 4.5),         // `Crab/Other_10:3-5,7`
-            (EnemyKind::Turtle, 1.0, 5.0),       // `Turtle/Other_10:3-8`
-            (EnemyKind::Salamander, 2.0, 2.5),   // `Salamander/Other_10:3-5,7`
-            (EnemyKind::Wolf, 1.0, 3.5),         // `Wolf/Other_10:3-5,16`
+            (EnemyKind::Rat, 0.8, 4.0),           // `Rat/Other_10:3-5,8`
+            (EnemyKind::BigRat, 0.8, 4.0),        // port-scaled `Rat`
+            (EnemyKind::FastRat, 0.8, 4.5),       // `FastRat/Other_10:3-5,8`
+            (EnemyKind::BoneFish, 0.8, 4.0),      // `BoneFish/Other_10:3-5,8`
+            (EnemyKind::Raven, 0.8, 3.5),         // `Raven/Other_10:3-5,7`
+            (EnemyKind::Freak, 0.55, 4.0),        // `Freak/Other_10:5-7,9`
+            (EnemyKind::ExploFreak, 0.6, 3.0),    // `ExploFreak/Other_10:6-8,10`
+            (EnemyKind::RhinoFreak, 0.8, 1.0),    // `RhinoFreak/Other_10:6-8,10`
+            (EnemyKind::PopoFreak, 0.55, 4.5),    // `PopoFreak/Other_10:5-9`
+            (EnemyKind::Crab, 1.5, 4.5),          // `Crab/Other_10:3-5,7`
+            (EnemyKind::Turtle, 1.0, 5.0),        // `Turtle/Other_10:3-8`
+            (EnemyKind::Salamander, 2.0, 2.5),    // `Salamander/Other_10:3-5,7`
+            (EnemyKind::Wolf, 1.0, 3.5),          // `Wolf/Other_10:3-5,16`
             (EnemyKind::HostileHorror, 0.8, 4.5), // `HostileHorror/Other_10:3-5,8`
-            (EnemyKind::Spider, 2.0, 5.0),       // `Spider/Other_10:3-5,12` (maxspeed)
-            (EnemyKind::InvSpider, 2.0, 5.0),    // `InvSpider/Other_10:3-5,12`
+            (EnemyKind::Spider, 2.0, 5.0),        // `Spider/Other_10:3-5,12` (maxspeed)
+            (EnemyKind::InvSpider, 2.0, 5.0),     // `InvSpider/Other_10:3-5,12`
         ];
         for (kind, impulse, cap) in table {
             let (got_impulse, got_cap) = gml_walk_law(kind);

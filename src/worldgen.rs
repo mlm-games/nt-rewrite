@@ -1060,7 +1060,8 @@ fn generate_palace_last(run: &Run) -> LevelPlan {
     // sit 20 rows further up, and `NothingInactive` marks the far end.
     for sx in [176.0f32, -144.0f32] {
         for py in [-928.0f32, -1088.0f32] {
-            plan.props.push((PropKind::BigGeneratorInactive, Vec2::new(sx, py)));
+            plan.props
+                .push((PropKind::BigGeneratorInactive, Vec2::new(sx, py)));
         }
     }
     // GML :51-63: each inactive generator lays six `Floor`s. `bbox_top` of
@@ -1329,7 +1330,6 @@ fn generate_hq_last(run: &Run) -> LevelPlan {
     build_walls(run, &floors, &mut plan);
     plan
 }
-
 
 fn rebuild_population_events(plan: &mut LevelPlan, base_events: &[PopulationEvent]) {
     let mut events: Vec<PopulationEvent> = base_events
@@ -1932,7 +1932,8 @@ fn populate(
             && !prop_tiles.contains(&(cx, cy))
         {
             let mut er = phase_rng(
-                run.gen_seed.wrapping_add(enemy_calls.wrapping_mul(0x9E37_79B9)),
+                run.gen_seed
+                    .wrapping_add(enemy_calls.wrapping_mul(0x9E37_79B9)),
                 RNG_ENEMY_CALL,
             );
             enemy_calls += 1;
@@ -1965,7 +1966,8 @@ fn populate(
         if rng.random::<f32>() * 6.0 < 1.0 {
             let ux = rng.random_range(0.0..31.0);
             let uy = rng.random_range(0.0..31.0);
-            plan.details.push(Vec2::new(cx as f32 * TILE + ux, cy as f32 * TILE + uy));
+            plan.details
+                .push(Vec2::new(cx as f32 * TILE + ux, cy as f32 * TILE + uy));
         }
     }
 
@@ -2038,7 +2040,8 @@ fn populate(
             && !prop_tiles.contains(&(cx, cy))
         {
             let mut er = phase_rng(
-                run.gen_seed.wrapping_add(enemy_calls.wrapping_mul(0x9E37_79B9)),
+                run.gen_seed
+                    .wrapping_add(enemy_calls.wrapping_mul(0x9E37_79B9)),
                 RNG_ENEMY_CALL,
             );
             enemy_calls += 1;
@@ -2072,7 +2075,8 @@ fn populate(
             && !prop_tiles.contains(&(cx, cy))
         {
             let mut er = phase_rng(
-                run.gen_seed.wrapping_add(enemy_calls.wrapping_mul(0x9E37_79B9)),
+                run.gen_seed
+                    .wrapping_add(enemy_calls.wrapping_mul(0x9E37_79B9)),
                 RNG_ENEMY_CALL,
             );
             enemy_calls += 1;
@@ -2149,7 +2153,11 @@ fn populate(
         // every area pays the draw before any area test.
         let walls_ok = rng.random::<f32>() * 5.0 < 1.0
             && d2 > 100.0 * 100.0
-            && !(area == 106 || area == 100 || (area == 0 && run.loop_count == 0) || area == 107 || area == 6)
+            && !(area == 106
+                || area == 100
+                || (area == 0 && run.loop_count == 0)
+                || area == 107
+                || area == 6)
             && (area != 102 || rng.random::<f32>() * 3.0 < 1.0)
             && !(area == 3 && is_last)
             && !(area == 7 && is_last)
@@ -2312,10 +2320,7 @@ fn populate(
                     made.push(PropKind::StreetLight);
                 }
             } else if d2 > 128.0 * 128.0 {
-                made.push(rng_choose(
-                    &mut rng,
-                    &[PropKind::Hydrant, PropKind::Car],
-                ));
+                made.push(rng_choose(&mut rng, &[PropKind::Hydrant, PropKind::Car]));
             }
         } else if area == 6 && rng.random::<f32>() * 4.0 < 1.0 {
             made.push(rng_choose(
@@ -2417,15 +2422,11 @@ fn populate(
     if area == 102 {
         plan.enemies.clear();
         let mut rng = phase_rng(run.gen_seed, RNG_PIZZA);
-        if let Some(&(fx, fy)) = plan
-            .floor_cells
-            .iter()
-            .max_by(|a, b| {
-                cell_dist2_origin(a.0, a.1)
-                    .partial_cmp(&cell_dist2_origin(b.0, b.1))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-        {
+        if let Some(&(fx, fy)) = plan.floor_cells.iter().max_by(|a, b| {
+            cell_dist2_origin(a.0, a.1)
+                .partial_cmp(&cell_dist2_origin(b.0, b.1))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }) {
             let (px, py) = cell_center_i(fx, fy);
             for _ in 0..4 {
                 let dx = rng.random_range(-2.0..2.0);
@@ -2462,7 +2463,11 @@ fn populate(
         plan.enemies.clear();
         plan.chests.clear();
         plan.boss = None;
-        if let Some(&(fx, fy)) = plan.floor_cells.iter().max_by_key(|c| c.0.abs() + c.1.abs()) {
+        if let Some(&(fx, fy)) = plan
+            .floor_cells
+            .iter()
+            .max_by_key(|c| c.0.abs() + c.1.abs())
+        {
             plan.chests.push(ChestSpawn::Weapon(cell_center_px(fx, fy)));
         }
         events.retain(|event| !matches!(event, PopulationEvent::Enemy { .. }));
@@ -3166,10 +3171,7 @@ fn cluster_source_skips(kind: EnemyKind, loops: u32, rng: &mut StdRng) -> bool {
     rng.random::<f32>() * 60.0 > loops as f32
         || matches!(
             kind,
-            EnemyKind::Mimic
-                | EnemyKind::SuperMimic
-                | EnemyKind::WepMimic
-                | EnemyKind::MaggotSpawn
+            EnemyKind::Mimic | EnemyKind::SuperMimic | EnemyKind::WepMimic | EnemyKind::MaggotSpawn
         )
 }
 

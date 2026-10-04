@@ -59,8 +59,10 @@ pub fn apply_pending_wall_breaks(
     // GML `FloorExplo/Create_0:19-27` runs before its `Top` spawns, so the new
     // `TopSmall`s test the re-sealed ring: track the post-break wall set here
     // rather than the deferred entity view.
-    let mut live_walls: std::collections::HashSet<(i32, i32)> =
-        walls.iter().map(|(_, cell, _, _)| (cell.0, cell.1)).collect();
+    let mut live_walls: std::collections::HashSet<(i32, i32)> = walls
+        .iter()
+        .map(|(_, cell, _, _)| (cell.0, cell.1))
+        .collect();
 
     for (marker_e, brk) in &pending {
         commands.entity(marker_e).despawn();
@@ -316,9 +318,7 @@ pub fn handle_throne_room_props(
                     sprites.dead = "images/sprBigGeneratorDead.png";
                 }
                 commands.entity(e).remove::<UnbreakableProp>();
-                commands
-                    .entity(e)
-                    .insert(PropDeathEffect::big_generator());
+                commands.entity(e).insert(PropDeathEffect::big_generator());
             }
             continue;
         }

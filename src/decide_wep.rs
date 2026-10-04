@@ -148,7 +148,12 @@ pub struct DecideCtx {
 /// [`decide_wep_seeded`] so their contents are fixed at spawn by
 /// `random_set_seed(dropseed)`.
 pub fn decide_wep(rng: &mut impl RngExt, ctx: &DecideCtx, extra: i32, curse: bool) -> WeaponId {
-    decide_wep_drawing(&mut || WeaponId(rng.random_range(1..=127)), ctx, extra, curse)
+    decide_wep_drawing(
+        &mut || WeaponId(rng.random_range(1..=127)),
+        ctx,
+        extra,
+        curse,
+    )
 }
 
 /// Same law, drawing ids from the `RNGStates.WeaponDrops` LCG
@@ -160,7 +165,12 @@ pub fn decide_wep_seeded(
     extra: i32,
     curse: bool,
 ) -> WeaponId {
-    decide_wep_drawing(&mut || WeaponId(rng.range_i32(1, 127) as u8), ctx, extra, curse)
+    decide_wep_drawing(
+        &mut || WeaponId(rng.range_i32(1, 127) as u8),
+        ctx,
+        extra,
+        curse,
+    )
 }
 
 /// GML `scrDecideWep` with the `irandom_range(1, maxwep - 1)` id draw

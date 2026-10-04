@@ -1445,12 +1445,7 @@ fn spawn_pellets(commands: &mut Commands, fx: &mut FireFx, shot: &GunShot, playe
 }
 
 /// GML `scrFire.gml:789-796` / `DogSpinAttack/Create_0.gml:1-7`.
-fn spawn_dog_spin_attack(
-    commands: &mut Commands,
-    pos: Vec2,
-    creator: Entity,
-    spec: SpinSpawn,
-) {
+fn spawn_dog_spin_attack(commands: &mut Commands, pos: Vec2, creator: Entity, spec: SpinSpawn) {
     let mut rng = rand::rng();
     commands.spawn((
         LevelCleanup,
@@ -1514,12 +1509,7 @@ fn tick_dog_spin_attacks(
 
 /// GML `AllyBullet/Create_0.gml:3-5`: `typ = 1` (deflectable), damage 3,
 /// `spr_fade = sprAllyBulletHit`, destroyed on a wall.
-fn spawn_ally_bullet(
-    commands: &mut Commands,
-    pos: Vec2,
-    vel: Vec2,
-    creator: Entity,
-) {
+fn spawn_ally_bullet(commands: &mut Commands, pos: Vec2, vel: Vec2, creator: Entity) {
     commands.spawn((
         GameCleanup,
         LevelCleanup,
@@ -2408,7 +2398,11 @@ fn plant_tangle(
     trapper: bool,
     rng: &mut rand::rngs::ThreadRng,
 ) {
-    let ultra = if trapper { "sndPlantSnareTrapperTB" } else { "sndPlantSnareTB" };
+    let ultra = if trapper {
+        "sndPlantSnareTrapperTB"
+    } else {
+        "sndPlantSnareTB"
+    };
     let plain = if trapper {
         "sndPlantSnareTrapper"
     } else {
@@ -2437,8 +2431,7 @@ fn plant_tangle(
     if trapper {
         let mut ang = rng.random_range(0.0..std::f32::consts::TAU);
         for _ in 0..5 {
-            let at = pos
-                + Vec2::new(ang.cos(), ang.sin()) * rng.random_range(26.0..34.0);
+            let at = pos + Vec2::new(ang.cos(), ang.sin()) * rng.random_range(26.0..34.0);
             body(commands, at, rng);
             ang += 72.0_f32.to_radians();
         }
@@ -2465,7 +2458,12 @@ pub fn tick_snare_zones(
             &mut Health,
             Option<&mut Velocity>,
         ),
-        (With<Enemy>, Without<Player>, Without<SnareSeed>, Without<Tangle>),
+        (
+            With<Enemy>,
+            Without<Player>,
+            Without<SnareSeed>,
+            Without<Tangle>,
+        ),
     >,
 ) {
     let dt = time.delta_secs;
@@ -2764,11 +2762,7 @@ pub fn player_ability(
     mut cues: ResMut<Queue<AudioCue>>,
     mut rumble_q: ResMut<Queue<RumbleRequest>>,
     mut toast: ResMut<Toast>,
-    mut persist: ParamSet<(
-        ResMut<SaveData>,
-        ResMut<SaveDirty>,
-        Res<Run>,
-    )>,
+    mut persist: ParamSet<(ResMut<SaveData>, ResMut<SaveDirty>, Res<Run>)>,
     catalog: Res<repame_anim::AnimCatalog>,
     mut tut: Option<ResMut<crate::state::TutorialState>>,
     mut player_q: Query<

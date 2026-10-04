@@ -120,17 +120,18 @@ fn fill_solid_shapes(
         let reach = radius + TILE;
         let min = start.min(start + displacement) - Vec2::splat(reach);
         let max = start.max(start + displacement) + Vec2::splat(reach);
-        let min_x = ((min.x / WALL_TILE).floor() as i32)
-            .max(((-ARENA_W * 0.5) / WALL_TILE).floor() as i32);
+        let min_x =
+            ((min.x / WALL_TILE).floor() as i32).max(((-ARENA_W * 0.5) / WALL_TILE).floor() as i32);
         let max_x =
             ((max.x / WALL_TILE).floor() as i32).min((ARENA_W * 0.5 / WALL_TILE).ceil() as i32 - 1);
-        let min_y = ((min.y / WALL_TILE).floor() as i32)
-            .max(((-ARENA_H * 0.5) / WALL_TILE).floor() as i32);
+        let min_y =
+            ((min.y / WALL_TILE).floor() as i32).max(((-ARENA_H * 0.5) / WALL_TILE).floor() as i32);
         let max_y =
             ((max.y / WALL_TILE).floor() as i32).min((ARENA_H * 0.5 / WALL_TILE).ceil() as i32 - 1);
         for y in min_y..=max_y {
             for x in min_x..=max_x {
-                if mask.cells.contains(&floor_cell_for_wall(x, y)) || mask.opened.contains(&(x, y)) {
+                if mask.cells.contains(&floor_cell_for_wall(x, y)) || mask.opened.contains(&(x, y))
+                {
                     continue;
                 }
                 shapes.push(SolidAabb::from_center_size(

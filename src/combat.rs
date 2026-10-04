@@ -24,11 +24,10 @@ use crate::comps_a::{
 };
 use crate::comps_b::{
     Beam, BigDogMissileState, ChestKind, Corpse, CorpseCollision, CustomExplosion, DeploysSentry,
-    Dying, Enemy, EnemyBrain, ExplosionVisual, GmlImage, HazardCloud, HurtAnim,
-    LoopTransition, NativeAngle, NativeDepth, NativeExplosionKind, Pickup, PickupLifetime,
-    PlasmaBurst, Portal, PortalPhase, PortalShock, PortalState, Prop, PropNestMarkers,
-    PropSprites, RadChestContainer, SecretEntrance, SentryTurret, Shield, SpawnsWeaponPickup,
-    StaticFx, ThroneRoomState, TrapFire,
+    Dying, Enemy, EnemyBrain, ExplosionVisual, GmlImage, HazardCloud, HurtAnim, LoopTransition,
+    NativeAngle, NativeDepth, NativeExplosionKind, Pickup, PickupLifetime, PlasmaBurst, Portal,
+    PortalPhase, PortalShock, PortalState, Prop, PropNestMarkers, PropSprites, RadChestContainer,
+    SecretEntrance, SentryTurret, Shield, SpawnsWeaponPickup, StaticFx, ThroneRoomState, TrapFire,
 };
 use crate::data::{AreaId, CrownKind, EnemyKind, HazardKind, MutationId, RaceId, WeaponId};
 use crate::effects::{
@@ -1318,11 +1317,7 @@ pub fn corpse_hits(
                         hurt: crate::anim::derive_hurt_path(idle),
                         timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
                         was_moving,
-                        rate: catalog
-                            .def(idle)
-                            .map(|d| d.fps)
-                            .unwrap_or(1.0)
-                            .max(1.0),
+                        rate: catalog.def(idle).map(|d| d.fps).unwrap_or(1.0).max(1.0),
                     });
                 }
                 if impact_wrists {
@@ -1936,12 +1931,15 @@ pub fn move_projectiles(
                         p.source,
                         None,
                         run.loop_count,
-                        player_ctx.single().ok().map(|(pl, inv, hp)| crate::spawns::DropCtx {
-                            player: pl,
-                            inv,
-                            health: hp,
-                            decide: gun_decide.as_ref(),
-                        }),
+                        player_ctx
+                            .single()
+                            .ok()
+                            .map(|(pl, inv, hp)| crate::spawns::DropCtx {
+                                player: pl,
+                                inv,
+                                health: hp,
+                                decide: gun_decide.as_ref(),
+                            }),
                     );
                 }
                 ps.0 -= 0.1;
@@ -2006,12 +2004,15 @@ pub fn move_projectiles(
                             p.source,
                             Some(frame.0 + 5),
                             run.loop_count,
-                            player_ctx.single().ok().map(|(pl, inv, hp)| crate::spawns::DropCtx {
-                                player: pl,
-                                inv,
-                                health: hp,
-                                decide: gun_decide.as_ref(),
-                            }),
+                            player_ctx
+                                .single()
+                                .ok()
+                                .map(|(pl, inv, hp)| crate::spawns::DropCtx {
+                                    player: pl,
+                                    inv,
+                                    health: hp,
+                                    decide: gun_decide.as_ref(),
+                                }),
                         );
                     }
                     continue;
@@ -2075,12 +2076,15 @@ pub fn move_projectiles(
                         p.source,
                         None,
                         run.loop_count,
-                        player_ctx.single().ok().map(|(pl, inv, hp)| crate::spawns::DropCtx {
-                            player: pl,
-                            inv,
-                            health: hp,
-                            decide: gun_decide.as_ref(),
-                        }),
+                        player_ctx
+                            .single()
+                            .ok()
+                            .map(|(pl, inv, hp)| crate::spawns::DropCtx {
+                                player: pl,
+                                inv,
+                                health: hp,
+                                decide: gun_decide.as_ref(),
+                            }),
                     );
                     if hp_before < ((p.damage as f32 * 0.5).ceil() as i32) {
                         continue;
@@ -2191,12 +2195,15 @@ pub fn move_projectiles(
                     p.source,
                     None,
                     run.loop_count,
-                    player_ctx.single().ok().map(|(pl, inv, hp)| crate::spawns::DropCtx {
-                        player: pl,
-                        inv,
-                        health: hp,
-                        decide: gun_decide.as_ref(),
-                    }),
+                    player_ctx
+                        .single()
+                        .ok()
+                        .map(|(pl, inv, hp)| crate::spawns::DropCtx {
+                            player: pl,
+                            inv,
+                            health: hp,
+                            decide: gun_decide.as_ref(),
+                        }),
                 );
             }
 
@@ -3114,15 +3121,13 @@ pub fn tick_sentry_turrets(
     decide: Res<crate::pickups::GunDecideCache>,
     player_q: Query<(&Player, &Inventory, &Health), With<Player>>,
     enemies: Query<&Pos, With<Enemy>>,
-    mut sentries: Query<
-        (
-            Entity,
-            &Pos,
-            &mut SentryTurret,
-            Option<&Health>,
-            Option<&mut NativeAngle>,
-        ),
-    >,
+    mut sentries: Query<(
+        Entity,
+        &Pos,
+        &mut SentryTurret,
+        Option<&Health>,
+        Option<&mut NativeAngle>,
+    )>,
 ) {
     let steps = time.delta_secs * crate::SIM_HZ as f32;
     for (entity, pos, mut sentry, health, mut gunangle) in &mut sentries {
@@ -3239,7 +3244,8 @@ fn has_line_of_sight(from: glam::Vec2, to: glam::Vec2, mask: &FloorMask) -> bool
             (p.x / 16.0).floor() * 16.0 + 8.0,
             (p.y / 16.0).floor() * 16.0 + 8.0,
         );
-        if !mask.is_walkable(p) && !mask.is_walkable(tile_check)
+        if !mask.is_walkable(p)
+            && !mask.is_walkable(tile_check)
             && p.x.abs() < ARENA_W / 2.0
             && p.y.abs() < ARENA_H / 2.0
         {
@@ -3372,12 +3378,7 @@ const STREET_LIGHT: &str = "images/sprStreetLight.png";
 const CAR_IDLE: &str = "images/sprCarIdle.png";
 
 #[inline]
-fn masks_overlap(
-    a: glam::Vec2,
-    a_half: glam::Vec2,
-    b: glam::Vec2,
-    b_half: glam::Vec2,
-) -> bool {
+fn masks_overlap(a: glam::Vec2, a_half: glam::Vec2, b: glam::Vec2, b_half: glam::Vec2) -> bool {
     let (a_half, b_half) = (a_half.abs(), b_half.abs());
     (a.x - a_half.x < b.x + b_half.x)
         && (b.x - b_half.x < a.x + a_half.x)
@@ -3432,11 +3433,9 @@ pub fn prop_chest_collisions(
         }
 
         // GML `StreetLight/Collision_Car.gml`.
-        if props
-            .iter()
-            .any(|(_, opos, oprop, osprites)| osprites.idle == CAR_IDLE
-                && masks_overlap(pos.0, half, opos.0, oprop.size * 0.5))
-        {
+        if props.iter().any(|(_, opos, oprop, osprites)| {
+            osprites.idle == CAR_IDLE && masks_overlap(pos.0, half, opos.0, oprop.size * 0.5)
+        }) {
             dead.push(e);
             continue;
         }
@@ -4443,9 +4442,7 @@ pub fn apply_explosions(
                 }
             }
             let mut destroyed_props = Vec::new();
-            for (prop_e, mut prop, ppos, death_effect, sprites, entrance, nest, rad) in
-                &mut props
-            {
+            for (prop_e, mut prop, ppos, death_effect, sprites, entrance, nest, rad) in &mut props {
                 if !prop.destructible {
                     continue;
                 }

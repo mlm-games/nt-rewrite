@@ -127,11 +127,8 @@ pub fn observe_oasis_floor_start(
         .iter()
         .filter(|p| matches!(p.kind, PickupKind::Chest(_)))
         .count() as u32;
-    triggers.oasis_floor_enemies_initial = (enemies_q
-        .iter()
-        .filter(|e| !enemy_def(e.kind).boss)
-        .count() as u32)
-        .max(1);
+    triggers.oasis_floor_enemies_initial =
+        (enemies_q.iter().filter(|e| !enemy_def(e.kind).boss).count() as u32).max(1);
     triggers.oasis_snapshot_done = true;
 }
 
@@ -165,10 +162,7 @@ pub fn detect_oasis_eligibility(
         return;
     }
 
-    let living_trash = enemies_q
-        .iter()
-        .filter(|e| !enemy_def(e.kind).boss)
-        .count() as u32;
+    let living_trash = enemies_q.iter().filter(|e| !enemy_def(e.kind).boss).count() as u32;
     let killed = triggers
         .oasis_floor_enemies_initial
         .saturating_sub(living_trash);

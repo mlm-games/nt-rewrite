@@ -3000,9 +3000,7 @@ pub fn tick_floor_transition(
             // GML `GenCont/Destroy_0.gml:178-182`: a desert entry with
             // banked `blackswords` re-drops that many Black Swords on the
             // spawn tile and zeroes the counter.
-            if run.area == crate::data::AreaId::Desert
-                && run.loop_count > 0
-                && run.blackswords > 0
+            if run.area == crate::data::AreaId::Desert && run.loop_count > 0 && run.blackswords > 0
             {
                 for _ in 0..run.blackswords {
                     crate::pickups::spawn_pickup(

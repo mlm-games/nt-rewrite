@@ -16,13 +16,13 @@ use crate::comps_a::{
     ProjectileFade, ProjectileFriction, ProjectileTyp, ShellBonus, ShellWallBounce,
     SpawnHazardOnDeath, SplitOnDeath, Team, Velocity,
 };
+use crate::comps_b::SpecialPropDeath;
 use crate::comps_b::{
-    CustomExplosion, DeploysSentry, ExplosionVisual, NativeExplosionKind,
-    PlasmaBurst, PortalClear, Prop, PropNestMarkers, PropSprites, RadChestContainer,
-    SecretEntrance, SentryTurret, SpawnsWeaponPickup,
+    CustomExplosion, DeploysSentry, ExplosionVisual, NativeExplosionKind, PlasmaBurst, PortalClear,
+    Prop, PropNestMarkers, PropSprites, RadChestContainer, SecretEntrance, SentryTurret,
+    SpawnsWeaponPickup,
 };
 use crate::data::{EnemyKind, HazardDef, SplitDef};
-use crate::comps_b::SpecialPropDeath;
 use crate::environment::PropDeathEffect;
 use crate::msg::Queue;
 use crate::pickups::{random_weapon, spawn_pickup, spawn_rad, spawn_rad_burst};
@@ -180,10 +180,8 @@ pub fn spawn_split_projectiles(
             SplitChild::SmallGrenade => {
                 let speed = rng.random_range(3.0..5.0) * 30.0;
                 let life = rng.random_range(10..=20) as f32 / 30.0;
-                let scatter = glam::Vec2::new(
-                    rng.random_range(-2.0..2.0),
-                    rng.random_range(-2.0..2.0),
-                );
+                let scatter =
+                    glam::Vec2::new(rng.random_range(-2.0..2.0), rng.random_range(-2.0..2.0));
                 commands.spawn((
                     GameCleanup,
                     LevelCleanup,
@@ -359,12 +357,7 @@ pub fn spawn_sentry_turret(commands: &mut Commands, pos: glam::Vec2, spec: Deplo
 /// `motion_add(_gunangle, 6)`. Bullet: `Bullet1` at
 /// `motion_add(gunangle + random(12) - 6, 16)` - 16 px/step = 480 px/s,
 /// damage 3.
-pub fn spawn_sentry_gun(
-    commands: &mut Commands,
-    pos: glam::Vec2,
-    dir: glam::Vec2,
-    team: Team,
-) {
+pub fn spawn_sentry_gun(commands: &mut Commands, pos: glam::Vec2, dir: glam::Vec2, team: Team) {
     commands.spawn((
         GameCleanup,
         LevelCleanup,
@@ -523,7 +516,14 @@ pub fn on_projectile_removed(
             .unwrap_or((32.0, 1, 0.0));
         if count <= 1 {
             spawn_explosion_with_source_radius_kind(
-                commands, pos, blast_damage, source, radius, team, true, visual,
+                commands,
+                pos,
+                blast_damage,
+                source,
+                radius,
+                team,
+                true,
+                visual,
             );
         } else {
             let ang0 = rand::rng().random_range(0.0..std::f32::consts::TAU);

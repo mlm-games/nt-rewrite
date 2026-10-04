@@ -132,11 +132,11 @@ pub mod state;
 pub mod time;
 pub mod vortex;
 pub mod vortex_pass;
-#[cfg(target_arch = "wasm32")]
-pub mod web;
 pub mod walls;
 pub mod weapon_runtime;
 pub mod weapons_data;
+#[cfg(target_arch = "wasm32")]
+pub mod web;
 pub mod worldgen;
 
 pub use ids_part::{EnemyKind, MutationId, UltraMutationId};

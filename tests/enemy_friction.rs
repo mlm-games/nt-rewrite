@@ -13,8 +13,8 @@ use web_time::Duration;
 use nt_rewrite::App;
 use nt_rewrite::comps_a::{FloorMask, Velocity};
 use nt_rewrite::comps_b::{Enemy, EnemyBrain};
-use nt_rewrite::state::AppState;
 use nt_rewrite::spatial::Pos;
+use nt_rewrite::state::AppState;
 use nt_rewrite::time::{GTimer, TimerMode};
 use repose_core::Scheduler;
 

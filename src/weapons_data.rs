@@ -2411,4 +2411,3 @@ pub const fn ammo_pickup(kind: AmmoType) -> u16 {
         AmmoType::Energy => 10,
     }
 }
-

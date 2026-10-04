@@ -227,7 +227,8 @@ impl FloorMask {
     }
 
     pub fn is_walkable(&self, p: Vec2) -> bool {
-        self.cells.contains(&self.world_to_cell(p)) || self.opened.contains(&self.world_to_wall_cell(p))
+        self.cells.contains(&self.world_to_cell(p))
+            || self.opened.contains(&self.world_to_wall_cell(p))
     }
 
     /// Push-out from unwalkable cells. Port adaptation: bevy carried 2D positions
@@ -1285,9 +1286,7 @@ mod gml_top_small_tests {
                     continue;
                 }
                 let cell = (at.0 + dx, at.1 + dy);
-                if after.contains(&cell)
-                    || floor.contains(&floor_cell_for_wall(cell.0, cell.1))
-                {
+                if after.contains(&cell) || floor.contains(&floor_cell_for_wall(cell.0, cell.1)) {
                     continue;
                 }
                 assert!(tops.cells.contains(&cell), "missing {dx},{dy}");

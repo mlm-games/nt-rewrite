@@ -33,8 +33,8 @@ use repame_anim::{AnimCatalog, AnimDef, AtlasDesc, UvRect, frame_key};
 use repame_atlas::AtlasId;
 use repame_fx::{DamageNumber, Particle, particle_sprites};
 use repame_sprite::{
-    AtlasUpload, BatchDesc, Camera2d, FitMode, SpriteBlend, SpriteInstance, WorldText,
-    dp_to_world, effective_fit, world_to_dp,
+    AtlasUpload, BatchDesc, Camera2d, FitMode, SpriteBlend, SpriteInstance, WorldText, dp_to_world,
+    effective_fit, world_to_dp,
 };
 
 use crate::anim::{PlayerAnim, SpriteAnim};
@@ -47,15 +47,13 @@ use crate::comps_a::{
     Velocity, WallCell, WallTile,
 };
 use crate::comps_b::{
-    Beam, BigDogMissileState, BossBrain, BossPhase, ChestArt, ChestKind, Corpse, Enemy, EnemyBrain,
-    FxAngle,
-    GmlImage, GroundDecalTint, GroundDetail, HazardCloud, HurtAnim, MaggotSpawnCharge, Mote,
-    MoteScale,
-    NativeAngle, NativeDepth, NativeFlip, NativeScale, OpenedChest, Pickup, PickupKind,
-    PickupLifetime, Portal, PortalClear, PortalShock, PortalStrike, Prop, PropSprites, Shield,
-    CrownObject, InvisiWall,
-    StaticFx, SwingFx, Telekinesis, ThroneCarpet, ThroneSit, TitleCampChar, TitleCampfire,
-    TitleLogMenu, TitleTv, ToxicGasState, WeaponVisual, YungCuz, YvCouch,
+    Beam, BigDogMissileState, BossBrain, BossPhase, ChestArt, ChestKind, Corpse, CrownObject,
+    Enemy, EnemyBrain, FxAngle, GmlImage, GroundDecalTint, GroundDetail, HazardCloud, HurtAnim,
+    InvisiWall, MaggotSpawnCharge, Mote, MoteScale, NativeAngle, NativeDepth, NativeFlip,
+    NativeScale, OpenedChest, Pickup, PickupKind, PickupLifetime, Portal, PortalClear, PortalShock,
+    PortalStrike, Prop, PropSprites, Shield, StaticFx, SwingFx, Telekinesis, ThroneCarpet,
+    ThroneSit, TitleCampChar, TitleCampfire, TitleLogMenu, TitleTv, ToxicGasState, WeaponVisual,
+    YungCuz, YvCouch,
 };
 use crate::data::{
     AreaId, CrownKind, EnemyKind, HazardKind, MutationId, RaceId, UltraMutationId, WeaponId,
@@ -1158,10 +1156,7 @@ fn trans_cells(cells: &TopSmalls, trans_frames: u32) -> Vec<((i32, i32), i32)> {
     let frame = trans_frames as i32 - 1;
     let mut sorted: Vec<(i32, i32)> = cells.cells.iter().copied().collect();
     sorted.sort_unstable();
-    sorted
-        .into_iter()
-        .map(|c| (c, frame))
-        .collect()
+    sorted.into_iter().map(|c| (c, frame)).collect()
 }
 
 /// sRGB channel -> linear light (exact transfer function). GPU tints
@@ -1908,10 +1903,7 @@ fn laser_sight(
         }
     }
     let native = assets.native_size(path)?;
-    let size = Vec2::new(
-        native.x * (origin.distance(tip) / 2.0 + 2.0),
-        native.y,
-    );
+    let size = Vec2::new(native.x * (origin.distance(tip) / 2.0 + 2.0), native.y);
     let mut sight = assets.sprite_sized(path, 0, origin, size, false, [1.0; 4])?;
     sight.rotation = angle;
     sight.anchor = Vec2::ZERO;
@@ -2084,255 +2076,259 @@ pub fn world_instances_cached(
             .map(|(pos, _)| pos.0)
             .collect();
 
-    // Floor: GML draws the room background colour first
-    // (`background_set_colour`), then ONLY the live floor cells - no padded
-    // outside ring of floor tiles (a ±6-cell ring buried the transparent
-    // vortex layer on the campfire title: the "no vortex on the title
-    // screen" bug). Lit strip over mask cells only; room colour elsewhere.
-    // Quads place by art top-left (`place_top_left`, bevy
-    // `sprite_at_gm_origin` parity): origin-(0,0) art would sit half a cell
-    // off if given cell centers.
-    if let (Some(run), Some(mask)) = (
-        world.get_resource::<Run>(),
-        world.get_resource::<FloorMask>(),
-    ) {
-        let floor = run.floor;
-        let area = run.area;
-        let seed = run.gen_seed;
-        let cells: HashSet<(i32, i32)> = mask.cells.iter().copied().collect();
-        let has = |p: &str| assets.catalog.def(p).is_some();
-        let (floor_png, wall_bot_png, wall_top_png, wall_out_png, wall_trans_png) =
-            area_sprites_full_for_run(floor, area, has);
-        let (mut minx, mut miny, mut maxx, mut maxy) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
-        for &(cx, cy) in &cells {
-            minx = minx.min(cx);
-            miny = miny.min(cy);
-            maxx = maxx.max(cx);
-            maxy = maxy.max(cy);
-        }
-        // GML draws the room background colour first
-        // (`background_set_colour`), then ONLY the live floor cells - no
-        // padded outside ring of floor tiles (a ±6-cell ring buried the
-        // transparent vortex layer on the campfire title). Lit strip over
-        // mask cells only; room colour elsewhere.
-        if minx <= maxx {
-            for cy in miny..=maxy {
-                for cx in minx..=maxx {
-                    if !cells.contains(&(cx, cy)) {
-                        continue;
-                    }
-                    let top_left = Vec2::new(cx as f32 * TILE, cy as f32 * TILE);
-                    // GML `Floor/Create_0:8-13` floor variant verbatim:
-                    // `random(500) < 1` takes frame 3, else
-                    // `choose(0,0,0,0,0,0,0,1,2) + choose(0,4)`. No live
-                    // RNG stream here, so the cell coords hash into the same
-                    // distribution deterministically (1/500 rare, 7/9 plain,
-                    // 1/9 mid, then +4 half the time).
-                    let h = (cx
-                        .wrapping_mul(0x8da6b343u32 as i32)
-                        .wrapping_add(cy.wrapping_mul(0xd8163841u32 as i32))
-                        >> 7) as u32;
-                    let raw = if h % 500 == 0 {
-                        3
-                    } else {
-                        let base = match h % 9 {
-                            7 => 1,
-                            8 => 2,
-                            _ => 0,
+        // Floor: GML draws the room background colour first
+        // (`background_set_colour`), then ONLY the live floor cells - no padded
+        // outside ring of floor tiles (a ±6-cell ring buried the transparent
+        // vortex layer on the campfire title: the "no vortex on the title
+        // screen" bug). Lit strip over mask cells only; room colour elsewhere.
+        // Quads place by art top-left (`place_top_left`, bevy
+        // `sprite_at_gm_origin` parity): origin-(0,0) art would sit half a cell
+        // off if given cell centers.
+        if let (Some(run), Some(mask)) = (
+            world.get_resource::<Run>(),
+            world.get_resource::<FloorMask>(),
+        ) {
+            let floor = run.floor;
+            let area = run.area;
+            let seed = run.gen_seed;
+            let cells: HashSet<(i32, i32)> = mask.cells.iter().copied().collect();
+            let has = |p: &str| assets.catalog.def(p).is_some();
+            let (floor_png, wall_bot_png, wall_top_png, wall_out_png, wall_trans_png) =
+                area_sprites_full_for_run(floor, area, has);
+            let (mut minx, mut miny, mut maxx, mut maxy) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+            for &(cx, cy) in &cells {
+                minx = minx.min(cx);
+                miny = miny.min(cy);
+                maxx = maxx.max(cx);
+                maxy = maxy.max(cy);
+            }
+            // GML draws the room background colour first
+            // (`background_set_colour`), then ONLY the live floor cells - no
+            // padded outside ring of floor tiles (a ±6-cell ring buried the
+            // transparent vortex layer on the campfire title). Lit strip over
+            // mask cells only; room colour elsewhere.
+            if minx <= maxx {
+                for cy in miny..=maxy {
+                    for cx in minx..=maxx {
+                        if !cells.contains(&(cx, cy)) {
+                            continue;
+                        }
+                        let top_left = Vec2::new(cx as f32 * TILE, cy as f32 * TILE);
+                        // GML `Floor/Create_0:8-13` floor variant verbatim:
+                        // `random(500) < 1` takes frame 3, else
+                        // `choose(0,0,0,0,0,0,0,1,2) + choose(0,4)`. No live
+                        // RNG stream here, so the cell coords hash into the same
+                        // distribution deterministically (1/500 rare, 7/9 plain,
+                        // 1/9 mid, then +4 half the time).
+                        let h = (cx
+                            .wrapping_mul(0x8da6b343u32 as i32)
+                            .wrapping_add(cy.wrapping_mul(0xd8163841u32 as i32))
+                            >> 7) as u32;
+                        let raw = if h % 500 == 0 {
+                            3
+                        } else {
+                            let base = match h % 9 {
+                                7 => 1,
+                                8 => 2,
+                                _ => 0,
+                            };
+                            base + if h % 2 == 0 { 4 } else { 0 }
                         };
-                        base + if h % 2 == 0 { 4 } else { 0 }
-                    };
-                    // Clamp to the strip (GML families always carry
-                    // 0-7; a short pack strip must not drop the cell).
-                    let frames = strip_frames(assets, floor_png).max(1) as i32;
-                    let frame = raw % frames;
-                    if let Some(mut s) =
-                        place_top_left(assets, floor_png, frame, top_left, [1.0; 4], GRID_OVERLAP)
-                    {
-                        s.z = Z_FLOOR;
-                        out.push(s);
+                        // Clamp to the strip (GML families always carry
+                        // 0-7; a short pack strip must not drop the cell).
+                        let frames = strip_frames(assets, floor_png).max(1) as i32;
+                        let frame = raw % frames;
+                        if let Some(mut s) = place_top_left(
+                            assets,
+                            floor_png,
+                            frame,
+                            top_left,
+                            [1.0; 4],
+                            GRID_OVERLAP,
+                        ) {
+                            s.z = Z_FLOOR;
+                            out.push(s);
+                        }
                     }
                 }
             }
-        }
-        // GML `FloorExplo/Create_0:12,15`: the destroyed wall's cell becomes a
-        // 16x16 `sprFloor<area>Explo` (`_area = GameCont.area`),
-        // `image_index = choose(1, 2, 3, 4)`. The port draws floor from
-        // `FloorMask`, so the hole needs its own pass at the wall's 16x16
-        // resolution.
-        let explo_png = match area {
-            AreaId::Oasis => "images/sprFloor101Explo.png",
-            AreaId::PizzaSewers => "images/sprFloor102Explo.png",
-            AreaId::City => "images/sprFloor103Explo.png",
-            AreaId::CursedCaves => "images/sprFloor104Explo.png",
-            AreaId::Jungle => "images/sprFloor105Explo.png",
-            AreaId::HQ => "images/sprFloor106Explo.png",
-            AreaId::Crib => "images/sprFloor107Explo.png",
-            AreaId::Vault | AreaId::CrownVault => "images/sprFloor100Explo.png",
-            AreaId::Campfire => "images/sprFloor0Explo.png",
-            AreaId::Loop | AreaId::Desert => "images/sprFloor1Explo.png",
-            AreaId::Sewers => "images/sprFloor2Explo.png",
-            AreaId::Scrapyards => "images/sprFloor3Explo.png",
-            AreaId::CrystalCaves => "images/sprFloor4Explo.png",
-            AreaId::FrozenCity => "images/sprFloor5Explo.png",
-            AreaId::Labs => "images/sprFloor6Explo.png",
-            AreaId::Palace => "images/sprFloor7Explo.png",
-        };
-        let explo_png = if has(explo_png) {
-            explo_png
-        } else {
-            floor_png
-        };
-        let explo_frames = strip_frames(assets, explo_png).max(1);
-        for &(wx, wy) in &mask.opened {
-            // GML `image_index = choose(1, 2, 3, 4)` on a 4-frame strip, which
-            // GameMaker wraps, so the drawn frame is `(1 + n) % 4`.
-            let h = (wx
-                .wrapping_mul(0x8da6b343u32 as i32)
-                .wrapping_add(wy.wrapping_mul(0xd8163841u32 as i32))
-                >> 7) as u32;
-            let frame = ((1 + h % 4) % explo_frames) as i32;
-            let top_left = Vec2::new(wx as f32 * 16.0, wy as f32 * 16.0);
-            if let Some(mut s) =
-                place_top_left(assets, explo_png, frame, top_left, [1.0; 4], GRID_OVERLAP)
-            {
-                s.z = Z_FLOOR;
-                out.push(s);
-            }
-        }
-        let floor_end = out.len();
-        // Walls: GML law (`GenCont/Alarm_0` + `SubTopCont/Draw_0`): Out
-        // skirt always (neighbor-cropped), Bot iff the screen-south tile is
-        // floor (`place_meeting(x, y + 16, Floor)` on the wall instance),
-        // Top always straddling the cell's top edge (top-left
-        // (wx*16, wy*16-8)), then the full-ring Trans skirting pass. Bot and
-        // Top share the body's `image_index` (the `topindex` roll is never
-        // read). Push order = draw order.
-        let mut walls: Vec<WallCell> = world
-            .query_filtered::<&WallCell, With<WallTile>>()
-            .iter(world)
-            .copied()
-            .collect();
-        walls.sort_by_key(|c| (c.0, c.1));
-        let solid_wall_set: HashSet<(i32, i32)> = world
-            .query::<&WallCell>()
-            .iter(world)
-            .map(|cell| (cell.0, cell.1))
-            .collect();
-        let out_frames = strip_frames(assets, wall_out_png);
-        let bot_frames = strip_frames(assets, wall_bot_png);
-        if has(wall_out_png) {
-            for cell in walls.iter().rev() {
-                let (wx, wy) = (cell.0, cell.1);
-                let frame = (wall_out_raw(seed, wx, wy) % out_frames.max(1) as usize) as i32;
-                if let Some(mut s) = wall_out_part(
-                    assets,
-                    wall_out_png,
-                    frame,
-                    wx,
-                    wy,
-                    wall_out_crop(&solid_wall_set, wx, wy),
-                    [1.0; 4],
-                ) {
-                    s.z = Z_WALL_SUBTOP;
-                    wall_out.push(s);
-                }
-            }
-        }
-        for cell in &walls {
-            let (wx, wy) = (cell.0, cell.1);
-            // GML `Wall/Create_0:34` verbatim: `place_meeting(x, y + 16,
-            // Floor)` on the 16x16 wall body (origin (0,0) at the cell
-            // top-left). The south point owns exactly one floor cell.
-            let south_tile = (
-                (wx as f32 * 16.0 / TILE).floor() as i32,
-                ((wy as f32 * 16.0 + 16.0) / TILE).floor() as i32,
-            );
-            let floor_south = cells.contains(&south_tile);
-            let raw = wall_body_raw(seed, wx, wy);
-            let frame = raw as i32;
-            if floor_south && has(wall_bot_png) && bot_frames > 0 {
-                if let Some(s) = place_top_left(
-                    assets,
-                    wall_bot_png,
-                    frame,
-                    Vec2::new(wx as f32 * 16.0, wy as f32 * 16.0),
-                    [1.0; 4],
-                    0.0,
-                ) {
+            // GML `FloorExplo/Create_0:12,15`: the destroyed wall's cell becomes a
+            // 16x16 `sprFloor<area>Explo` (`_area = GameCont.area`),
+            // `image_index = choose(1, 2, 3, 4)`. The port draws floor from
+            // `FloorMask`, so the hole needs its own pass at the wall's 16x16
+            // resolution.
+            let explo_png = match area {
+                AreaId::Oasis => "images/sprFloor101Explo.png",
+                AreaId::PizzaSewers => "images/sprFloor102Explo.png",
+                AreaId::City => "images/sprFloor103Explo.png",
+                AreaId::CursedCaves => "images/sprFloor104Explo.png",
+                AreaId::Jungle => "images/sprFloor105Explo.png",
+                AreaId::HQ => "images/sprFloor106Explo.png",
+                AreaId::Crib => "images/sprFloor107Explo.png",
+                AreaId::Vault | AreaId::CrownVault => "images/sprFloor100Explo.png",
+                AreaId::Campfire => "images/sprFloor0Explo.png",
+                AreaId::Loop | AreaId::Desert => "images/sprFloor1Explo.png",
+                AreaId::Sewers => "images/sprFloor2Explo.png",
+                AreaId::Scrapyards => "images/sprFloor3Explo.png",
+                AreaId::CrystalCaves => "images/sprFloor4Explo.png",
+                AreaId::FrozenCity => "images/sprFloor5Explo.png",
+                AreaId::Labs => "images/sprFloor6Explo.png",
+                AreaId::Palace => "images/sprFloor7Explo.png",
+            };
+            let explo_png = if has(explo_png) { explo_png } else { floor_png };
+            let explo_frames = strip_frames(assets, explo_png).max(1);
+            for &(wx, wy) in &mask.opened {
+                // GML `image_index = choose(1, 2, 3, 4)` on a 4-frame strip, which
+                // GameMaker wraps, so the drawn frame is `(1 + n) % 4`.
+                let h = (wx
+                    .wrapping_mul(0x8da6b343u32 as i32)
+                    .wrapping_add(wy.wrapping_mul(0xd8163841u32 as i32))
+                    >> 7) as u32;
+                let frame = ((1 + h % 4) % explo_frames) as i32;
+                let top_left = Vec2::new(wx as f32 * 16.0, wy as f32 * 16.0);
+                if let Some(mut s) =
+                    place_top_left(assets, explo_png, frame, top_left, [1.0; 4], GRID_OVERLAP)
+                {
+                    s.z = Z_FLOOR;
                     out.push(s);
                 }
             }
-            if has(wall_top_png) {
+            let floor_end = out.len();
+            // Walls: GML law (`GenCont/Alarm_0` + `SubTopCont/Draw_0`): Out
+            // skirt always (neighbor-cropped), Bot iff the screen-south tile is
+            // floor (`place_meeting(x, y + 16, Floor)` on the wall instance),
+            // Top always straddling the cell's top edge (top-left
+            // (wx*16, wy*16-8)), then the full-ring Trans skirting pass. Bot and
+            // Top share the body's `image_index` (the `topindex` roll is never
+            // read). Push order = draw order.
+            let mut walls: Vec<WallCell> = world
+                .query_filtered::<&WallCell, With<WallTile>>()
+                .iter(world)
+                .copied()
+                .collect();
+            walls.sort_by_key(|c| (c.0, c.1));
+            let solid_wall_set: HashSet<(i32, i32)> = world
+                .query::<&WallCell>()
+                .iter(world)
+                .map(|cell| (cell.0, cell.1))
+                .collect();
+            let out_frames = strip_frames(assets, wall_out_png);
+            let bot_frames = strip_frames(assets, wall_bot_png);
+            if has(wall_out_png) {
+                for cell in walls.iter().rev() {
+                    let (wx, wy) = (cell.0, cell.1);
+                    let frame = (wall_out_raw(seed, wx, wy) % out_frames.max(1) as usize) as i32;
+                    if let Some(mut s) = wall_out_part(
+                        assets,
+                        wall_out_png,
+                        frame,
+                        wx,
+                        wy,
+                        wall_out_crop(&solid_wall_set, wx, wy),
+                        [1.0; 4],
+                    ) {
+                        s.z = Z_WALL_SUBTOP;
+                        wall_out.push(s);
+                    }
+                }
+            }
+            for cell in &walls {
+                let (wx, wy) = (cell.0, cell.1);
+                // GML `Wall/Create_0:34` verbatim: `place_meeting(x, y + 16,
+                // Floor)` on the 16x16 wall body (origin (0,0) at the cell
+                // top-left). The south point owns exactly one floor cell.
+                let south_tile = (
+                    (wx as f32 * 16.0 / TILE).floor() as i32,
+                    ((wy as f32 * 16.0 + 16.0) / TILE).floor() as i32,
+                );
+                let floor_south = cells.contains(&south_tile);
+                let raw = wall_body_raw(seed, wx, wy);
+                let frame = raw as i32;
+                if floor_south && has(wall_bot_png) && bot_frames > 0 {
+                    if let Some(s) = place_top_left(
+                        assets,
+                        wall_bot_png,
+                        frame,
+                        Vec2::new(wx as f32 * 16.0, wy as f32 * 16.0),
+                        [1.0; 4],
+                        0.0,
+                    ) {
+                        out.push(s);
+                    }
+                }
+                if has(wall_top_png) {
+                    if let Some(mut s) = place_top_left(
+                        assets,
+                        wall_top_png,
+                        frame,
+                        Vec2::new(wx as f32 * 16.0, wy as f32 * 16.0 - 8.0),
+                        [1.0; 4],
+                        0.0,
+                    ) {
+                        s.z = Z_WALL_SUBTOP;
+                        wall_top.push(s);
+                    }
+                }
+            }
+            // Trans skirting: the live GML `TopSmall` instances (see
+            // [`TopSmalls`]) - the worldgen ring, extended one step out per
+            // broken wall by `FloorExplo`. Drawn from the Trans strip at `y - 8`.
+            let trans_cells: Vec<((i32, i32), i32)> = if has(wall_trans_png) {
+                trans_cells(
+                    &world
+                        .get_resource::<TopSmalls>()
+                        .cloned()
+                        .unwrap_or_default(),
+                    strip_frames(assets, wall_trans_png),
+                )
+            } else {
+                Vec::new()
+            };
+            let trans_set: HashSet<(i32, i32)> = trans_cells.iter().map(|(c, _)| *c).collect();
+            for ((wx, wy), frame) in &trans_cells {
                 if let Some(mut s) = place_top_left(
                     assets,
-                    wall_top_png,
-                    frame,
-                    Vec2::new(wx as f32 * 16.0, wy as f32 * 16.0 - 8.0),
+                    wall_trans_png,
+                    *frame,
+                    Vec2::new(*wx as f32 * 16.0, *wy as f32 * 16.0 - 8.0),
                     [1.0; 4],
                     0.0,
                 ) {
                     s.z = Z_WALL_SUBTOP;
-                    wall_top.push(s);
+                    wall_trans.push(s);
                 }
             }
-        }
-        // Trans skirting: the live GML `TopSmall` instances (see
-        // [`TopSmalls`]) - the worldgen ring, extended one step out per
-        // broken wall by `FloorExplo`. Drawn from the Trans strip at `y - 8`.
-        let trans_cells: Vec<((i32, i32), i32)> = if has(wall_trans_png) {
-            trans_cells(
-                &world.get_resource::<TopSmalls>().cloned().unwrap_or_default(),
-                strip_frames(assets, wall_trans_png),
-            )
-        } else {
-            Vec::new()
-        };
-        let trans_set: HashSet<(i32, i32)> = trans_cells.iter().map(|(c, _)| *c).collect();
-        for ((wx, wy), frame) in &trans_cells {
-            if let Some(mut s) = place_top_left(
-                assets,
-                wall_trans_png,
-                *frame,
-                Vec2::new(*wx as f32 * 16.0, *wy as f32 * 16.0 - 8.0),
-                [1.0; 4],
-                0.0,
-            ) {
-                s.z = Z_WALL_SUBTOP;
-                wall_trans.push(s);
-            }
-        }
-        // Wall drop shadows (GML `scrShadows` wall half: the full Out
-        // sprite flipped under each wall with no `TopSmall` at
-        // `(x, y + 16)`).
-        if has(wall_out_png) {
-            let shadow_tint = shadow_color(area);
-            for cell in walls.iter().rev() {
-                let (wx, wy) = (cell.0, cell.1);
-                if trans_set.contains(&(wx, wy + 1)) {
-                    continue;
-                }
-                let frame = (wall_out_raw(seed, wx, wy) % out_frames.max(1) as usize) as i32;
-                if let Some(mut s) = assets.sprite_for_full(
-                    wall_out_png,
-                    frame,
-                    Vec2::new(wx as f32 * 16.0, wy as f32 * 16.0 + 18.0),
-                    false,
-                    true,
-                    0.0,
-                    // GML `scrShadows.gml:29` draws the wall `outspr` flipped
-                    // into the `shad` surface with `c_black` at alpha 1; the
-                    // surface itself is fogged to `shadow_color` at 0.4 by
-                    // `BackCont/Draw_0:11-12`.
-                    shadow_tint,
-                ) {
-                    s.z = Z_SHADOW;
-                    wall_shadows.push(s);
+            // Wall drop shadows (GML `scrShadows` wall half: the full Out
+            // sprite flipped under each wall with no `TopSmall` at
+            // `(x, y + 16)`).
+            if has(wall_out_png) {
+                let shadow_tint = shadow_color(area);
+                for cell in walls.iter().rev() {
+                    let (wx, wy) = (cell.0, cell.1);
+                    if trans_set.contains(&(wx, wy + 1)) {
+                        continue;
+                    }
+                    let frame = (wall_out_raw(seed, wx, wy) % out_frames.max(1) as usize) as i32;
+                    if let Some(mut s) = assets.sprite_for_full(
+                        wall_out_png,
+                        frame,
+                        Vec2::new(wx as f32 * 16.0, wy as f32 * 16.0 + 18.0),
+                        false,
+                        true,
+                        0.0,
+                        // GML `scrShadows.gml:29` draws the wall `outspr` flipped
+                        // into the `shad` surface with `c_black` at alpha 1; the
+                        // surface itself is fogged to `shadow_color` at 0.4 by
+                        // `BackCont/Draw_0:11-12`.
+                        shadow_tint,
+                    ) {
+                        s.z = Z_SHADOW;
+                        wall_shadows.push(s);
+                    }
                 }
             }
+            out.splice(floor_end..floor_end, wall_shadows.drain(..));
         }
-        out.splice(floor_end..floor_end, wall_shadows.drain(..));
-    }
         if let Some(key) = key {
             cache.key = Some(key);
             cache.prefix = Arc::from(out.clone());
@@ -4749,10 +4745,7 @@ pub(crate) fn letterbox_sprites(
     let bottom_x = vw;
     let mut out = Vec::new();
     let scale = 36.0 / 35.0;
-    for (x, y, flip_x, flip_y) in [
-        (top_x, -1.0, false, false),
-        (bottom_x, 242.0, true, true),
-    ] {
+    for (x, y, flip_x, flip_y) in [(top_x, -1.0, false, false), (bottom_x, 242.0, true, true)] {
         if let Some(mut sprite) = assets.sprite_for_full(
             "images/sprLetterbox.png",
             frame,
@@ -4791,17 +4784,20 @@ pub(crate) fn settings_slider_hit(
 ) -> Option<(usize, SettingSliderTarget)> {
     let row_left = vw * 0.5 - SETTINGS_SLIDER_ROW_HALF_WIDTH;
     let row_right = vw * 0.5 + SETTINGS_SLIDER_ROW_HALF_WIDTH + SETTINGS_SLIDER_ROW_EXTRA;
-    settings_hot_rows(page, vw).iter().enumerate().find_map(|(idx, row)| {
-        let target = match row.op {
-            SettingHotOp::Volume(channel) => SettingSliderTarget::Volume(channel),
-            SettingHotOp::Slider(key) => SettingSliderTarget::Slider(key),
-            _ => return None,
-        };
-        ((gy - row.gy).abs() <= SETTINGS_SLIDER_HIT_HALF_HEIGHT
-            && gx >= row_left - 4.0
-            && gx <= row_right + 4.0)
-            .then_some((idx, target))
-    })
+    settings_hot_rows(page, vw)
+        .iter()
+        .enumerate()
+        .find_map(|(idx, row)| {
+            let target = match row.op {
+                SettingHotOp::Volume(channel) => SettingSliderTarget::Volume(channel),
+                SettingHotOp::Slider(key) => SettingSliderTarget::Slider(key),
+                _ => return None,
+            };
+            ((gy - row.gy).abs() <= SETTINGS_SLIDER_HIT_HALF_HEIGHT
+                && gx >= row_left - 4.0
+                && gx <= row_right + 4.0)
+                .then_some((idx, target))
+        })
 }
 
 pub(crate) fn settings_slider_value(target: SettingSliderTarget, gx: f32, vw: f32) -> f32 {
@@ -4851,17 +4847,9 @@ fn push_settings_slider(
     ) {
         out.push(sprite);
     }
-    if let Some(sprite) = settings_slider_part(
-        assets,
-        view,
-        gm,
-        x,
-        y - 5.0,
-        4.0,
-        0.0,
-        fill + 5.0,
-        20.0,
-    ) {
+    if let Some(sprite) =
+        settings_slider_part(assets, view, gm, x, y - 5.0, 4.0, 0.0, fill + 5.0, 20.0)
+    {
         out.push(sprite);
     }
     if let Some(sprite) = assets.sprite_for(
@@ -5394,7 +5382,10 @@ pub fn credit_section_count() -> usize {
 pub fn unlock_popup_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
     use crate::state::menus::UnlockPopup;
     let cx = vw * 0.5;
-    let state = world.get_resource::<MenuState>().map(|m| m.unlock).unwrap_or_default();
+    let state = world
+        .get_resource::<MenuState>()
+        .map(|m| m.unlock)
+        .unwrap_or_default();
     let popup = world
         .get_resource::<MenuState>()
         .and_then(|m| m.unlock_queue.first().copied());
@@ -5446,10 +5437,7 @@ pub fn unlock_popup_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
         out.push(MenuGuiText {
             text: "CONTINUE".to_string(),
             gx: cx,
-            gy: 240.0
-                - 16.0
-                - state.addy2
-                - if state.pointed { 1.0 } else { 0.0 },
+            gy: 240.0 - 16.0 - state.addy2 - if state.pointed { 1.0 } else { 0.0 },
             color: if state.addy2 > 0.0 || state.pointed {
                 GUI_WHITE
             } else {
@@ -5611,9 +5599,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     .get_resource::<crate::comps_a::Run>()
                     .map(crate::progression::pick_loading_tip)
                     .unwrap_or_else(|| "KILL ENEMIES TO LEVEL UP".to_string());
-                if let Some(mut loading) =
-                    world.get_resource_mut::<crate::state::LoadingState>()
-                {
+                if let Some(mut loading) = world.get_resource_mut::<crate::state::LoadingState>() {
                     loading.tip = picked.clone();
                 } else if let Some(mut transition) =
                     world.get_resource_mut::<crate::comps_b::FloorTransition>()
@@ -6376,10 +6362,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     );
                 }
             } else {
-                push_gameover_text(
-                    &mut out,
-                    gui_center("GAME OVER", cx, 100.0, GUI_WHITE),
-                );
+                push_gameover_text(&mut out, gui_center("GAME OVER", cx, 100.0, GUI_WHITE));
             }
             let (appear, _hover) = world
                 .get_resource::<MenuState>()
@@ -6901,7 +6884,11 @@ pub fn settings_click_action(
     })?;
     let dir = match row.op {
         SettingHotOp::Cycle(_) => {
-            if gx >= row.cx { 1 } else { -1 }
+            if gx >= row.cx {
+                1
+            } else {
+                -1
+            }
         }
         _ => 0,
     };
@@ -7046,12 +7033,7 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
                     let second = parts.get(1).copied().unwrap_or("");
                     out.push(gui_body(first, 80.0, y - 4.0, GUI_CREAM));
                     out.push(gui_body(second, 80.0, y + 4.0, GUI_CREAM));
-                    out.push(gui_body(
-                        if on { "ON" } else { "OFF" },
-                        200.0,
-                        y,
-                        GUI_GRAY,
-                    ));
+                    out.push(gui_body(if on { "ON" } else { "OFF" }, 200.0, y, GUI_GRAY));
                 } else {
                     push_toggle(&mut out, label, y, on);
                 }
@@ -8000,9 +7982,8 @@ pub fn crosshair_sprites(
     // `gamepad[index] = opt_gamepad`. A touch-only device is never keyboard-driven, so a
     // touch local always draws the lerped crosshair - the GML Android cursor - and
     // `Draw_75` never fires there.
-    let (keyboard_local, _) = crate::input::gml_input_device(
-        world.get_resource::<crate::savedata_part::SaveData>(),
-    );
+    let (keyboard_local, _) =
+        crate::input::gml_input_device(world.get_resource::<crate::savedata_part::SaveData>());
     if keyboard_local {
         return out;
     }
@@ -8161,9 +8142,9 @@ fn enemy_shadow(kind: EnemyKind) -> Option<ShadowSpec> {
         EnemyKind::SnowTank => ShadowSpec::new("images/shd32.png", 0.0, 5.0),
         EnemyKind::GoldSnowtank => ShadowSpec::new("images/shd32.png", 0.0, 3.0),
         EnemyKind::RhinoFreak => ShadowSpec::new("images/shd24.png", -2.0, 4.0),
-        EnemyKind::LaserCrystal
-        | EnemyKind::LightningCrystal
-        | EnemyKind::InvLaserCrystal => ShadowSpec::new("images/shd24.png", 0.0, 4.0),
+        EnemyKind::LaserCrystal | EnemyKind::LightningCrystal | EnemyKind::InvLaserCrystal => {
+            ShadowSpec::new("images/shd24.png", 0.0, 4.0)
+        }
         EnemyKind::Jock
         | EnemyKind::JungleFly
         | EnemyKind::Salamander
@@ -8423,7 +8404,6 @@ pub fn go_button_pos(wh: [f32; 2], count: usize, bbox_h: f32) -> [f32; 2] {
         wh[1] - 36.0 + (bbox_h / 2.0).floor() - 2.0,
     ]
 }
-
 
 /// Character-pod hit size (GML `CharSelect` sprite bbox: the pods are
 /// `sprCharSelect` cells drawn at the layout origin; `title_click_action`
@@ -8789,16 +8769,7 @@ fn menu_loadout_sprites(
     }
 
     if !fullview {
-        menu_loadout_closed_sprites(
-            world,
-            assets,
-            vwvh,
-            selected,
-            true,
-            false,
-            to_world,
-            out,
-        );
+        menu_loadout_closed_sprites(world, assets, vwvh, selected, true, false, to_world, out);
         return;
     }
 
@@ -8868,10 +8839,7 @@ fn menu_loadout_sprites(
                 "images/sprLoadoutSkinLocked.png"
             },
             race_skin_subimage(race, j as u8),
-            to_world([
-                skins_x,
-                sy + openaddy - if selected { 1.0 } else { 0.0 },
-            ]),
+            to_world([skins_x, sy + openaddy - if selected { 1.0 } else { 0.0 }]),
             false,
             0.0,
             tint,
@@ -10052,11 +10020,7 @@ pub fn pause_button_sprite(
     let shown = world
         .get_resource::<crate::savedata_part::SaveData>()
         .is_some_and(|s| s.settings.pause_button)
-        && world
-            .query::<&Player>()
-            .iter(world)
-            .next()
-            .is_some();
+        && world.query::<&Player>().iter(world).next().is_some();
     if !shown {
         return None;
     }
@@ -10353,10 +10317,7 @@ pub fn menu_sprites(
                 let skin = screen.skin.map(|skin| skin as u8).unwrap_or(0);
                 let (path, frame) = if race == RaceId::Chicken && screen.hp <= 0 {
                     ("images/sprMapIconChickenHeadless.png", i32::from(skin))
-                } else if race == RaceId::Rebel
-                    && skin == 1
-                    && area == AreaId::FrozenCity
-                {
+                } else if race == RaceId::Rebel && skin == 1 && area == AreaId::FrozenCity {
                     ("images/sprMapIconRebelBHooded.png", 0)
                 } else {
                     (
@@ -10630,7 +10591,9 @@ pub fn menu_sprites(
                 .map(|m| m.settings_splat_get(page, cursor))
                 .unwrap_or(0.0);
             if splat > 0.0
-                && menu.as_ref().is_some_and(|m| m.settings_cursor != usize::MAX)
+                && menu
+                    .as_ref()
+                    .is_some_and(|m| m.settings_cursor != usize::MAX)
                 && let Some(row) = settings_hot_rows(page, vw).get(cursor)
                 && !matches!(row.op, SettingHotOp::Back)
                 && settings_row_available(world, page, row)
@@ -10638,8 +10601,7 @@ pub fn menu_sprites(
             {
                 if let Some(s) = assets.sprite_for(
                     "images/sprMainMenuSplat.png",
-                    (splat.floor() as i32)
-                        .min(crate::state::menus::SETTINGS_SPLAT_MAX as i32),
+                    (splat.floor() as i32).min(crate::state::menus::SETTINGS_SPLAT_MAX as i32),
                     gui_to_world(cx, row.gy),
                     false,
                     0.0,
@@ -10678,9 +10640,7 @@ pub fn menu_sprites(
                         (96.0, settings.ambience_volume),
                         (116.0, settings.sfx_volume),
                     ] {
-                        push_settings_slider(
-                            &mut out, assets, view, gm, slider_x, y, value, 1.0,
-                        );
+                        push_settings_slider(&mut out, assets, view, gm, slider_x, y, value, 1.0);
                     }
                 }
                 2 => {
@@ -10735,7 +10695,11 @@ pub fn menu_sprites(
                 view,
                 gm,
                 false,
-                if back_hover { [1.0; 4] } else { [0.7, 0.7, 0.7, 1.0] },
+                if back_hover {
+                    [1.0; 4]
+                } else {
+                    [0.7, 0.7, 0.7, 1.0]
+                },
             );
             let gamepad_ui = gamepad_ui_on(world);
             if gamepad_ui {
@@ -10906,15 +10870,19 @@ pub fn menu_sprites(
             ) {
                 out.push(s);
             }
-
         }
         crate::MenuOverlay::Unlock => {
             use crate::state::menus::{UnlockPopup, race_skin_subimage};
-            let state = world.get_resource::<MenuState>().map(|m| m.unlock).unwrap_or_default();
+            let state = world
+                .get_resource::<MenuState>()
+                .map(|m| m.unlock)
+                .unwrap_or_default();
             let popup = world
                 .get_resource::<MenuState>()
                 .and_then(|m| m.unlock_queue.first().copied());
-            if state.visible && let Some(popup) = popup {
+            if state.visible
+                && let Some(popup) = popup
+            {
                 let (race_gml, skin) = match popup {
                     UnlockPopup::Race(race) => (race as usize, 0u8),
                     UnlockPopup::Skin(race, skin) => (race as usize, skin),
@@ -10976,7 +10944,10 @@ pub fn pause_button_sprites(
         &["MENU", "RETRY", "SETTINGS", "CONTINUE"]
     };
     let positions: &[(f32, f32, i32)] = if confirm.is_some() {
-        &[(52.0, 192.0, 4), (vw - 52.0, 192.0, if confirm == Some(0) { 5 } else { 6 })]
+        &[
+            (52.0, 192.0, 4),
+            (vw - 52.0, 192.0, if confirm == Some(0) { 5 } else { 6 }),
+        ]
     } else {
         &[
             (45.0, 176.0, 0),
@@ -10985,10 +10956,7 @@ pub fn pause_button_sprites(
             (vw - 78.0, 208.0, 3),
         ]
     };
-    let hover = menu
-        .as_ref()
-        .map(|m| m.hover_label.as_str())
-        .unwrap_or("");
+    let hover = menu.as_ref().map(|m| m.hover_label.as_str()).unwrap_or("");
     let mut out = Vec::new();
     for (i, (label, (x, y, frame))) in labels.iter().zip(positions.iter()).enumerate() {
         let appear = menu
@@ -11313,7 +11281,6 @@ pub fn fx_texts(world: &mut World) -> Vec<WorldText> {
         })
         .collect()
 }
-
 
 /// World-anchored HUD labels for the repose `Text` overlay: run extras
 /// with no bevy `nt_hud_overlay` equivalent (toast, floor/score/kills, GML clock + map
@@ -11658,10 +11625,16 @@ mod ui_parity_regression {
         // TOTAL box centers on its own gx=110.
         let (total_left, total_w) = (dp[0].1[0], dp[0].4);
         let k = 3.0f32;
-        assert!((total_left + total_w * 0.5 - 110.0 * k).abs() < 1.0, "{dp:?}");
+        assert!(
+            (total_left + total_w * 0.5 - 110.0 * k).abs() < 1.0,
+            "{dp:?}"
+        );
         // PLAY centers on the view center (426.667/2 = 213.33 GUI px).
         let (play_left, play_w) = (dp[1].1[0], dp[1].4);
-        assert!((play_left + play_w * 0.5 - 213.3333 * k).abs() < 1.0, "{dp:?}");
+        assert!(
+            (play_left + play_w * 0.5 - 213.3333 * k).abs() < 1.0,
+            "{dp:?}"
+        );
     }
 
     /// GML `draw_stat` law: the name right-aligns on `statx - 1`, so
@@ -11688,7 +11661,10 @@ mod ui_parity_regression {
         // column anchor (no extra offset here).
         let k = 3.0f32;
         let ox = (1280.0 - gml_view_size([1280.0, 720.0])[0] * k) * 0.5;
-        assert!((dp[0].1[0] + dp[0].4 - (ox + 109.0 * k)).abs() < 0.01, "{dp:?}");
+        assert!(
+            (dp[0].1[0] + dp[0].4 - (ox + 109.0 * k)).abs() < 0.01,
+            "{dp:?}"
+        );
     }
 
     /// Narrow-window contain-fit: on a 600x800 portrait canvas the

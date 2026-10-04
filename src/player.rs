@@ -10,19 +10,19 @@ use repame_sim::SimTime;
 
 use crate::audio::{AudioCue, GameAudio};
 use crate::comps_a::{
-    AbilityHazard, AimDir, DamageSource, FloorMask, GameCleanup, Health, HitId,
-    Inventory, LevelCleanup, Player, Projectile, RaceState, Team, Velocity,
+    AbilityHazard, AimDir, DamageSource, FloorMask, GameCleanup, Health, HitId, Inventory,
+    LevelCleanup, Player, Projectile, RaceState, Team, Velocity,
 };
 use crate::comps_b::{
     Ally, Dash, Enemy, EnemyBrain, FrogCharge, HazardCloud, HorrorCharge, Portal, PortalState,
     PortalSucking, Prop, Shield, Telekinesis, WeaponVisual, WeaponVisualOwner,
 };
 use crate::data::{AbilityKind, EnemyKind, HazardKind, RaceId, WeaponId};
-use crate::weapon_runtime::weapon_runtime_def;
 use crate::input::NtInput;
 use crate::msg::Queue;
 use crate::spatial::{Pos, clamp_to_arena, resolve_mask_circle, resolve_prop_collision};
 use crate::time::{GTimer, TimerMode};
+use crate::weapon_runtime::weapon_runtime_def;
 
 use super::spatial::PLAYER_RADIUS;
 
@@ -99,7 +99,6 @@ pub fn player_move(
     resolve_mask_circle(&mask, &mut pos.0, PLAYER_RADIUS);
     clamp_to_arena(&mut pos.0, PLAYER_RADIUS);
 }
-
 
 // SIM-side player systems: headless port of the non-render half of the GML player scripts.
 // RENDERER-OWNED (resolved in `render.rs` from sim state, no systems here):
@@ -244,8 +243,8 @@ pub fn weapon_switch(
         // `scrSwapWeps` - no tutorial latch either. The old code cycled onto
         // the same slot, set `switched`, and stalled the tutorial at
         // Swapping with one gun.
-        let has_second = (0..inv.weapon_slots)
-            .any(|s| s != inv.current && inv.weapons[s] != WeaponId::NONE);
+        let has_second =
+            (0..inv.weapon_slots).any(|s| s != inv.current && inv.weapons[s] != WeaponId::NONE);
         if has_second {
             let direction = if cycle > 0 { 1 } else { inv.weapon_slots - 1 };
 
@@ -589,11 +588,7 @@ pub fn tick_hold_abilities(
                 timer: GTimer::from_seconds(0.25, TimerMode::Once),
             });
         }
-        let free_x = |p: glam::Vec2| {
-            floor
-                .as_ref()
-                .is_none_or(|m| m.is_walkable(p))
-        };
+        let free_x = |p: glam::Vec2| floor.as_ref().is_none_or(|m| m.is_walkable(p));
         for (epos, mut evel) in &mut enemies {
             let epos_v = epos.0;
             if (epos_v.x - pos.x).abs() > 160.0 || (epos_v.y - pos.y).abs() > 120.0 {
@@ -888,9 +883,8 @@ pub fn tick_loop_sfx(
         let held = input.spec_held;
         let tb = player.throne_butt;
         // GML Eyes hold (`scrPowers` Eyes branch).
-        let eyes = race_state.race == RaceId::Eyes
-            && player.ability == AbilityKind::Telekinesis
-            && held;
+        let eyes =
+            race_state.race == RaceId::Eyes && player.ability == AbilityKind::Telekinesis && held;
         if eyes != player.eyes_loop_on {
             player.eyes_loop_on = eyes;
             push_loop_cue(
@@ -903,9 +897,8 @@ pub fn tick_loop_sfx(
             );
         }
         // GML Horror hold (`scrPowers:296-298`).
-        let horror = race_state.race == RaceId::Horror
-            && player.ability == AbilityKind::HorrorBeam
-            && held;
+        let horror =
+            race_state.race == RaceId::Horror && player.ability == AbilityKind::HorrorBeam && held;
         if horror != player.horror_loop_on {
             player.horror_loop_on = horror;
             push_loop_cue(
@@ -933,8 +926,7 @@ pub fn tick_loop_sfx(
         }
         // GML chicken headless (`Player/Step_0:206-235`): loop while the
         // head debt is banked; stop + regen cue on heal (`Step_0:47-48`).
-        let headless =
-            race_state.race == RaceId::Chicken && health.hp > 0 && player.headloses > 0;
+        let headless = race_state.race == RaceId::Chicken && health.hp > 0 && player.headloses > 0;
         if headless != player.chicken_headless_loop_on {
             player.chicken_headless_loop_on = headless;
             if headless {
@@ -962,7 +954,12 @@ pub fn tick_loop_sfx(
             push_loop_cue(&mut cues, LoopSfx::Portal.stop_cue(false));
         }
     }
-    for gone in looping_portals.iter().filter(|e| !live_portals.contains(e)).copied().collect::<Vec<_>>() {
+    for gone in looping_portals
+        .iter()
+        .filter(|e| !live_portals.contains(e))
+        .copied()
+        .collect::<Vec<_>>()
+    {
         looping_portals.remove(&gone);
         push_loop_cue(&mut cues, LoopSfx::Portal.stop_cue(false));
     }
@@ -981,7 +978,12 @@ pub fn tick_loop_sfx(
             push_loop_cue(&mut cues, LoopSfx::Salamander.stop_cue(false));
         }
     }
-    for gone in looping_salamanders.iter().filter(|e| !live_sal.contains(e)).copied().collect::<Vec<_>>() {
+    for gone in looping_salamanders
+        .iter()
+        .filter(|e| !live_sal.contains(e))
+        .copied()
+        .collect::<Vec<_>>()
+    {
         looping_salamanders.remove(&gone);
         push_loop_cue(&mut cues, LoopSfx::Salamander.stop_cue(false));
     }

@@ -12,8 +12,8 @@ use repame_sim::SimTime;
 
 use crate::audio::AudioCue;
 use crate::comps_a::{
-    CrownState, FloorStarted, GameCleanup, Health, Hitbox, Inventory, LevelCleanup, NextHurt, Player,
-    Projectile, Run, Team, Toast, Velocity,
+    CrownState, FloorStarted, GameCleanup, Health, Hitbox, Inventory, LevelCleanup, NextHurt,
+    Player, Projectile, Run, Team, Toast, Velocity,
 };
 use crate::comps_b::{
     Ally, ChestKind, CrownObject, CrownPedestal, Enemy, Pickup, PickupKind, Prop, PropHpTracker,
@@ -55,11 +55,7 @@ fn vault_statue_angle(rng: &mut impl RngExt) -> f32 {
 /// `do..until` rejection loop draws at least once); else none. `crownvisits` is the
 /// port's `SecretTriggers::vaults_entered`, incremented on entry like GML's
 /// room-start `GameCont/Other_4.gml:8`.
-pub fn vault_statue_angles(
-    crownvisits: u8,
-    crown_object: bool,
-    rng: &mut impl RngExt,
-) -> Vec<f32> {
+pub fn vault_statue_angles(crownvisits: u8, crown_object: bool, rng: &mut impl RngExt) -> Vec<f32> {
     if crownvisits >= 3 {
         return vec![0.0, 90.0, 180.0, 270.0];
     }
@@ -362,16 +358,7 @@ pub fn crown_floor_start_bonus(
     mut started: ResMut<Queue<FloorStarted>>,
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
-    mut q: Query<
-        (
-            &Player,
-            &mut CrownState,
-            &mut Inventory,
-            &Pos,
-            &mut Health,
-        ),
-        With<Player>,
-    >,
+    mut q: Query<(&Player, &mut CrownState, &mut Inventory, &Pos, &mut Health), With<Player>>,
 ) {
     let mut start: Option<FloorStarted> = None;
     for event in started.drain() {
@@ -430,17 +417,32 @@ pub fn crown_name_text_gml(gml: u8) -> (&'static str, &'static str) {
         0 => ("RANDOM", "???"),
         1 => ("NO CROWN", "A BARE HEAD#IS A FAIR HEAD"),
         2 => ("CROWN OF DEATH", "BIGGER @wEXPLOSIONS#@s-1 @rMAX HP@s"),
-        3 => ("CROWN OF LIFE", "NO @rHP DROPS@s#@rBIG HP CHESTS@s MORE COMMON"),
+        3 => (
+            "CROWN OF LIFE",
+            "NO @rHP DROPS@s#@rBIG HP CHESTS@s MORE COMMON",
+        ),
         4 => ("CROWN OF HASTE", "@wPICKUPS@s FADE FAST#ARE WORTH MORE"),
         5 => ("CROWN OF GUNS", "NO @yAMMO DROPS@s#MORE @wWEAPON DROPS"),
-        6 => ("CROWN OF HATRED", "TAKE @wDAMAGE@s AND GAIN @gRADS@s#WHEN OPENING @wCHESTS@s"),
+        6 => (
+            "CROWN OF HATRED",
+            "TAKE @wDAMAGE@s AND GAIN @gRADS@s#WHEN OPENING @wCHESTS@s",
+        ),
         7 => ("CROWN OF BLOOD", "MORE @wENEMIES@s#FEWER @gRADS@s"),
         8 => ("CROWN OF DESTINY", "FREE @gMUTATION@s#NARROW FUTURE"),
         9 => ("CROWN OF LOVE", "@yAMMO@s CHESTS ONLY"),
-        10 => ("CROWN OF LUCK", "START @wAREAS@s AT 1 @rHP@s#CHANCE @wENEMIES@s HAVE 1 @rHP@s"),
+        10 => (
+            "CROWN OF LUCK",
+            "START @wAREAS@s AT 1 @rHP@s#CHANCE @wENEMIES@s HAVE 1 @rHP@s",
+        ),
         11 => ("CROWN OF CURSES", "A LOT MORE @pCURSED CHESTS@s"),
-        12 => ("CROWN OF RISK", "MORE @wDROPS@s WHEN AT FULL @rHP@s#LESS @wDROPS@s WHEN NOT"),
-        _ => ("CROWN OF PROTECTINON", "@wWEAPONS@s CONTAIN @rHP@s#INSTEAD OF @yAMMO@s"),
+        12 => (
+            "CROWN OF RISK",
+            "MORE @wDROPS@s WHEN AT FULL @rHP@s#LESS @wDROPS@s WHEN NOT",
+        ),
+        _ => (
+            "CROWN OF PROTECTINON",
+            "@wWEAPONS@s CONTAIN @rHP@s#INSTEAD OF @yAMMO@s",
+        ),
     }
 }
 

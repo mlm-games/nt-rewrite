@@ -77,10 +77,7 @@ impl NtAction {
 }
 
 fn chord(c: char) -> KeymapEntry {
-    KeymapEntry::Key(KeyChord::new(
-        Key::Character(c),
-        Modifiers::default(),
-    ))
+    KeymapEntry::Key(KeyChord::new(Key::Character(c), Modifiers::default()))
 }
 
 fn chord_shift(c: char) -> KeymapEntry {
@@ -99,14 +96,8 @@ fn chord_shift(c: char) -> KeymapEntry {
 /// `pick` is E.
 pub fn default_keymap() -> Keymap<NtAction> {
     let mut map = Keymap::new();
-    map.set_keyboard(
-        NtAction::Fire,
-        KeymapEntry::Mouse(PointerButton::Primary),
-    );
-    map.set_keyboard(
-        NtAction::Spec,
-        KeymapEntry::Mouse(PointerButton::Secondary),
-    );
+    map.set_keyboard(NtAction::Fire, KeymapEntry::Mouse(PointerButton::Primary));
+    map.set_keyboard(NtAction::Spec, KeymapEntry::Mouse(PointerButton::Secondary));
     map.set_keyboard(
         NtAction::Swap,
         KeymapEntry::Key(KeyChord::new(Key::Space, Modifiers::default())),
@@ -130,15 +121,9 @@ pub fn default_keymap() -> Keymap<NtAction> {
     );
     map.set_gamepad(NtAction::Pick, KeymapEntry::Pad(GamepadButton::South));
     map.set_gamepad(NtAction::North, KeymapEntry::Pad(GamepadButton::DPadUp));
-    map.set_gamepad(
-        NtAction::South,
-        KeymapEntry::Pad(GamepadButton::DPadDown),
-    );
+    map.set_gamepad(NtAction::South, KeymapEntry::Pad(GamepadButton::DPadDown));
     map.set_gamepad(NtAction::West, KeymapEntry::Pad(GamepadButton::DPadLeft));
-    map.set_gamepad(
-        NtAction::East,
-        KeymapEntry::Pad(GamepadButton::DPadRight),
-    );
+    map.set_gamepad(NtAction::East, KeymapEntry::Pad(GamepadButton::DPadRight));
     // Shift is the keyboard-side `spec` fallback next to RMB: GML
     // binds `spec` to `mb_right` only. The sampler ORs the Shift
     // levels in next to the row, so a rebound Shift key keeps working.
@@ -167,10 +152,7 @@ impl KeyBindings {
             if row.keyboard.is_empty() {
                 map.set_keyboard(action, repame_input::KeymapEntry::None);
             } else {
-                map.set_keyboard(
-                    action,
-                    repame_input::decode_keymap_entry(&row.keyboard),
-                );
+                map.set_keyboard(action, repame_input::decode_keymap_entry(&row.keyboard));
             }
             if row.gamepad.is_empty() {
                 map.set_gamepad(action, repame_input::KeymapEntry::None);

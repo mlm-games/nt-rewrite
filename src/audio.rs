@@ -175,7 +175,6 @@ impl GameAudio {
         Self::cue(cues, "sndPickupDisappear", 1.0, 0.0);
     }
 
-
     /// GML `Rad/Step_0.gml:33` `snd_play(sndRadPickup)`.
     pub fn play_rad_pickup(&self, cues: &mut Queue<AudioCue>) {
         Self::cue(cues, "sndRadPickup", 1.0, 0.0);
@@ -321,7 +320,6 @@ impl GameAudio {
         }
     }
 }
-
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum MusicCue {
@@ -871,7 +869,6 @@ pub fn init_area_audio_resources(world: &mut World) {
         .map_or(0.0, |t| t.delta_secs);
     world.resource_mut::<MainVol>().step(dt);
 }
-
 
 /// Headless mirror of the bevy menu `UiAction` (variant shapes kept so
 /// the mapping below ports verbatim; the real menu slice owns the

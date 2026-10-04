@@ -193,7 +193,9 @@ pub fn tick_tutorial(world: &mut World, dt: f32) {
         // DONE HERE!" bar is still on screen, because `Draw_64` only
         // hides it once the Portal exists.
         tut.portal_open = true;
-        world.resource_mut::<crate::savedata_part::SaveData>().tutorial_done = true;
+        world
+            .resource_mut::<crate::savedata_part::SaveData>()
+            .tutorial_done = true;
         world.resource_mut::<crate::comps_a::SaveDirty>().0 = true;
     } else if tut.step == TutorialStep::Fin {
         // GML `Alarm_0:8` `if (step_current == Fin) alarm[0] = 45`.

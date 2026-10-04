@@ -286,11 +286,7 @@ pub fn capture_game_over(world: &mut World) -> Option<GameOverScreen> {
         return None;
     }
     let player = world
-        .query::<(
-            &crate::comps_a::RaceState,
-            &crate::comps_a::Health,
-            &Player,
-        )>()
+        .query::<(&crate::comps_a::RaceState, &crate::comps_a::Health, &Player)>()
         .iter(world)
         .next()
         .map(|(race_state, health, player)| {
@@ -304,8 +300,8 @@ pub fn capture_game_over(world: &mut World) -> Option<GameOverScreen> {
             )
         });
     let run = world.get_resource::<Run>()?;
-    let (race, skin, hp, ultra, mutations, patience_used) = player
-        .unwrap_or((None, None, 0, None, Vec::new(), false));
+    let (race, skin, hp, ultra, mutations, patience_used) =
+        player.unwrap_or((None, None, 0, None, Vec::new(), false));
     let screen = GameOverScreen {
         world: run.world,
         floor_in_world: crate::worldgen::floor_in_world(run.floor),
@@ -2285,7 +2281,9 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
             .get_resource::<repame_sim::SimTime>()
             .map(|time| (time.delta_secs * 30.0).max(0.0))
             .unwrap_or(1.0);
-        let player_gone = !world.iter_entities().any(|entity| entity.contains::<Player>());
+        let player_gone = !world
+            .iter_entities()
+            .any(|entity| entity.contains::<Player>());
         if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
             if menu.unlock_queue.is_empty() {
                 menu.unlock = UnlockPopupState::default();
@@ -2498,10 +2496,7 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
     // (`game_restart()` - same path as the death RETRY: immediate
     // restart through Loading). GML gates only on typing/console/
     // public lobbies, none of which the port implements.
-    if edge.restart_pressed
-        && !run_over
-        && *world.resource::<OverlayMenu>() == OverlayMenu::None
-    {
+    if edge.restart_pressed && !run_over && *world.resource::<OverlayMenu>() == OverlayMenu::None {
         goto_state(world, AppState::Loading);
         return;
     }
@@ -2566,9 +2561,7 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
         if delta != 0 {
             let index = world
                 .get_resource::<MenuState>()
-                .map(|menu| {
-                    (menu.pause_cursor as i16 + delta).rem_euclid(count as i16) as usize
-                })
+                .map(|menu| (menu.pause_cursor as i16 + delta).rem_euclid(count as i16) as usize)
                 .unwrap_or(0);
             let label = if let Some(kind) = pause_kind {
                 if index == 0 {

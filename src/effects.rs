@@ -7,7 +7,9 @@
 
 use bevy_ecs::prelude::*;
 use glam::Vec2;
-use repame_fx::{DamageNumber, EaseKind, Flash, Gradient, Particle, Trauma, step_numbers, step_particles};
+use repame_fx::{
+    DamageNumber, EaseKind, Flash, Gradient, Particle, Trauma, step_numbers, step_particles,
+};
 use repame_sim::SimTime;
 
 use crate::msg::Queue;
@@ -181,7 +183,6 @@ pub fn flash_rgba(world: &World) -> Option<[f32; 4]> {
     }
     world.get_resource::<Flash>().and_then(|f| f.rgba())
 }
-
 
 /// Hit-stop dip state (game-utils `HitStop` parity).
 #[derive(Resource, Clone, Debug)]

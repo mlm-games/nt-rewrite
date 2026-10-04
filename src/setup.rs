@@ -2407,149 +2407,98 @@ pub fn setup_title_campfire(world: &mut World) {
                 );
                 let mut commands = world.commands();
                 for at in cacti {
-                spawn_prop_sim(
-                    &mut commands,
-                    &catalog,
-                    &camp_run,
-                    crate::worldgen::PropKind::NightCactus,
-                    at,
-                    false,
-                );
-            }
-            // `Alarm_1` topdecal half: night-desert top decals ride the
-            // `GroundDecal` prop (art resolves to the night strip
-            // renderer-side via the Campfire area).
-            for at in decals {
-                spawn_prop_sim(
-                    &mut commands,
-                    &catalog,
-                    &camp_run,
-                    crate::worldgen::PropKind::GroundDecal,
-                    at,
-                    false,
-                );
-            }
-            // `scrCampfireMenuCreate` actors in world px: Campfire (64,64) +
-            // LogMenu (64,32), four fixed starters, scattered Plant..Cuz,
-            // chicken TV, BigDog sleepers. Positions were computed above
-            // (dressing gates on them); only unlocked races got campers (locked
-            // return `noone` in GML). Every camper pops a `PortalClear`
-            // (`MenuGen/Alarm_1`). Actors carry their idle `SpriteAnim`
-            // (`sprCampfire` 4f @ 0.4, `sprLogMenu`, per-race `*Menu`, `sprTV`).
-            let mut campfire_e = commands.spawn((
-                GameCleanup,
-                LevelCleanup,
-                crate::comps_b::TitleCampfire,
-                Pos(camp_px),
-            ));
-            // GML `Campfire/Create_0`: 1-in-200 bear cameo (+ `alarm[6]`
-            // music cue, audio-side).
-            let campfire_idle = if rng.random_range(0.0..200.0) < 1.0 {
-                "images/sprCampfireBear.png"
-            } else {
-                "images/sprCampfire.png"
-            };
-            if let Some(def) = catalog.def(campfire_idle) {
-                campfire_e.insert(SpriteAnim::new(campfire_idle, def));
-            }
-            let mut logmenu_e = commands.spawn((
-                GameCleanup,
-                LevelCleanup,
-                crate::comps_b::TitleLogMenu,
-                Pos(glam::Vec2::new(64.0, 32.0)),
-            ));
-            if let Some(def) = catalog.def("images/sprLogMenu.png") {
-                logmenu_e.insert(SpriteAnim::new("images/sprLogMenu.png", def));
-            }
-            // GML race ids: Fish 1, Crystal 2, Eyes 3, Melting 4.
-            for (gml, at) in fixed_campers {
-                let mut e = commands.spawn((
-                    GameCleanup,
-                    LevelCleanup,
-                    crate::comps_b::TitleCampChar {
-                        race_gml: gml,
-                        fixed: true,
-                        swap: None,
-                    },
-                    Pos(at),
-                ));
-                let strip = crate::comps_b::camper_menu_strip(gml);
-                if let Some(def) = catalog.def(strip) {
-                    e.insert(SpriteAnim::new(strip, def));
+                    spawn_prop_sim(
+                        &mut commands,
+                        &catalog,
+                        &camp_run,
+                        crate::worldgen::PropKind::NightCactus,
+                        at,
+                        false,
+                    );
                 }
-            }
-            // Scattered Plant..Cuz from the precomputed positions
-            // above (the distance law ran there, against the full
-            // camper list, like GML).
-            for (gml, at) in scattered {
-                let mut e = commands.spawn((
-                    GameCleanup,
-                    LevelCleanup,
-                    crate::comps_b::TitleCampChar {
-                        race_gml: gml,
-                        fixed: false,
-                        swap: None,
-                    },
-                    Pos(at),
-                ));
-                let strip = crate::comps_b::camper_menu_strip(gml);
-                if let Some(def) = catalog.def(strip) {
-                    e.insert(SpriteAnim::new(strip, def));
+                // `Alarm_1` topdecal half: night-desert top decals ride the
+                // `GroundDecal` prop (art resolves to the night strip
+                // renderer-side via the Campfire area).
+                for at in decals {
+                    spawn_prop_sim(
+                        &mut commands,
+                        &catalog,
+                        &camp_run,
+                        crate::worldgen::PropKind::GroundDecal,
+                        at,
+                        false,
+                    );
                 }
-            }
-            // Scatter-overflow clears (one per failed try past 50).
-            for clear_at in scatter_clears {
-                commands.spawn((
+                // `scrCampfireMenuCreate` actors in world px: Campfire (64,64) +
+                // LogMenu (64,32), four fixed starters, scattered Plant..Cuz,
+                // chicken TV, BigDog sleepers. Positions were computed above
+                // (dressing gates on them); only unlocked races got campers (locked
+                // return `noone` in GML). Every camper pops a `PortalClear`
+                // (`MenuGen/Alarm_1`). Actors carry their idle `SpriteAnim`
+                // (`sprCampfire` 4f @ 0.4, `sprLogMenu`, per-race `*Menu`, `sprTV`).
+                let mut campfire_e = commands.spawn((
                     GameCleanup,
                     LevelCleanup,
-                    PortalClear {
-                        timer: crate::time::GTimer::from_seconds(
-                            5.0 / 30.0,
-                            crate::time::TimerMode::Once,
-                        ),
-                        scale: 1.0,
-                    },
-                    Pos(clear_at),
+                    crate::comps_b::TitleCampfire,
+                    Pos(camp_px),
                 ));
-            }
-            // Chicken TV + 2 half-scale clears (`scrCampfireMenuCreate`
-            // chicken arm verbatim: TV at `x + orandom(2), y + orandom(4)
-            // - 32`, clears at `(x, y + 16)` and `(x, y)` rescaled 0.5).
-            if let Some(at) = chicken_at {
-                let mut tv_e = commands.spawn((
-                    GameCleanup,
-                    LevelCleanup,
-                    crate::comps_b::TitleTv,
-                    Pos(glam::Vec2::new(
-                        at.x + rng.random_range(-2.0..2.0),
-                        at.y - 32.0 + rng.random_range(-4.0..4.0),
-                    )),
-                ));
-                if let Some(def) = catalog.def("images/sprTV.png") {
-                    tv_e.insert(SpriteAnim::new("images/sprTV.png", def));
+                // GML `Campfire/Create_0`: 1-in-200 bear cameo (+ `alarm[6]`
+                // music cue, audio-side).
+                let campfire_idle = if rng.random_range(0.0..200.0) < 1.0 {
+                    "images/sprCampfireBear.png"
+                } else {
+                    "images/sprCampfire.png"
+                };
+                if let Some(def) = catalog.def(campfire_idle) {
+                    campfire_e.insert(SpriteAnim::new(campfire_idle, def));
                 }
-                for off in [glam::Vec2::new(0.0, 16.0), glam::Vec2::ZERO] {
-                    commands.spawn((
+                let mut logmenu_e = commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    crate::comps_b::TitleLogMenu,
+                    Pos(glam::Vec2::new(64.0, 32.0)),
+                ));
+                if let Some(def) = catalog.def("images/sprLogMenu.png") {
+                    logmenu_e.insert(SpriteAnim::new("images/sprLogMenu.png", def));
+                }
+                // GML race ids: Fish 1, Crystal 2, Eyes 3, Melting 4.
+                for (gml, at) in fixed_campers {
+                    let mut e = commands.spawn((
                         GameCleanup,
                         LevelCleanup,
-                        PortalClear {
-                            timer: crate::time::GTimer::from_seconds(
-                                5.0 / 30.0,
-                                crate::time::TimerMode::Once,
-                            ),
-                            scale: 0.5,
+                        crate::comps_b::TitleCampChar {
+                            race_gml: gml,
+                            fixed: true,
+                            swap: None,
                         },
-                        Pos(at + off),
+                        Pos(at),
                     ));
+                    let strip = crate::comps_b::camper_menu_strip(gml);
+                    if let Some(def) = catalog.def(strip) {
+                        e.insert(SpriteAnim::new(strip, def));
+                    }
                 }
-            }
-            if let Some(at) = bigdog_at {
-                for off in [
-                    glam::Vec2::new(-32.0, 0.0),
-                    glam::Vec2::new(32.0, 0.0),
-                    glam::Vec2::new(0.0, -32.0),
-                    glam::Vec2::new(0.0, 32.0),
-                ] {
+                // Scattered Plant..Cuz from the precomputed positions
+                // above (the distance law ran there, against the full
+                // camper list, like GML).
+                for (gml, at) in scattered {
+                    let mut e = commands.spawn((
+                        GameCleanup,
+                        LevelCleanup,
+                        crate::comps_b::TitleCampChar {
+                            race_gml: gml,
+                            fixed: false,
+                            swap: None,
+                        },
+                        Pos(at),
+                    ));
+                    let strip = crate::comps_b::camper_menu_strip(gml);
+                    if let Some(def) = catalog.def(strip) {
+                        e.insert(SpriteAnim::new(strip, def));
+                    }
+                }
+                // Scatter-overflow clears (one per failed try past 50).
+                for clear_at in scatter_clears {
                     commands.spawn((
                         GameCleanup,
                         LevelCleanup,
@@ -2560,24 +2509,75 @@ pub fn setup_title_campfire(world: &mut World) {
                             ),
                             scale: 1.0,
                         },
-                        Pos(at + off),
+                        Pos(clear_at),
                     ));
                 }
-            }
-            for at in campers {
-                commands.spawn((
-                    GameCleanup,
-                    LevelCleanup,
-                    PortalClear {
-                        timer: crate::time::GTimer::from_seconds(
-                            5.0 / 30.0,
-                            crate::time::TimerMode::Once,
-                        ),
-                        scale: 1.0,
-                    },
-                    Pos(at),
-                ));
-            }
+                // Chicken TV + 2 half-scale clears (`scrCampfireMenuCreate`
+                // chicken arm verbatim: TV at `x + orandom(2), y + orandom(4)
+                // - 32`, clears at `(x, y + 16)` and `(x, y)` rescaled 0.5).
+                if let Some(at) = chicken_at {
+                    let mut tv_e = commands.spawn((
+                        GameCleanup,
+                        LevelCleanup,
+                        crate::comps_b::TitleTv,
+                        Pos(glam::Vec2::new(
+                            at.x + rng.random_range(-2.0..2.0),
+                            at.y - 32.0 + rng.random_range(-4.0..4.0),
+                        )),
+                    ));
+                    if let Some(def) = catalog.def("images/sprTV.png") {
+                        tv_e.insert(SpriteAnim::new("images/sprTV.png", def));
+                    }
+                    for off in [glam::Vec2::new(0.0, 16.0), glam::Vec2::ZERO] {
+                        commands.spawn((
+                            GameCleanup,
+                            LevelCleanup,
+                            PortalClear {
+                                timer: crate::time::GTimer::from_seconds(
+                                    5.0 / 30.0,
+                                    crate::time::TimerMode::Once,
+                                ),
+                                scale: 0.5,
+                            },
+                            Pos(at + off),
+                        ));
+                    }
+                }
+                if let Some(at) = bigdog_at {
+                    for off in [
+                        glam::Vec2::new(-32.0, 0.0),
+                        glam::Vec2::new(32.0, 0.0),
+                        glam::Vec2::new(0.0, -32.0),
+                        glam::Vec2::new(0.0, 32.0),
+                    ] {
+                        commands.spawn((
+                            GameCleanup,
+                            LevelCleanup,
+                            PortalClear {
+                                timer: crate::time::GTimer::from_seconds(
+                                    5.0 / 30.0,
+                                    crate::time::TimerMode::Once,
+                                ),
+                                scale: 1.0,
+                            },
+                            Pos(at + off),
+                        ));
+                    }
+                }
+                for at in campers {
+                    commands.spawn((
+                        GameCleanup,
+                        LevelCleanup,
+                        PortalClear {
+                            timer: crate::time::GTimer::from_seconds(
+                                5.0 / 30.0,
+                                crate::time::TimerMode::Once,
+                            ),
+                            scale: 1.0,
+                        },
+                        Pos(at),
+                    ));
+                }
             })
         })
     });
