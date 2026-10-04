@@ -9777,13 +9777,14 @@ pub fn touch_sprites(
     // deflection point (`_stick_radius_treshold` 0.5). Anchors always
     // exist (GML homes from `Create_0`); the sampler only fills the
     // claim/deflection once a finger lands.
+    let (move_home, attack_home) = crate::input::stick_homes(vw);
     let move_stick = input.move_stick.unwrap_or(crate::input::TouchStick {
-        anchor: Vec2::new(64.0, 240.0 - 64.0),
+        anchor: move_home,
         touch: -1,
         ..Default::default()
     });
     let attack_stick = input.attack_stick.unwrap_or(crate::input::TouchStick {
-        anchor: Vec2::new(vw - 64.0, 240.0 - 64.0),
+        anchor: attack_home,
         touch: -1,
         ..Default::default()
     });

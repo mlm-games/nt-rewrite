@@ -78,6 +78,21 @@ pub struct TouchStick {
 pub const ATTACK_BUTTON_DEADZONE: f32 = 0.4125;
 /// GML stick radius (`JoystickMove/Create_0`, `JoystickAttack/Create_0`).
 pub const TOUCH_STICK_RADIUS: f32 = 32.0;
+/// Default stick anchors from the GUI size (`JoystickMove/Create_0`,
+/// `JoystickAttack/Create_0`: move `(view-max)/2 + 64, h - 64`,
+/// attack `w + (max-w)/2 - 64, h - 64`). The view here is the GUI
+/// width; `global.view_width_max` is the widened cap - the port
+/// centers on `width` directly (no widen split).
+pub const TOUCH_GUI_H: f32 = 240.0;
+pub const TOUCH_HOME_INSET: f32 = 64.0;
+
+pub fn stick_homes(width: f32) -> (Vec2, Vec2) {
+    let y = TOUCH_GUI_H - TOUCH_HOME_INSET;
+    (
+        Vec2::new(TOUCH_HOME_INSET, y),
+        Vec2::new(width - TOUCH_HOME_INSET, y),
+    )
+}
 /// GML `approach` verbatim (also in `menus.rs` for the game-over
 /// anim): move `v` toward `target` by `delta` without overshooting.
 /// The attack stick's `vdis` decay uses it (`approach(vdis, dis, 2)`).
@@ -256,11 +271,12 @@ impl NtInput {
         if self.touch_home_width == width {
             return;
         }
+        let (move_home, attack_home) = stick_homes(width);
         if let Some(s) = self.move_stick.as_mut() {
-            s.anchor = Vec2::new(64.0, 240.0 - 64.0);
+            s.anchor = move_home;
         }
         if let Some(s) = self.attack_stick.as_mut() {
-            s.anchor = Vec2::new(width - 64.0, 240.0 - 64.0);
+            s.anchor = attack_home;
         }
         self.touch_home_width = width;
     }
@@ -1004,17 +1020,11 @@ pub fn sample_touch_full(
     output.touch_released_swap = false;
     output.touch_released_fire = false;
 
-    // Default stick anchors from the GUI size (`JoystickMove/Create_0`,
-    // `JoystickAttack/Create_0`: move `(view-max)/2 + 64, h - 64`,
-    // attack `w + (max-w)/2 - 64, h - 64`). The view here is the GUI
-    // width; `global.view_width_max` is the widened cap - the port
-    // centers on `width` directly (no widen split).
-    let gui_h = 240.0;
-    let move_home = Vec2::new(64.0, gui_h - 64.0);
-    let attack_home = Vec2::new(width - 64.0, gui_h - 64.0);
-    // `ButtonAct` (w/2, 48), `ButtonSwap` ((w-max)/2+64, h/2-48),
-    // `ButtonActive` (w+(max-w)/2-64, h/2-48), `ButtonAttack`
+    // Button homes are `ButtonAct` (w/2, 48), `ButtonSwap` ((w-max)/2+64,
+    // h/2-48), `ButtonActive` (w+(max-w)/2-64, h/2-48), `ButtonAttack`
     // (w+(max-w)/2-48, h/2) - same centering simplification.
+    let gui_h = TOUCH_GUI_H;
+    let (move_home, attack_home) = stick_homes(width);
     let act_home = Vec2::new(width * 0.5, 48.0);
     let swap_home = Vec2::new(64.0, gui_h * 0.5 - 48.0);
     let active_home = Vec2::new(width - 64.0, gui_h * 0.5 - 48.0);
