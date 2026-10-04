@@ -324,6 +324,10 @@ pub struct PropDeathEffect {
     /// `orandom(J)` scatter per blast (0 = the exact prop position).
     pub blast_jitter: f32,
     pub hazard: Option<EnvironmentHazardSpec>,
+    /// GML `ToxicBarrel/Destroy_0.gml:4` `repeat (25) instance_create(x, y,
+    /// ToxicGas)` - all at the exact prop position, each cloud taking its own
+    /// `motion_add(random_angle, random(1.5) + 0.2)`.
+    pub toxic_gas: u8,
     pub ground_flames: u8,
     /// GML `WaterMineExplode/Step_0.gml:13-24`: 16 `EnemyBullet3` on a
     /// 360/16 ring at `motion_add(ang, 5 + random(7))`, `team = -1`.
@@ -517,7 +521,7 @@ impl PropDeathEffect {
     pub fn toxic_barrel() -> Self {
         Self {
             explosion: Self::blast(32.0, 5),
-            hazard: Some(EnvironmentHazardSpec::toxic_barrel()),
+            toxic_gas: 25,
             ground_flames: 4,
             flame_jitter: 16.0,
             ..Default::default()
@@ -735,6 +739,24 @@ pub fn spawn_prop_death_effect(
 
     if let Some(hazard) = effect.hazard {
         spawn_environment_hazard(commands, pos, hazard);
+    }
+
+    if effect.toxic_gas > 0 {
+        let mut rng = rand::rng();
+        for _ in 0..effect.toxic_gas {
+            let angle = rng.random_range(0.0..std::f32::consts::TAU);
+            let speed = rng.random_range(0.2..1.7) * 30.0;
+            let mut gas = crate::comps_b::ToxicGasState::new();
+            gas.grow_speed = 0.003 + rng.random_range(0.0..0.002);
+            gas.rot = (1.0 + rng.random_range(0.0..=3.0))
+                * if rng.random_bool(0.5) { 1.0 } else { -1.0 };
+            crate::enemies::spawn_toxic_gas(
+                commands,
+                pos,
+                glam::Vec2::from_angle(angle) * speed,
+                gas,
+            );
+        }
     }
 
     if effect.mine_ring {
