@@ -44,7 +44,7 @@ use crate::comps_a::{
     ARENA_H, ARENA_W, AimDir, DogGuardianLeap, DogGuardianPose, FloorMask, GrenadeFuse, Health,
     HitId, Inventory, LightningArc, PendingMutation, PendingUltra, Player, Projectile,
     ProjectileFade, RaceState, Run, SelectedCharacter, SlashProjectile, TILE, Team, TopSmalls,
-    Velocity, WallCell, WallTile,
+    Velocity, WallCell, WallTile, floor_cell_for_wall,
 };
 use crate::comps_b::{
     Beam, BigDogMissileState, BossBrain, BossPhase, ChestArt, ChestKind, Corpse, CrownObject,
@@ -1291,6 +1291,52 @@ pub(crate) fn stamp_z(out: &mut [SpriteInstance], z: f32) {
 /// exactly like bevy's `sprite_at_gm_origin` (passing a cell center would
 /// shift it by half a cell). `grow` extends the +x/+y edges (see
 /// [`GRID_OVERLAP`]); UVs still span the cell.
+///
+/// GML `Floor/Create_0:8-13` floor variant, verbatim: `random(500) < 1` takes
+/// frame 3, else `choose(0,0,0,0,0,0,0,1,2) + choose(0,4)`. No live RNG stream
+/// here, so the cell coords hash into the same distribution deterministically
+/// (1/500 rare, 7/9 plain, 1/9 mid, then +4 half the time). Clamped to the strip
+/// (GML families always carry 0-7; a short pack strip must not drop the cell).
+fn floor_frame(cx: i32, cy: i32, frames: i32) -> i32 {
+    let h = (cx
+        .wrapping_mul(0x8da6b343u32 as i32)
+        .wrapping_add(cy.wrapping_mul(0xd8163841u32 as i32))
+        >> 7) as u32;
+    let raw = if h % 500 == 0 {
+        3
+    } else {
+        let base = match h % 9 {
+            7 => 1,
+            8 => 2,
+            _ => 0,
+        };
+        base + if h % 2 == 0 { 4 } else { 0 }
+    };
+    raw % frames.max(1)
+}
+
+/// One 32x32 floor tile, top-left placed at the cell's origin.
+fn push_floor_tile(
+    out: &mut Vec<SpriteInstance>,
+    assets: &RenderAssets,
+    floor_png: &str,
+    cx: i32,
+    cy: i32,
+) {
+    let frames = strip_frames(assets, floor_png).max(1) as i32;
+    if let Some(mut s) = place_top_left(
+        assets,
+        floor_png,
+        floor_frame(cx, cy, frames),
+        Vec2::new(cx as f32 * TILE, cy as f32 * TILE),
+        [1.0; 4],
+        GRID_OVERLAP,
+    ) {
+        s.z = Z_FLOOR;
+        out.push(s);
+    }
+}
+
 fn place_top_left(
     assets: &RenderAssets,
     path: &str,
@@ -2092,6 +2138,7 @@ pub fn world_instances_cached(
             let area = run.area;
             let seed = run.gen_seed;
             let cells: HashSet<(i32, i32)> = mask.cells.iter().copied().collect();
+            let opened: HashSet<(i32, i32)> = mask.opened.iter().copied().collect();
             let has = |p: &str| assets.catalog.def(p).is_some();
             let (floor_png, wall_bot_png, wall_top_png, wall_out_png, wall_trans_png) =
                 area_sprites_full_for_run(floor, area, has);
@@ -2113,43 +2160,25 @@ pub fn world_instances_cached(
                         if !cells.contains(&(cx, cy)) {
                             continue;
                         }
-                        let top_left = Vec2::new(cx as f32 * TILE, cy as f32 * TILE);
-                        // GML `Floor/Create_0:8-13` floor variant verbatim:
-                        // `random(500) < 1` takes frame 3, else
-                        // `choose(0,0,0,0,0,0,0,1,2) + choose(0,4)`. No live
-                        // RNG stream here, so the cell coords hash into the same
-                        // distribution deterministically (1/500 rare, 7/9 plain,
-                        // 1/9 mid, then +4 half the time).
-                        let h = (cx
-                            .wrapping_mul(0x8da6b343u32 as i32)
-                            .wrapping_add(cy.wrapping_mul(0xd8163841u32 as i32))
-                            >> 7) as u32;
-                        let raw = if h % 500 == 0 {
-                            3
-                        } else {
-                            let base = match h % 9 {
-                                7 => 1,
-                                8 => 2,
-                                _ => 0,
-                            };
-                            base + if h % 2 == 0 { 4 } else { 0 }
-                        };
-                        // Clamp to the strip (GML families always carry
-                        // 0-7; a short pack strip must not drop the cell).
-                        let frames = strip_frames(assets, floor_png).max(1) as i32;
-                        let frame = raw % frames;
-                        if let Some(mut s) = place_top_left(
-                            assets,
-                            floor_png,
-                            frame,
-                            top_left,
-                            [1.0; 4],
-                            GRID_OVERLAP,
-                        ) {
-                            s.z = Z_FLOOR;
-                            out.push(s);
-                        }
+                        push_floor_tile(&mut out, assets, floor_png, cx, cy);
                     }
+                }
+            }
+            // GML's floor is a continuous 32x32 `Floor` plane with the 16x16
+            // `Wall`s laid over it (`mcr_floor_make_walls` only spawns a `Wall`
+            // where no `Floor` meets), so a broken wall uncovers floor that was
+            // always there. The port has no underlying plane - `cells` holds
+            // real floor and `opened` only the destroyed 16x36 cells - so each
+            // opened cell has to draw the 32x32 tile that covers it, or the hole
+            // reads as bare background while `is_walkable` says otherwise.
+            if !opened.is_empty() && has(floor_png) {
+                let mut covered: HashSet<(i32, i32)> = HashSet::new();
+                for &(wx, wy) in &opened {
+                    let tile = floor_cell_for_wall(wx, wy);
+                    if cells.contains(&tile) || !covered.insert(tile) {
+                        continue;
+                    }
+                    push_floor_tile(&mut out, assets, floor_png, tile.0, tile.1);
                 }
             }
             // GML `FloorExplo/Create_0:12,15`: the destroyed wall's cell becomes a
@@ -2177,7 +2206,7 @@ pub fn world_instances_cached(
             };
             let explo_png = if has(explo_png) { explo_png } else { floor_png };
             let explo_frames = strip_frames(assets, explo_png).max(1);
-            for &(wx, wy) in &mask.opened {
+            for &(wx, wy) in &opened {
                 // GML `image_index = choose(1, 2, 3, 4)` on a 4-frame strip, which
                 // GameMaker wraps, so the drawn frame is `(1 + n) % 4`.
                 let h = (wx
@@ -2236,15 +2265,20 @@ pub fn world_instances_cached(
                 let (wx, wy) = (cell.0, cell.1);
                 // GML `Wall/Create_0:34` verbatim: `place_meeting(x, y + 16,
                 // Floor)` on the 16x16 wall body (origin (0,0) at the cell
-                // top-left). The south point owns exactly one floor cell.
-                let south_tile = (
-                    (wx as f32 * 16.0 / TILE).floor() as i32,
-                    ((wy as f32 * 16.0 + 16.0) / TILE).floor() as i32,
-                );
-                let floor_south = cells.contains(&south_tile);
+                // top-left). The south point owns exactly one floor cell - or,
+                // since `FloorExplo/Create_0:46-59` recomputes `visible` on
+                // every break, one freshly opened 16x16 cell. A wall whose
+                // south neighbour is a hole is hidden, so a break clears the
+                // corner art that used to bridge into it.
+                let south_wall = (wx, wy + 1);
+                let floor_south = cells.contains(&floor_cell_for_wall(south_wall.0, south_wall.1))
+                    || opened.contains(&south_wall);
                 let raw = wall_body_raw(seed, wx, wy);
                 let frame = raw as i32;
-                if floor_south && has(wall_bot_png) && bot_frames > 0 {
+                if !floor_south {
+                    continue;
+                }
+                if has(wall_bot_png) && bot_frames > 0 {
                     if let Some(s) = place_top_left(
                         assets,
                         wall_bot_png,
@@ -11697,6 +11731,70 @@ mod ui_parity_regression {
             (top - (oy + 24.0 * k - (10.0 * k).round() * 0.5)).abs() < 1.0,
             "{dp:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod wall_break_floor_tests {
+    use super::*;
+
+    /// GML has a continuous 32x32 `Floor` plane with the 16x16 `Wall`s laid over
+    /// it, so breaking a wall uncovers floor that was always underneath. The port
+    /// stores real floor in `cells` and destroyed cells in `opened`, so each
+    /// opened cell must pull the 32x32 tile covering it back into the floor pass
+    /// or the hole renders as bare background while `is_walkable` says otherwise.
+    #[test]
+    fn opened_cell_pulls_back_its_floor_tile() {
+        let mut mask = FloorMask::default();
+        // Two opened 16x16 cells inside ONE 32x32 tile.
+        mask.opened.insert((4, 4));
+        mask.opened.insert((5, 4));
+        assert_eq!(floor_cell_for_wall(4, 4), (2, 2));
+        assert_eq!(floor_cell_for_wall(5, 4), (2, 2));
+        let mut covered: HashSet<(i32, i32)> = HashSet::new();
+        for &(wx, wy) in &mask.opened {
+            covered.insert(floor_cell_for_wall(wx, wy));
+        }
+        // Deduped to the single tile that actually needs drawing.
+        assert_eq!(covered.len(), 1);
+        assert!(covered.contains(&(2, 2)));
+    }
+
+    /// GML `Wall/Create_0:34` + `FloorExplo/Create_0:53`: a wall is visible iff
+    /// floor (or a freshly opened cell) meets its south point. Without the
+    /// `opened` term a wall whose only southern cover was a broken cell keeps
+    /// drawing its Top, leaving the corner art stranded around the hole.
+    #[test]
+    fn wall_south_cover_counts_opened_cells() {
+        let mut mask = FloorMask::default();
+        // Wall cells sit in the half-resolution grid, so pick one whose southern
+        // 32x32 tile is NOT itself floor (a wall ring cell, not floor).
+        let (wx, wy) = (2i32, 2i32);
+        let south = (wx, wy + 1);
+        let south_tile = floor_cell_for_wall(south.0, south.1);
+        mask.cells.insert((0, 0));
+        assert!(!mask.cells.contains(&south_tile), "south tile starts as wall");
+
+        // Bare wall ring: no floor south, no opened cell -> hidden.
+        assert!(!mask.opened.contains(&south));
+
+        // Break the cell below: the wall above is uncovered, so it shows again.
+        mask.opened.insert(south);
+        assert!(mask.opened.contains(&south));
+    }
+
+    /// Both Bot and Top hang off one `visible` flag in GML, so a hidden wall
+    /// must contribute neither. Guards the regression where Top drew
+    /// unconditionally and only Bot respected the flag.
+    #[test]
+    fn hidden_wall_emits_neither_bot_nor_top() {
+        let cells: HashSet<(i32, i32)> = HashSet::new();
+        let opened: HashSet<(i32, i32)> = HashSet::new();
+        let (wx, wy) = (7i32, 7i32);
+        let south = (wx, wy + 1);
+        let visible =
+            cells.contains(&floor_cell_for_wall(south.0, south.1)) || opened.contains(&south);
+        assert!(!visible, "no floor south means the wall stays hidden");
     }
 }
 
