@@ -1,8 +1,6 @@
 //! 2D space: positions, arena bounds, collision push-outs.
-//!
-//! The bevy build carried positions in `Transform.translation` (`Vec3`);
-//! the port stores plain [`Pos`] (`Vec2`) and keeps every helper 2D.
-//! Laws are byte-identical to `world.rs` (`clamp_to_arena`,
+//! Bevy carried positions in `Transform.translation` (`Vec3`); the port stores
+//! plain [`Pos`] (`Vec2`). Laws byte-identical to `world.rs` (`clamp_to_arena`,
 //! `resolve_prop_collision`).
 
 use bevy_ecs::prelude::*;
@@ -114,12 +112,11 @@ fn fill_solid_shapes(
     if let Some(mask) = mask
         && !mask.cells.is_empty()
     {
-        // GML has no 32x32 solid: `Floor` is a 32x32 non-solid tile and `Wall` is
-        // a 16x16 solid, so a destroyed wall opens exactly one 16x16 cell
-        // (`FloorExplo`) while its siblings stay solid. Building the obstacle
-        // grid at the wall's 16x16 resolution keeps `solid_shapes` in step with
-        // `FloorMask::is_walkable` instead of blocking a whole 32x32 floor tile
-        // that only one quadrant of actually lost its wall.
+        // GML has no 32x32 solid: `Floor` is a 32x32 non-solid tile, `Wall` a
+        // 16x16 solid, so a destroyed wall opens exactly one 16x16 cell
+        // (`FloorExplo`) while its siblings stay solid. The obstacle grid is
+        // built at the wall's 16x16 resolution to stay in step with
+        // `FloorMask::is_walkable` instead of blocking a whole 32x32 floor tile.
         let reach = radius + TILE;
         let min = start.min(start + displacement) - Vec2::splat(reach);
         let max = start.max(start + displacement) + Vec2::splat(reach);
@@ -333,10 +330,9 @@ pub fn move_bounce_solid_displacement(
             return first;
         }
     }
-    // Out of reflections with displacement left. A diagonal path into a
-    // corner burns one reflection per wall and used to drop the remainder,
-    // so the mover stalled and jittered in the corner instead of sliding
-    // out. Apply whatever is left.
+    // Out of reflections with displacement left: a diagonal path into a corner
+    // burns one reflection per wall, so apply the remainder rather than dropping
+    // it and stalling the mover in the corner.
     *pos += remaining;
     clamp_to_arena(pos, radius);
     first

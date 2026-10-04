@@ -1,10 +1,9 @@
-//! Area hazards, surface zones, and prop-death effects. Ported from
-//! nt's `game/environment.rs` (data + spawners + sim-half ticks;
-//! `animate_environment`'s alpha law lives in [`SurfacePulse::alpha_at`]
-//! and applies renderer-side; art paths resolve renderer-side from the
-//! recorded [`PulseSprite`]). Hazard tint art likewise resolves
-//! renderer-side from the spec; colors below are the exact bevy values
-//! as arrays.
+//! Area hazards, surface zones, and prop-death effects. Ported from nt's
+//! `game/environment.rs` (data + spawners + sim-half ticks).
+//! `animate_environment`'s alpha law lives in [`SurfacePulse::alpha_at`],
+//! applied renderer-side; art paths and hazard tints resolve renderer-side
+//! from the recorded [`PulseSprite`] / spec. Colors below are the exact bevy
+//! values as arrays.
 
 use bevy_ecs::prelude::*;
 use rand::RngExt;
@@ -110,10 +109,9 @@ pub struct GroundFlame {
     pub big: bool,
     pub disappearing: bool,
     /// GML `BigGenerator/Destroy_0.gml:17`
-    /// `move_contact_solid(random_angle, 8 + random(12))`, in px. GML's
-    /// `move_contact_solid` is a one-shot displacement that leaves `speed`
-    /// alone, and `GroundFlame` has no `Step_0` - so this is applied once
-    /// and cleared, not integrated per tick.
+    /// `move_contact_solid(random_angle, 8 + random(12))`, in px: one-shot
+    /// (leaves `speed` alone) and `GroundFlame` has no `Step_0`, so applied
+    /// once and cleared, not integrated per tick.
     pub launch: glam::Vec2,
 }
 
@@ -183,12 +181,11 @@ impl SurfacePulse {
     }
 }
 
-/// Renderer-side record for bevy `sprite_from_candidates` decal
-/// entities (fire-trap visuals): the resolved art path (`None` = solid
-/// fallback rect, bevy `Sprite` without image), base tint, drawn size,
-/// and x-flip. Alpha always comes from the paired [`SurfacePulse`] via
-/// `alpha_at` (bevy `animate_environment` overwrites the sprite alpha
-/// every frame).
+/// Renderer-side record for bevy `sprite_from_candidates` decal entities
+/// (fire-trap visuals). `None` path = solid fallback rect (bevy `Sprite`
+/// without image). Alpha always comes from the paired [`SurfacePulse`] via
+/// `alpha_at` (bevy `animate_environment` overwrites sprite alpha every
+/// frame).
 #[derive(Component, Clone, Copy, Debug)]
 pub struct PulseSprite {
     pub path: Option<&'static str>,
@@ -209,13 +206,12 @@ pub fn pick_first_present(
         .find(|p| catalog.def(p).is_some())
 }
 
-/// Damage actors standing in live hazards (bevy
-/// `tick_environment_hazards` gameplay half: life/damage-tick timers,
-/// team gates, radius + player-invuln gates, Boiling Veins fire
-/// immunity at/below threshold, player invuln refresh +
-/// `mark_damage_taken`). Hit-flash rides the existing [`HitFlash`]
-/// marker and damage numbers the `repame_fx` floaters; the pulse alpha
-/// rides [`SurfacePulse`] renderer-side (`animate_environment` law).
+/// Damage actors standing in live hazards (bevy `tick_environment_hazards`
+/// gameplay half: life/damage-tick timers, team gates, radius +
+/// player-invuln gates, Boiling Veins fire immunity at/below threshold,
+/// player invuln refresh + `mark_damage_taken`). Hit-flash rides
+/// [`HitFlash`], damage numbers the `repame_fx` floaters, pulse alpha rides
+/// [`SurfacePulse`] renderer-side (`animate_environment` law).
 #[allow(clippy::type_complexity)]
 pub fn tick_environment_hazards(
     time: Res<SimTime>,
@@ -421,16 +417,16 @@ pub fn tick_prop_drops(
         crown: player.crown,
         ..Default::default()
     };
-    // GML `instance_number` counts the CALLING instance - proven in-repo by
+    // GML `instance_number` counts the CALLING instance - proven by
     // `Console/Create_0.gml:4`, which self-destructs when
     // `instance_number(object_index) > 1`. So a `Destroy_0` sees itself and
-    // `<= 1` means "this is the last one": with 4 throne generators the
-    // halving fires once, on the final death.
+    // `<= 1` means "last one": with 4 throne generators the halving fires
+    // once, on the final death.
     //
-    // GML `BigGeneratorInactive` is a root object (`parentObjectId: null`),
-    // so `instance_number(BigGenerator)` skips it. The port shares one
-    // component across both kinds and flips `destructible` on conversion
-    // (`walls::handle_throne_room_props`), which is the discriminator.
+    // GML `BigGeneratorInactive` is a root object (`parentObjectId: null`), so
+    // `instance_number(BigGenerator)` skips it. The port shares one component
+    // across both kinds and flips `destructible` on conversion
+    // (`walls::handle_throne_room_props`), the discriminator.
     let generators_left = generators.iter().filter(|prop| prop.destructible).count();
     for (entity, drop) in &pending {
         let (pickup_chance, weapon_chance, rolls) = if player.crown == CrownKind::Guns {
@@ -566,12 +562,11 @@ impl PropDeathEffect {
     }
 
     /// GML `BigGenerator/Destroy_0.gml:1-36` verbatim: `speed = 0`,
-    /// `event_inherited()` (Corpse + `snd_dead` + the `:12` rad drop),
-    /// THREE `Explosion` at the exact position, the crown-gated
-    /// `scrDrop`, 6 `GroundFlame` launched with
-    /// `move_contact_solid`, the 10-mote 36-degree dust ring interleaved
-    /// with 10 bbox-scattered `PortalL`, the SECOND `scrRadDrop`, and
-    /// the `Nothing` halving.
+    /// `event_inherited()` (Corpse + `snd_dead` + the `:12` rad drop), THREE
+    /// `Explosion` at the exact position, crown-gated `scrDrop`, 6
+    /// `GroundFlame` launched with `move_contact_solid`, the 10-mote 36-degree
+    /// dust ring interleaved with 10 bbox-scattered `PortalL`, the SECOND
+    /// `scrRadDrop`, the `Nothing` halving.
     pub fn big_generator() -> Self {
         Self {
             explosion: Self::blast(32.0, 5),
@@ -1319,12 +1314,12 @@ pub fn tick_native_motion(
     }
 }
 
-/// GML `objects/Trap` - the solid, indestructible flamethrower that
+/// GML `objects/Trap` - the solid, indestructible flamethrower
 /// `scrPopProps.gml:24-28` bolts to a freshly created small wall in the
-/// scrapyards. `Alarm_0.gml:1-4` flips the emitting axis, re-arms at 90
-/// steps and opens the emitter for 45; `Step_0.gml:4-27` launches one
-/// `TrapFire` (speed 6) from every unblocked edge on each of those 45
-/// steps, then self-destroys once a wall covers it.
+/// scrapyards. `Alarm_0.gml:1-4` flips the emitting axis, re-arms at 90 steps
+/// and opens the emitter for 45; `Step_0.gml:4-27` launches one `TrapFire`
+/// (speed 6) from every unblocked edge on each of those 45 steps, then
+/// self-destroys once a wall covers it.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct FireTrap {
     /// GML `side = choose(0, 1)`: 0 emits along +/-y, 1 along +/-x.
@@ -1563,12 +1558,10 @@ pub fn spawn_motes(
                 0.3 + rng.random_range(0.0..0.1),
                 0,
             ),
-            // GML `PortalL/Create_0.gml`:
-            // `sprite_index = choose(sprPortalL1..5)`,
-            // `animation_speed = 0.3 + random(0.1)`. `scrFX` supplies
-            // the speed (3, px/step) and a random direction. `PortalL`
-            // has no parent object, so it keeps GameMaker's default
-            // `friction = 0.1`.
+            // GML `PortalL/Create_0.gml`: `sprite_index = choose(sprPortalL1..5)`,
+            // `animation_speed = 0.3 + random(0.1)`; `scrFX` supplies the speed
+            // (3, px/step) and a random direction. `PortalL` has no parent
+            // object, so it keeps GameMaker's default `friction = 0.1`.
             MoteStrip::PortalL => (
                 match rng.random_range(1..=5) {
                     1 => "images/sprPortalL1.png",
@@ -1669,13 +1662,12 @@ pub fn spawn_motes(
     }
 }
 
-/// GML `Dust/Step_0` + `Smoke/Step_0` + `Feather/Step_0` + `Curse`
-/// integration (sim half): flat-friction slide + spin + grow/decay on
-/// `MoteScale`, feather fall-sway (`x += 0.35*sin(fall/7)`,
-/// `y += 0.3`, `speed *= 0.9` over 0.2, `image_speed = 0` at rest),
-/// wall bounce (Smoke every 3rd tick, Feather at half speed -
-/// `move_bounce_solid`). `PickupLifetime` expiry is handled by
-/// `tick_hit_effects`; scale <= 0 despawns like GML's
+/// GML `Dust/Step_0` + `Smoke/Step_0` + `Feather/Step_0` + `Curse` (sim
+/// half): flat-friction slide + spin + grow/decay on `MoteScale`, feather
+/// fall-sway (`x += 0.35*sin(fall/7)`, `y += 0.3`, `speed *= 0.9` over 0.2,
+/// `image_speed = 0` at rest), wall bounce (Smoke every 3rd tick, Feather at
+/// half speed - `move_bounce_solid`). `PickupLifetime` expiry is
+/// `tick_hit_effects`' job; scale <= 0 despawns like GML's
 /// `image_xscale < 0` kill.
 pub fn tick_motes(
     time: Res<SimTime>,

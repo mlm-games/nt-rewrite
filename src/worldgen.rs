@@ -1,23 +1,10 @@
-//! Level-generation core, mechanically ported from
-//! `world.rs` floor generation (plus `is_secret_area` from
-//! the GML secret-area scripts).
-//!
-//! Scope: `LevelPlan`, `PropKind`, `ChestSpawn`, `Gen`/`Maker` +
-//! `step_delta`, `rng_choose`, `turn_table`, `gml_area_from_run`,
-//! `generation_goal`, `generation_goal_for_run`, `is_screen_end_wall`,
-//! `floor_cell_for_wall`, `wall_cell_at`, `generate_level`,
-//! `generate_palace_last`, `generate_campfire`, `generate_crib`,
-//! `generate_hq_last`,
-//! `world_of`, `floor_in_world`, `is_secret_area`.
-//!
-//! Wall helpers (`wall_point`, `nearest_wall`, `populate_throne_room`,
-//! `big_bandit_count`) and the full `populate` live here too.
+//! Level-generation core, ported from `world.rs` floor generation
+//! (plus `is_secret_area` from the GML secret-area scripts).
 //!
 //! Transform notes:
 //! - `use bevy::...` lines dropped. `crate::game::areas::AreaId` becomes
 //!   `crate::data::AreaId`; `crate::game::secret_areas::is_secret_area`
-//!   becomes the local `is_secret_area` ported below. Inner
-//!   `use crate::game::areas::AreaId;` lines are covered by the top import.
+//!   becomes the local `is_secret_area` ported below.
 //! - Logic, RNG call order, tables and comments are byte-identical to source.
 
 use glam::Vec2;
@@ -265,14 +252,14 @@ pub fn gml_max_subarea(area: i32) -> u32 {
     }
 }
 
-/// GML keeps five RNG states and re-seeds GameMaker's default `random()`
-/// stream between `scrPopulate` phases from `rng_next_int(<state>)`
+/// Five GML RNG states re-seed the default `random()` stream between
+/// `scrPopulate` phases from `rng_next_int(<state>)`
 /// (`scrPopulate.gml:35,184,202,223,241,272`); `scrPopEnemies.gml:10`
 /// re-seeds that same default stream from the advanced `Enemies` LCG on
-/// *every* call. The port draws one `StdRng` per phase out of `run.gen_seed`
-/// so a phase can no longer shift its neighbours, but neither the re-seed
-/// chain nor the advanced LCG is ported, so GameMaker's exact sequences
-/// still differ.
+/// *every* call. Deviation: the port draws one `StdRng` per phase out of
+/// `run.gen_seed` so a phase can no longer shift its neighbours; the
+/// re-seed chain and the advanced LCG are unported, so GameMaker's exact
+/// sequences still differ.
 const RNG_DEFAULT: u64 = 0x2545_F491_4F6C_DD1D;
 const RNG_BONES: u64 = 0xBF58_476D_1CE4_E5B9;
 const RNG_ENEMIES: u64 = 0x94D0_49BB_1331_11EB;
@@ -441,7 +428,7 @@ impl Gen {
     fn create_maker(&mut self, x: i32, y: i32) -> Maker {
         let dir = rng_choose(&mut self.rng, &[0, 0, 90, 180, 270]);
         // GML `FloorMaker/Create_0:3` reads `styleb = !rng_float(Generation, 6
-        // - (area == 104 * 4))`. `104 * 4` is 416, never an area, so the
+        // - (area == 104 * 4))`; `104 * 4` is 416, never an area, so the
         // divisor is 6 everywhere. The original NT expression is
         // `!random(6)` -- an *integer* 0..5, true only at 0 -- so styleb is
         // 1 in 6. The rewrite's `rng_float` returns a real, and a literal
@@ -930,14 +917,12 @@ fn turn_table(rng: &mut StdRng, area: i32) -> i32 {
     }
 }
 
-/// GML `GenCont/Step_0` safespawn shift verbatim: once the makers finish,
-/// if the spawn ring is already full (`_numfloors >= _maxfloors`) the
-/// whole level drifts one `safedir` step and grows a fresh centre floor.
-/// GML runs this once per step (repeated over frames); the port settles
-/// the same loop inline before walls go up (bounded 16; GML is unbounded
-/// per-frame but converges the same way).
-/// Skipped exactly where `scrAreaHasSafespawn` is false (campfire, crib,
-/// vault, palace/HQ finales).
+/// GML `GenCont/Step_0` safespawn shift: once the makers finish, a full spawn
+/// ring (`_numfloors >= _maxfloors`) drifts the level one `safedir` step and
+/// grows a fresh centre floor. GML repeats this every step; the port settles it
+/// inline before walls, bounded 16 (GML unbounded per frame, same convergence).
+/// Skipped where `scrAreaHasSafespawn` is false (campfire, crib, vault,
+/// palace/HQ finales).
 fn apply_safespawn_shift(plan: &mut LevelPlan, run: &Run, gen_rng: &mut StdRng) {
     let no_safe = matches!(
         run.area,
@@ -1124,14 +1109,11 @@ fn generate_campfire(run: &Run) -> LevelPlan {
     plan
 }
 
-/// GML `objects/GenCont/Alarm_2.gml:28-105` verbatim. The crib is an
-/// ordinary area-107 maker run (`goal = 20`,
-/// `scrAreaGetGenerationGoal.gml:129`) plus the two hand-laid slabs and
-/// their props. GML's `FloorMaker/Step_0.gml:82-86` sets
-/// `GenCont.alarm[0] = 3` and `alarm[2] = 2` in the same step, so
-/// `Alarm_2` fires BEFORE `Alarm_0` -- the slab floors are in the cell
-/// list `mcr_floor_make_walls` and `scrPopulate` walk, so they are added
-/// before those two passes here.
+/// GML `objects/GenCont/Alarm_2.gml:28-105` verbatim: an ordinary area-107
+/// maker run (`goal = 20`, `scrAreaGetGenerationGoal.gml:129`) plus the two
+/// hand-laid slabs. `FloorMaker/Step_0.gml:82-86` sets `alarm[0] = 3` and
+/// `alarm[2] = 2` in one step, so `Alarm_2` fires BEFORE `Alarm_0` -- the slab
+/// floors land in the cell list `mcr_floor_make_walls`/`scrPopulate` walk.
 fn generate_crib(run: &Run) -> LevelPlan {
     let mut genr = Gen::new(run, 107, false);
     let initial = genr.create_maker(0, 0);
@@ -1145,25 +1127,24 @@ fn generate_crib(run: &Run) -> LevelPlan {
     let walls = plan.wall_cells.clone();
     populate(run, &floors, &walls, &mut plan, &styleb_cells);
 
-    // GML `GenCont/Destroy_0.gml:126-139`: the crib keeps no enemy (and no
-    // chestprop but the two Giant kinds, which `apply_chest_permutations`
-    // already reduced to none). The `with Wall` half of `:127-129` is a
-    // no-op here: `build_walls` never stamps a wall whose owning 32px
-    // cell is floor, which is exactly `place_meeting(wall.x, wall.y,
-    // Floor)`.
+    // GML `GenCont/Destroy_0.gml:126-139`: the crib keeps no enemy, and no
+    // chestprop but the two Giant kinds (`apply_chest_permutations` already
+    // reduced those to none). The `with Wall` half of `:127-129` is a no-op:
+    // `build_walls` never stamps a wall whose owning 32px cell is floor, which
+    // is exactly `place_meeting(wall.x, wall.y, Floor)`.
     plan.enemies.clear();
     plan.population_events
         .retain(|event| !matches!(event, PopulationEvent::Enemy { .. }));
     plan
 }
 
-/// GML `GenCont/Alarm_2.gml:29-104`: the lower 11x7 slab with the TV,
-/// couch, two `MoneyPile`s and the carpet, then the upper 10x7 slab with
-/// its `CarVenusFixed` scatter. The Giant chest pairs (`:57-74`) need the
-/// live Open-Mind level and Crown Love, so they ride
-/// [`apply_chest_permutations`] off [`LevelPlan::crib_anchor`] -- GML
-/// creates them in this same alarm, before `scrPopulate` runs, and
-/// `scrPopChests` leaves them alone (they have no `chestprop` parent).
+/// GML `GenCont/Alarm_2.gml:29-104`: lower 11x7 slab (TV, couch, two
+/// `MoneyPile`s, carpet), then upper 10x7 slab with its `CarVenusFixed`
+/// scatter. The Giant chest pairs (`:57-74`) need the live Open-Mind level and
+/// Crown Love, so they ride [`apply_chest_permutations`] off
+/// [`LevelPlan::crib_anchor`]; GML creates them in this same alarm, before
+/// `scrPopulate` runs, and `scrPopChests` leaves them alone (no `chestprop`
+/// parent).
 fn build_crib_rooms(plan: &mut LevelPlan, run: &Run) {
     let mut cells = plan.floor_cells.clone();
     let mut seen: HashSet<(i32, i32)> = cells.iter().copied().collect();
@@ -1373,13 +1354,11 @@ fn rebuild_population_events(plan: &mut LevelPlan, base_events: &[PopulationEven
     plan.population_events = events;
 }
 
-/// GML `scrPopChests` input: everything the permutation pass reads.
-/// `seed` threads the Generation RNG stream (GML `random`/`irandom`
-/// inside `scrPopChests` draw from the level-generation stream, so equal
-/// `gen_seed`s permute identically). Callers pass the run's `gen_seed`
-/// mixed with a fixed salt (floor number lives in the plan already via
-/// `area`/`subarea`; the salt keeps first-floor and portal permutations
-/// on disjoint substreams).
+/// GML `scrPopChests` input. `seed` threads the Generation RNG stream (GML
+/// `random`/`irandom` there draw from it, so equal `gen_seed`s permute
+/// identically); callers pass the run's `gen_seed` mixed with a fixed salt,
+/// keeping first-floor and portal permutations on disjoint substreams (the
+/// floor number already rides `area`/`subarea`).
 pub struct ChestPermuteCtx {
     pub area: AreaId,
     pub loops: u32,
@@ -1396,10 +1375,10 @@ pub struct ChestPermuteCtx {
     pub hardmode: bool,
     /// GML raises the tutorial's weapon chest from `TutCont/Alarm_0:53`
     /// (`if (!_any) instance_create(10016, 10016, WeaponChest)`), and
-    /// `scrPopChests` - the only caller of the trim, `scrPopulate:224` -
-    /// never runs for the 5-floor `TutCont` arena. Its `do…until` removes the
-    /// last chest of a kind, so trimming the tutorial would delete the only
-    /// gun pickup in the level.
+    /// `scrPopChests` -- the only caller of the trim, `scrPopulate:224` --
+    /// never runs for the 5-floor `TutCont` arena. Its `do…until` removes
+    /// the last chest of a kind, so trimming the tutorial would delete the
+    /// only gun pickup in the level.
     pub tutorial: bool,
     pub player_pos: Vec2,
     pub seed: u64,
@@ -1476,12 +1455,12 @@ fn replace_prop_with_chest(
 }
 
 /// Verbatim `scripts/scrPopChests/scrPopChests.gml`: vault proto-chest +
-/// chestless areas, Open-Mind bonus counts, trim to 1 + bonus per base
-/// kind (GML destroys nearest-to-`10016+orandom(250)`; the port shuffles
-/// with the seeded stream then truncates - same count law, stable order),
-/// rad permutations (Rogue / noradch horror-or-big / half-health /
-/// desert styleb maggot), crown Life/Love conversions, mimic rolls, and
-/// the hardmode desert 1-1 `BigWeaponChest` arm.
+/// chestless areas, Open-Mind bonus counts, trim to 1 + bonus per base kind
+/// (GML destroys nearest-to-`10016+orandom(250)`; the port shuffles with the
+/// seeded stream then truncates -- same count law, stable order), rad
+/// permutations (Rogue / noradch horror-or-big / half-health / desert styleb
+/// maggot), crown Life/Love conversions, mimic rolls, desert 1-1
+/// `BigWeaponChest` arm in hardmode.
 pub fn apply_chest_permutations(plan: &mut LevelPlan, ctx: ChestPermuteCtx) -> ChestPermuteOut {
     let mut rng = phase_rng(ctx.seed, RNG_CHEST);
     let mut out = ChestPermuteOut { horror: false };
@@ -1564,12 +1543,12 @@ pub fn apply_chest_permutations(plan: &mut LevelPlan, ctx: ChestPermuteCtx) -> C
         return out;
     }
 
-    // GML `scrPopChests.gml:19-23,65-69`: the crib sets `_tot_chests = 0`,
-    // so every Ammo/Weapon/Rad chest the area-107 maker stamped is
-    // destroyed. What survives is the `(1 + open_mind)` pair of Giant
-    // chests `GenCont/Alarm_2.gml:57-74` planted a step earlier -- Crown
-    // Love picks the ammo pair. `if (instance_exists(Player))` is always
-    // true: the crib is only ever entered through a portal.
+    // GML `scrPopChests.gml:19-23,65-69`: the crib sets `_tot_chests = 0`, so
+    // every Ammo/Weapon/Rad chest the area-107 maker stamped is destroyed. What
+    // survives is the `(1 + open_mind)` pair of Giant chests
+    // `GenCont/Alarm_2.gml:57-74` planted a step earlier -- Crown Love picks the
+    // ammo pair. `if (instance_exists(Player))` is always true: the crib is only
+    // ever entered through a portal.
     if ctx.area == AreaId::Crib {
         let mut events = base_events.clone();
         plan.chests.clear();
@@ -1812,14 +1791,13 @@ pub fn wall_top_left(wx: i32, wy: i32) -> Vec2 {
 }
 
 pub(crate) fn build_walls(_run: &Run, floors: &[(i32, i32)], plan: &mut LevelPlan) {
-    // GML `mcr_floor_make_walls` verbatim: the probes are the 12 cells
-    // of the 16px ring around the 32px floor tile, i.e. half-open
-    // [x-16, x+48) x [y-16, y+48) in floor-px minus the 2x2 floor block
-    // itself: corners (-1,-1), (2,-1), (-1,2), (2,2) are single cells,
-    // the other 8 come in wall/floor pairs (two 16px halves each).
-    // `position_meeting` tests the point, not the cell, so the diagonal
-    // corners probe, the pairs probe both halves, and every probe only
-    // fires where the owning 32px tile is not floor.
+    // GML `mcr_floor_make_walls` verbatim: the probes are the 12 cells of the
+    // 16px ring around the 32px floor tile -- half-open
+    // [x-16, x+48) x [y-16, y+48) in floor-px minus the 2x2 floor block. Corners
+    // (-1,-1), (2,-1), (-1,2), (2,2) are single cells; the other 8 come in
+    // wall/floor pairs (two 16px halves each). `position_meeting` tests the
+    // point, not the cell, so the diagonal corners probe, the pairs probe both
+    // halves, and a probe only fires where the owning 32px tile is not floor.
     let floor_set: std::collections::HashSet<(i32, i32)> = floors.iter().copied().collect();
 
     for &(cx, cy) in floors {
@@ -1886,11 +1864,11 @@ fn nearest_wall(plan: &LevelPlan, walls: &HashSet<(i32, i32)>, px: f32, py: f32)
 }
 
 /// GML `GameCont.hard` is a live accumulator, not `scrAreaGetDifficulty`:
-/// `GameCont/Create_0.gml:9` seeds it at 0 (`:85-88` sets 13 and bumps
-/// `loops` in hardmode) and `GameCont/Other_5.gml:136` adds
-/// `scrGameIsHardmode() ? 2 : 1` on every room advance -- including the
-/// secret areas that `Other_5` routes back to. `scrPopulate.gml:4` reads the
-/// accumulator, so floor 1 populates with `hard = 0`.
+/// `GameCont/Create_0.gml:9` seeds it at 0 (`:85-88` sets 13 and bumps `loops`
+/// in hardmode), `GameCont/Other_5.gml:136` adds
+/// `scrGameIsHardmode() ? 2 : 1` on every room advance (including the secret
+/// areas `Other_5` routes back to), and `scrPopulate.gml:4` reads it -- so
+/// floor 1 populates with `hard = 0`.
 pub fn game_hard(run: &Run) -> f32 {
     run.hard as f32
 }

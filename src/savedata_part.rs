@@ -1,15 +1,12 @@
 //! Save-data items (keep semantics byte-identical).
-//! Sources:
-//! - `src/save.rs`: `SAVE_VERSION`, `SaveData`, `SettingsData` (+ `default_*` helpers, `Default` impls)
-//! - `src/game/components.rs`: `RaceLoadout` (imported by `src/save.rs` as
-//!   `crate::game::components::RaceLoadout`; canonical definition, not an invention)
-//! - `src/game/generated/unlocks.rs`: `try_unlock_race`, `check_kill_unlocks`,
-//!   `try_unlock_skin`, `try_unlock_skeleton` (complete bodies, verbatim logic)
-//! - `src/game/content.rs`: `PassiveKind` (verbatim companion required by `CharacterDef`,
-//!   same source file, not an invention), `CharacterDef`, `character_def`
-//! Transforms: `RaceId` -> `crate::data::RaceId`, `WeaponId`/`PLAYABLE_RACES` -> `crate::data::*`,
-//! `EnemyKind` -> `crate::data::EnemyKind`, `AbilityKind` -> `crate::data::AbilityKind`,
-//! `Color::srgb(r,g,b)` -> `[r, g, b, 1.0f32]`. Field names/order, match arms, comments preserved.
+//! Sources: `src/save.rs` (`SAVE_VERSION`, `SaveData`, `SettingsData`,
+//! `default_*`, `Default` impls), `src/game/components.rs` (`RaceLoadout`),
+//! `src/game/generated/unlocks.rs` (`try_unlock_race`, `check_kill_unlocks`,
+//! `try_unlock_skin`, `try_unlock_skeleton`), `src/game/content.rs`
+//! (`PassiveKind`, `CharacterDef`, `character_def`).
+//! Transforms: `RaceId`/`EnemyKind`/`AbilityKind` -> `crate::data::*`,
+//! `WeaponId`/`PLAYABLE_RACES` -> `crate::data::*`,
+//! `Color::srgb(r,g,b)` -> `[r, g, b, 1.0f32]`.
 //! `SaveData` keeps `#[derive(Resource)]`: it becomes a sim resource.
 
 use std::collections::BTreeMap;
@@ -103,11 +100,10 @@ pub struct SaveData {
     #[serde(default)]
     pub best_run_loop: u32,
     /// GML `hbst_*` best hardmode run (kills + race + map), written by
-    /// `scrPlayerUpdateBestRunStats` only when `scrGameIsHardmode()`.
-    /// Global aggregate like `best_run_*` (GML keeps per-race arrays;
-    /// the stats screen only shows the global max). New in v5: old
-    /// saves fill zeros via serde defaults, then `tick_sanitize_save`
-    /// stamps the version.
+    /// `scrPlayerUpdateBestRunStats` only when `scrGameIsHardmode()`. Global
+    /// aggregate like `best_run_*` (GML keeps per-race arrays; the stats screen
+    /// only shows the global max). New in v5: old saves fill zeros via serde
+    /// defaults, then `tick_sanitize_save` stamps the version.
     #[serde(default)]
     pub hard_best_kills: u32,
     #[serde(default)]
@@ -384,18 +380,8 @@ pub fn achievement_for_boss(kind: crate::data::EnemyKind) -> Option<u8> {
     })
 }
 
-// Save-phase extensions (ported from `src/save.rs` gameplay methods):
-// `race_unlocked` (with the `unlocked_characters` name fallback),
-// `race_loadout`, `sanitize_loadouts`, `crown_row`, `crown_unlocked`,
-// `any_crown_unlocked`, `unlock_crown`, `crown_port_to_gml`,
-// `crown_gml_to_port`, plus game-utils RON storage IO (`save_file_path`,
-// `serialize_save`, `parse_save`, `store_save_to_file`,
-// `load_save_from_file`, `load_or_default`) and the full
-// `src/game/skin_unlocks.rs` surface (`check_area_skins`,
-// `tick_area_skins`, `check_robot_weapon_skins`, `tick_robot_skins`,
-// `CrystalDamageTaken`, `tick_crystal_damage`, `tick_global_skins`).
-// Transforms: `RaceId` -> `crate::data::RaceId`, `WeaponId` ->
-// `crate::data::WeaponId`, `AreaId` -> `crate::data::AreaId`,
+// Save-phase extensions: gameplay methods ported from `src/save.rs`, plus
+// game-utils RON storage IO. Transforms: `AreaId` -> `crate::data::AreaId`,
 // `SkinLetter` -> `crate::data::SkinLetter`, `WeaponId` ammo names via
 // `crate::weapon_runtime::weapon_meta`; `ResMut<SaveData>` systems kept.
 
@@ -447,9 +433,9 @@ pub struct SettingsData {
     pub gamepad_enabled: bool,
     /// GML `options_keyboard` (`scrOptionsUpdate:22`: `save_get_option(
     /// "options", "keyboard", desktop)`; Android OS-change forces false).
-    /// GML device law (`InputHandling:225`): `keyboard = opt_keyboard
-    /// && !opt_gamepad`, `gamepad = opt_gamepad`, `touch = !(gamepad ||
-    /// keyboard)`. Desktop defaults true, Android false.
+    /// GML device law (`InputHandling:225`): `keyboard = opt_keyboard && !opt_gamepad`,
+    /// `gamepad = opt_gamepad`, `touch = !(gamepad || keyboard)`. Desktop
+    /// defaults true, Android false.
     #[serde(default = "default_true")]
     pub keyboard_enabled: bool,
     #[serde(default)]
@@ -686,9 +672,9 @@ impl Versioned for SaveData {
 }
 
 // NOTE: `is_race_unlocked` / `check_progress_unlocks` below are the
-// `src/game/generated/unlocks.rs` gameplay slice that already lived here;
-// the `skin_unlocks.rs` half now lives in the section below.
-// Save migration is delegated to `game-utils`' `Versioned` implementation.
+// `src/game/generated/unlocks.rs` gameplay slice; the `skin_unlocks.rs` half
+// lives in the section below. Migration is delegated to `game-utils`'
+// `Versioned` implementation.
 
 pub fn try_unlock_race(save: &mut SaveData, race: crate::data::RaceId) -> bool {
     try_unlock_race_with_menu(save, race, None)
@@ -1317,16 +1303,15 @@ pub fn is_race_unlocked(save: &SaveData, race: RaceId) -> bool {
     }
 }
 
-/// GML `scrInitStats` progress count verbatim (`progress/maxprogress`
-/// for the stats unlocks row): races 1..16 skip the kinda-secret trio
-/// entirely; loadout races count crowns 1..=13 (`crownmax`) plus the
-/// race unlock (no max bump, verbatim) plus skins 1..max-1; hardmode
-/// adds one each side. The `crownmax + 1` stored-weapon slot only feeds
-/// the per-race tally (`race_prog_max`), never the global one -
-/// mirrored by ignoring it here, as do stored weapons. Skin maxima
-/// come from [`race_max_skin_count`] (`scrRaceGetMaxSkinCount(race,
-/// false)` verbatim: BigDog/Frog hold 1, everything else 3 without
-/// the hidden-NTT gate the port does not model).
+/// GML `scrInitStats` progress count verbatim (`progress/maxprogress` for the
+/// stats unlocks row): races 1..16 skip the kinda-secret trio entirely; loadout
+/// races count crowns 1..=13 (`crownmax`) plus the race unlock (no max bump,
+/// verbatim) plus skins 1..max-1; hardmode adds one each side. The `crownmax + 1`
+/// stored-weapon slot only feeds the per-race tally (`race_prog_max`), never the
+/// global one - mirrored by ignoring it here, as do stored weapons. Skin maxima
+/// come from [`race_max_skin_count`] (`scrRaceGetMaxSkinCount(race, false)`
+/// verbatim: BigDog/Frog hold 1, everything else 3 without the hidden-NTT gate
+/// the port does not model).
 pub fn race_max_skin_count(race: crate::data::RaceId) -> usize {
     use crate::data::RaceId;
     match race {
@@ -1483,10 +1468,8 @@ pub fn check_progress_unlocks(
     got
 }
 
-// ---------------------------------------------------------------------------
 // Save file IO. `game-utils` owns the RON codec, platform path, and
 // crash-safe storage; this module only defines the game data and migration.
-// ---------------------------------------------------------------------------
 
 /// Save file name for the project save.
 pub fn save_file_name() -> &'static str {
@@ -1586,24 +1569,16 @@ fn save_store(path: &Path) -> Result<SaveStore<FsStorage>, String> {
         .with_validator(SaveStore::<FsStorage>::is_intact_ron))
 }
 
-// ---------------------------------------------------------------------------
-// Skin unlocks. Port of the GML skin-unlock scripts
-// (all 8 items): area, robot-weapon, crystal-damage and global checks
-// plus their tick systems. Transforms: `AreaId` -> `crate::data::AreaId`,
-// components -> `crate::comps_a`, `RaceId`/`SkinLetter` ->
-// `crate::data`, `weapon_id_name` ->
-// `crate::weapon_runtime::weapon_id_name`, `PLAYABLE_RACES` ->
-// `crate::data::PLAYABLE_RACES`. No sprite/UI code in source; nothing
-// omitted.
-// ---------------------------------------------------------------------------
+// Skin unlocks: port of the GML skin-unlock scripts (all 8 items) - area,
+// robot-weapon, crystal-damage and global checks plus their tick systems. No
+// sprite/UI code in source; nothing omitted.
 
 /// Area-gated race/skin unlocks (called when the run enters an area).
 /// GML `scrUnlocks` area switch verbatim: race unlocks are unconditional
 /// (single-player: the current run's race is the only present player),
 /// Chicken/B needs hardmode (not modeled - stays locked), HQ Horror/C
 /// needs ≤3 mutations held. Fresh unlocks also queue the GML
-/// `UnlockScreen` popup (race or skin); pass the live menu when the
-/// caller owns it.
+/// `UnlockScreen` popup (race or skin).
 pub fn check_area_skins(
     save: &mut SaveData,
     area: AreaId,
@@ -1788,9 +1763,9 @@ pub fn tick_crystal_damage(
 
 /// Global skin checks (GML `scrUnlocksCharacterStats` +
 /// `scrUnlocksPlayerEquipment` verbatim, minus achievements/dailies):
-/// all-golden stored weapons (Venuz B), loop-as-every-character (Fish
-/// B), all B skins (Fish C), held golden/cursed counts (Cuz B/C),
-/// 12+ mutations held (Melting C), 3+ blood sources held (Plant C).
+/// all-golden stored weapons (Venuz B), loop-as-every-character (Fish B),
+/// all B skins (Fish C), held golden/cursed counts (Cuz B/C), 12+ mutations
+/// held (Melting C), 3+ blood sources held (Plant C).
 pub fn tick_global_skins(
     mut save: ResMut<SaveData>,
     _run: Res<Run>,

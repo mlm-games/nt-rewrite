@@ -66,15 +66,14 @@ pub fn player_move(
             commands.entity(entity).remove::<Dash>();
         }
     } else {
-        // GML Player/Step_0 only clamps while adding walk accel: external
-        // impulses above maxspeed (melee lunge, knockback) are preserved
-        // and decay via friction instead of being hard-clamped away.
+        // GML Player/Step_0 only clamps while adding walk accel: impulses
+        // above maxspeed (melee lunge, knockback) decay via friction
+        // instead of being hard-clamped away.
         let max_speed = player.speed * player.speed_mult;
-        // GML `Player/Step_0:101,134` verbatim: any movement input
-        // latches the tutorial Walking step - `KeyCont.moving > 0`,
-        // not accel-gated (GML fires even at max speed; the port's
-        // old accel-gate stalled Walking until friction bled speed,
-        // deadlocking the tutorial for key-held players).
+        // GML `Player/Step_0:101,134` verbatim: any movement input latches
+        // the tutorial Walking step (`KeyCont.moving > 0`), not accel-gated -
+        // an accel-gate stalled Walking until friction bled speed and
+        // deadlocked the tutorial for key-held players.
         if input.move_axis != glam::Vec2::ZERO {
             if let Some(tut) = tut.as_deref_mut() {
                 tut.complete_step(crate::state::TutorialStep::Walking);
@@ -102,40 +101,29 @@ pub fn player_move(
 }
 
 
-// ---------------------------------------------------------------------------
-// SIM-side player systems: headless port of the non-render half of
-// the GML player scripts.
-// PORTED (pure sim): `player_aim` (stick path verbatim + shell-fed
-// mouse path), `weapon_switch` (timers untouched, bevy parity),
-// `tick_player_timers`, `ally_ai`, `tick_hold_abilities`,
-// `held_weapon_angle`, `steroids_secondary_slot`,
-// `ensure_weapon_visual` / `tick_weapon_visuals` (entity + wkick/wep
-// state; art/pose resolve renderer-side).
-// RENDERER-OWNED (resolved in `render.rs` from sim state, no systems):
-// `face_aim` (flip from AimDir/Velocity), `blink_player` (alpha from
-// invuln).
+// SIM-side player systems: headless port of the non-render half of the GML player scripts.
+// RENDERER-OWNED (resolved in `render.rs` from sim state, no systems here):
+// `face_aim` (flip from `AimDir`/`Velocity`), `blink_player` (alpha from
+// invuln), and the `WeaponVisual` art/anchor/pose/`flip_y`.
 // Conventions: `Timer` -> `GTimer`, `Transform` -> [`Pos`], audio spawns ->
-// [`AudioCue`]s in a [`Queue`], `Time<Fixed>` -> [`SimTime`],
-// thread rng -> `rand::rng()`.
-// ---------------------------------------------------------------------------
+// [`AudioCue`]s in a [`Queue`], `Time<Fixed>` -> [`SimTime`], thread rng ->
+// `rand::rng()`.
 
 /// Stick aim -> [`AimDir`]. Bevy `player_aim` stick path verbatim: any
-/// nonzero deflection steers (no dead zone - bevy normalizes directly).
-/// The mouse path lives in the shell: every frame
-/// [`App::feed_input`](crate::App::feed_input) steers `aim_axis` at the
-/// latest viewport hover (world coords from the live fit, same role as
-/// bevy's `viewport_to_world_2d` cursor ray), so this system steers
-/// `AimDir` at the cursor without knowing about pointers. With no
-/// deflection the last aim is kept (bevy only overwrote aim when a
-/// cursor ray hit). `Sprite` flips skipped.
+/// nonzero deflection steers (no dead zone - bevy normalizes directly). The
+/// mouse path lives in the shell: every frame [`App::feed_input`](crate::App::feed_input)
+/// steers `aim_axis` at the latest viewport hover (world coords from the live
+/// fit, same role as bevy's `viewport_to_world_2d` cursor ray). With no
+/// deflection the last aim is kept (bevy only overwrote aim when a cursor ray
+/// hit). `Sprite` flips skipped.
 ///
-/// Touch aim assist (GML `Player/Step_0:334` - `KeyCont.aimassist`,
-/// default on for touch): when the touch attack stick deflects and the
-/// held weapon takes assist (non-melee, `!wep_naim`), the heading snaps
-/// toward the nearest visible enemy within 35° inside the forward
-/// 0.67w × 0.5h window - hard snap while firing, eased otherwise
-/// (`angle_lerp(gunangle, dir, 1 - diff/35)`). Props count at 4x
-/// distance + 64 (`instance_is(self, prop)` penalty); walls block.
+/// Touch aim assist (GML `Player/Step_0:334`, `KeyCont.aimassist`, default on
+/// for touch): with the attack stick deflected and the held weapon taking
+/// assist (non-melee, `!wep_naim`), the heading snaps toward the nearest
+/// visible enemy within 35° inside the forward 0.67w × 0.5h window - hard snap
+/// while firing, eased otherwise (`angle_lerp(gunangle, dir, 1 - diff/35)`).
+/// Props count at 4x distance + 64 (`instance_is(self, prop)` penalty); walls
+/// block.
 pub fn player_aim(
     input: Res<NtInput>,
     save: Res<crate::savedata_part::SaveData>,
@@ -224,12 +212,10 @@ pub fn player_aim(
     }
 }
 
-/// Equip/cycle weapons. Slot-select + cycle logic is bevy-verbatim
-/// (skips `NONE` slots, wraps with `weapon_slots`); audio is the
-/// per-weapon swap stem GML `Player/Step_0:34` plays
-/// (`snd_play(wep_swap[wep])`, via [`GameAudio::play_weapon_swap`]).
-/// Fire timers are untouched (bevy keeps the old cooldown running
-/// across a switch).
+/// Equip/cycle weapons. Slot-select + cycle logic is bevy-verbatim (skips
+/// `NONE` slots, wraps with `weapon_slots`); audio is the per-weapon swap stem
+/// GML `Player/Step_0:34` plays (`snd_play(wep_swap[wep])`, via
+/// [`GameAudio::play_weapon_swap`]). Fire timers keep running across a switch.
 pub fn weapon_switch(
     mut input: ResMut<NtInput>,
     audio: Res<GameAudio>,
@@ -254,10 +240,10 @@ pub fn weapon_switch(
     let cycle = input.take_cycle_weapon();
     if cycle != 0 && inv.weapon_slots > 1 {
         // GML `Player/Step_0:22` verbatim: swap needs a held second gun
-        // (`bwep != 0`). Without it Space is a no-op (GML never reaches
-        // `scrSwapWeps`, so no tutorial latch either - the old code
-        // cycled onto the same slot, set `switched`, and stalled the
-        // tutorial at Swapping with one gun).
+        // (`bwep != 0`), else Space is a no-op and never reaches
+        // `scrSwapWeps` - no tutorial latch either. The old code cycled onto
+        // the same slot, set `switched`, and stalled the tutorial at
+        // Swapping with one gun.
         let has_second = (0..inv.weapon_slots)
             .any(|s| s != inv.current && inv.weapons[s] != WeaponId::NONE);
         if has_second {
@@ -287,9 +273,7 @@ pub fn weapon_switch(
 }
 
 /// Held-gun entities, sim half (bevy `ensure_weapon_visual` /
-/// `tick_weapon_visuals` minus `Sprite`/`Transform`: art, anchor, pose
-/// and `flip_y` resolve renderer-side from `WeaponVisual`, so the sim
-/// only owns `owner` / `wep_id` / `wep_angle` / `wkick` / `slot`).
+/// `tick_weapon_visuals` minus `Sprite`/`Transform`).
 pub fn ensure_weapon_visual(
     mut commands: Commands,
     player_q: Query<
@@ -435,8 +419,8 @@ pub fn tick_weapon_visuals(
 }
 
 /// Tick player-scoped cooldowns. Bevy-verbatim: ability cooldown, hurt
-/// invuln, shield and telekinesis timers. Fire-rate timers tick in
-/// `player_fire` (already ported) and are not touched here.
+/// invuln, shield and telekinesis timers. Fire-rate timers live in
+/// `player_fire`.
 pub fn tick_player_timers(
     time: Res<SimTime>,
     mut q: Query<(
@@ -480,12 +464,10 @@ pub fn tick_player_timers(
     }
 }
 
-/// Rebel ally AI, headless: seek the nearest enemy at 140 px/s, fire an
-/// ally bolt every `shoot` tick, despawn when `life` ends. Ally spawns
-/// live in `player_fire` (`SpawnAlly`) and `crown` (Love) and are reused
-/// here unchanged. Art stripped (sim-only `Pos` projectile); the bolt
-/// bolt. Reuses the ally representation from `player_fire` (`SpawnAlly`)
-/// and `crown` (Love): same comps, same 140 px/s + bolt stats.
+/// Rebel ally AI, headless: seek nearest enemy at 140 px/s, fire an ally bolt
+/// every `shoot` tick, despawn when `life` ends. Same comps and 140 px/s + bolt
+/// stats as the `SpawnAlly` / Love allies spawned by `player_fire` / `crown`;
+/// art stripped (sim-only `Pos` projectile).
 #[allow(clippy::type_complexity)]
 pub fn ally_ai(
     time: Res<SimTime>,
@@ -552,10 +534,9 @@ pub fn ally_ai(
 }
 
 /// Hold abilities (GML hold_spec RMB): Eyes telekinesis push/pull, Horror
-/// rad-drain beam, Frog charge/release. Headless: catalog sprites
-/// stripped, sim spawns + cues kept, laws verbatim. `RaceState` was
-/// spawns + cues kept, laws verbatim. `RaceState` was
-/// unused in bevy (`let _ = race`) and is dropped from the query.
+/// rad-drain beam, Frog charge/release. Headless: catalog sprites stripped,
+/// laws verbatim. `RaceState` was unused in bevy (`let _ = race`) and is
+/// dropped from the query.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn tick_hold_abilities(
     time: Res<SimTime>,
@@ -595,12 +576,11 @@ pub fn tick_hold_abilities(
 
     if player.ability == AbilityKind::Telekinesis && held {
         // GML `scrEyesTelekinesis.gml:14`: `_strength = 1 +
-        // scr_skill_get(mut_throne_butt)` px per STEP, i.e. 30/60 px per
-        // second at 30 Hz, over the `game_screen_width/2 x
-        // game_screen_height/2` box (the macros are fixed 320/240, so
-        // 160 x 120). GML sets POSITION behind `place_free` per axis; the
-        // port drives velocity, so the walkable mask gates each axis the
-        // same way instead.
+        // scr_skill_get(mut_throne_butt)` px per STEP = 30/60 px per second at
+        // 30 Hz, over the `game_screen_width/2 x game_screen_height/2` box
+        // (macros fixed 320/240, so 160 x 120). GML sets POSITION behind
+        // `place_free` per axis; the port drives velocity, so the walkable mask
+        // gates each axis the same way.
         let strength = if player.throne_butt { 60.0 } else { 30.0 };
         if let Ok(mut t) = telek_q.single_mut() {
             t.timer = GTimer::from_seconds(0.25, TimerMode::Once);
@@ -802,11 +782,11 @@ pub fn tick_hold_abilities(
     }
 }
 
-/// Looping one-shots in headless cue form (GML `snd_play_loop` /
-/// `snd_stop`: `scrPowers` Eyes/Horror holds, `Player/Step_0` frog +
-/// chicken-headless, `Portal/Other_7`, `Salamander/Alarm_2`). Backend
-/// wiring is out of scope - start cues carry the loop sound name, stop
-/// cues the same name under `stop_`.
+/// Looping one-shots in headless cue form (GML `snd_play_loop` / `snd_stop`):
+/// `scrPowers` Eyes/Horror holds, `Player/Step_0` frog + chicken-headless,
+/// `Portal/Other_7`, `Salamander/Alarm_2`. Backend wiring is out of scope:
+/// start cues carry the loop sound name, stop cues the same name under
+/// `stop_`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LoopSfx {
     Eyes,
@@ -1014,18 +994,14 @@ pub fn held_weapon_angle(aim_angle: f32, wep_angle_deg: f32, wkick: f32) -> f32 
 
 /// Exact GML Player/Step_0 facing quadrant law (`Step_0:442-450`):
 /// `right = -1` when `90 < gunangle < 270`, else `1`;
-/// `back = 1` when `0 < gunangle < 180`, else `-1`.
+/// `back = 1` when `0 < gunangle < 180`, else `-1`. `right` is the sprite
+/// xscale side, `back` the weapon/body ordering.
 ///
-/// `gunangle` is GML degrees (`lengthdir` convention: 0 = right,
-/// 90 = screen-up). The sim `aim` is y-down, so convert first:
-/// GML-degrees = `atan2(-aim.y, aim.x)`. (The y-down `atan2` value
-/// mirrors the quadrants: feeding it straight into the GML thresholds
-/// inverts `back`, drawing the gun behind the body when aiming down.)
-///
-/// Returns `(right, back)`, where:
-/// - `right` is the sprite xscale side: `-1` when aiming left, `1` otherwise.
-/// - `back` decides weapon/body ordering: `1` when aiming up (GML angle
-///   space), `-1` otherwise.
+/// `gunangle` is GML degrees (`lengthdir`: 0 = right, 90 = screen-up) and the
+/// sim `aim` is y-down, so convert first: `atan2(-aim.y, aim.x)`. The y-down
+/// `atan2` mirrors the quadrants, so feeding it straight into the GML
+/// thresholds inverts `back` and draws the gun behind the body when aiming
+/// down.
 pub fn gml_player_right_back_from_aim(aim: Vec2) -> (f32, f32) {
     let a = (-aim.y).atan2(aim.x).to_degrees().rem_euclid(360.0);
     let right = if a > 90.0 && a < 270.0 { -1.0 } else { 1.0 };
@@ -1034,9 +1010,7 @@ pub fn gml_player_right_back_from_aim(aim: Vec2) -> (f32, f32) {
 }
 
 /// GML Player/Step_0 parity: after weapon/spec logic, the player velocity is
-/// capped back to maxspeed.
-///
-/// In GameMaker this is the literal:
+/// capped back to maxspeed. In GameMaker this is the literal:
 ///
 /// ```gml
 /// if speed > maxspeed {
@@ -1044,9 +1018,9 @@ pub fn gml_player_right_back_from_aim(aim: Vec2) -> (f32, f32) {
 /// }
 /// ```
 ///
-/// Keep this separate from `player_move` because the Rust schedule performs
-/// `player_fire` after `player_move`, while GML's player Step contains both and
-/// clamps after firing/recoil has already been applied.
+/// Separate from `player_move` because the Rust schedule runs `player_fire`
+/// after `player_move`, while GML's player Step contains both and clamps after
+/// firing/recoil has already been applied.
 pub fn player_post_fire_speed_cap(
     mut q: Query<(&Player, &mut Velocity, Option<&Dash>), With<Player>>,
 ) {
@@ -1071,8 +1045,7 @@ pub fn player_post_fire_speed_cap(
 }
 
 /// Steroids second slot mirrors the other live slot. Verbatim bevy helper,
-/// shared with the fire path (`player_fire` imports this instead of
-/// keeping a second copy).
+/// shared with the fire path (`player_fire` imports this).
 pub fn steroids_secondary_slot(current: usize, slots: usize) -> usize {
     if slots > 1 {
         (current + 1) % slots

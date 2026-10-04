@@ -1,12 +1,10 @@
-//! Secret-area trigger state and detectors. `SecretTriggers` is a
-//! verbatim port (no engine types); the observer/detect systems below
-//! mirror the GML secret-area scripts with positions
-//! as [`Pos`] and the boss check via `enemy_def(kind).boss`.
-//!
-//! Already-ported elsewhere (not duplicated here):
-//! `is_secret_area` lives in [`crate::worldgen`], and
-//! `target_for_secret_area` / `apply_secret_transition` live in
-//! `progression.rs` (private floor-advance helpers).
+//! Secret-area trigger state and detectors. `SecretTriggers` is a verbatim port
+//! (no engine types); the observer/detect systems below mirror the GML
+//! secret-area scripts with positions as [`Pos`] and the boss check via
+//! `enemy_def(kind).boss`.
+//! Already-ported elsewhere (not duplicated here): `is_secret_area` lives in
+//! [`crate::worldgen`], and `target_for_secret_area` / `apply_secret_transition`
+//! live in `progression.rs` (private floor-advance helpers).
 
 use bevy_ecs::prelude::*;
 use repame_sim::SimTime;

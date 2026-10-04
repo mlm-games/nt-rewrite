@@ -1,55 +1,46 @@
-//! Headless menu/state-machine layer. State-only port of
-//! the former bevy app (`process_ui_actions`,
-//! `handle_pause_input`, `handle_mutation_keys`, `handle_death_restart`)
-//! and `src/menus/` (character select, loadout select, mutation choice,
-//! pause, settings, unlock popups, game-over data). No rendering: repose
-//! views come later and read these resources.
+//! Headless menu/state-machine layer: state-only port of the former bevy app
+//! (`process_ui_actions`, `handle_pause_input`, `handle_mutation_keys`,
+//! `handle_death_restart`) and `src/menus/`. No rendering.
 //!
-//! [`apply_menu_action`] ports every `UiAction` arm's state law verbatim
-//! (reusing the canonical [`crate::audio::UiAction`] + [`crate::audio::UiBridgeAction`]
-//! queue and the [`crate::audio::ui_action_sfx`] mapping for audio).
-//! [`tick_menus`] is the headless `Update` driver: it drains the action
-//! queue and routes [`NtInput`] pulses + [`MenuEdge`] shell edges per
-//! app state. Register it as an exclusive system before
-//! `handle_mutation_choice` so picks written here resolve the same tick.
+//! [`tick_menus`] is the headless `Update` driver -- register it as an
+//! exclusive system before `handle_mutation_choice` so picks resolve the same
+//! tick. Actions ride the canonical [`crate::audio::UiAction`] +
+//! [`crate::audio::UiBridgeAction`] queue.
 //!
-//! Input map (headless choices, documented because bevy was mouse/key
-//! driven and several bevy keys have no headless counterpart):
-//! - Title: `cycle_weapon` moves the character cursor over the visible
-//!   pod roster (wraps; GML `_char_list` order), `weapon_slot` jumps to
-//!   a gml-id pod (hidden-and-locked races sting `sndNoSelect`),
-//!   `interact` confirms (re-clicking the selected race starts loading,
-//!   bevy parity), `spec` toggles the loadout panel shut when open.
-//! - Mutation: `weapon_slot` (Digit1-4) routes through the bevy two-step
-//!   (`SelectMutation` highlight then `PickMutation` commit, same as
-//!   bevy `handle_mutation_keys`), `cycle_weapon` moves the highlight,
-//!   `interact` commits the highlight.
+//! Input map (bevy was mouse/key driven; several keys have no headless
+//! counterpart):
+//! - Title: `cycle_weapon` moves the cursor over the visible pod roster
+//!   (wraps; GML `_char_list` order), `weapon_slot` jumps to a gml-id pod
+//!   (hidden-and-locked races sting `sndNoSelect`), `interact` confirms
+//!   (re-click starts loading), `spec` shuts the loadout panel when open.
+//! - Mutation: `weapon_slot` (Digit1-4) routes the bevy two-step
+//!   (`SelectMutation` highlight then `PickMutation` commit), `cycle_weapon`
+//!   moves the highlight, `interact` commits it.
 //! - Pause: `interact` resumes, `spec` closes the top overlay,
 //!   `MenuEdge::pause_pressed` (Escape) toggles with bevy's confirm/
 //!   settings-stack laws.
-//! - Game over: `MenuEdge::restart_pressed` (KeyR), MENU, and RETRY are
-//!   direct actions; stray clicks do nothing.
-//! - Splash: any key/mouse edge advances (bevy `boot_intro` law).
+//! - Game over: `MenuEdge::restart_pressed` (KeyR), MENU and RETRY are direct
+//!   actions; stray clicks do nothing.
+//! - Splash: any key/mouse edge advances (bevy `boot_intro`).
 //! - MainMenu: `interact` plays (bevy PLAY item).
 //!
 //! Fidelity compromises (need shell/window services):
-//! - `KeyCode` has no Escape/KeyR, so those arrive as [`MenuEdge`]
-//!   (shell sets, `tick_menus` clears). Everything else uses `NtInput`
-//!   pulses with take-once semantics.
-//! - Mouse hover (`title_hover_race`, `main_menu_hover`), portrait/text
-//!   anim timers, and all drawing are render-phase (no state kept).
-//! - `SaveManager` disk writes become `SaveDirty(true)`; the existing
-//!   `flush_dirty_save*` ownership is unchanged.
-//! - Locale switching applies `SaveData.settings.language` directly
-//!   (no `LocaleResources` headless); `SetLanguage` writes through even
-//!   for unknown codes, exactly like bevy (only the effective locale
-//!   was gated there).
-//! - Unlock popups: bevy `unlock_popup.rs` is a placeholder and unlocks
-//!   surface as toasts in `apply_floor_reach_unlocks`; the headless
-//!   queue ([`MenuState::unlock_queue`]) exists with push/dismiss laws,
-//!   but no producer wires into it yet (deferred with the toast bridge).
-//! - Denied picks (locked race/crown/skin) have no variant in the
-//!   [`crate::audio::ui_action_sfx`] map, so [`emit_denied`] pushes
+//! - `KeyCode` has no Escape/KeyR, so those arrive as [`MenuEdge`] (shell
+//!   sets, `tick_menus` clears); everything else is a take-once `NtInput`
+//!   pulse.
+//! - Mouse hover (`title_hover_race`, `main_menu_hover`), portrait/text anim
+//!   timers and all drawing are render-phase (no state kept).
+//! - `SaveManager` disk writes become `SaveDirty(true)`; `flush_dirty_save*`
+//!   ownership unchanged.
+//! - No `LocaleResources` headless: `SetLanguage` applies
+//!   `SaveData.settings.language` directly and writes through even for
+//!   unknown codes, exactly like bevy (only the effective locale was gated).
+//! - bevy `unlock_popup.rs` is a placeholder and unlocks surface as toasts in
+//!   `apply_floor_reach_unlocks`; the headless queue
+//!   ([`MenuState::unlock_queue`]) has push/dismiss laws but no producer yet
+//!   (deferred with the toast bridge).
+//! - Denied picks (locked race/crown/skin) have no variant in
+//!   [`crate::audio::ui_action_sfx`], so [`emit_denied`] pushes
 //!   `sndNoSelect` directly (bevy played `sndNoSelect`).
 
 use bevy_ecs::prelude::*;
@@ -187,27 +178,24 @@ pub fn crown_short_name(id: u8) -> &'static str {
     }
 }
 
-/// Unlock notification: GML `scrUnlockScreenCreate` dedup queue
-/// (`objects/UnlockScreen` FIFO: one visible at a time, destroy chains
-/// the next via `Destroy_0`; dismiss needs `can_continue` from
-/// `Alarm_1`). Race unlocks and skin unlocks queue here; crown/gold/
-/// cheat unlocks surface as `draw_unlock` toasts (GML
-/// `scrShowUnlockPopup`), which the port renders as `Toast`.
+/// Unlock notification: GML `scrUnlockScreenCreate` dedup FIFO
+/// (`objects/UnlockScreen`: one visible at a time, `Destroy_0` chains the
+/// next; dismiss needs `can_continue` from `Alarm_1`). Race and skin unlocks
+/// queue here; crown/gold/cheat surface as `draw_unlock` toasts (GML
+/// `scrShowUnlockPopup`), rendered as `Toast`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnlockPopup {
     Race(RaceId),
     Skin(RaceId, u8),
 }
 
-/// GML `scr_death_cause_is_valid` + `scrDeathCauseGetSprite` verbatim
-/// over the port [`HitId`](crate::comps_a::HitId): enemy hits (either
-/// an explicit kind or an `Enemy(id)` hit) resolve to the killer's
-/// idle strip (`enemy_def(kind).sprite`, the same `spr*Idle` table GML
-/// `scrDeathCauseDefine`s); `Explosion` → `sprExplosion`, `Toxic` →
-/// `sprToxicGas`, `Fire`/`Trap` → `sprTrapGameover`. Everything else
+/// GML `scr_death_cause_is_valid` + `scrDeathCauseGetSprite` verbatim over
+/// [`HitId`](crate::comps_a::HitId): enemy hits (explicit kind or `Enemy(id)`)
+/// resolve to `enemy_def(kind).sprite`, the same `spr*Idle` table GML
+/// `scrDeathCauseDefine`s; `Explosion` -> `sprExplosion`, `Toxic` ->
+/// `sprToxicGas`, `Fire`/`Trap` -> `sprTrapGameover`. Everything else
 /// (contact/bullets/crowns/unknown) is not a valid GML cause and draws
-/// nothing - exactly like the `sprite_exists` gate in
-/// `GameOver/Draw_0`.
+/// nothing, per the `sprite_exists` gate in `GameOver/Draw_0`.
 pub fn deathcause_sprite_for_hit(
     hit: Option<crate::comps_a::HitId>,
     enemy_kind: Option<crate::data::EnemyKind>,
@@ -550,15 +538,12 @@ pub fn route_mutation_digit(menu: &MenuState, idx: usize) -> Option<UiAction> {
     }
 }
 
-/// GML `MainMenuButton/Other_10` PLAY-submenu rows verbatim: NORMAL
-/// always; DAILY/WEEKLY when the tutorial is done; HARD when loop 2
-/// cleared (`hardgot`); CUSTOM last. A single row auto-fires (GML
-/// `event_user(0)`), so fresh/tutorial profiles skip the submenu.
-/// DAILY/WEEKLY draw `c_uidark`-dimmed when `!can_daily/can_weekly`
-/// (offline: the port has no daily/weekly backend, so both read
-/// unavailable) but STAY clickable - GML opens the Leaderboards
-/// instead of starting the run. The port has no Leaderboards entity,
-/// so the click stings `sndNoSelect` (same feedback class).
+/// GML `MainMenuButton/Other_10` PLAY-submenu rows verbatim (`hardgot` maps to
+/// `save.hardmode_unlocked`). A single row auto-fires (GML `event_user(0)`), so
+/// fresh/tutorial profiles skip the submenu. DAILY/WEEKLY draw
+/// `c_uidark`-dimmed when `!can_daily/can_weekly` but STAY clickable -- GML
+/// opens the Leaderboards instead of starting the run, and with no Leaderboards
+/// entity here the click stings `sndNoSelect`.
 pub fn play_rows(save: &SaveData) -> Vec<u8> {
     let mut rows = vec![0];
     if !save.settings.show_tutorial {
@@ -907,12 +892,10 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 goto_state(world, AppState::Title);
             }
             // GML `PlayButton/Other_10` verbatim: DAILY/WEEKLY with
-            // `!can_daily/can_weekly` open the Leaderboards (daily /
-            // weekly board) + `sndMenuScores` INSTEAD of starting a run;
-            // CUSTOM loads the custom presets into
-            // `MenuOptions(CustomMode)`. The port has neither backend,
-            // so all three sting `sndNoSelect` (same feedback class as
-            // the unavailable-button early-`exit`).
+            // `!can_daily/can_weekly` open the Leaderboards (daily / weekly
+            // board) + `sndMenuScores` INSTEAD of starting a run; CUSTOM
+            // loads the custom presets into `MenuOptions(CustomMode)`. The
+            // port has neither backend, so all three sting `sndNoSelect`.
             _ => {
                 emit_cue(world, &UiAction::PlaySubmenu(row));
                 emit_denied(world);
@@ -1203,15 +1186,12 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 world.resource_mut::<crate::state::Paused>().0 = false;
                 emit_cue(world, &UiAction::ConfirmPause(kind));
                 goto_state(world, AppState::MainMenu);
-                // GML `Vlambeer/Create_0` quit branch verbatim: the logo
-                // room rebuilds with a FRESH live `SpiralCont` - never the
-                // previous run's leftover drain. `setup_logo_room` owns the
-                // world half; the view spiral re-warms here (same call the
-                // MainMenu-entry lifecycle makes, kept explicit so direct
-                // `goto_state(MainMenu)` shells like tests stay covered).
-                // Seed 0: GML builds the cont fresh at room start.
-                // `App::view` refreshes `view_w` every frame, so the rewarm
-                // only needs to be live here; width syncs on the next frame.
+                // GML `Vlambeer/Create_0` quit branch: the logo room rebuilds with a FRESH
+                // live `SpiralCont` (seed 0), never the previous run's leftover
+                // drain. `setup_logo_room` owns the world half; kept explicit
+                // here so direct `goto_state(MainMenu)` shells stay covered.
+                // `App::view` refreshes `view_w` every frame, so the rewarm only
+                // needs to be live here; width syncs next frame.
                 crate::vortex::rewarm_view_spiral(world, crate::vortex::GUI_W);
             } else {
                 // Restart via loading (fresh run: drop stale highlight).
@@ -1272,12 +1252,11 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                     menu.title_go_visible = true;
                 }
 
-                // GML `scrCampfireMenuSelectionChange` verbatim anim half:
-                // the picking player's portrait slides (180) and the name
-                // text hides (2) before typing back in (ticked in
-                // `tick_title_input`). Crown/skin/weapon sync lives in the
-                // save stamps the run setup already reads, so only the
-                // anim + panel gate apply here.
+                // GML `scrCampfireMenuSelectionChange` verbatim anim half: the picking
+                // player's portrait slides (180), the name text hides (2)
+                // before typing back in (ticked in `tick_title_input`).
+                // Crown/skin/weapon sync lives in the save stamps the run
+                // setup already reads, so only the anim + panel gate apply.
                 menu.portrait_offsets[0] = 180.0;
                 menu.textappear[0] = 2.0;
                 // GML `if !scr_loadout_is_available_for_race loadout_open=false`.
@@ -1734,10 +1713,9 @@ pub fn tick_menus(world: &mut World) {
 
     // GML `Credits/Create_0/Step_0/Other_11` cycler verbatim over sim
     // seconds: `timer` opens at 60 steps (2 s), then 180 steps (6 s) per
-    // section; tall sections (`height > gui_h - 36`) set `largetext`,
-    // grow `height += gui_h` and pan `scroll = height` down (`scroll`
-    // ticks in `MenuState::credits_scroll`). Clicks (non-scroll touch)
-    // force-advance. `AdvanceCredits` = the click arm.
+    // section; tall sections (`height > gui_h - 36`) set `largetext`, grow
+    // `height += gui_h` and pan `scroll = height` down (`scroll` ticks in
+    // `MenuState::credits_scroll`). `AdvanceCredits` = the non-scroll click arm.
     if world
         .get_resource::<OverlayMenu>()
         .is_some_and(|o| *o == OverlayMenu::Credits)
@@ -2008,12 +1986,12 @@ fn tick_title_input(world: &mut World, edge: MenuEdge) {
         }
     }
     if confirm {
-        // GML `CharSelect/Mouse_4` verbatim: confirming the ALREADY
-        // selected race starts the run immediately (`scrRunStart` via
-        // `StartGame`); confirming another pod only re-selects (reveal
-        // GO via `SelectCharacter`). The headless confirm (E/Enter) and
-        // the pod click share this law: `SelectCharacter` starts when
-        // `_pinst.race == _race`, so issuing it unconditionally is GML.
+        // GML `CharSelect/Mouse_4` verbatim: confirming the ALREADY selected race
+        // starts the run (`scrRunStart` via `StartGame`); confirming another
+        // pod only re-selects (reveal GO via `SelectCharacter`). Headless
+        // confirm (E/Enter) and pod click share this law: `SelectCharacter`
+        // starts when `_pinst.race == _race`, so issuing it unconditionally is
+        // GML.
         let roster = visible_roster(world.get_resource::<SaveData>());
         let cursor = world
             .get_resource::<MenuState>()
@@ -2381,13 +2359,12 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
     }
 
     let (cycle, slot, confirm, nav_v, nav_h) = {
-        // Take-once pulses are shared with gameplay systems that run
-        // later in the schedule (`weapon_switch` takes cycle/slot,
-        // `collect_pickups` takes interact, weapons/abilities take spec;
-        // bevy has no menu consumer for these). Only take when a menu is
-        // actually open - otherwise E / 1-4 / right-click would be
-        // swallowed every tick and weapons could never be picked up.
-        // `spec` is taken and dropped: ability lives in gameplay (gated),
+        // Take-once pulses are shared with gameplay systems running later in the
+        // schedule (`weapon_switch` takes cycle/slot, `collect_pickups` takes
+        // interact, weapons/abilities take spec). Only take them when a menu is
+        // actually open -- otherwise E / 1-4 / right-click would be swallowed
+        // every tick and weapons could never be picked up. `spec` is taken and
+        // dropped: ability is gameplay-gated.
         let menu_open = run_over
             || world
                 .get_resource::<MenuState>()
@@ -2435,10 +2412,9 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
     let overlay = world.resource::<OverlayMenu>();
     let overlay_kind = *overlay;
     // Keyboard shortcuts for the pause buttons (1-4): MENU / RETRY /
-    // SETTINGS / CONTINUE. Mouse already works via `route_menu_click`;
-    // without this the buttons are unreachable from the keyboard.
-    // While the quit/restart confirm is open, Enter commits it and
-    // digits 1-2 pick MENU/RETRY directly (Escape dismisses via the
+    // SETTINGS / CONTINUE -- without this the buttons are unreachable from
+    // the keyboard. While the quit/restart confirm is open, Enter commits it
+    // and digits 1-2 pick MENU/RETRY directly (Escape dismisses via the
     // escape tick); other rows are inert until the confirm resolves.
     if overlay_kind == OverlayMenu::Pause
         && let Some(slot) = slot

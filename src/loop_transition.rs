@@ -1,11 +1,7 @@
-//! Throne-room loop transitions. Small pure helpers plus the
-//! campfire phase machine (bevy `loop_transition.rs` gameplay half:
-//! timers, IDPD-gate/raid interplay, trauma, toasts, Throne II spawn).
-//! Ember/burst `Vfx` visuals stay renderer-side (skipped); the sim
-//! keeps every phase edge, toast, trauma hit, and spawn.
-//!
-//! `try_apply_loop_portal_transition` lives in `progression.rs`
-//! (private floor-advance helper, not duplicated here).
+//! Throne-room loop transitions: pure helpers plus the campfire phase machine
+//! (bevy `loop_transition.rs` gameplay half). Ember/burst `Vfx` visuals stay
+//! renderer-side (skipped); the sim keeps every phase edge, toast, trauma hit and
+//! spawn. `try_apply_loop_portal_transition` lives in `progression.rs`.
 
 use bevy_ecs::prelude::*;
 use rand::RngExt;
@@ -80,13 +76,11 @@ fn start_campfire_rising(campfire: &mut CampfireState, toast: &mut Toast, trauma
     trauma.add(0.18);
 }
 
-/// Advance campfire phases (bevy `tick_campfire` gameplay half).
-/// Sitting waits out its timer, then Rising spawns Throne II via
-/// [`PendingEnemySpawn`]; any living IDPD or pending raid parks the
-/// fire in `WaitingForIdpd` until the room stays clear 0.35 s.
-/// Ember/particle bursts are skipped (renderer-side); trauma, toasts,
-/// the `sndNothing2Appear` spawn sting (GML `Nothing2/Create_0:37`),
-/// and the spawn are verbatim.
+/// Advance campfire phases (bevy `tick_campfire` gameplay half). Rising spawns Throne
+/// II via [`PendingEnemySpawn`]; any living IDPD or pending raid parks the fire in
+/// `WaitingForIdpd` until the room stays clear 0.35 s. Ember/particle bursts are
+/// skipped (renderer-side); trauma, toasts, the `sndNothing2Appear` spawn sting (GML
+/// `Nothing2/Create_0:37`) and the spawn are verbatim.
 pub fn tick_campfire(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -190,12 +184,11 @@ pub fn tick_campfire(
     }
 }
 
-/// GML `VenuzCouch/Create_0.gml:13-16` with no Venuz/Cuz player at the
-/// crib couch: a `YungCuz` at `x + 21` whose `image_xscale` is flipped
-/// by the spawning `with`, and the `YungVenuzCouch` sitter at `x - 12`.
-/// `VenuzTV/Destroy_0.gml:3-14` despawns the sitter to raise YvBoss and
-/// `:16-24` puts the `YungCuz` into its cry; the `YungCuz` also owns the
-/// greet/leave interact strips (`YungCuz/Other_7`). The port spawns both
+/// GML `VenuzCouch/Create_0.gml:13-16` with no Venuz/Cuz player at the crib couch: a
+/// `YungCuz` at `x + 21` whose `image_xscale` is flipped by the spawning `with`, and
+/// the `YungVenuzCouch` sitter at `x - 12`. `VenuzTV/Destroy_0.gml:3-14` despawns the
+/// sitter to raise YvBoss and `:16-24` puts the `YungCuz` into its cry; the `YungCuz`
+/// also owns the greet/leave interact strips (`YungCuz/Other_7`). The port spawns both
 /// unconditionally (GML picks the pair from the active player races).
 pub fn spawn_yv_couch(commands: &mut Commands, couch: glam::Vec2) {
     commands.spawn((
@@ -225,14 +218,12 @@ const CUZ_CRY_BONUS: [&str; 10] = [
     "sndCuzCryBonus10",
 ];
 
-/// Animate the YV couch sitter (GML `YungVenuzCouch/Step_0`:
-/// `image_speed = timescale * 0.4`, airhorn one-shot back to idle on
-/// animation end) and tick `YungCuz` (GML `YungCuz/Create_0` image_speed
-/// 0.4; `Alarm_1` bonus cries; the `Other_7` greet/leave two-step on
-/// every animation end; the `VenuzTV/Destroy_0.gml:16-24` cry keyed on
-/// the raised YvBoss). Strip fps/frames resolve from the catalog when the
-/// art is packed, else the GML strip values (couch idle 12 fps / 24
-/// frames, airhorn 6 fps / 22 frames).
+/// Animate the YV couch sitter (GML `YungVenuzCouch/Step_0`: `image_speed =
+/// timescale * 0.4`, airhorn one-shot back to idle on animation end) and tick `YungCuz`
+/// (GML `YungCuz/Create_0` image_speed 0.4; `Alarm_1` bonus cries; `Other_7`
+/// greet/leave two-step on every animation end; `VenuzTV/Destroy_0.gml:16-24` cry keyed
+/// on the raised YvBoss). Strip fps/frames resolve from the catalog when the art is
+/// packed, else the GML strip values (idle 12 fps / 24 frames, airhorn 6 fps / 22).
 pub fn tick_yv_couch(
     time: Res<SimTime>,
     catalog: Option<Res<repame_anim::AnimCatalog>>,

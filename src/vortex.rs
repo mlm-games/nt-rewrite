@@ -1,21 +1,20 @@
-//! Vortex spiral sim state. Headless port of the sim half of the bevy
-//! reference `game/vortex.rs`: the [`SpiralKind`] enum, the [`SpiralCtl`]
-//! angle-advance law and deterministic per-seed random stream, and the
-//! snapshot the background pass consumes.
+//! Vortex spiral sim state: headless sim half of the bevy reference
+//! `game/vortex.rs` - the [`SpiralKind`] enum, the [`SpiralCtl`] angle-advance
+//! law, the deterministic per-seed random stream, and the snapshot the
+//! background pass consumes.
 //!
-//! Everything bevy-render stays out: no `Handle<Image>`, no materials, no
+//! bevy-render stays out: no `Handle<Image>`, no materials, no
 //! `sync_spiral_cpu_layer` GPU writes, no plugin. Star/vard dots and the
 //! retired-entity list were renderer-side (`ChildOf(camera)` entities), so
-//! stars/vards survive here as data-only (positions still integrate, which
-//! keeps the shared RNG stream and debris spawn cadence identical) while
-//! the entity handles are dropped.
+//! stars/vards survive as data-only - positions still integrate, keeping the
+//! shared RNG stream and debris spawn cadence identical - while the entity
+//! handles drop.
 //!
-//! Timing is fixed-step driven: `App::advance` calls [`SpiralCtl::step`]
-//! once per GML 30 Hz tick, exactly like the bevy `vortex_tick` system.
-//! Area selection goes through [`gml_area_for_area`]
-//! (bevy `gml_area_for_bevy_area` by variant name) into
-//! [`SpiralKind::for_gml_area`]; `AreaId::Loop` maps to GML area 1, i.e.
-//! `Normal` - there is no loop-count branch in the reference.
+//! Timing is fixed-step driven: `App::advance` calls [`SpiralCtl::step`] once
+//! per GML 30 Hz tick, like the bevy `vortex_tick` system. Area selection goes
+//! through [`gml_area_for_area`] (bevy `gml_area_for_bevy_area` by variant
+//! name) into [`SpiralKind::for_gml_area`]; `AreaId::Loop` maps to GML area 1,
+//! i.e. `Normal` - no loop-count branch in the reference.
 
 use crate::vortex_pass::{
     VARD_CELL_SIZES, VARD_FRAME_COUNTS, VORTEX_DEBRIS, VORTEX_VARDS, VORTEX_WISPS, VortexSnapshot,
@@ -40,24 +39,22 @@ pub const MAX_DEBRIS: usize = VORTEX_DEBRIS;
 const WARMUP_TICKS: u32 = 150;
 
 /// GUI-space size the spiral laws are written in (GML
-/// `game_screen_width/height` base; the HEIGHT is always 240, the WIDTH
-/// is the live view width - `view_width = 240 * aspect` with
-/// `opt_resolution` on (default), 320 portrait-floored. GML
-/// `SpiralCont/Step_0` centers on `view_width div 2`, so the vortex
-/// tracks wide windows; the sim carries the live width in
-/// [`SpiralCtl::view_w`] ( refreshed per frame by the shell; warmups
-/// default to the 320 base).
+/// `game_screen_width/height` base: HEIGHT is always 240, WIDTH is the live
+/// view width - `view_width = 240 * aspect` with `opt_resolution` on
+/// (default), 320 portrait-floored. GML `SpiralCont/Step_0` centers on
+/// `view_width div 2`, so the vortex tracks wide windows; the sim carries the
+/// live width in [`SpiralCtl::view_w`] (refreshed per frame by the shell;
+/// warmups default to the 320 base).
 pub const GUI_W: f32 = 320.0;
 pub const GUI_H: f32 = 240.0;
 
-/// Fallback look center + visible extent in wisp coord space: the
-/// 320x240 base view 1:1. The live snapshot overrides this with the
-/// live GUI view (`view_w/2, 120, view_w, 240`) so the fullscreen quad
-/// maps screen px to GUI px exactly like GML (`display_set_gui_size`
-/// = view size). The old 6x value (`[160, 120, 1920, 1440]`) was a
-/// mistranslation of bevy's 6x WORLD-space mesh size: on a fullscreen
-/// quad it shrank every wisp 6x toward the center, so the vortex
-/// never filled the corners.
+/// Fallback look center + visible extent in wisp coord space: the 320x240 base
+/// view 1:1. The live snapshot overrides with the live GUI view
+/// (`view_w/2, 120, view_w, 240`) so a fullscreen quad maps screen px to GUI px
+/// like GML (`display_set_gui_size` = view size). The old 6x value
+/// (`[160, 120, 1920, 1440]`) mistranslated bevy's 6x WORLD-space mesh size:
+/// on a fullscreen quad it shrank every wisp 6x toward the center, so the
+/// vortex never filled the corners.
 pub const VORTEX_VIEW: [f32; 4] = [160.0, 120.0, 320.0, 240.0];
 
 /// Spiral visual variant, selected by GML area.
@@ -113,11 +110,11 @@ pub fn gml_area_for_area(area: AreaId) -> u8 {
 /// Re-warm the view spiral for a fresh campfire-logo room (GML
 /// `Vlambeer/Create_0` quit branch / `BackButton/Other_10` Menu branch:
 /// `instance_create(0, 0, SpiralCont)` builds a LIVE cont with the
-/// `repeat 150` warmup, never the previous run's leftover drain).
-/// Called from the quit-to-menu action arms (the state-entry lifecycle in
-/// `lib.rs` only fires on `AppState` edges, which the actions already
-/// consumed). Prefers the `Run`'s seed when present so the menu vortex
-/// stays in the run's deterministic stream; seed 0 when no run exists.
+/// `repeat 150` warmup, never the previous run's leftover drain). Called from
+/// the quit-to-menu action arms - the state-entry lifecycle in `lib.rs` only
+/// fires on `AppState` edges, which the actions already consumed. Prefers the
+/// `Run`'s seed so the menu vortex stays in the run's deterministic stream;
+/// seed 0 when no run exists.
 pub fn rewarm_view_spiral(world: &mut World, view_w: f32) {
     let seed = world
         .get_resource::<crate::comps_a::Run>()
@@ -191,17 +188,15 @@ impl Vard {
 }
 
 /// Per-wisp lightning-stream state (GML `Spiral/Create_0` + `Step_0` +
-/// `scrDrawSpiral`): `lanim` starts at `-random(300)` and grows
-/// `0.2 + random(0.3)` per tick; `langle` is the `random_angle`
-/// bolt offset. `lanim in (0, 6)` shows the `sprPortalLightning`
-/// stream at rotation `image_angle + langle`. The GML dice are a
-/// deterministic splitmix stream over `(seed, birth, tick)` so
-/// snapshots stay contract-stable across runs with the same seed.
-/// `langle` is radians; dead slots hold `lanim = -1`.
-/// `sound_played` is GML `Spiral.lsound` verbatim: the
-/// `sndPortalLightning{1..8}` one-shot fires once per wisp, the first
-/// tick its bolt becomes visible outside menus (drained by the shell
-/// audio layer; see `WispStream::bolt_sound_due`).
+/// `scrDrawSpiral`): `lanim` starts at `-random(300)`, grows
+/// `0.2 + random(0.3)` per tick; `langle` is the `random_angle` bolt offset,
+/// in radians. `lanim in (0, 6)` shows the `sprPortalLightning` stream at
+/// rotation `image_angle + langle`. The GML dice are a deterministic splitmix
+/// stream over `(seed, birth, tick)`, so snapshots stay contract-stable across
+/// runs with the same seed. Dead slots hold `lanim = -1`. `sound_played` is GML
+/// `Spiral.lsound`: the `sndPortalLightning{1..8}` one-shot fires once per
+/// wisp, the first tick its bolt becomes visible outside menus (drained by the
+/// shell audio layer; see `WispStream::bolt_sound_due`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WispStream {
     pub lanim: f32,
@@ -223,11 +218,10 @@ impl WispStream {
         self.lanim > 0.0 && self.lanim < 6.0
     }
 
-    /// GML `scrDrawSpiral` bolt-sound gate verbatim: fires once per
-    /// wisp, the first tick the bolt is visible (`lanim in (0, 6)`;
-    /// the caller additionally gates on non-menu, since GML only
-    /// plays the sound when `!_is_menu`). Marks played; the caller
-    /// emits `sndPortalLightning{1..8}` at pitch `0.9 + rand * 0.2`.
+    /// GML `scrDrawSpiral` bolt-sound gate: fires once per wisp the first tick
+    /// the bolt is visible (`lanim in (0, 6)`); the caller gates further on
+    /// non-menu (GML plays only when `!_is_menu`), emits `sndPortalLightning{1..8}`
+    /// at pitch `0.9 + rand * 0.2`.
     pub fn bolt_sound_due(&mut self) -> bool {
         if !self.sound_played && self.bolt_visible() {
             self.sound_played = true;
@@ -251,11 +245,11 @@ fn stream_hash01(seed: u64, birth: u32, tick: u32, salt: u64) -> f32 {
     ((z >> 11) as f32) / 9_007_199_254_740_992.0
 }
 
-/// Deterministic small-int pick in `0..n` off the same splitmix stream
-/// (GML `irandom(n - 1)` replacement for the draw-script one-shots:
-/// bolt `sndPortalLightning{1..8}` variant, flyby `sndPortalFlyby{1..4}`
-/// variant). `slot` decorrelates wisps/motes; `tag` decorrelates the
-/// two rolls from each other and from the `stream_hash01` lanes.
+/// Deterministic small-int pick in `0..n` off the same splitmix stream (GML
+/// `irandom(n - 1)` replacement for the draw-script one-shots: bolt
+/// `sndPortalLightning{1..8}` variant, flyby `sndPortalFlyby{1..4}` variant).
+/// `slot` decorrelates wisps/motes; `tag` decorrelates the two rolls from each
+/// other and from the `stream_hash01` lanes.
 pub fn stream_pick(seed: u64, slot: u32, tag: u64) -> u32 {
     let mut z = seed
         .wrapping_add((slot as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
@@ -300,24 +294,21 @@ impl Debris {
     }
 }
 
-/// Headless spiral control (bevy `SpiralCtl` minus the render-only
-/// `retired` entity list; `head`/`dhead` are `pub` here so the write-only
-/// ring cursors never trip dead-code lints outside test builds).
+/// Headless spiral control (bevy `SpiralCtl` minus the render-only `retired`
+/// entity list; `head`/`dhead` are `pub` so the write-only ring cursors never
+/// trip dead-code lints outside test builds).
 ///
 /// GML notes (`objects/SpiralCont/Step_0.gml`, `objects/Spiral/Step_0.gml`,
 /// `objects/SpiralDebris/Step_0.gml`, `objects/SpiralStar/Step_0.gml`):
-/// - Wisp births inherit the emitter pos (`instance_create(x, y, Spiral)`
-///   at the cont's just-stepped `x/y`); each wisp's `xstart/ystart` is
-///   that birth pos, NOT the cont's live pos. The ring therefore stores
-///   the birth pos per slot.
-/// - `image_angle` is stored in RADIANS on each `Spiral` (`other.
-///   image_angle` is degrees; GML trig takes degrees so the drawn value
-///   is deg-based, but the stored `image_angle` field itself is the
-///   radian conversion - the shader's `cos/sin(rot)` needs radians).
-/// - `SpiralStar` has NO alpha gate (spirals never despawn either;
-///   only debris culls offscreen). The star shader pass is additive
-///   white with `1 - xscale` black; the wisp pass uses real art, never
-///   a white quad.
+/// - Wisp births inherit the emitter pos (`instance_create(x, y, Spiral)` at
+///   the cont's just-stepped `x/y`), so each `xstart/ystart` is that birth pos,
+///   NOT the cont's live pos; the ring stores the birth pos per slot.
+/// - `image_angle` is stored in RADIANS on each `Spiral` (`other.image_angle`
+///   is degrees and GML trig takes degrees, but the shader's `cos/sin(rot)`
+///   needs radians).
+/// - `SpiralStar` has NO alpha gate (spirals never despawn either; only debris
+///   culls offscreen). The star pass is additive white with `1 - xscale` black;
+///   the wisp pass uses real art, never a white quad.
 #[derive(Resource, Debug)]
 pub struct SpiralCtl {
     pub angle: f32,
@@ -347,20 +338,20 @@ pub struct SpiralCtl {
     wisp_xscale: Vec<f32>,
     wisp_grow: Vec<f32>,
     wisp_frozen: Vec<bool>,
-    /// GML `SpiralCont.bossfight` verbatim (`instance_exists(Nothing2) ||
-    /// instance_exists(Nothing2Appear) || instance_exists(NothingSpiral)`):
-    /// while set, no `SpiralDebris` births. GML `Nothing2/Create_0`
-    /// spawns `NothingSpiral` + a fresh `SpiralCont` on throne-II rise,
-    /// so the live port condition is a live Throne-II enemy (any phase:
-    /// `SpawnThroneII` pending, `ThroneII` fighting, `Nothing2Death`
-    /// pageant) - refreshed per tick by the shell from the live `Enemy`
-    /// query. Sim-only warmups default it off.
+    /// GML `SpiralCont.bossfight` (`instance_exists(Nothing2) ||
+    /// instance_exists(Nothing2Appear) || instance_exists(NothingSpiral)`): no
+    /// `SpiralDebris` births while set. GML `Nothing2/Create_0` spawns
+    /// `NothingSpiral` + a fresh `SpiralCont` on throne-II rise, so the live
+    /// port condition is a live Throne-II enemy in any phase (`SpawnThroneII`
+    /// pending, `ThroneII` fighting, `Nothing2Death` pageant), refreshed per
+    /// tick by the shell from the live `Enemy` query; sim-only warmups default
+    /// it off.
     pub bossfight_suppressed: bool,
     /// Live GUI view width in px (GML `view_width`: 240 * aspect with
-    /// `opt_resolution` on, 320 portrait-floored). The emitter orbit
-    /// centers on `view_w/2` (`SpiralCont/Step_0`: `view_width div 2`);
-    /// the snapshot maps `view = (view_w/2, 120, view_w, 240)`. The
-    /// shell refreshes this per frame; warmups default to 320.
+    /// `opt_resolution` on, 320 portrait-floored). The emitter orbit centers on
+    /// `view_w/2` (`SpiralCont/Step_0`: `view_width div 2`); the snapshot maps
+    /// `view = (view_w/2, 120, view_w, 240)`. The shell refreshes this per
+    /// frame; warmups default to 320.
     pub view_w: f32,
 }
 
@@ -443,15 +434,13 @@ impl SpiralCtl {
         }
     }
 
-    /// Drain finished: every wisp past the kill plane AND every debris
-    /// mote culled AND every star/vard dead. GML has no timer here - the
-    /// `SpiralCont` object destroys itself only via the Step_0 gate, and
-    /// `Menu/Draw_0` keeps calling `scrDrawSpiral` (drawing the leftover
-    /// motes) for as long as the campfire room lives. A tick-count gate
-    /// here unmounted the layer after ~0.9 s while motes were still
-    /// visibly swirling - the "no vortex on the title screen" bug.
-    /// `kill()` only freezes births; the layer must stay mounted until
-    /// the sky is actually empty.
+    /// Drain finished: every wisp past the kill plane AND every debris mote
+    /// culled AND every star/vard dead. GML has no timer here - `SpiralCont`
+    /// destroys itself only via the Step_0 gate, and `Menu/Draw_0` keeps calling
+    /// `scrDrawSpiral` (drawing the leftover motes) as long as the campfire room
+    /// lives. A tick-count gate unmounted the layer after ~0.9 s with motes
+    /// still swirling (the "no vortex on the title screen" bug); `kill()` only
+    /// freezes births, so the layer must stay mounted until the sky is empty.
     pub fn is_done(&self) -> bool {
         if self.alive {
             return false;
@@ -585,11 +574,10 @@ impl SpiralCtl {
                 self.push_star(x, y);
             } else {
                 // GML `SpiralCont/Step_0`: `image_angle = other.image_angle`
-                // copies the cont angle in DEGREES, then `scrDrawSpiral`
-                // draws at `image_angle + 45` with GML-degree trig. The
-                // shader samples with radians trig, so the ring stores
-                // `(angle_deg + 45).to_radians()` (rotation only; the `+45`
-                // is wisp-art-only - the bolt pass strips it back out).
+                // copies the cont angle in DEGREES, then `scrDrawSpiral` draws at
+                // `image_angle + 45` with GML-degree trig. The shader samples with
+                // radians trig, so the ring stores `(angle_deg + 45).to_radians()`
+                // (rotation only; `+45` is wisp-art-only - the bolt pass strips it).
                 let mut rot = (self.angle + 45.0).to_radians();
                 if kind == SpiralKind::Idpd && (self.ticks as i64 % 11) <= 1 {
                     // GML only swaps sprite_index to sprSpiralIDPD2 here;
@@ -636,15 +624,13 @@ impl SpiralCtl {
                     {
                         self.push_vard(x, y, path, frame);
                     } else {
-                        // GML `SpiralDebris/Create_0` runs at birth, then
-                        // the SAME tick's `Step_0` integrates once before
-                        // the first draw (`repeat 150` warmup steps self
-                        // then motes, and live ticks create-then-step in
-                        // order). A mote stored with xscale 0 and drawn
-                        // next frame would pop full-size through the
-                        // `frame + xscale/32` packing (see the ring write
-                        // below); integrate once here so the birth frame
-                        // already carries the first growth step.
+                        // GML `SpiralDebris/Create_0` runs at birth, then the SAME
+                        // tick's `Step_0` integrates once before the first draw
+                        // (`repeat 150` warmup steps self then motes, live ticks
+                        // create-then-step in order). A mote stored at xscale 0 and
+                        // drawn next frame would pop full-size through the
+                        // `frame + xscale/32` packing (ring write below), so
+                        // integrate once here: the birth frame already carries it.
                         let slot = self.dhead;
                         let frame = (self.random01() * 4.0).floor().min(3.0);
                         let image_angle = self.random_range(0.0, 360.0);
@@ -660,14 +646,12 @@ impl SpiralCtl {
                             grow: 0.0,
                             image_angle,
                             // GML `sprDebrisN` default arm: `image_index =
-                            // random(image_number)` is float, but the
-                            // ring packs `frame + xscale/32` and the
-                            // shader splits with `floor`/`fract` - so
-                            // the frame MUST be integral (bevy floors
-                            // + clamps to 0..3 verbatim), else the
-                            // frame fraction leaks into `fract` and
-                            // newborns decode at xscale up to 32
-                            // (the "debris spawns massive" bug).
+                            // random(image_number)` is float, but the ring packs
+                            // `frame + xscale/32` and the shader splits with
+                            // `floor`/`fract` - so the frame MUST be integral (bevy
+                            // floors + clamps to 0..3 verbatim), else the frame
+                            // fraction leaks into `fract` and newborns decode at
+                            // xscale up to 32 (the "debris spawns massive" bug).
                             frame,
                             sound_played: false,
                         };
@@ -780,11 +764,10 @@ impl SpiralCtl {
         self.step_vard_slot(index, false);
     }
 
-    /// One GML `SpiralDebris/Step_0` integration over mote `i`
-    /// (verbatim order: pos from current angle/radius, then
-    /// angle/dist/grow/xscale advance, cull at view ± 16, ring write
-    /// with the `frame + xscale/32` pack). Shared by the birth site
-    /// (newborns step once in their birth tick, exactly like GML's
+    /// One GML `SpiralDebris/Step_0` integration over mote `i` (order:
+    /// pos from current angle/radius, then angle/dist/grow/xscale advance, cull
+    /// at view ± 16, ring write with the `frame + xscale/32` pack). Shared by
+    /// the birth site (newborns step once in their birth tick, like GML's
     /// Create-then-Step order) and the per-tick loop.
     fn step_debris_slot(&mut self, i: usize, drain: bool) {
         // Split borrow: the mote mutably, the ring slot mutably.
@@ -808,10 +791,9 @@ impl SpiralCtl {
             }
             d.grow *= d.xscale * 0.05 + 1.0;
             d.image_angle += d.rotspeed;
-            // GML `Step_0` cull verbatim: view rect ± 16 - but against
-            // the LIVE view width (`view_width`, 426 at 16:9), not the
-            // 320 base. The old `GUI_W` bound killed side-drifting motes
-            // up to 106px before they left the screen.
+            // GML `Step_0` cull: view rect ± 16, but against the LIVE view width
+            // (`view_width`, 426 at 16:9), not the 320 base. The old `GUI_W` bound
+            // killed side-drifting motes up to 106px before they left the screen.
             let culled = dx + d.xstart < -16.0
                 || dx + d.xstart > self.view_w + 16.0
                 || dy + d.ystart < -16.0
@@ -828,11 +810,10 @@ impl SpiralCtl {
             )
         };
         self.debris_ring[i] = if culled {
-            // Parked sentinel: x < -100 (the ONLY component the shader
-            // tests). Must be `[-1000, 0, 0, 0]` - `[-1000; 4]`
-            // smuggles `frame=0, xscale=32` into slot 3, which the
-            // shader unpacks as a FULL-SIZE rock (the "debris spawns
-            // massive" bug).
+            // Parked sentinel: x < -100 is the ONLY component the shader tests.
+            // Must be `[-1000, 0, 0, 0]` - `[-1000; 4]` smuggles `frame=0,
+            // xscale=32` into slot 3, which the shader unpacks as a FULL-SIZE
+            // rock (the "debris spawns massive" bug).
             [-1000.0, 0.0, 0.0, 0.0]
         } else {
             [dx, dy, rot_rad, packed]
@@ -899,19 +880,17 @@ impl SpiralCtl {
         }
     }
 
-    /// Snapshot for the background pass. Produces exactly the type
+    /// Snapshot for the background pass: exactly what
     /// [`VortexPass`](crate::vortex_pass::VortexPass) consumes (converter, not
-    /// an engine change): `glob_a = (ticks, drain_bias, bg_r, bg_g)`,
-    /// `glob_b = (bg_b, bg_alpha, thresh, kindpacked)` with the bevy
-    /// paddings (`-1` wisps, `-1000` debris), plus each wisp's own
-    /// `lanim`/`langle` stream (GML `Spiral` bolt clock) indexed like
-    /// the ring. Background is always black
-    /// (bevy `background_color`); `bg_alpha` follows GML `scrDrawSpiral`
-    /// verbatim (opaque everywhere except the campfire title; see the
-    /// `bg_alpha` match at the `VortexPass` mount in `lib.rs`).
-    /// Sound flags (`WispStream::sound_played`, `Debris::sound_played`)
-    /// stay sim-side - the snapshot carries no audio, the shell drains
-    /// the flags directly (GML plays them inline in the draw script).
+    /// engine change). `glob_a = (ticks, drain_bias, bg_r, bg_g)`,
+    /// `glob_b = (bg_b, bg_alpha, thresh, kindpacked)` with the bevy paddings
+    /// (`-1` wisps, `-1000` debris), plus each wisp's `lanim`/`langle` stream
+    /// (GML `Spiral` bolt clock) indexed like the ring. Background is always
+    /// black (bevy `background_color`); `bg_alpha` follows GML `scrDrawSpiral`
+    /// (opaque everywhere except the campfire title; see the `bg_alpha` match at
+    /// the `VortexPass` mount in `lib.rs`). Sound flags (`WispStream::sound_played`,
+    /// `Debris::sound_played`) stay sim-side - the snapshot carries no audio, the
+    /// shell drains them directly (GML plays them inline in the draw script).
     pub fn snapshot(&self, bg_alpha: f32) -> VortexSnapshot {
         self.snapshot_with_lightning(bg_alpha, true)
     }
@@ -1123,11 +1102,10 @@ mod vortex_ui_parity {
         assert!(live_wisps > 64, "warmup must leave a full ring behind");
     }
 
-    /// GML `Vlambeer/Alarm_0` parity: the boot spiral is LIVE from
-    /// construction (warmed cont, births on), so the logo screen can
-    /// mount the vortex layer under the `Logo` - a dead-on-arrival
-    /// spiral would leave the reel black (the "no vortex on the logo
-    /// screen" bug).
+    /// GML `Vlambeer/Alarm_0` parity: the boot spiral is LIVE from construction
+    /// (warmed cont, births on) so the logo screen can mount the vortex layer
+    /// under the `Logo`; a dead-on-arrival spiral left the reel black (the "no
+    /// vortex on the logo screen" bug).
     #[test]
     fn boot_spiral_is_live_for_logo_mount() {
         let ctl = SpiralCtl::warmed_up_for_gml_area_seeded(0, 1234);

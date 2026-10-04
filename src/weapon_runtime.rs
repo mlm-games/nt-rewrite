@@ -1,17 +1,11 @@
-//! Weapon runtime definitions: pure-data port of
-//! `weapon_runtime.rs` game data, plus the `WeaponDef` /
-//! `MeleeDef` structs and the legacy `weapon_def` table from bevy
-//! `content.rs` (~lines 832-1223).
-//!
-//! Sim-side conventions:
-//! - bevy `Color::srgb(r, g, b)` -> `[f32; 3]` RGB array (the renderer
-//!   resolves presentation later); values are untouched.
-//! - `HazardDef` / `SplitDef` are reused from `crate::data` (their color
-//!   is `[f32; 4]`); bevy `Color::srgba(r, g, b, a)` maps component-wise.
-//! - bevy `Vec2 size` -> `glam::Vec2`.
-//! - `WeaponId` is `crate::data::WeaponId(pub u8)`; `.0` indexes `WEAPONS`.
-//! - Pure data/logic only: zero ECS imports, zero bevy imports.
-//!
+//! Weapon runtime definitions: pure-data port of `weapon_runtime.rs` game
+//! data, plus the `WeaponDef` / `MeleeDef` structs and the legacy
+//! `weapon_def` table from bevy `content.rs` (~lines 832-1223). Pure
+//! data/logic only: zero ECS imports, zero bevy imports.
+//! Sim-side conventions: bevy `Color::srgb(r, g, b)` -> `[f32; 3]` (values
+//! untouched); `Color::srgba` maps component-wise onto `HazardDef`/`SplitDef`'s
+//! `[f32; 4]`; bevy `Vec2 size` -> `glam::Vec2`; `WeaponId` is
+//! `crate::data::WeaponId(pub u8)` whose `.0` indexes `WEAPONS`.
 //! `weapon_runtime_def` is the key API the firing phase will call:
 //! `WeaponId -> WeaponDef` with all profile layers applied in the same
 //! order as bevy (legacy-or-family base -> exact -> variant -> normalize).
@@ -487,11 +481,8 @@ pub fn melee_projectile_spec(weapon_name: &str) -> MeleeProjectileSpec {
     }
 }
 
-/// GML melee swing sprite per weapon (scrFire spawns Slash/Shank/EnergySlash
-/// variants; Shovel/Sledge/Guitar use sprHeavySlash, Screwdriver uses Shank,
-/// EnergySword uses EnergySlash, Black Sword mega uses MegaSlash, Ultra
-/// Shovel uses UltraSlash, Blood Hammer uses BloodSlash, Lightning Hammer
-/// uses LightningSlash, Energy Hammer uses EnergyHammerSlash).
+/// GML melee swing sprite per weapon (scrFire spawns the
+/// Slash/Shank/EnergySlash family).
 pub fn melee_swing_sprite(weapon_name: &str) -> &'static str {
     match base_weapon_name(weapon_name) {
         "SHOVEL" | "SLEDGEHAMMER" | "GUITAR" | "ELECTRIC GUITAR" => "images/sprHeavySlash.png",
@@ -1255,22 +1246,20 @@ fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
 
         "CLUSTER LAUNCHER" => {
             // GML `scrFire.gml:632` fires `ClusterNade` at 8 px/step with
-            // `scr_projectile_spread(8)`; `ClusterNade/Create_0.gml:3-8`
-            // sets `alarm[0] = 30` (1.0 s fuse), `damage = 7`,
-            // `knockback_speed = 10` (300 px/s) and inherits
-            // `Grenade/Collision_Wall.gml:18-19` - it bounces at `speed *= 0.6`
-            // instead of detonating.
+            // `scr_projectile_spread(8)`; `ClusterNade/Create_0.gml:3-8` sets
+            // `alarm[0] = 30` (1.0 s fuse), `damage = 7`, `knockback_speed = 10`
+            // (300 px/s) and inherits `Grenade/Collision_Wall.gml:18-19` - it bounces
+            // at `speed *= 0.6` instead of detonating.
             set_explosive(def, 7, 1, 240.0, 1.0, 0.14, 9.0, 7.0, 300.0,
                 [1.0, 0.62, 0.22], Vec2::splat(11.0));
             def.bounces = 255;
 
             // GML `ClusterNade/Destroy_0.gml:1-13`: `8 + Death-crown`
-            // `SmallGrenade` on `random_angle` at `random_range(3, 5)`
-            // px/step, each inheriting `motion_add(parent_direction, 2)`
-            // and `friction = 0.4`. `SmallGrenade/Create_0.gml` is a
-            // `Grenade` child: damage 5, `alarm[0] = irandom_range(10, 20)`,
-            // `knockback_speed = 10` (300 px/s), and `Collision_Wall`
-            // destroys it outright.
+            // `SmallGrenade` on `random_angle` at `random_range(3, 5)` px/step, each
+            // inheriting `motion_add(parent_direction, 2)`, `friction = 0.4`.
+            // `SmallGrenade/Create_0.gml` is a `Grenade` child: damage 5,
+            // `alarm[0] = irandom_range(10, 20)`, `knockback_speed = 10` (300 px/s),
+            // `Collision_Wall` destroys it outright.
             set_split(def, 8, std::f32::consts::PI, 120.0, 5, 15.0 / 30.0, 3.0, 300.0,
                 [1.0, 0.78, 0.38], Vec2::splat(7.0));
         }

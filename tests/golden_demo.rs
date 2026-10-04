@@ -1,32 +1,31 @@
-//! Golden demo-level walkthrough on the pre-migration pipeline.
-//! Boots a deterministic run, plays a scripted input tape through the
-//! LIVE per-frame path (`feed_polled` with a synthetic `Scheduler`
-//! snapshot → `feed_input` → `advance`), and checks structural
-//! invariants per tick. The sim uses thread RNG for drops and aim
-//! jitter, so exact positions never reproduce across runs. What IS
-//! deterministic: movement responds, firing spends ammo and spawns
-//! projectiles, kills increment, pause freezes the world, the run
-//! never leaves InGame, the player never dies.
+//! Golden demo-level walkthrough. Boots a deterministic run (seed 4242, desert
+//! 1-1) and plays a scripted input tape through the LIVE per-frame path
+//! (`feed_polled` with a synthetic `Scheduler` snapshot → `feed_input` →
+//! `advance`), checking structural invariants per tick. Drops and aim jitter use
+//! thread RNG, so exact positions never reproduce across runs. What IS
+//! deterministic: movement responds, firing spends ammo and spawns projectiles,
+//! kills increment, pause freezes the world, the run never leaves InGame, the
+//! player never dies.
 //!
 //! Live-path coverage (deliberately NOT bypassed):
-//! - every frame builds a synthetic `Scheduler` (polled `held_keys` +
-//!   mouse levels mirror the hardware truth the tape asserts) and runs
-//!   `feed_polled` before `feed_input`, exactly like `view` does. If
-//!   `reconcile_held` drops a still-down key, movement stalls here.
-//! - Esc travels the real shortcut pipeline: `install` (map + handler)
-//!   once, then `resolve_action` + `handle` per press like the runtime
-//!   dispatch does. `drain` runs inside `feed_input` as live.
-//! - the fire leg stages TWO `stage_click`s before one `feed_input`
-//!   (press + motion event in the same frame). A click pileup that
-//!   fires twice fails the exact first-shot tick below.
-//! - the release leg drops the key from the synthetic snapshot AND
-//!   stages the key-up: levels must clear, not latch.
+//! - every frame builds a synthetic `Scheduler` (polled `held_keys` + mouse levels
+//!   mirror the hardware truth the tape asserts) and runs `feed_polled` before
+//!   `feed_input`, exactly like `view` does. If `reconcile_held` drops a
+//!   still-down key, movement stalls here.
+//! - Esc travels the real shortcut pipeline: `install` (map + handler) once, then
+//!   `resolve_action` + `handle` per press like the runtime dispatch does.
+//!   `drain` runs inside `feed_input` as live.
+//! - the fire leg stages TWO `stage_click`s before one `feed_input` (press + motion
+//!   event in the same frame). A click pileup that fires twice fails the exact
+//!   first-shot tick below.
+//! - the release leg drops the key from the synthetic snapshot AND stages the
+//!   key-up: levels must clear, not latch.
 //!
-//! The tape (seed 4242, desert 1-1):
+//! The tape:
 //! - ticks 0-29: hold W (walk north)
 //! - tick 30: tap E (interact pulse)
-//! - ticks 40-169: hold D (strafe east; starts BEFORE the fire leg so
-//!   the only other actor can't touch the player mid-walk)
+//! - ticks 40-169: hold D (strafe east; starts BEFORE the fire leg so the only
+//!   other actor can't touch the player mid-walk)
 //! - ticks 140-147: hold LMB (fire revolver at the bandit)
 //! - tick 148: release LMB
 //! - ticks 170-171: tap Space (swap pulse)
@@ -156,15 +155,13 @@ fn clear_line(mask: &FloorMask, from: glam::Vec2, to: glam::Vec2) -> bool {
     (1..=steps).all(|i| mask.is_walkable(from + (to - from) * (i as f32 / steps as f32)))
 }
 
-/// Where the fire leg puts its target: the walkable cell centre nearest the
-/// player that still has an unobstructed line to it, at least 32 px out.
-///
-/// The tape's subject is the input -> sim pipeline (movement responds,
-/// firing spends ammo, kills increment), not the floor layout, so the target
-/// is derived from whatever the generator produced rather than pinned to a
-/// fixed offset. A hardcoded `player + (60, 0)` put the bandit inside a wall
-/// as soon as the starting arena changed shape, and every shot was eaten by
-/// geometry before it arrived.
+/// Walkable cell centre nearest the player with a clear line to it, at least
+/// 32 px out. The tape's subject is the input -> sim pipeline (movement responds,
+/// firing spends ammo, kills increment), not the floor layout, so the target is
+/// derived from whatever the generator produced rather than pinned to a fixed
+/// offset: a hardcoded `player + (60, 0)` put the bandit inside a wall as soon as
+/// the starting arena changed shape, and every shot was eaten by geometry before
+/// it arrived.
 fn target_spot(w: &World, player_pos: glam::Vec2) -> Option<glam::Vec2> {
     let mask = w.resource::<FloorMask>();
     let mut cells: Vec<(i32, i32)> = mask.cells.iter().copied().collect();
@@ -212,11 +209,10 @@ fn run_tape() -> Vec<TickSnap> {
     let nt_state = nt_rewrite::nt_shortcuts::test_state(&app);
     let mut hw = Hardware::default();
     let mut out = Vec::with_capacity(TICKS);
-    // Release bookkeeping: key-up must hit BOTH the App level set
-    // (the sampler reads `App.held`) and the snapshot (so the
-    // reconcile keeps it cleared). Both go through the same focus
-    // route as live (`stage_key`); the direct level writer only runs
-    // for keys whose Up event carries no physical position.
+    // Release bookkeeping: key-up must hit BOTH the App level set (the sampler
+    // reads `App.held`) and the snapshot (so the reconcile keeps it cleared), both
+    // through the same focus route as live (`stage_key`); the direct level writer
+    // only runs for keys whose Up event carries no physical position.
     let release_key = |app: &mut App, hw: &mut Hardware, key: PhysicalKey, glyph: Key| {
         hw.keys.remove(&key);
         app.stage_key(&key_up(glyph, key));
@@ -284,11 +280,10 @@ fn run_tape() -> Vec<TickSnap> {
             }
             180 => {
                 // Live Esc path: focus-routed key event into staging AND
-                // the runtime shortcut dispatch into the installed
-                // handler; `drain` inside `feed_input` moves it to the
-                // pause edge like `view` does. Release the key the next
-                // tick: live, winit delivers the Up event (a held Esc
-                // must not re-toggle while down).
+                // the runtime shortcut dispatch into the installed handler; `drain`
+                // inside `feed_input` moves it to the pause edge like `view` does.
+                // Release the key the next tick: live, winit delivers the Up event
+                // (a held Esc must not re-toggle while down).
                 app.stage_key(&key_event(Key::Escape, PhysicalKey::Escape));
                 let chord = KeyChord::new(Key::Escape, Modifiers::default());
                 let action = nt_state.resolve_action(&chord).expect("Esc must resolve");

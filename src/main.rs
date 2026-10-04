@@ -1,9 +1,8 @@
-//! Entry: desktop window plus Android NativeActivity (`cargo rapk`).
-//! Assets when present, placeholders otherwise (`NT_ASSETS` overrides the
-//! search; see `nt_rewrite` docs). Hardware gamepads drain through
-//! `repame-shell`'s [`GamepadPoller`] into backend-neutral [`GamepadState`]
-//! snapshots (bevy `sample_input` pad-section parity); touch arrives as
-//! viewport `PickEvent`s.
+//! Entry: desktop window plus Android NativeActivity (`cargo rapk`). Assets when
+//! present, placeholders otherwise (`NT_ASSETS` overrides the search; see
+//! `nt_rewrite` docs). Hardware gamepads drain through `repame-shell`'s
+//! [`GamepadPoller`] into backend-neutral [`GamepadState`] snapshots (bevy
+//! `sample_input` pad-section parity); touch arrives as viewport `PickEvent`s.
 
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 use web_time::{Duration, Instant};

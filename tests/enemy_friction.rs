@@ -1,14 +1,12 @@
 //! GML `enemy/Create_0.gml` sets `friction = 0.4` on every enemy, and GMS2
-//! applies it to `hspeed`/`vspeed` once per step, between the object's step
-//! code and the move. The port carried the value on `EnemyBrain` but only ever
-//! read it in the `enemy/Collision_Wall` axis slide, so no enemy ever
-//! decelerated: the walk law's `motion_add` ratcheted every one of them to its
-//! `Other_10` cap, and once `walk` expired they glided at that cap until
-//! something stopped them. That is the "enemies move far more often and far
-//! faster" report.
-//!
-//! This drives the live schedule and pins the decay, so the law cannot be
-//! dropped from the pipeline again without this failing.
+//! applies it to `hspeed`/`vspeed` once per step, between the object's step code
+//! and the move. The port carried the value on `EnemyBrain` but only ever read it
+//! in the `enemy/Collision_Wall` axis slide, so no enemy ever decelerated: the
+//! walk law's `motion_add` ratcheted every one of them to its `Other_10` cap, and
+//! once `walk` expired they glided at that cap until something stopped them. That
+//! is the "enemies move far more often and far faster" report.
+//! This drives the live schedule and pins the decay, so the law cannot be dropped
+//! from the pipeline again without this failing.
 
 use web_time::Duration;
 

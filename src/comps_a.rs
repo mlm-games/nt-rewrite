@@ -16,13 +16,12 @@ pub const PLAYER_BASE_SPEED: f32 = 120.0;
 pub const PLAYER_ACCEL: f32 = 2700.0;
 
 pub const PLAYER_FRICTION: f32 = 0.45;
-/// GML reference view scale, no zoom: at a 1280x720 window the view
-/// shows 426x240 world px (GML `macros_general`: base 320x240 GUI/view,
+/// GML reference view scale, no zoom: at a 1280x720 window the view shows
+/// 426x240 world px (GML `macros_general`: base 320x240 GUI/view,
 /// `scrSetViewSize` widens to `view_width_max = 240 * aspect` when
-/// `opt_resolution`, which defaults on - so the visible height is always
-/// 240 world px). The live frame resolves the scale per window through
-/// [`crate::render::gml_frame`] (the engine contain-fit over
-/// [`crate::render::gml_view_size`]); this const is the 720p reference
+/// `opt_resolution`, which defaults on, so the visible height is always 240
+/// world px). The live frame resolves the scale per window through
+/// [`crate::render::gml_frame`]; this const is the 720p reference
 /// (`240/720 = 1/3`) for boot/tests.
 pub const NT_CAM_SCALE: f32 = 1.0 / 3.0;
 
@@ -76,14 +75,13 @@ pub const TILE: f32 = 32.0;
 /// GML's tile model is two objects at two resolutions: `Floor` is a 32x32
 /// non-solid tile and `Wall` is a 16x16 solid. `scrWallDestroy` destroys one
 /// `Wall` and drops a 16x16 `FloorExplo` in its place, so a hole punched in the
-/// wall ring is **one 16x16 cell** wide, and the sibling `Wall`s inside the same
+/// wall ring is **one 16x16 cell** wide and the sibling `Wall`s inside the same
 /// 32x32 `Floor` neighbour stay solid.
 ///
 /// The port collapsed that into the 32x32 `cells` set, so a break opened a whole
-/// floor tile while the remaining 16x16 wall bodies still blocked it: the floor
-/// sprite appeared but the area was not walkable. `opened` restores the 16x16
-/// resolution for destroyed walls, so `cells` (32x32 floor) and `opened` (16x16
-/// destroyed wall) agree everywhere.
+/// floor tile while the remaining 16x16 wall bodies still blocked it (floor
+/// sprite, not walkable). `opened` restores the 16x16 resolution for destroyed
+/// walls, so `cells` (32x32 floor) and `opened` (16x16 destroyed wall) agree.
 #[derive(Resource, Default, Clone)]
 pub struct FloorMask {
     pub cells: std::collections::HashSet<(i32, i32)>,
@@ -108,15 +106,14 @@ pub fn floor_cell_for_wall(wx: i32, wy: i32) -> (i32, i32) {
 ///
 /// GML creates them once: every `Floor` spawns 8 `Top`s at its 32px
 /// neighbours (`mcr_floor_create_tops`, `GenCont/Alarm_0:50` plus the
-/// `call_after(5, ...)` second pass) and each `Top` splits into 4
-/// `TopSmall`s (`Top/Create_0:11-14`). `TopSmall/Create_0:1-4` kills the
-/// ones meeting a `Wall` or a `Floor` **at that instant** - nothing ever
-/// re-evaluates them, so a destroyed wall does NOT grow its Trans tile
-/// back. The only later growth is `FloorExplo/Create_0:43-50`, which
-/// spawns 8 more `Top`s per broken wall.
+/// `call_after(5, ...)` second pass) and each `Top` splits into 4 `TopSmall`s
+/// (`Top/Create_0:11-14`). `TopSmall/Create_0:1-4` kills the ones meeting a
+/// `Wall` or a `Floor` **at that instant** - nothing re-evaluates them, so a
+/// destroyed wall does NOT grow its Trans tile back. The only later growth is
+/// `FloorExplo/Create_0:43-50` (8 more `Top`s per broken wall).
 ///
-/// Modelled as accumulated state (not a live recompute) so the renderer
-/// draws exactly the instances GML has at that moment.
+/// Accumulated state, not a live recompute, so the renderer draws exactly the
+/// instances GML has at that moment.
 #[derive(Resource, Default, Clone)]
 pub struct TopSmalls {
     pub cells: std::collections::HashSet<(i32, i32)>,
@@ -169,10 +166,10 @@ impl TopSmalls {
 
     /// GML `FloorExplo/Create_0:43-50`: the 8 `Top`s the explosion spawns
     /// cover a 6x6 block of 16px cells centred on the broken wall, MINUS the
-    /// centre 2x2 - `instance_create(x, y, Top)` is absent from that list,
-    /// so the hole itself never regains a Trans tile. `walls` must be the
-    /// post-break set (broken walls removed, re-seal walls added), because
-    /// `TopSmall/Create_0` tests the live instances.
+    /// centre 2x2 (`instance_create(x, y, Top)` is absent from that list, so
+    /// the hole never regains a Trans tile). `walls` must be the post-break set
+    /// (broken walls removed, re-seal walls added): `TopSmall/Create_0` tests
+    /// the live instances.
     pub fn spawn_around_break(
         &mut self,
         at: (i32, i32),
@@ -233,9 +230,8 @@ impl FloorMask {
         self.cells.contains(&self.world_to_cell(p)) || self.opened.contains(&self.world_to_wall_cell(p))
     }
 
-    /// Push-out from unwalkable cells. Port adaptation: the bevy build
-    /// carried 2D positions in `Vec3` (`Transform.translation`); here
-    /// positions are `Vec2` throughout, so the dead `z` channel is gone.
+    /// Push-out from unwalkable cells. Port adaptation: bevy carried 2D positions
+    /// in `Vec3` (`Transform.translation`), so the dead `z` channel is gone.
     pub fn resolve_circle(&self, pos: &mut Vec2, radius: f32) {
         let p = *pos;
         if self.is_walkable(p) {
@@ -266,10 +262,9 @@ impl FloorMask {
         }
     }
 
-    /// Centre of the nearest walkable cell, scanning outward in
-    /// Chebyshev rings so the search order is deterministic. 32x32
-    /// floor tiles win over cells `scrWallDestroy` opened, because a
-    /// tile centre sits 16 px clear of the ring.
+    /// Centre of the nearest walkable cell, scanning outward in Chebyshev rings
+    /// so the search order is deterministic. 32x32 floor tiles win over cells
+    /// `scrWallDestroy` opened: a tile centre sits 16 px clear of the ring.
     pub fn nearest_walkable_center(&self, p: Vec2) -> Option<Vec2> {
         let (ox, oy) = self.world_to_cell(p);
         let tile_ring = (ARENA_W.max(ARENA_H) * 0.5 / TILE) as i32;
@@ -304,11 +299,10 @@ impl FloorMask {
         None
     }
 
-    /// Drop a circle that sits in a solid cell onto the nearest
-    /// walkable cell centre. `move_contact_solid` only resolves the
-    /// movement, so a body that starts in contact walks out along the
-    /// contact normal and the separation jitter then flings it;
-    /// snapping lands it on floor instead.
+    /// Drop a circle that sits in a solid cell onto the nearest walkable cell
+    /// centre. `move_contact_solid` only resolves the movement, so a body that
+    /// starts in contact walks out along the contact normal and the separation
+    /// jitter then flings it; snapping lands it on floor instead.
     pub fn snap_inside(&self, pos: &mut Vec2) -> bool {
         if self.is_walkable(*pos) {
             return false;
@@ -993,12 +987,11 @@ impl DamageSource {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct ProjectileFriction(pub f32);
 
-/// GML `Rocket/Create_0.gml:12-15` + `Step_0.gml:4-5`: once `active`
-/// (set by `alarm[1]`) the body runs
-/// `motion_add_m(direction, accel, maxspeed)` every step - accelerate
-/// along the current heading, then clamp the total speed to `max`.
-/// `arm` is the `alarm[1]` countdown; it is `finished()` only after the
-/// alarm has actually fired, so acceleration starts on the next step.
+/// GML `Rocket/Create_0.gml:12-15` + `Step_0.gml:4-5`: once `active` (set by
+/// `alarm[1]`) the body runs `motion_add_m(direction, accel, maxspeed)` every
+/// step - accelerate along the current heading, then clamp total speed to `max`.
+/// `arm` is the `alarm[1]` countdown, `finished()` only once the alarm has
+/// actually fired, so acceleration starts on the next step.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct ProjectileAccel {
     /// px/step added per step.
@@ -1050,8 +1043,8 @@ pub struct ShellWallBounce {
 /// `shank` passes through walls (screwdriver). `walled` latches after first
 /// wall hit so MeleeHitWall + shake + sound fire once. `reach`/`back`/
 /// `half_width` describe the oriented hitbox: GML sprites carry their origin
-/// (e.g. sprSlash xorigin 0 = arc extends 48px forward), so hits must be
-/// tested against the forward segment, not a circle at the entity.
+/// (sprSlash xorigin 0 = arc extends 48px forward), so hits test the forward
+/// segment, not a circle at the entity.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct SlashProjectile {
     pub typ: u8,
@@ -1103,9 +1096,9 @@ pub struct ProjectileTyp(pub u8);
 
 /// Exact GML object art identity (Bullet1 vs Bullet2).
 ///
-/// Do not derive render art from [`ProjectileTyp`]: in the GML project both
-/// Bullet1 and Bullet2 have `typ = 1`, but they are different objects with
-/// different sprites, masks, fade animations, friction, and hit behavior.
+/// Do not derive render art from [`ProjectileTyp`]: in GML both Bullet1 and
+/// Bullet2 have `typ = 1` yet are different objects with different sprites,
+/// masks, fade animations, friction and hit behavior.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProjectileVisual {
     pub sprite: &'static str,
@@ -1115,9 +1108,8 @@ pub struct ProjectileVisual {
 
 /// Data-driven GML prop hurt/broken art identity.
 ///
-/// GameMaker props do not share one hit animation: some swap to a hurt
-/// strip for a few ticks, some swap into broken variants, some are
-/// already correct with no hurt sprite.
+/// GameMaker props do not share one hit animation: some swap to a hurt strip
+/// for a few ticks, some swap into broken variants, some have no hurt sprite.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GmlHurtSprite {
     pub normal: &'static str,

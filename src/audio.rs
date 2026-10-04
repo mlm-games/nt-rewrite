@@ -1,18 +1,14 @@
 //! Audio selection: cues, area music/ambience.
-//!
-//! The bevy build spawned `AudioPlayer` entities straight from systems
-//! and resolved files through `AssetCatalog` + `AssetServer`; here
-//! systems output DATA and the platform layer (repame-audio) plays it:
-//!
-//! * one-shots ([`AudioCue`]) queue with stem + volume + pitch variance;
-//!   the backend samples the pitch at play time (bevy
-//!   `AudioM::play_sfx_varied` parity) and resolves stems against its
-//!   asset store.
-//! * area music/ambience ([`sync_area_audio`]) resolves the GML
-//!   `MusCont` selection law to bare GML stems in [`AreaAudioState`],
-//!   which the backend polls every tick.
-//!
-//! Only the cues needed by ported systems exist yet for gameplay SFX.
+//! The bevy build spawned `AudioPlayer` entities straight from systems and
+//! resolved files through `AssetCatalog` + `AssetServer`; here systems output
+//! DATA and the platform layer (repame-audio) plays it:
+//! * one-shots ([`AudioCue`]) queue with stem + volume + pitch variance; the
+//!   backend samples the pitch at play time (bevy `AudioM::play_sfx_varied`
+//!   parity) and resolves stems against its asset store.
+//! * area music/ambience ([`sync_area_audio`]) resolves the GML `MusCont`
+//!   selection law to bare GML stems in [`AreaAudioState`], polled by the
+//!   backend every tick.
+//! Only the cues the ported systems need exist yet.
 
 use bevy_ecs::prelude::*;
 use repame_sim::SimTime;
@@ -138,7 +134,6 @@ impl GameAudio {
         Self::cue(cues, "sndPortalOpen", 1.0, 0.0);
     }
 
-    // --- Full GML stem table (`snd*` asset names); volume/variance
     // follow the GML call site cited on each helper.
 
     /// Explosion crack (GML `Sniper/Destroy_0.gml:6`
@@ -180,7 +175,6 @@ impl GameAudio {
         Self::cue(cues, "sndPickupDisappear", 1.0, 0.0);
     }
 
-    // --- Pickup / chest cues (GML stems verbatim).
 
     /// GML `Rad/Step_0.gml:33` `snd_play(sndRadPickup)`.
     pub fn play_rad_pickup(&self, cues: &mut Queue<AudioCue>) {
@@ -328,7 +322,6 @@ impl GameAudio {
     }
 }
 
-// --- Area music / ambience selection (bevy `ambience.rs` port) ---
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum MusicCue {
@@ -667,14 +660,13 @@ pub fn update_amb_filter(
     );
 }
 
-/// GML `MusCont` selection law per app state: menus hold the title
-/// theme (A→B timer at `Create_0.gml:10-12`, char-select ambience at
-/// `Menu/Create_0.gml:96`), Loading previews the area, InGame runs the
-/// `Alarm_11` area bed under the boss-death jingle / boss-dead /
-/// big-dog / campfire priority. The splash gun-reel finale runs
-/// `Logo/Alarm_0.gml:8` `sndLogoLoop` on the same ambience slot; the
-/// Splash -> MainMenu handoff (`Logo/Destroy_0.gml:1` `snd_stop`) is
-/// the want dropping back to `None`.
+/// GML `MusCont` selection law per app state: menus hold the title theme
+/// (A→B timer at `Create_0.gml:10-12`, char-select bed `Menu/Create_0.gml:96`),
+/// Loading previews the area, InGame runs the `Alarm_11` area bed under the
+/// boss-death jingle / boss-dead / big-dog / campfire priority, and Splash runs
+/// `Logo/Alarm_0.gml:8` `sndLogoLoop` on the ambience slot - leaving Splash
+/// re-evaluates it to `None`, which is the backend stop
+/// (`Logo/Destroy_0.gml:1` `snd_stop`).
 pub fn sync_area_audio(
     time: Res<SimTime>,
     app_state: Res<AppState>,
@@ -880,7 +872,6 @@ pub fn init_area_audio_resources(world: &mut World) {
     world.resource_mut::<MainVol>().step(dt);
 }
 
-// --- Menu action enum (bevy `menus::UiAction` mirror) ---
 
 /// Headless mirror of the bevy menu `UiAction` (variant shapes kept so
 /// the mapping below ports verbatim; the real menu slice owns the

@@ -1,9 +1,8 @@
-//! Game timers. The bevy build stored `bevy::time::Timer` inside
-//! components (`Health.invuln`, `FireCooldown`, `GrenadeFuse`, …);
-//! `bevy_time` is engine, so the port mirrors its tick surface
-//! (`tick` / `finished` / `just_finished` / `duration` / `fraction`,
-//! once vs repeating) over plain seconds. Fixed-step driven
-//! (`dt = 1/30`); `just_finished` is true only on the completing tick,
+//! Game timers. The bevy build stored `bevy::time::Timer` inside components
+//! (`Health.invuln`, `FireCooldown`, `GrenadeFuse`, …); `bevy_time` is engine,
+//! so the port mirrors its tick surface (`tick` / `finished` / `just_finished` /
+//! `duration` / `fraction`, once vs repeating) over plain seconds. Fixed-step
+//! driven (`dt = 1/30`); `just_finished` is true only on the completing tick,
 //! exactly like bevy, because dozens of systems branch on it.
 
 use bevy_ecs::prelude::*;

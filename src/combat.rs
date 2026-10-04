@@ -1,10 +1,10 @@
 //! Combat hit pipeline. Ported from nt's `game/combat.rs` in `NtSimSet`
 /// order (Always → Input → Combat → Progression → Cleanup).
 ///
-/// Render writes (`Sprite.image/rect`, tint restore) stay out: systems
-/// mutate sim state and marker components, and the render phase resolves
-/// visuals. Effect sinks (`Trauma`, `FlashWhite`, audio cues, rumble,
-/// bursts, secrets) are ported alongside and asserted in tests.
+/// Render writes (`Sprite.image/rect`, tint restore) stay out - the render
+/// phase resolves visuals from sim state. Effect sinks (`Trauma`,
+/// `FlashWhite`, audio cues, rumble, bursts, secrets) are ported alongside
+/// and asserted in tests.
 use bevy_ecs::prelude::*;
 use rand::RngExt;
 use repame_fx::Trauma;
@@ -500,13 +500,11 @@ mod corpse_launch_tests {
     }
 }
 
-/// Enemy death resolution, slice A: despawn + corpse slide, kill
-/// counting, Throne/ThroneII transitions, feel triggers, death burst,
-/// Throne boom, hit sting.
-///
-/// The per-kind spawn arms (Ballguy, ExploFreak, BigMaggot, …) and the
-/// kill unlocks/save writes run in this same fn; only the
-/// player-death branch lives elsewhere (`deaths::resolve_player_gameover`).
+/// Enemy death resolution, slice A: despawn + corpse slide, kill counting,
+/// Throne/ThroneII transitions, feel triggers, death burst, Throne boom, hit
+/// sting. Per-kind spawn arms (Ballguy, ExploFreak, BigMaggot, …) and kill
+/// unlocks/save writes run here too; only the player-death branch lives in
+/// `deaths::resolve_player_gameover`.
 pub fn resolve_enemy_deaths(
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
@@ -1673,13 +1671,13 @@ pub fn resolve_death_drops(
 
 /// Kill unlocks + save writes, and the player-death branch (slice B3).
 
-/// Projectile integration + collision. Ported from nt's
-/// `move_projectiles` with positions as [`Pos`].
+/// Projectile integration + collision. Ported from nt's `move_projectiles`
+/// with positions as [`Pos`].
 ///
 /// Render split: rotation writes (`tf.rotation` orienting sprites along
-/// velocity) are dropped - the renderer orients from `Velocity`
-/// directly. Everything else (bounce math, fuses, cascades) is
-/// byte-identical, including call order into the removal cascade.
+/// velocity) are dropped - the renderer orients from `Velocity`. Everything
+/// else (bounce math, fuses, cascades) is byte-identical, including call
+/// order into the removal cascade.
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::type_complexity)]
 pub fn move_projectiles(
@@ -2946,12 +2944,10 @@ pub fn projectile_hits(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Projectile-tick battery. Ported from nt's `game/combat.rs` Combat-set
-// systems (`tick_homing_projectiles` … `tick_shell_bonus`,
-// `tick_hazard_clouds`, `apply_explosions`), `Pos` for `Transform`,
-// catalog paths for handles, cue queues for audio.
-// ---------------------------------------------------------------------------
+// Projectile-tick battery: nt `game/combat.rs` Combat-set systems
+// (`tick_homing_projectiles` … `tick_shell_bonus`, `tick_hazard_clouds`,
+// `apply_explosions`), `Pos` for `Transform`, catalog paths for handles,
+// cue queues for audio.
 
 /// Steer homing projectiles toward the nearest in-range target
 /// (player shots pick enemies, enemy shots track the player).
@@ -3103,14 +3099,12 @@ pub fn tick_beams(
     }
 }
 
-/// Sentry turrets tick life, then fire player bullets at the nearest
-/// enemy in range on interval. Render split: no sprite handle here;
-/// the renderer keys art off the `Projectile` marker.
+/// Render split: no sprite handle; the renderer keys art off `Projectile`.
 ///
 /// GML `SentryGun`: `Step_0.gml:1` destroys the body at `hp <= 0`
 /// (`Destroy_0.gml:1` drops `scrDrop(16, 0)`), `Create_0.gml:14` holds the
-/// first shot for `alarm[0] = 30` steps, and `Alarm_0.gml:18-29` keeps
-/// only the targets with a clear `collision_line` to the muzzle.
+/// first shot for `alarm[0] = 30` steps, `Alarm_0.gml:18-29` keeps only
+/// targets with a clear `collision_line` to the muzzle.
 pub fn tick_sentry_turrets(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -3488,12 +3482,12 @@ pub fn prop_chest_collisions(
 }
 
 /// GML shell slowdown deaths: Bullet2/Slug/HeavySlug/HyperSlug/UltraShell
-/// swap to their `spr_fade` at speed < 6 px/step and Other_7 destroys the
-/// instance when the fade anim ends, so shorten life to the fade length.
-/// FlameShell instead dies outright under 5 px/step with no fade (its
-/// Destroy spawns the Flame, handled by the normal life-end path).
-/// Render split: sprite image/rect writes are renderer-owned; the sim
-/// swaps the `SpriteAnim` path marker and shortens life.
+/// swap to `spr_fade` at speed < 6 px/step and Other_7 destroys the instance
+/// when the fade anim ends, so life shortens to the fade length. FlameShell
+/// instead dies outright under 5 px/step, no fade (its Destroy spawns the
+/// Flame, handled by the normal life-end path). Render split: sprite
+/// image/rect writes are renderer-owned; the sim swaps the `SpriteAnim` path
+/// marker and shortens life.
 pub fn tick_bullet2_fade(
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
@@ -3702,13 +3696,13 @@ const ELECTRIC_GUITAR_HIT_STEMS: [&str; 6] = [
 /// GML Slash/Shank projectiles (melee). Friction 0.1 slide, pierce via
 /// nexthurt (no despawn on hit), shank passes walls, slash stops with
 /// MeleeHitWall + shake damage/3 once, deflects enemy bullets (typ 1),
-/// destroys typ 2 / redirects grenades, Blood/Lightning/Hammer extras.
-/// Life end = anim end (Other_7 destroy); BloodSlash misses self-hit 1.
+/// destroys typ 2 / redirects grenades, Blood/Lightning/Hammer extras. Life
+/// end = anim end (Other_7 destroy); BloodSlash misses self-hit 1.
 ///
 /// Render split: bevy oriented `Transform.rotation` along velocity and
-/// spawned the MeleeHitWall sprite; here the slash direction derives
-/// from `Velocity` directly (fallback +X once stopped) and the wall-hit
-/// FX is skipped - trauma/audio/latch carry the sim effect.
+/// spawned the MeleeHitWall sprite; here the slash direction derives from
+/// `Velocity` (fallback +X once stopped) and the wall-hit FX is skipped -
+/// trauma/audio/latch carry the sim effect.
 #[allow(clippy::too_many_arguments)]
 pub fn tick_slash_projectiles(
     time: Res<SimTime>,
@@ -4136,8 +4130,7 @@ pub fn tick_slash_projectiles(
 
 /// Timed hazard clouds (fire/toxic): tick damage on opposing teams in
 /// radius, player hits gated by invuln and booked to secrets/last-damage.
-/// This is combat's own cloud tick (enemy clouds); the AbilityHazard
-/// variant lives in `player_fire`.
+/// Enemy clouds only; the AbilityHazard variant lives in `player_fire`.
 pub fn tick_hazard_clouds(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -4283,12 +4276,12 @@ pub fn tick_throne_victory(
     }
 }
 
-/// Timed area explosion: trauma/chroma/hitstop/boom, player-team damage
-/// to enemies + destructible props (corpse/effect chain, secret
-/// entrances, snowman ambushes, gold/rad drops) + wall breaks,
-/// hits-player damage with Boiling Veins law, Death-crown chains.
-/// Bevy `apply_explosions` parity (`Pos` for `Transform`, prop marker
-/// options folded into one query to fit the 16-param system cap).
+/// Timed area explosion: trauma/chroma/hitstop/boom, player-team damage to
+/// enemies + destructible props (corpse/effect chain, secret entrances,
+/// snowman ambushes, gold/rad drops) + wall breaks, hits-player damage with
+/// Boiling Veins law, Death-crown chains. Bevy `apply_explosions` parity
+/// (`Pos` for `Transform`; prop marker options folded into one query to fit
+/// the 16-param system cap).
 #[allow(clippy::too_many_arguments)]
 pub fn apply_explosions(
     time: Res<SimTime>,

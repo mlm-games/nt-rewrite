@@ -1,10 +1,8 @@
-//! Pickup / drop spawning. Ported from nt's `game/pickups.rs` spawn
-//! helpers plus the combat drop fns (`spawn_rad_burst`,
-//! `maybe_spawn_drop`, `spawn_chest`, …).
-//!
-//! Render split: only rads carry `SpriteAnim` (bevy parity); static
-//! kinds resolve art renderer-side from the same kind -> path table.
-//! Juice pop-ins are render juice and skipped (no sim effect).
+//! Pickup / drop spawning. Ported from nt's `game/pickups.rs` spawn helpers plus
+//! the combat drop fns (`spawn_rad_burst`, `maybe_spawn_drop`, `spawn_chest`, …).
+//! Render split: only rads carry `SpriteAnim` (bevy parity); static kinds resolve
+//! art renderer-side from the same kind -> path table. Juice pop-ins skipped
+//! (no sim effect).
 
 use bevy_ecs::prelude::*;
 use rand::RngExt;
@@ -126,26 +124,23 @@ fn pickup_sprite(kind: PickupKind) -> Option<(&'static str, f32)> {
     })
 }
 
-// GML mask half-extents (each object's `spriteMaskId` bbox; the
-// reference resolves pickups as per-axis box overlap, never as a
-// distance): `mskWepPickup` 28x28 origin 14, `mskPickup` 10x10 origin 5,
-// `mskRad` 8x8 origin 4, and the chestprop sprites carry no mask so
-// their 16x16 origin-8 bbox is the box. `PLAYER_MASK_HALF` takes the
-// `mskPlayer` 16x16 FRAME (origin 8), not its `bbox_*` 4..11 x 4..13 -
-// the prop prompts below do use that bbox.
-//
-// The prop prompts instead keep GML `place_meeting(x, y, _player)`
-// verbatim as a closed per-axis window of `player - prop`, from the
-// real `bbox_*` + origin (both edge pixels inclusive, `image_xscale =
-// -1` mirrored): the player's box is `mskPlayer` bbox 4..11 x 4..13 at
-// origin (8,8) - 8x10 inside the 16x16 frame, never mirrored (`Player`
+// GML mask half-extents (each object's `spriteMaskId` bbox; the reference
+// resolves pickups as per-axis box overlap, never as a distance): `mskWepPickup`
+// 28x28 origin 14, `mskPickup` 10x10 origin 5, `mskRad` 8x8 origin 4; the
+// chestprop sprites carry no mask, so their 16x16 origin-8 bbox is the box.
+// `PLAYER_MASK_HALF` takes the `mskPlayer` 16x16 FRAME (origin 8), not its
+// `bbox_*` 4..11 x 4..13.
+// The prop prompts instead keep GML `place_meeting(x, y, _player)` verbatim as
+// a closed per-axis window of `player - prop`, from the real `bbox_*` + origin
+// (both edge pixels inclusive): the player's box is `mskPlayer` bbox 4..11 x
+// 4..13 at origin (8,8) - 8x10 inside the 16x16 frame, never mirrored (`Player`
 // draws through `draw_sprite_ext(.., right, ..)`, it never writes
-// `image_xscale`) - against `CarVenusFixed` 0..31 x 3..30 at origin
-// (16,16) (both car sprites and both hurt strips share that box;
-// `image_xscale = choose(1, -1)` in `Create_0` mirrors it, carried by
-// `PropSprites.flip_x`), `IceFlower` `sprIceFlowerIdle` 1..30 x 2..29 at
-// origin (16,16) (pinned `image_xscale = 1`), and `Van` `mskVan` 27..100
-// x 42..85 at origin (64,64) (`Van` never writes `image_xscale`).
+// `image_xscale`) - against `CarVenusFixed` 0..31 x 3..30 at origin (16,16)
+// (both car sprites and both hurt strips share that box; `image_xscale =
+// choose(1, -1)` in `Create_0` mirrors it, carried by `PropSprites.flip_x`),
+// `IceFlower` `sprIceFlowerIdle` 1..30 x 2..29 at origin (16,16) (pinned
+// `image_xscale = 1`), and `Van` `mskVan` 27..100 x 42..85 at origin (64,64)
+// (`Van` never writes `image_xscale`).
 const PLAYER_MASK_HALF: f32 = 8.0;
 const WEP_PICKUP_MASK_HALF: f32 = 14.0;
 const PICKUP_MASK_HALF: f32 = 5.0;
@@ -178,14 +173,12 @@ pub fn mask_overlap(a: glam::Vec2, b: glam::Vec2, half_sum: f32) -> bool {
     (a.x - b.x).abs() < half_sum && (a.y - b.y).abs() < half_sum
 }
 
-/// Half-extent sum of the player's mask and a pickup's own box, or
-/// `None` when the pickup cannot react at all.
-///
+/// Half-extent sum of the player's mask and a pickup's own box, `None` when
+/// the pickup cannot react at all.
 /// GML `Player/Collision_WepPickup.gml:6` gates the equip on
-/// `other.id == instance_nearest(x, y, WepPickup)`, so only the NEAREST
-/// ground weapon ever reacts to a press - but the ammo payout at
-/// `:90-104` sits OUTSIDE that `if`, so it only needs mask overlap (see
-/// [`weapon_pickup_ammo_pays`] for that separate half-extent).
+/// `other.id == instance_nearest(x, y, WepPickup)`, so only the NEAREST ground
+/// weapon reacts to a press - but the ammo payout at `:90-104` sits OUTSIDE
+/// that `if` and needs only mask overlap (see [`weapon_pickup_ammo_pays`]).
 pub fn pickup_mask_half(kind: &PickupKind, is_nearest_weapon: bool) -> Option<f32> {
     Some(match kind {
         PickupKind::Weapon(_) if !is_nearest_weapon => return None,
@@ -203,14 +196,12 @@ pub fn pickup_mask_half(kind: &PickupKind, is_nearest_weapon: bool) -> Option<f3
 /// fire on any overlapping `WepPickup` (nearest or not).
 pub const WEP_AMMO_REACH: f32 = PLAYER_MASK_HALF + WEP_PICKUP_MASK_HALF;
 
-/// GML `scrDrawInteractionHUD:342` verbatim: the prompt lights on the
-/// NEAREST `WepPickup` whose mask overlaps the player. Rads, ammo,
-/// medkits, chests and curse motes are not in
-/// `[ WepPickup, CarVenusFixed, IceFlower, Van ]`, so they must never
-/// light the act button ("the pickup indicator showing over a rad").
-/// The prop half (`scrDrawPlayerHUD.gml:371-376,402`: the
-/// `Prompt{Object}` line plus the `active = true` act raise) rides
-/// [`WeaponLabel::prop_prompts`], scanned by [`sync_weapon_label`].
+/// GML `scrDrawInteractionHUD:342` verbatim: the prompt lights on the NEAREST
+/// `WepPickup` whose mask overlaps the player. Rads, ammo, medkits, chests and
+/// curse motes are not in `[ WepPickup, CarVenusFixed, IceFlower, Van ]`, so they
+/// must never light the act button ("the pickup indicator showing over a rad").
+/// The prop half (`scrDrawPlayerHUD.gml:371-376,402`: the `Prompt{Object}` line
+/// plus the `active = true` act raise) rides [`WeaponLabel::prop_prompts`].
 pub fn nearest_ground_weapon(
     player: glam::Vec2,
     pickups: impl Iterator<Item = (Entity, glam::Vec2, PickupKind)>,
@@ -251,13 +242,12 @@ fn nearest_prompt_hit(
 }
 
 /// GML `ButtonAct` fade: `ButtonAct/Other_10` runs the 30 Hz step, and
-/// `scrDrawPlayerHUD.gml:378-403` raises `active` while the player
-/// stands on a promptable pickup - but only inside its `is_touch`
-/// block. The port raises it on every device because the sole reader
-/// is the touch chrome (`render.rs touch_sprites`), which never draws
-/// on keyboard/gamepad, so the raise is unobservable there. The prompt
-/// needs no interact press - it shows whether or not the press landed.
-/// Own system so the pickup scan stays query-free of UI state.
+/// `scrDrawPlayerHUD.gml:378-403` raises `active` while the player stands on a
+/// promptable pickup - only inside its `is_touch` block. The port raises it on
+/// every device because the sole reader is the touch chrome (`render.rs
+/// touch_sprites`), which never draws on keyboard/gamepad, so the raise is
+/// unobservable there. The prompt needs no interact press - it shows whether or
+/// not the press landed.
 pub fn tick_act_button(
     mut act: ResMut<crate::state::ActButton>,
     player_q: Query<&Pos, (With<Player>, Without<Pickup>)>,
@@ -601,13 +591,12 @@ pub fn spawn_chest(
     spawn_chest_with(commands, catalog, kind, pos, &ChestCtx::default());
 }
 
-/// GML `chestprop/Create_0` plus each subclass's `Create_0`: the
-/// built-in advance is OFF (`image_speed = 0`) and the index is driven
-/// by hand - `random(0.04)` while `image_index < 1`, then `+0.4`
-/// (`chestprop/Step_0.gml:4-7`, the identical `RadChest/Step_1.gml`
-/// ramp, and `RogueChest/Step_1.gml`'s `scrFirstFrameAnim(0.4)` whose
-/// first-frame jitter is `0.4 * 0.05 = 0.02`). `sprite_index` /
-/// `spr_dead`, the Curses roll and `dropseed` are all frozen here.
+/// GML `chestprop/Create_0` plus each subclass's `Create_0`: the built-in
+/// advance is OFF (`image_speed = 0`) and the index is driven by hand -
+/// `random(0.04)` while `image_index < 1`, then `+0.4` (`chestprop/Step_0.gml:4-7`,
+/// the identical `RadChest/Step_1.gml` ramp, and `RogueChest/Step_1.gml`'s
+/// `scrFirstFrameAnim(0.4)` whose first-frame jitter is `0.4 * 0.05 = 0.02`).
+/// `sprite_index`/`spr_dead`, the Curses roll and `dropseed` are frozen here.
 pub fn spawn_chest_with(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
@@ -629,11 +618,10 @@ pub fn spawn_chest_with(
             };
     let art = chest_art(kind, ctx, cursed);
     // GML `RadChest/Create_0.gml:15`, `RadChestBig/Create_0.gml:7` and
-    // `RadMaggotChest/Create_0.gml:4` all set `image_speed = 0` right
-    // after `event_inherited()`, so those three never animate their
-    // (otherwise busy) idle strips. Everything else runs the chestprop
-    // ramp; `RogueChest/Step_1.gml`'s `scrFirstFrameAnim(0.4)` jitters
-    // `0.4 * 0.05 = 0.02` instead of `0.04`.
+    // `RadMaggotChest/Create_0.gml:4` all set `image_speed = 0` right after
+    // `event_inherited()`, so those three never animate their (otherwise busy)
+    // idle strips. Everything else runs the chestprop ramp; the
+    // `RogueChest/Step_1.gml` `scrFirstFrameAnim(0.4)` jitters `0.4 * 0.05 = 0.02`.
     let frozen = matches!(
         kind,
         ChestKind::Rad | ChestKind::RadBig | ChestKind::RadMaggot
@@ -666,12 +654,11 @@ pub fn spawn_chest_with(
     }
 }
 
-/// GML `FXChestOpen`: `image_speed = 0.4` on an 8-frame strip, so
-/// `Other_7` (Animation End) fires after `8 / 0.4 = 20` steps. Under
-/// water it also throws `irandom_range(12, 20)` `Bubble`s with
-/// `motion_add(random_angle, random(3))` (`Bubble/Create_0.gml` adds
-/// its own `motion_add(random_angle, random(2))`, friction 0.02 and a
-/// `random(0.2) + 0.1` image speed).
+/// GML `FXChestOpen`: `image_speed = 0.4` on an 8-frame strip, so `Other_7`
+/// (Animation End) fires after `8 / 0.4 = 20` steps. Underwater it also throws
+/// `irandom_range(12, 20)` `Bubble`s with `motion_add(random_angle, random(3))`
+/// (`Bubble/Create_0.gml` adds its own `motion_add(random_angle, random(2))`,
+/// friction 0.02, `random(0.2) + 0.1` image speed).
 pub fn spawn_fx_chest_open(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
@@ -733,18 +720,15 @@ pub fn spawn_rad_burst(
     scr_rad_drop(commands, catalog, pos, amount, 0, false, false, true);
 }
 
-/// GML `scrRadDrop` (`scripts/scrRadDrop/scrRadDrop.gml:7-43`)
-/// verbatim: `_high = instance_is(self, RadChest) ? 26 : 15`, overspill
-/// past `_high` becomes 10-rad `BigRad` lumps, and every rad gets
-/// `motion_add(_direction, _speed)` PLUS
-/// `motion_add(random_angle, random(_amount * 0.5) + 5)` followed by
+/// GML `scrRadDrop` (`scripts/scrRadDrop/scrRadDrop.gml:7-43`) verbatim:
+/// `_high = instance_is(self, RadChest) ? 26 : 15`, overspill past `_high`
+/// becomes 10-rad `BigRad` lumps, and every rad gets `motion_add(_direction,
+/// _speed)` PLUS `motion_add(random_angle, random(_amount * 0.5) + 5)` then
 /// `repeat (speed) speed *= 0.9` to settle.
-///
-/// `from_prop` picks the caller's own kick: a `prop` caller (every
-/// `RadChest` descendant, via `prop/Destroy_0.gml:12`) uses
-/// `random_angle` / `16`, any other caller (the Horror death drop) uses
-/// its own `direction` / `speed`, which is 0 for a standing Player -
-/// so those rads only get the random kick.
+/// `from_prop` picks the caller's own kick: a `prop` caller (every `RadChest`
+/// descendant, via `prop/Destroy_0.gml:12`) uses `random_angle` / `16`, any
+/// other caller (the Horror death drop) uses its own `direction` / `speed`,
+/// which is 0 for a standing Player - so those rads only get the random kick.
 pub fn scr_rad_drop(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
@@ -1250,13 +1234,9 @@ pub fn tick_toast(time: Res<repame_sim::SimTime>, mut toast: ResMut<Toast>) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Pickup tick battery. Ported from nt's `game/pickups.rs` Progression-set
-// systems (`tick_pickup_drag`, `collect_pickups`, `sync_weapon_label`,
-// `tick_rad_container_contact`) plus the chest/ammo/weapon grant helpers.
-// Render split: `Visibility` blink-out and sprite alpha fades are
+// systems. Render split: `Visibility` blink-out and sprite alpha fades are
 // renderer-owned (skipped); the sim keeps lifetimes, motion, grants.
-// ---------------------------------------------------------------------------
 
 /// GML `CursedPickup` (`Step_0.gml` + `Alarm_0.gml`) verbatim:
 /// `image_index` dwells on frame 0 advancing by `random(0.04)` then
@@ -1290,13 +1270,12 @@ pub fn tick_cursed_ammo(
         if image.phase >= image.frames.max(1) as f32 {
             image.phase %= image.frames.max(1) as f32;
         }
-        // GML `CursedPickup/Step_0.gml:9` gates on `current_frame_active`,
-        // which is `#macro current_frame_active ((current_frame % 1) <
-        // timescale)`. Nothing in the GML ever increments `current_frame`
-        // (only `UberCont/Create_0.gml:140` resets it), and
-        // `MainMenuButton/Step_0.gml:7` compares it against an integer, so
-        // the macro is `0 < 1` - unconditionally true. The roll is every
-        // step, not once per image frame.
+        // GML `CursedPickup/Step_0.gml:9` gates on `current_frame_active`, a
+        // `#macro` of `((current_frame % 1) < timescale)`. Nothing in the GML
+        // ever increments `current_frame` (only `UberCont/Create_0.gml:140`
+        // resets it) and `MainMenuButton/Step_0.gml:7` compares it against an
+        // integer, so the macro is `0 < 1` - unconditionally true: the roll runs
+        // every step, not once per image frame.
         if rng.random::<f32>() < 0.25 {
             spawn_pickup(&mut commands, &catalog, PickupKind::Curse, pos.0, 0, false);
         }
@@ -1457,21 +1436,21 @@ pub fn collect_pickups(
     let _ = input.peek_interact_pressed();
 
     let telek_active = telek.is_some_and(|t| !t.timer.is_finished());
-    // GML `scrEyesTelekinesis.gml:2-3`: the attract box is the SCREEN
-    // box, `game_screen_width div 2 x game_screen_height div 2`, and
-    // `game_screen_width/height` are compile-time macros (320/240), so
-    // the half-extents are 160 x 120. `:14` strength is
-    // `1 + scr_skill_get(mut_throne_butt)` px/step (30/60 px per second
-    // here), moved per axis behind `place_free`.
+    // GML `scrEyesTelekinesis.gml:2-3`: the attract box is the SCREEN box,
+    // `game_screen_width div 2 x game_screen_height div 2`, and
+    // `game_screen_width/height` are compile-time macros (320/240), so the
+    // half-extents are 160 x 120. `:14` strength is
+    // `1 + scr_skill_get(mut_throne_butt)` px/step (30/60 px per second here),
+    // moved per axis behind `place_free`.
     let telek_step = if telek_active {
         30.0 * if player.throne_butt { 2.0 } else { 1.0 }
     } else {
         0.0
     };
     // GML `scrEyesTelekinesis:35-41` drags `chestprop`, `AmmoPickup`,
-    // `HPPickup`, `WepPickup`, `RadChest` and `Rad` - NOT `Curse`
-    // motes - through this direct-position arm, so chests DO drag and
-    // must stay out of the ordinary pickup drift below.
+    // `HPPickup`, `WepPickup`, `RadChest` and `Rad` - NOT `Curse` motes -
+    // through this direct-position arm, so chests DO drag and must stay out of
+    // the ordinary pickup drift below.
     let telek_drag = |pos: &mut Pos, at: glam::Vec2| {
         if telek_step <= 0.0 {
             return;
@@ -1601,14 +1580,13 @@ pub fn collect_pickups(
             continue;
         }
         if is_weapon {
-            // GML `Player/Collision_WepPickup:6` verbatim: `press_pick`
-            // OR `autopick`. `WepPickup/Create_0:11` starts it false and
-            // the only assignment to true (`scrPowers:581`) sits in
-            // `scrCuzThrowAllAbility`, reached solely behind
-            // `#macro cuz_fun false` (`scrPowers:2,426`), so every
-            // ground gun needs the interact press; the pulse is peeked,
-            // not taken, so the earlier `tick_throne_sit` peek of the
-            // same pulse never starves it.
+            // GML `Player/Collision_WepPickup:6` verbatim: `press_pick` OR `autopick`.
+            // `WepPickup/Create_0:11` starts it false and the only assignment to
+            // true (`scrPowers:581`) sits in `scrCuzThrowAllAbility`, reached
+            // solely behind `#macro cuz_fun false` (`scrPowers:2,426`), so every
+            // ground gun needs the interact press; the pulse is peeked, not
+            // taken, so the earlier `tick_throne_sit` peek of the same pulse
+            // never starves it.
             if !input.peek_interact_pressed() {
                 continue;
             }
@@ -1619,16 +1597,15 @@ pub fn collect_pickups(
             let ctx = decide_ctx_for(&run, &player, race, &inv, u32::from(race == RaceId::Robot));
             let seed = drop_seed.map_or(0, |s| s.0);
 
-            // GML `scrChestOpened` (`scripts/scrChestOpened.gml:11-29`)
-            // is called at the TOP of every chest's `Collision_Player`,
-            // before the loot. The Crown of Hatred burns 1 HP through the
-            // normal i-frame check (`scrPlayerProcTakeDamage`, so 1 HP
-            // survives) and drops 16 rads at the PLAYER's position - the
-            // event runs `with (p)`. The `_amount = 24` line is dead
-            // code (`other` in a `Collision_Player` event is the Player,
-            // never a `RadChest`), so it is deliberately NOT implemented.
-            // `ProtoChest` never calls the script: it runs its own block
-            // below, so it is excluded here to avoid the double trigger.
+            // GML `scrChestOpened` (`scripts/scrChestOpened.gml:11-29`) is called
+            // at the TOP of every chest's `Collision_Player`, before the loot. The
+            // Crown of Hatred burns 1 HP through the normal i-frame check
+            // (`scrPlayerProcTakeDamage`, so 1 HP survives) and drops 16 rads at
+            // the PLAYER's position - the event runs `with (p)`. The `_amount =
+            // 24` line is dead code (`other` in a `Collision_Player` event is the
+            // Player, never a `RadChest`), deliberately NOT implemented.
+            // `ProtoChest` never calls the script (it runs its own block below),
+            // so it is excluded here to avoid the double trigger.
             if chest != ChestKind::Proto && player.crown == CrownKind::Hatred && health.hp > 0 {
                 if health.invuln.is_finished() {
                     health.hp -= 1;
@@ -1727,13 +1704,12 @@ pub fn collect_pickups(
                 }
                 ChestKind::Rad => {
                     // GML `RadChest/Collision_Player.gml`:
-                    // `if !scrChestOpened() { GameCont.noradch = 0; hp = 0 }`,
-                    // then `RadChest/Destroy_0.gml:4-12` throws 4 x `Smoke`
-                    // (`motion_add(random_angle, random(3))`), an
-                    // `ExploderExplo` and `sndEXPChest`, and its own
-                    // `event_inherited()` lands on `prop/Destroy_0.gml:12`
-                    // to turn the inherited `raddrop = 25`
-                    // (`RadChest/Create_0.gml:20`) into 25 rads.
+                    // `if !scrChestOpened() { GameCont.noradch = 0; hp = 0 }`, then
+                    // `RadChest/Destroy_0.gml:4-12` throws 4 x `Smoke`
+                    // (`motion_add(random_angle, random(3))`), an `ExploderExplo`
+                    // and `sndEXPChest`, and its own `event_inherited()` lands on
+                    // `prop/Destroy_0.gml:12` to turn the inherited `raddrop =
+                    // 25` (`RadChest/Create_0.gml:20`) into 25 rads.
                     run.noradch = 0;
                     rad_chest_burst(&mut commands, pickup_pos_value);
                     scr_rad_drop(
@@ -1771,25 +1747,22 @@ pub fn collect_pickups(
                     //   `:5-8`  4 x `Smoke`, `motion_add(random_angle, random(3))`
                     //   `:10`   `instance_create(x, y, ExploderExplo)`
                     //   `:11`   `snd_play(sndEXPChest)`
-                    //   `:13`   `event_inherited()` -> `RadChest/Destroy_0.gml`,
-                    //           which repeats the same 4 x `Smoke` +
-                    //           `ExploderExplo` + `sndEXPChest` before its
-                    //           own `event_inherited()` reaches
-                    //           `prop/Destroy_0.gml:12`
+                    //   `:13`   `event_inherited()` -> `RadChest/Destroy_0.gml`, which
+                    //           repeats the same 4 x `Smoke` + `ExploderExplo` +
+                    //           `sndEXPChest` before its own `event_inherited()`
+                    //           reaches `prop/Destroy_0.gml:12`
                     //           `if (raddrop > 0) scrRadDrop(x, y, raddrop)`.
-                    // `RadMaggotChest.yy`'s `parentObjectId` is
-                    // `RadChest`, so `Create_0`'s `event_inherited()`
-                    // runs `RadChest/Create_0.gml:20` and the maggot cache
-                    // INHERITS `raddrop = 25` (it never overrides it) -
-                    // 25 rads, scattered by `scrRadDrop`.
+                    // `RadMaggotChest.yy`'s `parentObjectId` is `RadChest`, so
+                    // `Create_0`'s `event_inherited()` runs `RadChest/Create_0.gml:20`
+                    // and the maggot cache INHERITS `raddrop = 25` (it never overrides
+                    // it) - 25 rads, scattered by `scrRadDrop`.
                     // `ExploderExplo/Create_0.gml` is 6 x `Smoke` plus
-                    // `BackCont.shake += 6` - no `damage`, no
-                    // `Collision_Player`, so opening a maggot cache deals 0.
-                    //
-                    // `RadMaggotExplosion/Create_0.gml:1-14` fires the ring:
-                    // 6 `Smoke` at `motion_add(dir, 4 + random(1))` stepping
-                    // `dir += 360 / 6`, then 3 `AcidStreak` at
-                    // `motion_add(dir, 8)` stepping `dir += 120`.
+                    // `BackCont.shake += 6` - no `damage`, no `Collision_Player`, so
+                    // opening a maggot cache deals 0.
+                    // `RadMaggotExplosion/Create_0.gml:1-14` fires the ring: 6
+                    // `Smoke` at `motion_add(dir, 4 + random(1))` stepping
+                    // `dir += 360 / 6`, then 3 `AcidStreak` at `motion_add(dir, 8)`
+                    // stepping `dir += 120`.
                     let mut rng = rand::rng();
                     let mut dir = rng.random_range(0.0..std::f32::consts::TAU);
                     for _ in 0..6 {
@@ -1818,9 +1791,8 @@ pub fn collect_pickups(
                     //   `repeat(20) { with instance_create(x + random(8) - 4,
                     //     y + random(8) - 4, RadMaggot) motion_add(random_angle,
                     //     random(5)) }`
-                    // That is a VELOCITY of 0-5 px/step, not a spawn
-                    // offset. `alarm[0] = 8` (`Create_0.gml:3`) is the
-                    // eight-frame wind-up.
+                    // A VELOCITY of 0-5 px/step, not a spawn offset.
+                    // `alarm[0] = 8` (`Create_0.gml:3`) is the eight-frame wind-up.
                     for _ in 0..20 {
                         let at = pickup_pos_value
                             + glam::Vec2::new(
@@ -1841,10 +1813,9 @@ pub fn collect_pickups(
                         );
                     }
                     // `Destroy_0.gml:13`'s `event_inherited()` is
-                    // `RadChest/Destroy_0.gml:4-12`, which repeats the
-                    // exact same 4 x `Smoke` + `ExploderExplo` +
-                    // `sndEXPChest` before its own `event_inherited()`
-                    // reaches `prop/Destroy_0.gml:12`.
+                    // `RadChest/Destroy_0.gml:4-12`, which repeats the same 4 x `Smoke`
+                    // + `ExploderExplo` + `sndEXPChest` before its own
+                    // `event_inherited()` reaches `prop/Destroy_0.gml:12`.
                     rad_chest_burst(&mut commands, pickup_pos_value);
                     audio.play_exp_chest(&mut cues);
                     rad_chest_burst(&mut commands, pickup_pos_value);
@@ -1882,15 +1853,14 @@ pub fn collect_pickups(
                     toast.show("Healed");
                 }
                 ChestKind::CursedBig => {
-                    // GML `CursedBigChest/Collision_Player.gml:20`
-                    // verbatim: `scrDecideWep(1 + curse * 2, false)` with
-                    // `curse = true` from `Create_0:3`, so `extra = 3`, and
-                    // `random_set_seed(dropseed)` runs ONCE before the
-                    // `repeat` - `scrDecideWep` itself reseeds from
-                    // `dropseed` and then advances it, so all three guns
-                    // come off that fixed chain. `:33` resets `nochest`,
-                    // `:17` spawns a `PortalClear` and `Destroy_0:6` a
-                    // SECOND one.
+                    // GML `CursedBigChest/Collision_Player.gml:20` verbatim:
+                    // `scrDecideWep(1 + curse * 2, false)` with `curse = true`
+                    // from `Create_0:3`, so `extra = 3`, and
+                    // `random_set_seed(dropseed)` runs ONCE before the `repeat` -
+                    // `scrDecideWep` itself reseeds from `dropseed` and advances
+                    // it, so all three guns come off that fixed chain. `:33`
+                    // resets `nochest`, `:17` spawns a `PortalClear` and
+                    // `Destroy_0:6` a SECOND one.
                     let count = if ambidextrous { 4 } else { 3 };
                     let mut chain = DropSeedChain::new(seed);
                     let mut rng = rand::rng();
@@ -1927,10 +1897,9 @@ pub fn collect_pickups(
                 }
                 ChestKind::BigWeapon => {
                     // GML `BigWeaponChest/Collision_Player.gml:14-30`:
-                    // `random_set_seed(dropseed)` ONCE, then
-                    // `scrDecideWep(1, false)` per drop - so each gun is a
-                    // fresh roll off the same chain. `:16` a
-                    // `PortalClear`, `:30` resets `nochest`.
+                    // `random_set_seed(dropseed)` ONCE, then `scrDecideWep(1,
+                    // false)` per drop - each gun a fresh roll off the same
+                    // chain. `:16` a `PortalClear`, `:30` resets `nochest`.
                     let count = if ambidextrous { 4 } else { 3 };
                     let mut chain = DropSeedChain::new(seed);
                     let mut rng = rand::rng();
@@ -2020,11 +1989,10 @@ pub fn collect_pickups(
                 }
                 ChestKind::Idpd => {
                     // GML `IDPDChest/Collision_Player.gml:11-13` verbatim:
-                    // `repeat (8) instance_create(_player.x, _player.y,
-                    // AmmoPickup)` - all eight land ON the player, so they
-                    // are collected next tick and each one independently
-                    // rolls `scrAmmoDecideType(id, false)`. The chest then
-                    // `instance_destroy()`s, and `Destroy_0:11-20` raises
+                    // `repeat (8) instance_create(_player.x, _player.y, AmmoPickup)` -
+                    // all eight land ON the player, are collected next tick, and
+                    // each independently rolls `scrAmmoDecideType(id, false)`. The
+                    // chest then `instance_destroy()`s, and `Destroy_0:11-20` raises
                     // the six `IDPDSpawn` portals.
                     for _ in 0..8 {
                         spawn_ammo_pickup(
@@ -2086,13 +2054,12 @@ pub fn collect_pickups(
             }
             PickupKind::Ammo(..) | PickupKind::CursedAmmo => {
                 // GML `AmmoPickup/Collision_Player.gml:9-21`:
-                // `scrAmmoDecideType(id, false)`, then
-                // `_give_amount = typ_ammo[_type]` plus the Haste `++`
-                // (the Haste bonus is applied TWICE in GML: once folded
-                // into `typ_ammo` by `scrAmmoUpdateTypeStats`, once here).
-                // The `instance_is(other, CursedPickup)` 1.5x is DEAD
-                // (`other` is the Player), so a CursedPickup pays the same
-                // amount as a normal AmmoPickup.
+                // `scrAmmoDecideType(id, false)`, then `_give_amount =
+                // typ_ammo[_type]` plus the Haste `++` (the Haste bonus is
+                // applied TWICE in GML: once folded into `typ_ammo` by
+                // `scrAmmoUpdateTypeStats`, once here). The `instance_is(other,
+                // CursedPickup)` 1.5x is DEAD (`other` is the Player), so a
+                // CursedPickup pays the same amount as a normal AmmoPickup.
                 let ammo = decide_ammo_type(&inv, &player, race, false);
                 let amount = ammo_pickup_amount_for(ammo, fish, haste) + i32::from(haste > 0);
                 let cap = player.ammo_cap(ammo);
@@ -2329,13 +2296,13 @@ pub fn open_chest_shock(commands: &mut Commands, e: Entity, kind: ChestKind) {
     open_chest(commands, e, kind);
 }
 
-/// Headless weapon-label state: the nearest in-range weapon name for the
-/// HUD bridge to poll, plus the interact-prompt half of
-/// `scrDrawInteractionHUD`: the `sprEPickup` icon, the per-type ammo
-/// gauge (`scrDrawTypeAmmo`, `_player.ammo[type] / capacity`) and
-/// `prop_prompts`, the per-type `Prompt{Object}` hits over
-/// `CarVenusFixed` / `IceFlower` / `Van` (`scrDrawPlayerHUD.gml:374`)
-/// whose overlap also raises the act button (`:402`).
+/// Headless weapon-label state: the nearest in-range weapon name for the HUD
+/// bridge to poll, plus the interact-prompt half of `scrDrawInteractionHUD`:
+/// the `sprEPickup` icon, the per-type ammo gauge (`scrDrawTypeAmmo`,
+/// `_player.ammo[type] / capacity`) and `prop_prompts`, the per-type
+/// `Prompt{Object}` hits over `CarVenusFixed` / `IceFlower` / `Van`
+/// (`scrDrawPlayerHUD.gml:374`), whose overlap also raises the act button
+/// (`:402`).
 #[derive(Resource, Default, Debug)]
 pub struct WeaponLabel {
     pub text: String,
@@ -2493,14 +2460,12 @@ pub const ALL_AMMO_KINDS: [AmmoKind; 5] = [
 /// * BigDog or no held gun at all -> `irandom_range(Bullets, Energy)`.
 /// * the `extra_weps` re-roll replaces the secondary's type at a
 ///   `1 - 1/(_extra_count + 1)` rate (GML indexes 1-based with
-///   `irandom(_extra_count - 1)`, so index 0 is an empty slot and the
-///   LAST extra weapon is unreachable - kept verbatim);
-/// * `_prioritize_primary || !bwep` walks primary then secondary, and
-///   when BOTH are live and the primary is full it splits the choice
-///   50/50 with `choose(_atype, _btype)`;
-/// * otherwise (two live guns, no priority) it rolls
-///   `choose(_atype, _btype)` FIRST and falls through to a flat random
-///   type if that pick is full.
+///   `irandom(_extra_count - 1)`, so index 0 is an empty slot and the LAST extra
+///   weapon is unreachable - kept verbatim);
+/// * `_prioritize_primary || !bwep` walks primary then secondary; when BOTH are
+///   live and the primary is full it splits 50/50 with `choose(_atype, _btype)`;
+/// * otherwise (two live guns, no priority) it rolls `choose(_atype, _btype)`
+///   FIRST and falls through to a flat random type if that pick is full.
 fn decide_ammo_type(
     inv: &Inventory,
     player: &Player,
@@ -2649,11 +2614,10 @@ fn equip_weapon(
 }
 
 /// GML `Player/Collision_WepPickup.gml:90-104` verbatim - the block sits
-/// OUTSIDE the pick `if/else`, so mask overlap alone pays it (press or
-/// not, nearest gun or not) and `other.ammo` is always consumed.
-/// The Protection crown converts the payout into a
-/// `1 + scr_skill_get(mut_second_stomach)` heal plus a `HealFX`;
-/// otherwise it is `scrAmmoGetPickupAmount(_type) * 2`.
+/// OUTSIDE the pick `if/else`, so mask overlap alone pays it (press or not,
+/// nearest gun or not) and `other.ammo` is always consumed. The Protection
+/// crown converts the payout into a `1 + scr_skill_get(mut_second_stomach)`
+/// heal plus a `HealFX`; otherwise it is `scrAmmoGetPickupAmount(_type) * 2`.
 fn pay_weapon_pickup_ammo(
     commands: &mut Commands,
     inv: &mut Inventory,

@@ -1,24 +1,16 @@
-//! Wall breaking + throne-room props. Ported from the bevy reference
-//! `game/walls.rs` (`apply_pending_wall_breaks`,
-//! `queue_wall_breaks_in_radius`, `queue_wall_breaks_along_segment`,
-//! `segment_hits_wall`, `segment_hits_wall_query`,
-//! `segment_hits_wall_legacy`, `reset_hammerhead_budget`,
-//! `CountedGenerator`, `handle_throne_room_props`,
-//! `update_carpet_occupancy`) with positions as [`Pos`] (`Vec2`)
-//! instead of `Transform.translation`.
-//!
+//! Wall breaking + throne-room props, ported from the bevy reference
+//! `game/walls.rs` with positions as [`Pos`] (`Vec2`) instead of
+//! `Transform.translation`.
 //! Render split: the floor-sprite entity spawned per broken wall and the
-//! throne-room art stay out (renderer resolves floor from the
-//! [`FloorMask`]); bursts route through [`crate::effects::spawn_burst`]
-//! and trauma through `repame_fx::Trauma`, matching the bevy
-//! `VfxSpawner`/`ScreenEffects` call sites one-for-one.
-//!
-//! Pipeline note: this is the *only* drain of the existing
-//! [`PendingWallBreak`] queue (spawned by hammerhead chewing,
-//! boss charges, portal clears, delayed boss spawns). Wall entities are
-//! `(WallTile, WallCell, Pos)` plus an optional [`WallVisuals`] parts
-//! list; the flush matches by cell *or* by proximity (`WALL_PX * 0.75`),
-//! byte-identical to bevy.
+//! throne-room art stay out (renderer resolves floor from the [`FloorMask`]);
+//! bursts route through [`crate::effects::spawn_burst`] and trauma through
+//! `repame_fx::Trauma`, matching the bevy `VfxSpawner`/`ScreenEffects` call
+//! sites one-for-one.
+//! Pipeline note: the *only* drain of the [`PendingWallBreak`] queue (hammerhead
+//! chewing, boss charges, portal clears, delayed boss spawns). Wall entities are
+//! `(WallTile, WallCell, Pos)` plus an optional [`WallVisuals`] parts list; the
+//! flush matches by cell *or* by proximity (`WALL_PX * 0.75`), byte-identical to
+//! bevy.
 
 use bevy_ecs::prelude::*;
 use repame_fx::Trauma;
@@ -41,16 +33,15 @@ use crate::worldgen::WALL_PX;
 
 pub use crate::comps_a::floor_cell_for_wall;
 
-/// Flush queued wall breaks: despawn the marker, then every wall that
-/// matches by cell or sits within `WALL_PX * 0.75` of the break point
-/// (one marker can break several walls, bevy parity).
-///
-/// GML `scrWallDestroy` destroys the wall and creates a 16x16 `FloorExplo` at
-/// its position - so the hole is one wall cell wide, and any sibling `Wall`s
-/// inside the same 32x32 `Floor` neighbour stay solid. `FloorExplo/Create_0:19-27`
-/// then re-closes the hole: for each of the 8 neighbours at +/-16 px it creates
-/// a new `Wall` wherever there is neither a `Floor` nor a `Wall`, which is what
-/// stops the wall ring from degrading when a break has no floor on the far side.
+/// Flush queued wall breaks: every wall matching by cell *or* within
+/// `WALL_PX * 0.75` of the break point goes (one marker can break several
+/// walls, bevy parity).
+/// GML `scrWallDestroy` destroys the wall and creates a 16x16 `FloorExplo` at its
+/// position - so the hole is one wall cell wide, and any sibling `Wall`s inside
+/// the same 32x32 `Floor` neighbour stay solid. `FloorExplo/Create_0:19-27` then
+/// re-closes the hole: for each of the 8 neighbours at +/-16 px it creates a new
+/// `Wall` wherever there is neither a `Floor` nor a `Wall`, which is what stops
+/// the wall ring from degrading when a break has no floor on the far side.
 pub fn apply_pending_wall_breaks(
     mut commands: Commands,
     mut mask: ResMut<FloorMask>,
@@ -287,13 +278,12 @@ pub fn reset_hammerhead_budget(
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct CountedGenerator;
 
-/// Throne-room prop deaths: destroyed big generators announce
-/// `GENERATOR x/y` and, once all are down, halve the Throne (loop 0
-/// only) with a `THE THRONE WEAKENS` toast; destroyed statues pop their
-/// guardians as deferred spawns (drained by the shared
-/// [`PendingEnemySpawn`] flush). GML `objects/Nothing/Create_0.gml:5-11`
-/// also runs here: the moment a `Nothing` (Throne) exists, every
-/// `BigGeneratorInactive` becomes a real `BigGenerator`.
+/// GML `objects/Nothing/Create_0.gml:5-11` also runs here: the moment a
+/// `Nothing` (Throne) exists, every `BigGeneratorInactive` becomes a real
+/// `BigGenerator`. Destroyed generators toast `GENERATOR x/y`; all down halves
+/// the Throne (loop 0 only) with `THE THRONE WEAKENS`. Destroyed statues pop
+/// guardians as deferred spawns (drained by the shared [`PendingEnemySpawn`]
+/// flush).
 #[allow(clippy::type_complexity)]
 pub fn handle_throne_room_props(
     mut commands: Commands,

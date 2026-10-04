@@ -328,11 +328,10 @@ pub fn ammo_pickup_amount(kind: AmmoKind) -> i32 {
     }
 }
 
-/// GML `scrAmmoUpdateTypeStats` (`scripts/scrAmmoInit/scrAmmoInit.gml:
-/// 104-149`) folded into `typ_ammo`, the value
-/// `scrAmmoGetPickupAmount` returns: the flat base table plus
-/// `8/2/2/2/3` per Fish player and `+1` to every type for the Haste
-/// crown. `fish_players` is `scrPlayerCountRace(Race.Fish)` (0 or 1
+/// GML `scrAmmoUpdateTypeStats` (`scripts/scrAmmoInit/scrAmmoInit.gml:104-149`)
+/// folded into `typ_ammo`, the value `scrAmmoGetPickupAmount` returns: the flat
+/// base table plus `8/2/2/2/3` per Fish player and `+1` to every type for the
+/// Haste crown. `fish_players` is `scrPlayerCountRace(Race.Fish)` (0 or 1
 /// single-player), `haste` is `scrCrownCheck(crwn_haste)` (0 or 1).
 pub fn ammo_pickup_amount_for(kind: AmmoKind, fish_players: u32, haste: u32) -> i32 {
     if kind == AmmoKind::None {

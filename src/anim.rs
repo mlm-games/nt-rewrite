@@ -1,9 +1,8 @@
-//! Sprite animation state + switching. Sim-side only: systems advance
-//! `frame` and select `path`; the render phase maps `(path, frame)` to
-//! atlas uvs through `repame-anim` (no sprite handles here - the bevy
-//! build wrote `Sprite.image/rect` inline, which belongs to rendering).
-//!
-//! Ported from nt's `game/anim.rs` (frame laws byte-identical).
+//! Sprite animation state + switching. Sim-side only: systems advance `frame`
+//! and select `path`; the render phase maps `(path, frame)` to atlas uvs through
+//! `repame-anim`. No sprite handles here (bevy wrote `Sprite.image/rect` inline,
+//! which belongs to rendering). Ported from nt's `game/anim.rs` (frame laws
+//! byte-identical).
 
 use bevy_ecs::prelude::*;
 use rand::RngExt;
@@ -17,16 +16,14 @@ use crate::comps_b::{
 };
 use crate::time::{GTimer, TimerMode};
 
-/// Frame-animated sprite state. `frames`/`fps` come from the catalog
-/// def at (re)path time; the renderer resolves pixels from there.
+/// Frame-animated sprite state; the renderer resolves pixels from the catalog
+/// `frames`/`fps`.
 ///
-/// `fps` is the *effective* rate. `assets/images/anims.ron` carries a
-/// hand-authored per-strip rate, not the GML `image_speed`, so any
-/// object whose GML source states an `image_speed` must build its
-/// `SpriteAnim` with [`SpriteAnim::with_image_speed`] - the reference
-/// project runs every sprite at one frame per step (all `.yy` have
-/// `playbackSpeed: 1`), so the verbatim rate is
-/// `image_speed * SIM_HZ` frames per second.
+/// `fps` is the *effective* rate: `assets/images/anims.ron` carries a hand-authored
+/// per-strip rate, not the GML `image_speed`, so any object whose GML source states
+/// an `image_speed` must build via [`SpriteAnim::with_image_speed`]. The reference
+/// runs every sprite at one frame per step (all `.yy` have `playbackSpeed: 1`), so
+/// the verbatim rate is `image_speed * SIM_HZ` frames per second.
 #[derive(Component, Clone, Debug)]
 pub struct SpriteAnim {
     pub path: String,
@@ -418,14 +415,13 @@ pub fn prop_hurt_on_damage(
 
 /// Restore idle when the hurt strip lapses (GML verbatim:
 /// `Player/Step_0.gml:199-202`, `enemy/Step_0.gml:27-29,39-41`,
-/// `prop/Step_1.gml:8-10`: `if (sprite_index == spr_hurt &&
-/// image_index > 2) sprite_index = spr_idle` - always idle, never walk,
-/// no timer; GML's only `+5` is i-frames in `scr_hit`, not a visual
-/// timer). `anim.frame > 2` is the `image_index > 2` equivalent; the
-/// finished-oneshot arm is a safety net for strips shorter than 3
-/// frames, which GML would loop past `> 2` but our oneshot clamps.
-/// `PropSprites.flip_x` is intentionally NOT written here: the render
-/// phase resolves prop facing straight from `PropSprites`.
+/// `prop/Step_1.gml:8-10`: `if (sprite_index == spr_hurt && image_index > 2)
+/// sprite_index = spr_idle` - always idle, never walk, no timer; GML's only
+/// `+5` is i-frames in `scr_hit`, not a visual timer). `anim.frame > 2` is the
+/// `image_index > 2` equivalent; the finished-oneshot arm is a safety net for
+/// strips shorter than 3 frames, which GML would loop past `> 2` but our oneshot
+/// clamps. `PropSprites.flip_x` is intentionally NOT written (render phase
+/// resolves prop facing from `PropSprites`).
 pub fn tick_hurt_anims(
     time: Res<SimTime>,
     catalog: Res<AnimCatalog>,
@@ -522,12 +518,11 @@ pub fn tick_player_dying(
     }
 }
 
-/// Backfill strip state for pre-asset spawns (headless `setup_run` runs
-/// against the empty catalog, so actors spawn with no `SpriteAnim` and -
-/// for enemies - no `EnemySprites` table; without them the switch/hurt
-/// queries never match and actors stick on the render fallback frame 0).
-/// Runs once from `App::load_assets_from` after the full catalog lands;
-/// post-asset spawns already carry both and are skipped.
+/// Backfill strip state for pre-asset spawns: headless `setup_run` runs against
+/// the empty catalog, so actors spawn with no `SpriteAnim` and - for enemies - no
+/// `EnemySprites` table, and the switch/hurt queries never match (actors stick on
+/// the render fallback frame 0). Runs once from `App::load_assets_from` once the
+/// full catalog lands; post-asset spawns already carry both and are skipped.
 pub fn backfill_spawn_anims(world: &mut World) {
     let idle_of = |kind: crate::data::EnemyKind| -> &'static str {
         crate::enemy_data::enemy_def(kind).sprite

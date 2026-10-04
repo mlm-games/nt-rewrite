@@ -1,16 +1,8 @@
 //! Player combat: firing, melee, abilities, and ability-field ticks.
 //!
-//! Headless port of the COMBAT half of
-//! the GML player scripts: `player_fire`,
-//! `fire_burst_volley`, `fire_one_gun`, `apply_weapon_mutation_mods`,
-//! `spawn_pellets`, `slash_life_secs`, `flip_melee_angle`, `melee_attack`,
-//! `pay_fire_cost`, `spawn_beam_shot`, `spawn_player_projectile`,
-//! `spawn_player_projectile_with_source`, `hammerhead_chew`,
-//! `move_swing_fx` (lifetime tick only - see below), `tick_snare_zones`,
-//! `tick_slowed`, `tick_portal_strikes`, `tick_hazard_clouds`,
-//! `player_ability`.
+//! Headless port of the COMBAT half of the GML player scripts.
 //!
-//! Deferred (already ported or render-only, per the task):
+//! Deferred (already ported elsewhere or render-only):
 //! - `player_move`, `face_aim`, `player_aim`, `weapon_switch`,
 //!   `tick_player_timers`, `blink_player` - live in `crate::player` or
 //!   are render-only; not duplicated here.
@@ -18,8 +10,8 @@
 //!   visuals (`ensure_weapon_visual`, `tick_weapon_visuals`,
 //!   `held_weapon_angle`) - render or a separate slice; not ported.
 //! - `move_swing_fx` has no hitbox motion in bevy (slash hitboxes ride
-//!   `Velocity` integration in `move_projectiles`); the port keeps the
-//!   `SwingFx` lifetime tick so the marker cannot leak.
+//!   `Velocity` integration in `move_projectiles`); only the `SwingFx`
+//!   lifetime tick is kept, so the marker cannot leak.
 //!
 //! Headless adaptations (no bevy engine):
 //! - `Transform` -> [`Pos`]; `Timer` -> [`GTimer`]; `Time<Fixed>` ->
@@ -28,19 +20,17 @@
 //!   layer plays them). Stems mirror the bevy names (`shoot`,
 //!   `shotgun`, `empty`, …).
 //! - `VfxSpawner` bursts -> [`spawn_burst`]; damage numbers ->
-//!   `repame_fx::spawn_number`; trauma/hitstop/slow-mo/rumble keep
-//!   their sim-side sinks.
-//! - Shell casings, gun visuals, juice pop-ins, screen
-//!   flashes are render juice and omitted (no `todo!()` stubs). Muzzle
-//!   flashes keep a 3-tick [`FiredWeapon`] marker for the render phase.
-//! - Projectile art (catalog strips, anchors, anims) is renderer-side
-//!   here (see `spawns.rs`); spawns carry sim markers only
-//!   (`ProjectileTyp`, `ProjectileFade` paths, `PlasmaSize`, …).
-//! - Slash anim length is catalog data in bevy; headless slashes use
-//!   the 3-frame default (`slash_life_secs(3)`).
-//! - `ProjectileArchetype` (bevy `projectile_archetypes.rs`) is
-//!   re-expressed minimally as [`FireArch`]: only the fields the fire
-//!   path branches on.
+//!   `repame_fx::spawn_number`; trauma/hitstop/slow-mo/rumble keep their
+//!   sim-side sinks.
+//! - Shell casings, gun visuals, juice pop-ins, screen flashes omitted (no
+//!   `todo!()` stubs); muzzle flashes keep a 3-tick [`FiredWeapon`] marker.
+//! - Projectile art (catalog strips, anchors, anims) is renderer-side here
+//!   (see `spawns.rs`); spawns carry sim markers only (`ProjectileTyp`,
+//!   `ProjectileFade` paths, `PlasmaSize`, …).
+//! - Slash anim length is catalog data in bevy; headless slashes use the
+//!   3-frame default (`slash_life_secs(3)`).
+//! - `ProjectileArchetype` (bevy `projectile_archetypes.rs`) is re-expressed
+//!   minimally as [`FireArch`]: only the fields the fire path branches on.
 
 use bevy_ecs::prelude::*;
 use glam::Vec2;
@@ -93,9 +83,7 @@ use crate::weapon_runtime::{
 use crate::weapons_data::AmmoType;
 use crate::worldgen::WALL_PX;
 
-// ---------------------------------------------------------------------------
 // Small local helpers
-// ---------------------------------------------------------------------------
 
 /// Push a fire-and-forget cue (bevy `GameAudio::play_*` parity for the
 /// weapon stems that the headless `GameAudio` bank does not own yet).
@@ -175,9 +163,7 @@ pub fn gun_reload_fx(
 /// (bevy-verbatim body); reused by the fire path.
 use crate::player::steroids_secondary_slot;
 
-// ---------------------------------------------------------------------------
 // Projectile archetype (minimal headless `ProjectileArchetype`)
-// ---------------------------------------------------------------------------
 
 /// Headless beam spec (bevy `BeamSpec` with `Color` -> `[f32; 4]`).
 #[derive(Clone, Copy, Debug)]
@@ -469,10 +455,8 @@ fn projectile_arch(id: WeaponId) -> FireArch {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Chained records (deaths.rs pattern): the fire chain takes >16 params in
 // bevy, so systems pack them into these two records instead.
-// ---------------------------------------------------------------------------
 
 /// Feel sinks + toast shared by the whole fire chain.
 pub struct FireFx<'a> {
@@ -501,9 +485,7 @@ pub struct GunShot {
     pub burst: bool,
 }
 
-// ---------------------------------------------------------------------------
 // player_fire
-// ---------------------------------------------------------------------------
 
 /// Firing Cadence: burst continuations, then primary / Steroids-secondary
 /// intents. `Transform` -> [`Pos`]; pulses drained every tick.
@@ -804,12 +786,10 @@ fn fire_one_gun(
     let shot = &shot;
 
     if def.melee.is_none() {
-        // GML `scrPlayerFiring`: blood weapons consume ammo normally;
-        // on empty (and only via the press path, not bursts/dups) the
-        // click refills cost-worth of ammo for 1 HP (`scrBloodAmmoRefill`)
-        // and fires this same click. The sim models that as: ammo
-        // shortfall on a blood weapon with hp > 1 prepays 1 HP for
-        // `ammo_cost` ammo, then the normal deduction below fires.
+        // GML `scrPlayerFiring`: blood weapons consume ammo normally; on empty
+        // (press path only, not bursts/dups) the click refills cost-worth of ammo for
+        // 1 HP (`scrBloodAmmoRefill`) and fires the same click - modelled as: ammo
+        // shortfall on a blood weapon with hp > 1 prepays 1 HP, then deducts.
         if archetype.blood.is_some() && !player.free_ammo {
             let slot = inv.ammo_mut(def.ammo);
             if *slot < def.ammo_cost && health.hp > 1 {
@@ -2032,11 +2012,10 @@ pub fn spawn_player_projectile_with_source(
         // Bevy gates on ids 7/44 (plain + golden launcher only):
         // grenade shotguns/rifles/ultras keep their shell behavior.
         let full = weapon_meta(w).wep_name;
-        // GML `scrFire` spawns the base `Grenade` object for the grenade
-        // launcher (`Grenade/Create_0.gml:10-11` -> friction 0.1 with
-        // `alarm[1] = 6`), the sticky launcher (`:219-223` reuses
-        // `Grenade` with `sticky = true`) and the cluster launcher
-        // (`ClusterNade` inherits `Grenade`), so all three run
+        // GML `scrFire` spawns base `Grenade` for the grenade launcher
+        // (`Grenade/Create_0.gml:10-11` -> friction 0.1, `alarm[1] = 6`), the sticky
+        // launcher (`:219-223` reuses `Grenade` with `sticky = true`) and the cluster
+        // launcher (`ClusterNade` inherits `Grenade`): all three run
         // `Grenade/Alarm_1` (friction -> 0.4 + 4 `Smoke`).
         if full == "GRENADE LAUNCHER"
             || full == "GOLDEN GRENADE LAUNCHER"
@@ -2203,9 +2182,7 @@ pub fn spawn_player_projectile_with_source(
     // Juice::shake on explosives is render juice; omitted.
 }
 
-// ---------------------------------------------------------------------------
 // hammerhead_chew
-// ---------------------------------------------------------------------------
 
 /// Hammerhead wall/prop chewing while sprinting. Prop corpse art and
 /// death-effect particles are render-side; the sim keeps hp damage,
@@ -2320,9 +2297,7 @@ pub fn hammerhead_chew(
     }
 }
 
-// ---------------------------------------------------------------------------
 // move_swing_fx (lifetime tick only)
-// ---------------------------------------------------------------------------
 
 /// Lifetime tick for swing markers. Slash hitbox motion itself is
 /// `Velocity` integration in `move_projectiles`; this only retires the
@@ -2359,9 +2334,7 @@ pub fn tick_cry_anim(
     }
 }
 
-// ---------------------------------------------------------------------------
 // Ability-field ticks
-// ---------------------------------------------------------------------------
 
 /// GML `objects/TangleSeed/*` (`scrPowers.gml:126`): a 12 px/step seed
 /// that becomes a [`Tangle`] on the first `hitme` or `Wall` it touches.
@@ -2630,9 +2603,7 @@ pub fn tick_hazard_clouds(
     }
 }
 
-// ---------------------------------------------------------------------------
 // Cuz emotional helpers + Robot eat shared drops
-// ---------------------------------------------------------------------------
 
 /// GML `scr_ultra_get(Race.Cuz, UltraSkill.Emotional)` level (0/1).
 pub fn cuz_emotional_level(ultra: Option<UltraMutationId>) -> u32 {
@@ -2651,16 +2622,14 @@ pub fn refresh_cuz_ammo_max(player: &mut Player) {
     player.cuz_ammo_max = cuz_ammo_max_for(player.back_muscle, cuz_emotional_level(player.ultra));
 }
 
-/// GML `scrRobotEat` core (`scrPowers.gml:621-662`), shared by the
-/// active and the portal auto-collect path: golden weapon →
-/// `repeat(4+throne_butt)` HP-or-ammo (`random(max_hp)>hp` and not
-/// life-crown → HP else ammo); Regurgitate 43% →
+/// GML `scrRobotEat` core (`scrPowers.gml:621-662`), shared by the active and
+/// portal auto-collect paths: golden weapon → `repeat(4+throne_butt)` HP-or-ammo
+/// (`random(max_hp)>hp` and not life-crown → HP else ammo); Regurgitate 43% →
 /// love-crown ? AmmoChest : hurt && `random(3)<2` ? HealthChest :
-/// `choose(WeaponChest,AmmoChest,AmmoChest)`; then `repeat(1+throne_butt)`
-/// HP/ammo by the same hurt rule. With `auto_collect`, HP/ammo apply
-/// directly (GML `event_perform(ev_collision, Player)`); chests stay on
-/// the ground. (Rads/curse handling lives in the active arm - GML keeps
-/// it in `scrPowers`, not `scrRobotEat`.)
+/// `choose(WeaponChest,AmmoChest,AmmoChest)`; then `repeat(1+throne_butt)` by the
+/// same hurt rule. `auto_collect` applies HP/ammo directly (GML
+/// `event_perform(ev_collision, Player)`); chests stay on the ground. Rads/curse
+/// handling lives in the active arm (GML keeps it in `scrPowers`).
 pub fn robot_eat_drops(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
@@ -2721,10 +2690,9 @@ pub fn robot_eat_drops(
                 let off = Vec2::new(rng.random_range(-12.0..12.0), rng.random_range(-12.0..12.0));
                 // GML `scrPowers.gml:637,655` `__spawn_pickup(AmmoPickup,
                 // _auto_collect)` creates a real `AmmoPickup`, so
-                // `AmmoPickup/Create_0.gml:13-18`'s `CursedPickup`
-                // conversion applies - its gate is `instance_exists(Player)`,
-                // not `GenCont`. A conversion discards the type resolved
-                // here, exactly as GML re-rolls it in
+                // `AmmoPickup/Create_0.gml:13-18`'s `CursedPickup` conversion applies
+                // (gated on `instance_exists(Player)`, not `GenCont`) and discards the
+                // type resolved here, exactly as GML re-rolls it in
                 // `AmmoPickup/Collision_Player`.
                 crate::pickups::maybe_cursed_ammo(
                     commands,
@@ -2780,9 +2748,7 @@ pub fn robot_eat_drops(
     }
 }
 
-// ---------------------------------------------------------------------------
 // player_ability
-// ---------------------------------------------------------------------------
 
 /// One-shot racial abilities. Visual bursts are omitted; every sim effect
 /// (timers, damage, spawns, ammo/hp costs, unlocks) is kept. Steroids has
@@ -2852,18 +2818,15 @@ pub fn player_ability(
     if race_state.race == RaceId::Steroids {
         return;
     }
-    // GML `scrControlAutoSnare` verbatim: Plant auto-fires the snare
-    // off EITHER fire edge (press or release) when the aim ray hits an
-    // unsnared enemy within half a view (213px) with clear walls. The
-    // shot aims itself at the victim (`scrPowers` runs with the snapped
-    // `gunangle`, restored after): the port writes the snapped aim for
-    // this tick and the next `player_aim` pass re-steers from live
-    // input. Touch routes through the same take-once `fire_pressed`
-    // (press edge) / `fire_released` (attack-finger lift) channels as
-    // desktop, so this covers touch AND desktop identically - no
-    // touch-only latch needed here. (No `scr_player_pref(my_player,
-    // "plant")` gate in the port: no per-race pref store exists; Plant
-    // always snares.)
+    // GML `scrControlAutoSnare` verbatim: Plant auto-fires the snare off EITHER
+    // fire edge (press or release) when the aim ray hits an unsnared enemy within
+    // half a view (213px) with clear walls. The shot aims itself at the victim
+    // (`scrPowers` runs with the snapped `gunangle`, restored after): the port
+    // writes the snapped aim for this tick and the next `player_aim` pass
+    // re-steers from live input. Touch rides the same take-once `fire_pressed` /
+    // `fire_released` channels as desktop, so no touch-only latch. No
+    // `scr_player_pref(my_player, "plant")` gate: no per-race pref store exists,
+    // Plant always snares.
     {
         let press_edge = input.peek_fire_pressed();
         let release_edge = input.take_touch_released_fire();
@@ -3638,6 +3601,4 @@ pub fn tick_big_dog_missiles(
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests: headless parity for the combat block
-// ---------------------------------------------------------------------------

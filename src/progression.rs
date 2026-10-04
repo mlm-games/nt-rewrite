@@ -1,29 +1,24 @@
-//! Level/mutation/portal progression. Port of
-//! `progression.rs` GML port minus the three deferred
-//! items (`setup_run`, `begin_between_floor_skill_picks` as a public
-//! system, `starting_ammo_for` - reasons in the module docs below).
+//! Level/mutation/portal progression, ported from `progression.rs`.
 //!
-//! Render split: bursts stay (sim-side `Particle` spawns, deaths.rs
-//! parity); sprite strips, anchors, flips, portal deco sprites, hurt
-//! anims, and loading-tip UI text are omitted (render/UI phase), never
-//! stubbed. Key input (`Digit1..4`) does not exist headless: mutation
-//! picks arrive via the `MutationChoice` resource (tests/UI write it).
+//! Render split: bursts stay (sim-side `Particle` spawns, `deaths.rs`
+//! parity); sprite strips, anchors, flips, portal deco sprites, hurt anims
+//! and loading-tip UI text are omitted (render/UI phase), never stubbed.
+//! Key input (`Digit1..4`) does not exist headless: mutation picks arrive
+//! via the `MutationChoice` resource.
 //!
 //! Deferred, with reason:
-//! - `setup_run`: needs save-loadout (`race_loadout`, skins) + weapons
-//!   table + world spawn; lands with the save phase.
-//! - `begin_between_floor_skill_picks` (public system): needs
-//!   mutation-pick UI state; lands with the UI phase. Its resource flow
-//!   (pause + `PendingMutation`/`PendingUltra`) is ported as a private
-//!   helper because `tick_portal_suck` / `handle_mutation_choice` call
-//!   it.
-//! - `starting_ammo_for`: needs the `WEAPONS` ammo table; lands with
-//!   the weapons phase (ammo mapping now rides `weapon_runtime`).
-//! - `tick_floor_transition` stage 2 runs the full bevy law: fresh
-//!   plan + Open Mind bonus + `setup::spawn_level` entity spawn.
-//! - Save writes: the sim has no `SaveManager`; `flush_dirty_save*`
-//!   only manage the `SaveDirty` flag (the write itself lands with the
-//!   save phase).
+//! - `setup_run`: needs save-loadout (`race_loadout`, skins) + weapons table
+//!   + world spawn; lands with the save phase.
+//! - `begin_between_floor_skill_picks` (public system): needs mutation-pick
+//!   UI state; lands with the UI phase. Its resource flow (pause +
+//!   `PendingMutation`/`PendingUltra`) is ported as a private helper because
+//!   `tick_portal_suck` / `handle_mutation_choice` call it.
+//! - `starting_ammo_for`: needs the `WEAPONS` ammo table; lands with the
+//!   weapons phase (ammo mapping now rides `weapon_runtime`).
+//! - `tick_floor_transition` stage 2 runs the full bevy law: fresh plan +
+//!   Open Mind bonus + `setup::spawn_level` entity spawn.
+//! - Save writes: the sim has no `SaveManager`, so `flush_dirty_save*` only
+//!   manage the `SaveDirty` flag (the write lands with the save phase).
 
 use bevy_ecs::prelude::*;
 use rand::RngExt;
@@ -59,9 +54,7 @@ use crate::spatial::Pos;
 use crate::state::{AppState, Paused};
 use crate::time::{GTimer, TimerMode};
 
-// ---------------------------------------------------------------------------
 // Mutation data (byte-exact tables from bevy `content.rs`).
-// ---------------------------------------------------------------------------
 
 pub const ALL_MUTATIONS: [MutationId; 28] = [
     MutationId::RhinoSkin,
@@ -363,20 +356,17 @@ pub fn ultra_pick_stem(id: UltraMutationId) -> Option<&'static str> {
     })
 }
 
-// ---------------------------------------------------------------------------
 // Small local helpers (pure ports of bevy helpers owned by other phases).
-// ---------------------------------------------------------------------------
 
 /// Deferred floor generation flag (bevy `DeferredFloorGen` parity).
 #[derive(Resource, Default)]
 pub struct DeferredFloorGen(pub bool);
 
-/// GML `GenCont/Destroy_0:112-124`: entering `area_city` (`FrozenCity`)
-/// subarea 1 with `mut_last_wish` seeds that room's generation with an
-/// `IceFlower` - the furthest `prop` is `instance_change`d into one, or
-/// (no props) a random `enemy` is replaced by one. `IceFlower/Create_0`:
-/// `max_hp = 450`, `size = 3`, `name = "FEED"`, `feed = 0`.
-/// `setup::spawn_level` reads the flag; the floor transition clears it.
+/// GML `GenCont/Destroy_0:112-124`: `area_city` (`FrozenCity`) subarea 1 with
+/// `mut_last_wish` seeds the room with an `IceFlower` -- the furthest `prop`
+/// `instance_change`d into one, or (no props) a random `enemy` replaced.
+/// `IceFlower/Create_0`: `max_hp = 450`, `size = 3`, `name = "FEED"`,
+/// `feed = 0`. `setup::spawn_level` reads the flag; the transition clears it.
 #[derive(Resource, Default, Clone, Copy, Debug)]
 pub struct IceFlowerSeed(pub bool);
 
@@ -409,13 +399,9 @@ fn secret_name(target: SecretTarget) -> &'static str {
 }
 
 /// Floor to return to after leaving a secret area. GML
-/// `GameCont/Other_5:64-82` verbatim: the room-end secret exits, and
-/// the stale `_is_secret` taken before the reassignment skips the normal
-/// advance, so the player lands exactly on that area's last subarea.
-/// - pizza sewers -> `area_scrapyards; subarea = 0` (+1 -> 1-1)
-/// - oasis / mansion -> `area_scrapyards; subarea = 3`
-/// - cursed caves -> `area_city; subarea = 0` (+1 -> 1-1)
-/// - jungle -> `area_city; subarea = 3`
+/// `GameCont/Other_5:64-82` verbatim: the room-end secret exits, and the stale
+/// `_is_secret` taken before the reassignment skips the normal advance, so the
+/// player lands exactly on that area's last subarea.
 fn secret_return_floor(target: SecretTarget, current_floor: u32) -> u32 {
     match target {
         SecretTarget::PizzaSewers => 5,
@@ -574,9 +560,7 @@ fn try_apply_loop_portal_transition(
     true
 }
 
-// ---------------------------------------------------------------------------
 // Level-ups and mutations.
-// ---------------------------------------------------------------------------
 
 /// Spend banked rads into levels (cap 10; level 10 owes an ultra pick,
 /// lower levels owe a mutation pick each), toasting + feedback on any
@@ -1442,9 +1426,7 @@ pub fn apply_ultra_mutation(
     );
 }
 
-// ---------------------------------------------------------------------------
 // Portals and floor transitions.
-// ---------------------------------------------------------------------------
 
 /// GML `Portal/Create_0.gml:1-22` (+ the `PortalL` ring): a `Portal` of
 /// `type` (1 normal, 2 popo/HQ, 3 proto/vault), the enemy-shot clear, the
@@ -1517,15 +1499,13 @@ pub fn spawn_portal(
     );
 }
 
-/// GML `IceFlower/Step_0.gml:4-22` verbatim: the `feed >= 4` payoff, the
-/// only way into `area_jungle`. `GameCont.area = area_jungle; subarea = 0`
-/// pre-loads the jungle and the room-end bump (`GameCont/Other_5:134`)
-/// then takes subarea to 1, the jungle's only floor; the port flips the
-/// area on the portal transit instead, exactly as it already does for
-/// `area_vault`, so the leg is queued here. `with (enemy) hp = 0` wipes
-/// the floor (deaths run the normal cascade), a plain `type = 1`
-/// `Portal` opens at the flower, `mut_last_wish` is refunded, then the
-/// flower dies.
+/// GML `IceFlower/Step_0.gml:4-22` verbatim: the `feed >= 4` payoff, the only
+/// way into `area_jungle`. GML sets `GameCont.area = area_jungle; subarea = 0`
+/// and lets the room-end bump (`GameCont/Other_5:134`) take subarea to 1, the
+/// jungle's only floor; the port flips the area on the portal transit instead,
+/// as for `area_vault`. `with (enemy) hp = 0` wipes the floor (deaths run the
+/// normal cascade), a plain `type = 1` `Portal` opens at the flower,
+/// `mut_last_wish` is refunded, then the flower dies.
 pub fn ice_flower_jungle(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
@@ -1754,12 +1734,12 @@ fn shock_rad_drop(
 
 /// GML `event_perform(ev_collision, Player)` on `WeaponChest`,
 /// `BigWeaponChest`, `CursedBigChest`, `GoldChest` and `IDPDChest` - every
-/// one of those `Collision_PortalShock.gml:4` files is that one line - so a
+/// one of those `Collision_PortalShock.gml:4` files is that one line, so a
 /// portal shock must hand out EXACTLY the touch-open payout. The kinds that
 /// hand-roll their own shock loot (`AmmoChest`, `AmmoChestMystery`,
 /// `HealthChest`, `RogueChest`) and the `prop`-based rad chests
-/// (`PortalShock/Collision_prop.gml` is `other.hp = 0`) stay at their own
-/// call sites. `ProtoChest` has no `Collision_PortalShock` event at all.
+/// (`PortalShock/Collision_prop.gml` is `other.hp = 0`) keep their own call
+/// sites; `ProtoChest` has no `Collision_PortalShock` event at all.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn chest_loot(
     commands: &mut Commands,
@@ -2397,11 +2377,7 @@ const CUZ_CRY_STOPS: [&str; 12] = [
     "stop_sndCuzCryBonus10",
 ];
 
-/// Portal suck: drags the player into the portal core, then flips the
-/// level (loop / secret / normal advance), drains pending mutation
-/// picks (deferring floor-gen while the pick UI owns the pause), and
-/// otherwise kicks the loading transition. Rotation/shrink visuals
-/// from the bevy build are omitted (render phase). GML
+/// Portal suck. Rotation/shrink visuals are render-phase. GML
 /// `Portal/Alarm_1` verbatim: a tutorial exit portal restarts the run
 /// (`game_restart()`) instead of advancing the floor.
 pub fn tick_portal_suck(
@@ -2456,12 +2432,11 @@ pub fn tick_portal_suck(
     let race = race_state.race;
     commands.entity(player_e).remove::<PortalSucking>();
 
-    // GML `Portal/Alarm_1` verbatim: the tutorial exit portal restarts
-    // the run (`game_restart()`) instead of advancing the floor. The
-    // port reboots run state in place (same `Loading` path as death
-    // RETRY). Completion persists to the save first (GML
-    // `save game.tutorial=false` in `TutCont/Alarm_0`, written before
-    // the exit portal spawns) so the fresh run lands on the real
+    // GML `Portal/Alarm_1` verbatim: the tutorial exit portal restarts the run
+    // (`game_restart()`) instead of advancing the floor. The port reboots run
+    // state in place (same `Loading` path as death RETRY). Completion persists
+    // to the save first (GML `save game.tutorial=false` in `TutCont/Alarm_0`,
+    // written before the exit portal spawns) so the fresh run lands on the real
     // first floor instead of replaying the tutorial.
     if run.tutorial {
         run.tutorial = false;
@@ -2491,12 +2466,11 @@ pub fn tick_portal_suck(
         run.blackswords += swords;
     }
 
-    // GML `GameCont/Other_5:143-152` chest counters: unopened weapon/rad
-    // caches feed `nochest`/`noradch` (desert 1-1 exempts `nochest`),
-    // and every level ages `same_weapons_for`. `instance_exists` is
-    // hierarchy-inclusive, so `CursedBigChest` and `GoldChest` (both
-    // `WeaponChest` descendants) count toward `nochest` too, and a plain
-    // `RadChest` is a `Prop` in the port rather than a `Pickup`.
+    // GML `GameCont/Other_5:143-152` chest counters: unopened weapon/rad caches
+    // feed `nochest`/`noradch` (desert 1-1 exempts `nochest`), every level ages
+    // `same_weapons_for`. `instance_exists` is hierarchy-inclusive, so
+    // `CursedBigChest` and `GoldChest` count toward `nochest`; a plain
+    // `RadChest` is a `Prop` here, not a `Pickup`.
     {
         let mut weapon_left = false;
         let mut rad_left = !rad_props.is_empty();
@@ -2528,9 +2502,8 @@ pub fn tick_portal_suck(
     //   if (sprite_index == sprProtoChestOpen) { protowep = wep_rusty_revolver;
     //                                          protocurse = false }
     //   else { protowep = wep; protocurse = curse }
-    // The carried state rides the entity between floors; the persisted
-    // half is `etc.protowep` (`scrSave.gml:44`), loaded at run start by
-    // `PlayButton/Other_10.gml:11`.
+    // The persisted half is `etc.protowep` (`scrSave.gml:44`), loaded at run
+    // start by `PlayButton/Other_10.gml:11`.
     let mut proto_carriers = Vec::new();
     let mut stored = (run.protowep, run.protocurse);
     for (entity, mut state, opened) in &mut proto_chests {
@@ -2850,14 +2823,9 @@ pub fn tick_throne_sit(
     }
 }
 
-/// Loading-screen floor transition. Stage 1 fills the progress bar;
-/// stage 2 (after a 4-tick beat) flips run-side state: fresh plan +
-/// Open Mind bonus + full `spawn_level` (mask, walls, props, chests,
-/// enemies, bosses), `FloorStarted` event, +1 HP, strong-spirit
-/// recharge, headless reset, player placement, carried-weapon drops,
-/// juice. Bevy `progression.rs` stage-2 law verbatim.
-/// Everything `spawn_level` needs about the run it is entering. Bundled
-/// because `tick_floor_transition` sits at Bevy's 16-parameter cap.
+/// Loading-screen floor transition: stage 1 fills the progress bar, stage 2
+/// runs after a 4-tick beat. Bevy stage-2 law verbatim. Bundled because
+/// `tick_floor_transition` sits at Bevy's 16-parameter cap.
 #[derive(bevy_ecs::system::SystemParam)]
 pub struct RoomEntry<'w, 's> {
     pub open_mind: Res<'w, OpenMind>,
@@ -3049,12 +3017,11 @@ pub fn tick_floor_transition(
                 run.blackswords = 0;
             }
 
-            // GML `GenCont/Destroy:186-187` verbatim:
-            // `instance_destroy(SpiralCont)` at generation end. The
-            // view spiral dies in the lifecycle step; the sim
-            // `SpiralCtl` (ambience-duck presence) warms per
-            // generation (`try_start_pending_floor_gen`) and dies
-            // here, never leaking a live cont into settled play.
+            // GML `GenCont/Destroy:186-187` verbatim: `instance_destroy(SpiralCont)`
+            // at generation end. The view spiral dies in the lifecycle step;
+            // the sim `SpiralCtl` (ambience-duck presence) warms per
+            // generation (`try_start_pending_floor_gen`) and dies here, never
+            // leaking a live cont into settled play.
             commands.remove_resource::<crate::vortex::SpiralCtl>();
 
             if !carried.0.is_empty() {
@@ -3224,9 +3191,7 @@ pub fn animate_portal(
     }
 }
 
-// ---------------------------------------------------------------------------
 // Unlocks, saves, run lifecycle.
-// ---------------------------------------------------------------------------
 
 /// Floor-reach race unlocks (Crystal at 4, Eyes at 5, …), once per
 /// floor. Marks the save dirty and toasts each unlock.
@@ -3280,6 +3245,4 @@ pub fn flush_dirty_save(
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests.
-// ---------------------------------------------------------------------------

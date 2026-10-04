@@ -1,10 +1,8 @@
-//! Headless HUD state. Pure-state port of the bevy reference
-//! `game/hud.rs` (`sync_hud`, `reset_hud_flags`): the same sim values are
-//! derived (hp/ammo/rads/weapon names/crown/mutations/kills/level
-//! progress/boss bar/IDPD warning/toasts) but instead of writing through a
-//! `UiBridge` resource into drawn widgets, they are collected into a plain
-//! [`HudState`] that the repose-canvas UI polls after each tick. No drawing,
-//! no bevy engine imports.
+//! Headless HUD state. Pure-state port of the bevy reference `game/hud.rs`
+//! (`sync_hud`, `reset_hud_flags`): the same sim values are derived, but
+//! instead of writing through a `UiBridge` resource into drawn widgets they are
+//! collected into a plain [`HudState`] that the repose-canvas UI polls after
+//! each tick. No drawing, no bevy engine imports.
 
 use bevy_ecs::prelude::*;
 
@@ -181,15 +179,14 @@ pub fn reset_hud_state(hud: &mut HudState) {
     hud.loop_count = 0;
 }
 
-/// GML `timer_string` verbatim (`GameCont/Step_0`): `M:S.F` from the
-/// sub-second `timer` counter at 30 steps/s
-/// (`string_pad_zeroes(..., 1)` = at least 1 digit, i.e. no zero padding:
-/// `round(timer / 30 * 100)` prints 0-97 unpadded at whole steps).
-/// `timer` resets every second, so it equals `tottimer % 30` at whole
-/// steps; under slow-mo `timescale` fractions GML accumulates a float
+/// GML `timer_string` verbatim (`GameCont/Step_0`): `M:S.F` from the sub-second
+/// `timer` counter at 30 steps/s (`string_pad_zeroes(..., 1)` = at least 1
+/// digit, i.e. no zero padding: `round(timer / 30 * 100)` prints 0-97 unpadded
+/// at whole steps). `timer` resets every second, so it equals `tottimer % 30`
+/// at whole steps; under slow-mo `timescale` fractions GML accumulates a float
 /// that can print `.100` on the last sub-step before the roll
-/// (`round(29.99/30*100)`), while the port derives from the integer
-/// `tottimer` and caps at 97 (deferred: the sim has no float clock).
+/// (`round(29.99/30*100)`), while the port derives from the integer `tottimer`
+/// and caps at 97 (deferred: the sim has no float clock).
 pub fn run_timer_string(tottimer: u32) -> String {
     let minutes = tottimer / 1800;
     let seconds = (tottimer / 30) % 60;
@@ -241,12 +238,11 @@ pub fn gml_area_map_name(area: i32, sub: u32, lp: u32, hardmode: bool) -> String
     }
 }
 
-/// GML `scrAreaGetMapName` verbatim (unlocalized strings): a won run
-/// shows `END2` on the final HQ floor (`area == hq && subarea ==
-/// maxsubarea`); `END1` only when a `Cinematic` instance exists, which the
-/// port never spawns, so every other won run falls through to the normal
-/// map body. The loop suffix still applies to `END` results, exactly
-/// like GML.
+/// GML `scrAreaGetMapName` verbatim (unlocalized strings): a won run shows
+/// `END2` on the final HQ floor (`area == hq && subarea == maxsubarea`);
+/// `END1` only when a `Cinematic` instance exists, which the port never spawns,
+/// so every other won run falls through to the normal map body. The loop
+/// suffix still applies to `END` results, exactly like GML.
 pub fn run_area_string(run: &Run) -> String {
     let area = crate::worldgen::gml_area_from_run(run);
     if run.won {
@@ -294,12 +290,9 @@ fn apply_loop_suffix(base: String, lp: u32, hardmode: bool) -> String {
 pub fn sync_hud_state(world: &World) -> HudState {
     let mut hud = HudState::default();
 
-    // One walk over the entities instead of the reference's five (markers,
-    // boss bar, player panel, death mutations, alive-check). Every group
-    // keeps its original per-group rules: `iter_entities` order is stable,
-    // the boss tie still favors the later entity (`>=`), the first Player
-    // with Health+Inventory wins the panel, and the first Player at all
-    // wins the death-mutation ids.
+    // `iter_entities` order is stable: the boss tie still favors the later
+    // entity (`>=`), the first Player with Health+Inventory wins the panel,
+    // the first Player at all wins the death-mutation ids.
     let mut player_alive = false;
     let mut boss_best: Option<(i32, u32, String)> = None;
     let mut fields_seen = false;
@@ -392,8 +385,8 @@ pub fn sync_hud_state(world: &World) -> HudState {
     }
 
     let Some(run) = world.get_resource::<Run>() else {
-        // Bevy early-return: run-scoped fields back to defaults; the
-        // markers collected above survive, the rest of the walk is dropped.
+        // Bevy early-return: run-scoped fields back to defaults, the
+        // fainted markers collected above survive.
         let mut fresh = HudState::default();
         fresh.fainted_bars = hud.fainted_bars;
         return fresh;
@@ -470,12 +463,11 @@ pub fn sync_hud_state(world: &World) -> HudState {
     };
     hud.mutation_choices = choices;
     hud.mutation_choice_ids = ids;
-    // Note: bevy also maintained the `mutation_selected` cursor here
-    // (reset when the choice list changed length / emptied). Cursor state is
-    // UI-phase owned; the canvas resets its own cursor from
-    // `mutation_choices.len()`.
-    // Death-mutation ids were collected in the walk above (first Player);
-    // they only surface on the game-over screen.
+    // Bevy also maintained the `mutation_selected` cursor here (reset when the
+    // choice list changed length / emptied); cursor state is UI-phase owned and
+    // the canvas resets its own from `mutation_choices.len()`.
+    // Death-mutation ids were collected in the walk above (first Player); they
+    // only surface on the game-over screen.
     if !run.game_over {
         hud.death_mutation_ids.clear();
     }

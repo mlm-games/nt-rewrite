@@ -1,27 +1,18 @@
 //! Floor setup: mask building + entity spawning from plans.
 //!
-//! Save-phase extension: loadout-driven run setup. Bevy `setup_run`
-//! (GML level-flow scripts) resolves the
-//! save loadout (character stats, `start_crown` stamp, skins, starting
-//! weapons via `sanitize_weapon_id` + `starting_ammo_for`) and spawns
-//! the player; that logic lands here as pure helpers
-//! (`resolve_run_loadout`, `starting_ammo_for`, `build_player_bundle`)
-//! plus the headless entry points (`setup_run`, `setup_run_with_seed`)
-//! so tests never touch disk or RNG.
+//! Loadout run setup (bevy `setup_run`) resolves the save loadout (character
+//! stats, `start_crown` stamp, skins, starting weapons via `sanitize_weapon_id`
+//! + `starting_ammo_for`) in `resolve_run_loadout` / `starting_ammo_for` /
+//! `build_player_bundle`; `setup_run` / `setup_run_with_seed` stay headless so
+//! tests never touch disk or RNG.
 //!
-//! Headless adaptations (render/UI only, gameplay untouched):
-//! - No `AssetServer`/`AssetCatalog` sprites: `PlayerAnim` keeps path
-//!   strings (`idle`/`walk` from `character_def`, `hurt` from the local
-//!   `derive_hurt_path`); strips, anchors and `Juice::pop_in` are render.
-//! - No camera: `CameraFollow` retargeting is shell-side.
-//! - No `UiBridge`/`OverlayMenu`/`PendingUnpause`: the headless sim has
-//!   no menu bridge; `AppState::InGame` + `Paused(false)` carry the state.
-//! - No `world::spawn_level` visuals: floor/wall/decal `Sprite`s stay
-//!   renderer-owned, but the sim half (`spawn_level` below: wall bodies,
-//!   props, chests, enemies, throne-room extras, mines) runs here so a
-//!   headless `setup_run` yields a playable floor.
-//! - Timers use disarmed `GTimer`s (bevy `ready_timer` parity: finished
-//!   from birth, silent until re-armed).
+//! Headless adaptations, render/UI only: no sprites (`PlayerAnim` path
+//! strings, `hurt` via `derive_hurt_path`); no camera; no `UiBridge` /
+//! `OverlayMenu` / `PendingUnpause` (`AppState::InGame` + `Paused(false)`
+//! carry state); the `spawn_level` sim half (walls, props, chests, enemies,
+//! throne extras, mines) runs here so headless `setup_run` is playable;
+//! timers are disarmed `GTimer`s (bevy `ready_timer` parity: finished from
+//! birth, silent until re-armed).
 
 use bevy_ecs::prelude::*;
 use rand::rngs::StdRng;
@@ -69,13 +60,11 @@ pub fn build_floor_mask(plan: &LevelPlan) -> FloorMask {
     }
 }
 
-/// Player spawn with default Fish stats (kept byte-identical: the
-/// enemy-phase test dummies use this as a targeting stand-in).
-/// Loadout-driven spawns go through `spawn_player_loaded`.
-/// Tag is `GameCleanup` only (bevy parity): the player survives portal
-/// floor swaps (`tick_portal_suck` despawns `LevelCleanup`) and dies
-/// with the run (`teardown_session_entities` despawns every session
-/// entity).
+/// Player spawn with default Fish stats (byte-identical: the enemy-phase
+/// test dummies use this as a targeting stand-in). Loadout spawns go
+/// through `spawn_player_loaded`. Tag is `GameCleanup` only (bevy parity):
+/// the player survives portal floor swaps (`tick_portal_suck` despawns
+/// `LevelCleanup`) and dies with the run (`teardown_session_entities`).
 pub fn spawn_player(commands: &mut Commands, pos: glam::Vec2) -> Entity {
     commands
         .spawn((
@@ -291,12 +280,10 @@ pub fn roll_random_race(save: &SaveData, race: RaceId, rng: &mut StdRng) -> Race
 
 /// GML `scrRunStart:12-33` random-crown roll verbatim (`macros_general`:
 /// `crwn_random` 0, `crwn_none` 1, real crowns 2..`crownmax` 13):
-/// `do _crown = irandom_range(2, crownmax)` until every player has the
-/// crown unlocked (50 tries), else `crwn_none`. Single-player here, so
-/// one race is checked. Returns the port `CrownKind` (GML id mapped via
-/// `crown_gml_to_port`: GML 2..13 → port 1..12).
-/// The title loadout grid has no random slot yet, so run setup keeps the
-/// stamped crown; this helper carries the law for that slot.
+/// `irandom_range(2, crownmax)` until unlocked (50 tries), else
+/// `crwn_none`; single-player so one race is checked. GML 2..13 maps to
+/// port 1..12 via `crown_gml_to_port`. The title grid has no random slot
+/// yet, so run setup keeps the stamped crown; this carries the law for it.
 pub fn roll_random_crown(save: &SaveData, race: RaceId, rng: &mut StdRng) -> CrownKind {
     for _ in 0..50 {
         let gml: u8 = rng.random_range(2..=13);
@@ -410,12 +397,11 @@ pub fn build_player_bundle(race: RaceId, loadout: &RunLoadout) -> PlayerBundle {
     }
 }
 
-/// Spawn a loadout-built player (tags + aim + position; shared by
-/// `setup_run` so spawn code is not duplicated). `GameCleanup` only -
-/// same portal-survival reason as [`spawn_player`]. Bevy parity: the
-/// idle `SpriteAnim` rides along so `player_anim_switch`/`hurt_on_damage`
-/// match (without it the `&mut SpriteAnim` queries never fire and the
-/// player sticks on the render fallback frame 0).
+/// Spawn a loadout-built player (tags + aim + position, shared with
+/// `setup_run`). `GameCleanup` only, same portal-survival reason as
+/// [`spawn_player`]. Bevy parity: the idle `SpriteAnim` must ride along or
+/// the `&mut SpriteAnim` queries (`player_anim_switch`/`hurt_on_damage`)
+/// never fire and the player sticks on render fallback frame 0.
 pub fn spawn_player_loaded(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
@@ -446,20 +432,13 @@ pub fn spawn_player_loaded(
     ec.id()
 }
 
-/// Headless run setup (bevy `setup_run` resource flow verbatim, minus
-/// engine/UI: score/dirty/run reset, mutation-flag resources,
-/// loadout player spawn, floor mask from the generated plan,
-/// `FloorStarted` queue, crown toast; `AppState::InGame` marks the
-/// transition the bevy caller scheduled around `setup_run`).
-/// GML `scrCleanupSessionInstances` verbatim
-/// (`scrCleanupSessionInstances.gml:1-11`): `with all { if (object_index
-/// == UberCont || == CoopController || == Console) continue;
-/// instance_destroy(id, false) }`. The port's persistent controllers carry
-/// no entities (resources own that state), so this despawns every live
-/// entity - the `scrGameRestart` quit/restart path destroys the whole
-/// session before rebuilding. `setup_run_with_seed` and
-/// `setup_title_campfire` both funnel through here so menu transitions
-/// can never inherit a dead run's world.
+/// GML `scrCleanupSessionInstances` (`scrCleanupSessionInstances.gml:1-11`):
+/// `with all { if (object_index == UberCont || == CoopController ||
+/// == Console) continue; instance_destroy(id, false) }`. The port's
+/// persistent controllers own no entities (resources hold that state), so this
+/// despawns every live entity; `scrGameRestart` destroys the session first.
+/// `setup_run_with_seed` and `setup_title_campfire` funnel through here so
+/// menu transitions never inherit a dead run's world.
 pub fn teardown_session_entities(world: &mut World) {
     //
     let stale: Vec<Entity> = world
@@ -760,11 +739,10 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
     });
     world.flush();
     world.insert_resource(run);
-    // GML `GenCont/Destroy:186-187` verbatim:
-    // `instance_destroy(SpiralCont)` once generation lands. The run
-    // setup warms the sim `SpiralCtl` for the generating room (see
-    // above); the built level means generation end, so the cont dies
-    // here instead of leaking a live spiral into settled play.
+    // GML `GenCont/Destroy:186-187`: `instance_destroy(SpiralCont)` once
+    // generation lands. Run setup warmed the sim `SpiralCtl` for the generating
+    // room, so the built level ends generation - the cont dies here instead of
+    // leaking a live spiral into settled play.
     world.remove_resource::<crate::vortex::SpiralCtl>();
 
     world
@@ -1040,14 +1018,12 @@ pub fn ground_decal_for_floor(floor: u32) -> &'static str {
     }
 }
 
-/// Prop hurt/dead art for a picked idle strip (GML prop objects carry
-/// `spr_idle / spr_hurt / spr_dead` triples; the pack mirrors them as
-/// `sprXHurt.png` / `sprXDead.png`, with `*Idle` idles stripping the
-/// suffix). Cars leave a scorch mark, not a car corpse
-/// (`Car/Create_0.gml:6`, `corpse = false` in `Destroy_0`); the frozen
-/// city-car variant (`area_city` arm) reuses the same scorch dead strip.
-/// Returns static candidates; callers keep `idle` when the catalog lacks
-/// the strip (GML-equivalent: no hit anim / plain debris).
+/// Prop hurt/dead art for a picked idle strip: GML props carry
+/// `spr_idle / spr_hurt / spr_dead`, the pack mirrors them as
+/// `sprXHurt.png`/`sprXDead.png` with `*Idle` stripped. Cars leave a scorch
+/// mark, not a corpse (`Car/Create_0.gml:6`, `corpse = false` in `Destroy_0`);
+/// the frozen city-car reuses that scorch strip. Catalog gap: callers keep
+/// `idle` (GML: no hit anim, plain debris).
 fn prop_hurt_dead_paths(idle: &'static str) -> (&'static str, &'static str) {
     match idle {
         "images/sprBushIdle.png" => ("images/sprBushHurt.png", "images/sprBushDead.png"),
@@ -1192,15 +1168,13 @@ fn resolve_prop_art(
     (hurt, dead)
 }
 
-/// Prop sim half: `Prop` + tracker + `NextHurt` + recorded art paths +
-/// death effect + kind markers. GML `objects/prop/Create_0.gml:3` fixes
-/// `image_speed = 0.4` (frames per step) for every destructible prop, so
-/// the idle/hurt strips run at 12 fps regardless of the atlas `fps`.
-/// Functional kinds: `Trap` is a solid flamethrower emitter, `Torch`
-/// throbs, `ThroneStatue`/`BigGeneratorInactive` are `canbreak = 0`.
-/// `GroundDecal` records art only (non-solid). Crib kinds: `VenuzCarpet`
-/// and the two Giant chests carry art only (no GML parent, so no
-/// solidity and no hp).
+/// Prop sim half: `Prop` + tracker + `NextHurt` + art paths + death effect +
+/// kind markers. GML `objects/prop/Create_0.gml:3` fixes `image_speed = 0.4`
+/// frames/step for every destructible prop, so strips run at 12 fps regardless
+/// of atlas `fps`. `Trap` solid flamethrower emitter, `Torch` throbs,
+/// `ThroneStatue`/`BigGeneratorInactive` `canbreak = 0`, `GroundDecal` art
+/// only. Crib `VenuzCarpet` + the two Giant chests: art only (no GML parent,
+/// so no solidity, no hp).
 pub fn spawn_prop_sim(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
@@ -1696,14 +1670,14 @@ fn spawn_wall_tiles(
     }
 }
 
-/// Floor entity spawn from a generated plan (bevy `world::spawn_level`
-/// sim half: mask rebuild (via [`build_floor_mask`]), wall bodies,
-/// props, secret entrances, chests, enemies, boss extras, throne carpet,
-/// crown-vault pedestal). Floor/wall/decal/bone/detail `Sprite`s,
-/// transition quads and anchors are renderer-owned and skipped.
-/// `crown` / `ultra` are the live player's, because GML resolves the
-/// chest art variants, the Crown of Curses roll and the Steroids gates
-/// off `GameCont.crown` and `scr_ultra_get` at chest `Create_0` time.
+/// Floor entity spawn from a generated plan (bevy `world::spawn_level` sim
+/// half: mask rebuild via [`build_floor_mask`], wall bodies, props, secret
+/// entrances, chests, enemies, boss extras, throne carpet, crown-vault
+/// pedestal). Floor/wall/decal/bone/detail `Sprite`s, transition quads and
+/// anchors are renderer-owned. `crown` / `ultra` are the live player's:
+/// GML resolves chest art variants, the Crown of Curses roll and the
+/// Steroids gates off `GameCont.crown` and `scr_ultra_get` at chest
+/// `Create_0` time.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_level(
     commands: &mut Commands,
@@ -2007,22 +1981,19 @@ pub fn spawn_level(
     if let Some(kind) = plan.boss {
         match kind {
             EnemyKind::BigBandit | EnemyKind::BigBanditLoop => {
-                // GML `WantBoss/Step_0:9-24`:
-                //   treshhold = subarea == maxsubarea ? 0.9 : 0.98
-                //   if (surviving - radMaggot) > enemies * treshhold:
-                //       if subarea == maxsubarea: alarm[0] = 120
-                //       if !losthope && !chestprop && ChestOpen && !RadChest
-                //          && !RadChestBig && !RadMaggotChest && !RogueChest:
-                //          CanOasis; alarm[0] = 1
+                // GML `WantBoss/Step_0:9-24`: treshhold = subarea == maxsubarea
+                // ? 0.9 : 0.98; if (surviving - radMaggot) > enemies * treshhold
+                // then alarm[0] = 120 at maxsubarea, else if !losthope &&
+                // !chestprop && ChestOpen && !RadChest && !RadChestBig &&
+                // !RadMaggotChest && !RogueChest then CanOasis, alarm[0] = 1.
                 // `enemies` is captured in `WantBoss/Create_0` with the whole
-                // floor still alive, so `surviving > initial * 0.9` already
-                // holds on the first step: treshhold is a *remaining* fraction
-                // and the bandit is a timed encounter, not a kill gate. The last
-                // desert subarea therefore breaches 4 s in; 1-1/1-2 breach
-                // immediately but only once every chest on the floor is open,
-                // which is what makes them the CanOasis secret. The port used
-                // `0.10 + i*0.02` killed with no chest gate, so it held the
-                // bandit back on 1-3 and fired it early everywhere else.
+                // floor still alive, so `surviving > initial * 0.9` holds on the
+                // first step: treshhold is a *remaining* fraction and the bandit
+                // is a timed encounter, not a kill gate - the last desert subarea
+                // breaches 4 s in, 1-1/1-2 breach immediately but only once every
+                // chest on the floor is open, which is what makes them the CanOasis
+                // secret. The port's old `0.10 + i*0.02` killed gate with no chest
+                // condition held the bandit back on 1-3 and fired it early elsewhere.
                 let is_last = run.floor_in_area
                     >= crate::worldgen::gml_max_subarea(crate::worldgen::gml_area_from_run(run));
                 let n = plan.boss_count.max(1);
@@ -2127,16 +2098,14 @@ pub fn spawn_level(
 }
 
 /// Title campfire backdrop (GML `MenuGen/Create_0` + `Alarm_1` +
-/// GML `Vlambeer` logo-room branch verbatim (`Vlambeer/Create_0` with
-/// `want_quit_to_menu` and no `CoopController`): the room restarts with
-/// no gameplay instances - just `Logo` + `SpiralCont` over the black
-/// clear color. The port has no room primitive, so this is the blanket
-/// teardown plus the resource half of the room restart (empty campfire
-/// `Run` for the spiral variant, silenced area audio, cleared
-/// transition/offer covers). The campfire floor itself is NOT built here
-/// (GML builds it only in `MenuGen`, i.e. on PLAY into the title) - the
-/// logo menu sits over black, and `world_instances` emits nothing with
-/// an empty mask.
+/// `Vlambeer/Create_0` logo-room branch with `want_quit_to_menu` and no
+/// `CoopController`): the room restarts with no gameplay instances, just
+/// `Logo` + `SpiralCont` over the black clear color. No room primitive in
+/// the port, so this is the blanket teardown plus the resource half (empty
+/// campfire `Run` for the spiral variant, silenced area audio, cleared
+/// transition/offer covers). The campfire floor is NOT built here (GML
+/// builds it in `MenuGen`, i.e. on PLAY): the logo menu sits over black and
+/// `world_instances` emits nothing with an empty mask.
 pub fn setup_logo_room(world: &mut World) {
     teardown_session_entities(world);
     world.init_resource::<FloorMask>();
@@ -2152,10 +2121,9 @@ pub fn setup_logo_room(world: &mut World) {
 /// debris strip), silenced area audio (`audio_stop_all`), cleared
 /// transition/offer covers.
 fn reset_menu_room_resources(world: &mut World) {
-    // GML `GameCont/Create_0` verbatim: a fresh cont resets every run
-    // counter (area/loops/chests/kills/timers/flags/waypoints). Full
-    // default + campfire identity, so no field can leak a dead run
-    // into the menu room.
+    // GML `GameCont/Create_0`: a fresh cont resets every run counter
+    // (area/loops/chests/kills/timers/flags/waypoints). Full default + campfire
+    // identity, so no field leaks a dead run into the menu room.
     world.insert_resource(Run::default());
     {
         // GML `PlayButton/Other_10` + `scrInit.gml:155`: `protowep` loads
@@ -2210,10 +2178,10 @@ fn reset_menu_room_resources(world: &mut World) {
 
 /// `scrCampfireMenuCreate` sim half: 3x4 jittered 3x3 floor patches,
 /// cardinal-neighbour fill, ring walls, 1-in-6 NightCactus/TopDecal
-/// dressing, `PortalClear` per camper, and the Campfire/LogMenu/CampChar
-/// actors; no enemies, chests, makers or run state). Entities carry
-/// `GameCleanup`/`LevelCleanup` so run setup clears them; the `FloorMask`
-/// lets title-time systems collide against the same walls the menu draws.
+/// dressing, `PortalClear` per camper, Campfire/LogMenu/CampChar actors;
+/// no enemies, chests, makers or run state. Entities carry
+/// `GameCleanup`/`LevelCleanup`; the `FloorMask` lets title-time systems
+/// collide against the same walls the menu draws.
 pub fn setup_title_campfire(world: &mut World) {
     teardown_session_entities(world);
     world.init_resource::<FloorMask>();
@@ -2222,14 +2190,13 @@ pub fn setup_title_campfire(world: &mut World) {
         world.insert_resource(empty_anim_catalog());
     }
 
-    // GML `MenuGen/Create_0` verbatim: 3 rows x 4 cols of 3x3 patches.
-    // `dix` starts 32 for row 0 but resets to 0 after each row (so
-    // rows 1-2 use dix=0,32,64,96); `diy=32+row*32` px; one
-    // `mody=choose(32,0,-32)` jitters BOTH axes of the patch. In cells
-    // (px/32): base `(dix_c+col+mody_c, 1+row+mody_c)` with
-    // `dix_c = 1` on row 0 else `0`, `mody_c in {1,0,-1}`. GML draws
-    // from the live global RNG stream, so every title visit differs;
-    // the port likewise rolls live entropy (no two camps alike).
+    // GML `MenuGen/Create_0`: 3 rows x 4 cols of 3x3 patches. `dix` starts 32
+    // on row 0 but resets to 0 after each row, so rows 1-2 use
+    // dix=0,32,64,96; `diy = 32 + row*32` px; one `mody = choose(32,0,-32)`
+    // jitters BOTH axes. In cells (px/32): `(dix_c + col + mody_c,
+    // 1 + row + mody_c)` with `dix_c = 1` on row 0 else 0, `mody_c in {1,0,-1}`.
+    // Drawn off the live global RNG, so every title visit differs; the port
+    // rolls live entropy too.
     let mut rng = rand::rng();
     let mut seen = std::collections::HashSet::new();
     let mut floors: Vec<(i32, i32)> = Vec::new();
@@ -2249,7 +2216,7 @@ pub fn setup_title_campfire(world: &mut World) {
             }
         }
     }
-    // `MenuGen/Alarm_1` cardinal fill verbatim (neighbour floors pop in).
+    // `MenuGen/Alarm_1` cardinal fill (neighbour floors pop in).
     let snapshot = floors.clone();
     for (cx, cy) in snapshot {
         for c in [(cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)] {
@@ -2258,12 +2225,11 @@ pub fn setup_title_campfire(world: &mut World) {
             }
         }
     }
-    // `MenuGen/Create_0:38-40` FloorMakers verbatim: 4 makers at
-    // `choose(0,32,64,96,128)` px each axis, `goal = 50` under MenuGen.
-    // The 12 patches + fill already exceed 50 floors, so every maker
-    // lays exactly its spawn cell on the first step (`Floor > goal`
-    // arm) - up to 4 satellite cells, duplicates popping themselves
-    // (`Floor/Create_0` overlap arm, matched by `seen` here).
+    // `MenuGen/Create_0:38-40` FloorMakers: 4 makers at
+    // `choose(0,32,64,96,128)` px each axis, `goal = 50` under MenuGen. The 12
+    // patches + fill already exceed 50 floors, so every maker lays only its
+    // spawn cell (`Floor > goal` arm) - up to 4 satellite cells, duplicates
+    // popping themselves (`Floor/Create_0` overlap arm, matched by `seen`).
     for _ in 0..4 {
         let c = (rng.random_range(0..=4), rng.random_range(0..=4));
         if seen.insert(c) {
@@ -2298,12 +2264,11 @@ pub fn setup_title_campfire(world: &mut World) {
         fixed_campers.push((gml, at));
         campers.push(at);
     }
-    // Plant (5) .. Cuz (16), skipping locked; GML scatters with
-    // `move_contact_solid(random_angle, 32+iter*2+random(32)+...)`
-    // until 32px clear of every camper. The port walks the same
-    // distance law off the fixed stream and clamps onto floors
-    // (no physics here; contact-slide is renderer/collision-side).
-    // BigDog (13) keeps its four `PortalClear` dressings.
+    // Plant (5) .. Cuz (16) skipping locked; GML scatters with
+    // `move_contact_solid(random_angle, 32+iter*2+random(32)+...)` until 32px
+    // clear of every camper. The port walks the same distance law off the
+    // fixed stream, clamped onto floors (no physics; contact-slide is
+    // collision-side). BigDog (13) keeps its four `PortalClear` dressings.
     let floor_px: Vec<glam::Vec2> = floors
         .iter()
         .map(|(cx, cy)| {
@@ -2374,14 +2339,12 @@ pub fn setup_title_campfire(world: &mut World) {
         }
     }
 
-    // `MenuGen/Alarm_1` dressing verbatim: per floor `random(6)<1`, then
-    // `irandom(21)` - nonzero rolls a NightCactus, zero rolls a
-    // TopDecalNightDesert. GML gates the cactus on
-    // `distance_to_object(CampChar)>24 && distance_to_object(NightCactus)>16`
-    // against the live actors - Alarm_1 runs after ALL campers
-    // (fixed + scattered) are placed, so the port gates on the full
-    // `campers` list too. Floors are dressed in plan order so the fixed
-    // stream matches.
+    // `MenuGen/Alarm_1` dressing: per floor `random(6)<1`, then `irandom(21)`
+    // - nonzero rolls a NightCactus, zero a TopDecalNightDesert. GML gates the
+    // cactus on `distance_to_object(CampChar)>24 &&
+    // distance_to_object(NightCactus)>16` against the live actors; Alarm_1 runs
+    // after all campers (fixed + scattered), so the port gates on the full
+    // `campers` list too. Floors are dressed in plan order for the fixed stream.
     let mut cacti: Vec<glam::Vec2> = Vec::new();
     let mut decals: Vec<glam::Vec2> = Vec::new();
     for (cx, cy) in &floors {
@@ -2462,16 +2425,13 @@ pub fn setup_title_campfire(world: &mut World) {
                     false,
                 );
             }
-            // `scrCampfireMenuCreate` actors verbatim (positions in world
-            // px, same as GML): Campfire (64,64) + LogMenu (64,32), four
-            // fixed starters, scattered Plant..Cuz, chicken TV, BigDog
-            // sleepers. Positions were computed above (dressing gates on
-            // them); only unlocked races got campers (locked return
-            // `noone` in GML). Every camper pops a `PortalClear`
+            // `scrCampfireMenuCreate` actors in world px: Campfire (64,64) +
+            // LogMenu (64,32), four fixed starters, scattered Plant..Cuz,
+            // chicken TV, BigDog sleepers. Positions were computed above
+            // (dressing gates on them); only unlocked races got campers (locked
+            // return `noone` in GML). Every camper pops a `PortalClear`
             // (`MenuGen/Alarm_1`). Actors carry their idle `SpriteAnim`
-            // (`sprCampfire` 4f @ 0.4, `sprLogMenu`, per-race `*Menu`,
-            // `sprTV`) so `animate_sprites` + the campfire render arm
-            // draw them like any world instance.
+            // (`sprCampfire` 4f @ 0.4, `sprLogMenu`, per-race `*Menu`, `sprTV`).
             let mut campfire_e = commands.spawn((
                 GameCleanup,
                 LevelCleanup,
@@ -3079,23 +3039,21 @@ mod verbatim_title_to_first_level {
         assert_eq!(world.resource::<Run>().area, crate::data::AreaId::Campfire);
     }
 
-    /// Transition guard table (checked against GML per screen).
-    /// GML law per cover screen:
-    /// - Loading (`GenCont/Draw_0`): `scrDrawSpiral()` (opaque clear) +
+    /// Transition guard table (GML per screen):
+    /// - Loading (`GenCont/Draw_0`): `scrDrawSpiral()` opaque clear +
     ///   GENERATING + tip + roadmap. No world, no HUD, no menu chrome.
-    /// - Mutation/ultra offer (`LevCont/Draw_0`): `scrDrawSpiral()`
-    ///   (opaque clear) + offer title/subtitle + icons. No world, no
-    ///   HUD; the offer chrome is `LevCont`'s own (the port's Mutation
-    ///   overlay), not the campfire `Menu` chrome.
-    /// - Mid-run floor transition (same `GenCont` room, `room_restart`
-    ///   already destroyed the old room): spiral + text only.
-    /// - Title (`Menu/Draw_0`): spiral remnant transparently (no clear)
-    ///   UNDER camp + pods + portraits. World ON, menu chrome ON, HUD
-    ///   bars off (TopCont draws no HUD in the `MenuGen` room).
-    /// The composer expresses this as three gates in `App::view`
-    /// (`generation_screen`, `loading_cover`/`cover_chrome_off`,
-    /// `bg_alpha`) - this test pins the gate inputs per screen so a
-    /// future gate edit must keep all four screens exact.
+    /// - Mutation/ultra offer (`LevCont/Draw_0`): `scrDrawSpiral()` opaque
+    ///   clear + offer title/subtitle + icons. No world, no HUD; offer chrome
+    ///   is `LevCont`'s own (the port's Mutation overlay), not the campfire
+    ///   `Menu` chrome.
+    /// - Mid-run floor transition (same `GenCont` room, `room_restart` already
+    ///   destroyed the old room): spiral + text only.
+    /// - Title (`Menu/Draw_0`): spiral remnant transparently (no clear) UNDER
+    ///   camp + pods + portraits. World ON, menu chrome ON, HUD bars off
+    ///   (`TopCont` draws no HUD in the `MenuGen` room).
+    /// Three gates in `App::view` express this (`generation_screen`,
+    /// `loading_cover`/`cover_chrome_off`, `bg_alpha`); this pins their inputs
+    /// per screen so a gate edit must keep all four exact.
     #[test]
     fn transition_cover_law_matches_gml_per_screen() {
         use crate::comps_a::{PendingMutation, PendingUltra};
@@ -3182,13 +3140,12 @@ mod verbatim_title_to_first_level {
         assert!(!is_cover && !opaque && kind == Some(MenuOverlay::Title));
     }
 
-    /// Reported bug verbatim: the loading screen must show the vortex,
-    /// not the previous room. GML `room_restart` hands `GenCont` a fresh
-    /// room, so GENERATING draws over spiral + black only. Entering
-    /// Loading therefore tears down session entities + the floor mask
-    /// up front (bevy `teardown_game` on InGame exit); `setup_run`
-    /// rebuilds at the end of the load. Covers both the fresh-run path
-    /// (Title camp) and RETRY after death (dead run).
+    /// Reported bug: the loading screen must show the vortex, not the previous
+    /// room. GML `room_restart` hands `GenCont` a fresh room, so GENERATING
+    /// draws over spiral + black only. Entering Loading tears down session
+    /// entities + the floor mask up front (bevy `teardown_game` on InGame exit);
+    /// `setup_run` rebuilds at the end of the load. Covers fresh-run and RETRY
+    /// after death.
     #[test]
     fn loading_enter_clears_stale_world() {
         use crate::state::{AppState, goto_state};

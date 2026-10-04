@@ -178,13 +178,10 @@ impl CampfireState {
 pub struct CampfireProp;
 
 /// Coop downed marker (GML `objects/Revive`: `Create_0` + `Step_0` +
-/// `Alarm_4/5`). `alarm4` counts the 300-step grace (`Step_0` re-pins it
-/// to 300 while level generation runs, i.e. `GenCont`/`LevCont`
-/// exist); when it fires the 30-step hurt pulse starts (`Alarm_4`
-/// performs `Alarm_5`: every player takes 1, `alarm[5] = 30`).
-/// The port has no coop downing (single-player only), so nothing
-/// spawns or damages through this yet - the comp carries the timer
-/// law for the HUD draw below.
+/// `Alarm_4/5`). `alarm4` counts the 300-step grace (`Step_0` re-pins it to
+/// 300 while `GenCont`/`LevCont` exist); firing it starts the 30-step hurt
+/// pulse (`Alarm_4` performs `Alarm_5`: every player takes 1, `alarm[5] = 30`).
+/// The port has no coop downing -- the comp exists for the HUD timer law.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct Revive {
     /// GML `alarm[4]`: grace steps left (300 at spawn).
@@ -209,11 +206,9 @@ impl Default for Revive {
 }
 
 /// One downed-timer step (GML `Revive/Step_0` + `Alarm_4/5` verbatim,
-/// damage application excluded): generation holds `alarm4` at 300;
-/// otherwise `alarm4` drains, arming `alarm5 = 30` at zero; `alarm5`
-/// then re-arms at 30 every time it drains (each re-arm is one GML
-/// hurt pulse). `steps` is timescale steps (`delta * 30`).
-/// Returns true on the tick a hurt pulse fires.
+/// damage application excluded): `alarm4` is the 300-step grace, `alarm5` the
+/// 30-step hurt pulse, one re-arm per `alarm5` drain = one pulse. `steps` is
+/// timescale steps (`delta * 30`). True on the tick a hurt pulse fires.
 pub fn revive_step(revive: &mut Revive, steps: f32, generating: bool) -> bool {
     if generating {
         revive.alarm4 = 300.0;
@@ -273,11 +268,9 @@ impl YvCouch {
 }
 
 /// One couch animation step (GML `YungVenuzCouch/Step_0` verbatim:
-/// `image_speed = timescale * 0.4`, airhorn one-shot returns to idle
-/// on animation end; idle loops like every GML sprite).
-/// `steps` is timescale steps (`delta * 30`); `fps`/`frames` are the
-/// live strip's catalog values (GML normalizes `image_speed` by
-/// `sprite_fps / room_speed`, room 30 Hz).
+/// `image_speed = timescale * 0.4`, airhorn one-shot). `steps` is timescale
+/// steps (`delta * 30`); `fps`/`frames` are the live strip's catalog values
+/// (GML normalizes `image_speed` by `sprite_fps / room_speed`, room 30 Hz).
 pub fn yv_couch_step(couch: &mut YvCouch, steps: f32, fps: f32, frames: u32) {
     couch.frame += steps * 0.4 * fps.max(0.0) / 30.0;
     let frames = frames.max(1) as f32;
@@ -515,12 +508,10 @@ pub struct EnemyBrain {
 
     pub maggot_spawn_facing: f32,
 
-    /// GML `freeze` (`Grunt`, `EliteGrunt`, `Shielder`, `Inspector`
-    /// `Create_0`). Gates the roll/grenade/burst arms behind
-    /// `freeze > 40`, which accrues only while the target is moving or
-    /// this object is damaged. The `+ 3` term is dead against a player:
-    /// `Player/Create_0:99` sets `can_shoot = true` and nothing ever
-    /// clears it, so `!target.can_shoot` is never true.
+    /// GML `freeze` (`Grunt`, `EliteGrunt`, `Shielder`, `Inspector` `Create_0`).
+    /// Gates the roll/grenade/burst arms behind `freeze > 40`; the `+ 3` term
+    /// is dead against a player -- `Player/Create_0:99` sets `can_shoot = true`
+    /// and nothing clears it, so `!target.can_shoot` is never true.
     pub freeze: f32,
 
     /// GML `roll`. `true` is mid-roll; `Grunt/Other_10` and
@@ -858,14 +849,13 @@ pub enum ChestKind {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct PickupCurse;
 
-/// GML per-chest `sprite_index` / `spr_dead` variants, chosen in
-/// `Create_0` and fixed for the chest's life: Oasis
-/// `sprClamChest`/`Open` (`WeaponChest/Create_0.gml:12-15`), Crown of
-/// Curses `sprCursedChest` (`WeaponChest/Create_0.gml:16-18`),
-/// Ambidextrous `sprWeaponChestSteroidsUltra` (`:19-21`), Steroids Get
-/// Loaded `sprAmmoChestSteroids` (`AmmoChest/Create_0.gml:16-19`),
-/// Pizza Sewers `choose(sprPizzaChest1, sprPizzaChest2)` /
-/// `sprPizzaChestOpen` (`HealthChest/Create_0.gml:12-15`).
+/// GML per-chest `sprite_index` / `spr_dead` variants, fixed in `Create_0`:
+/// Oasis `sprClamChest`/`Open` (`WeaponChest/Create_0.gml:12-15`), Crown of
+/// Curses `sprCursedChest` (`WeaponChest/Create_0.gml:16-18`), Ambidextrous
+/// `sprWeaponChestSteroidsUltra` (`:19-21`), Steroids Get Loaded
+/// `sprAmmoChestSteroids` (`AmmoChest/Create_0.gml:16-19`), Pizza Sewers
+/// `choose(sprPizzaChest1, sprPizzaChest2)` / `sprPizzaChestOpen`
+/// (`HealthChest/Create_0.gml:12-15`).
 #[derive(Component, Clone, Copy, Debug)]
 pub struct ChestArt {
     pub idle: &'static str,
@@ -881,11 +871,10 @@ impl From<WeaponKind> for PickupKind {
 #[derive(Component)]
 pub struct Portal;
 
-/// GML Portal state machine (objects/Portal/*):
-/// Spawn (sprPortalSpawn) → Idle (sprPortal/Popo/Proto by type) → Disappear.
-/// `kind`: 1 normal, 2 popo (HQ), 3 proto (Vault).
-/// `anim` stands in for bevy's oneshot sprite anim: Spawn lasts the
-/// `sprPortalSpawn` strip (2 frames @ 8 fps = 0.25 s), Disappear lasts
+/// GML Portal state machine (objects/Portal/*): Spawn -> Idle -> Disappear.
+/// `kind`: 1 normal, 2 popo (HQ), 3 proto (Vault), which pick the Idle strip.
+/// `anim` stands in for bevy's oneshot sprite anim: Spawn lasts
+/// `sprPortalSpawn` (2 frames @ 8 fps = 0.25 s), Disappear
 /// `sprPortalDisappear` (9 frames @ 12 fps = 0.75 s).
 #[derive(Component, Clone, Copy, Debug)]
 pub struct PortalState {
@@ -1205,14 +1194,12 @@ impl MaggotSpawnCharge {
     }
 }
 
-/// GML `Dust`/`Smoke`/`Feather`/`Curse` motes: sprite debris with its
-/// own friction, spin, and scale law. `strip` selects the art
-/// (`sprDust`, `sprSmoke`, `sprRavenFeather`/`sprLeaf`/`sprMoney` set
-/// per-spawn, `sprCurse`); `friction` is the flat GML friction value
-/// (0.3 dust, 0.1 smoke, 0.005 curse, feathers use fall-sway instead);
-/// `spin`/`grow`/`grow_decay` drive `FxAngle` + `MoteScale` exactly
-/// like the `Step_0` handlers; `sway` enables the feather fall law
-/// (downward drift + sine wobble, `speed *= 0.9` over 0.2).
+/// GML `Dust`/`Smoke`/`Feather`/`Curse` motes. `strip` selects the art
+/// (`sprDust`, `sprSmoke`, `sprRavenFeather`/`sprLeaf`/`sprMoney` per-spawn,
+/// `sprCurse`); `friction` is the flat GML value (0.3 dust, 0.1 smoke, 0.005
+/// curse; feathers use fall-sway); `spin`/`grow`/`grow_decay` drive `FxAngle`
+/// + `MoteScale` as in the `Step_0` handlers; `sway` is the feather fall law
+/// (`speed *= 0.9` over 0.2).
 #[derive(Component, Clone, Copy)]
 pub struct Mote {
     pub friction: f32,
@@ -1317,19 +1304,17 @@ pub struct UnbreakableProp;
 /// GML `chestprop/Create_0.gml:10` `dropseed =
 /// rng_next_int(RNGStates.WeaponDrops)`, drawn in `Create_0` before any
 /// subclass roll. `BigWeaponChest/Collision_Player.gml:14` and
-/// `CursedBigChest/Collision_Player.gml:14` `random_set_seed(dropseed)`
-/// before rolling their three weapons, so a chest's contents are fixed
-/// at spawn.
+/// `CursedBigChest/Collision_Player.gml:14` `random_set_seed(dropseed)` before
+/// rolling their three weapons, so contents are fixed at spawn.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct DropSeed(pub u32);
 
 /// GML `chestprop` ground physics: `friction = 0.4`
-/// (`chestprop/Create_0.gml:5`), the `if speed > 4 speed = 4` cap
+/// (`chestprop/Create_0.gml:5`), `if speed > 4 speed = 4`
 /// (`chestprop/Step_0.gml:9-10`), `move_bounce_solid(true)` on walls
-/// (`Collision_Wall.gml:4`), and the `motion_add(..., 1)` shove from an
-/// overlapping chest (`Collision_chestprop.gml:5`) or `motion_add(...,
-/// 0.5)` from a walking enemy (`enemy/Collision_chestprop.gml:4`).
-/// Velocities are px per second (GML px per step times `SIM_HZ`).
+/// (`Collision_Wall.gml:4`), `motion_add(..., 1)` from an overlapping chest
+/// (`Collision_chestprop.gml:5`) and `motion_add(..., 0.5)` from a walking
+/// enemy (`enemy/Collision_chestprop.gml:4`). Velocities are px per second.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct ChestPropMotion {
     pub vel: Vec2,
@@ -1600,11 +1585,10 @@ pub struct MomShot;
 pub struct PopoNadeM;
 
 /// GML `PopoShield` (`Create_0`: `alarm[0] = 60`, `team = team_popo`,
-/// `creator`). A 60-frame bubble pinned to its `Shielder`
-/// (`Step_2`) that turns hostile `typ == 1` projectiles and eats `typ == 2`
-/// ones (`Collision_projectile`). `Other_7` charges the owner's
-/// `alarm[1] += 20` as it pops, and `Shielder/Alarm_2` refuses to fire
-/// while one is up.
+/// `creator`): a 60-frame bubble pinned to its `Shielder` (`Step_2`) that
+/// turns hostile `typ == 1` projectiles and eats `typ == 2` ones
+/// (`Collision_projectile`). `Other_7` charges the owner's `alarm[1] += 20`
+/// as it pops; `Shielder/Alarm_2` refuses to fire while one is up.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct PopoShieldM {
     pub creator: Entity,
@@ -1668,17 +1652,13 @@ pub struct ScreenEnd;
 pub struct TitleCampfire;
 
 /// GML camper strip table verbatim (`CampChar` instance vars as set by
-/// `scrCampfireMenuCreateCharacter` + the BigDog inline override +
-/// the Frog `Step_0` far/near rewrite): `slct` is the deselected end
-/// (`spr_slct`), `to`/`menu` the selected transition/end
-/// (`spr_to`/`spr_menu`), `from` the deselect transition (`spr_from`).
-/// Normal races use the `<Name>Menu` family; BigDog sleeps
-/// (`Sleep`/`Intro`/`Idle`/`SleepHurt`); Frog walks near the fire and
-/// sits far away (`Walk`/`GoSit`/`Sit`: `menu` doubles as the sit end,
-/// `from` is unused). Skeleton/Frog ship no `Select`/`Selected`
-/// strips, so their selected half falls back to `sprMutant<gml>Idle`
-/// - the `_default` arg of `scr_race_get_sprite` (`scrRaces.gml:74`).
-/// Ends loop, transitions are oneshots.
+/// `scrCampfireMenuCreateCharacter` + the BigDog inline override + the Frog
+/// `Step_0` far/near rewrite): `slct` = deselected end (`spr_slct`),
+/// `to`/`menu` = selected transition/end (`spr_to`/`spr_menu`), `from` =
+/// deselect transition (`spr_from`). Frog's `menu` doubles as the sit end,
+/// `from` unused. Skeleton/Frog ship no `Select`/`Selected` strips, so their
+/// selected half falls back to `sprMutant<gml>Idle` -- the `_default` arg of
+/// `scr_race_get_sprite` (`scrRaces.gml:74`). Ends loop, transitions oneshot.
 pub struct CamperStrips {
     pub slct: &'static str,
     pub to: &'static str,
@@ -1843,15 +1823,12 @@ pub fn camper_menu_strip(gml: usize) -> &'static str {
 pub struct TitleLogMenu;
 
 #[derive(Component, Clone, Copy, Debug)]
-/// GML `CampChar` title actor verbatim: wandering mutant around the
-/// campfire. `race_gml` is the GML race id (0..16), `fixed` marks the
-/// four hand-placed starters (Fish/Crystal/Eyes/Melting) that skip the
-/// scatter pass. `swap` tracks the `Other_7` select/deselect two-step:
-/// `None` = settled on the end strip, `Some(true)` = playing `spr_to`
-/// toward `spr_menu` (selected), `Some(false)` = playing `spr_from`
-/// toward `spr_slct` (deselected). The render arm flips `swap` on
-/// selection change and holds the transition strip until the oneshot
-/// finishes, then parks on the end strip - verbatim two-step.
+/// GML `CampChar` title actor verbatim. `fixed` marks the four hand-placed
+/// starters (Fish/Crystal/Eyes/Melting) that skip the scatter pass. `swap` is
+/// the `Other_7` select/deselect two-step: `None` = parked on the end strip,
+/// `Some(true)` = playing `spr_to` toward `spr_menu`, `Some(false)` = playing
+/// `spr_from` toward `spr_slct`; the render arm flips `swap` on selection
+/// change and holds the strip until the oneshot finishes.
 pub struct TitleCampChar {
     pub race_gml: usize,
     pub fixed: bool,

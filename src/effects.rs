@@ -1,10 +1,9 @@
 //! Screen/game feel sinks: flash, trauma, rumble, particle bursts.
 //!
-//! Split by ownership: `Trauma` reuses `repame_fx` verbatim (its `add`
-//! matches nt's law exactly); `FlashWhite` ports verbatim instead -
-//! `repame_fx::Flash` counts in ticks while nt's flash is seconds-based,
-//! and the renderer reads `amount` directly. Bursts spawn
-//! `repame_fx::Particle`s with nt's exact size/lifetime dice.
+//! Ownership: `Trauma` reuses `repame_fx` verbatim (its `add` matches nt's law
+//! exactly); `FlashWhite` ports verbatim instead - `repame_fx::Flash` counts in ticks
+//! while nt's flash is seconds-based, and the renderer reads `amount` directly.
+//! Bursts spawn `repame_fx::Particle`s with nt's exact size/lifetime dice.
 
 use bevy_ecs::prelude::*;
 use glam::Vec2;
@@ -46,16 +45,14 @@ pub fn rumble(queue: &mut Queue<RumbleRequest>, weak: f32, strong: f32, duration
     });
 }
 
-/// One-shot colored burst (game-utils `VfxSpawner::spawn_burst`
-/// parity): `count` dots, uniform directions, `speed_range` px/s,
-/// 3–7 px size, 0.4–0.9 s life. `rng` is caller-supplied so tests
-/// seed it (the bevy build used thread rng).
+/// One-shot colored burst (game-utils `VfxSpawner::spawn_burst` parity): `count`
+/// dots, uniform directions, `speed_range` px/s, 3–7 px size, 0.4–0.9 s life. `rng`
+/// is caller-supplied so tests seed it (the bevy build used thread rng).
 ///
-/// GML parity (`BloodStreak`: `friction = 0.4`, `Dust`: 0.3, `Smoke`:
-/// 0.1 - all flat px/step² decays): bursts carry exponential drag so
-/// dots settle near the corpse instead of coasting at full speed for
-/// their whole life. 4/s halves a dot every ~0.17 s, matching the feel
-/// of GML's flat friction over a ~0.6 s life.
+/// GML parity (`BloodStreak` friction 0.4, `Dust` 0.3, `Smoke` 0.1 - all flat
+/// px/step² decays): bursts carry exponential drag so dots settle near the corpse
+/// instead of coasting at full speed for their whole life. 4/s halves a dot every
+/// ~0.17 s, matching the feel of GML's flat friction over a ~0.6 s life.
 pub fn spawn_burst(
     commands: &mut Commands,
     rng: &mut impl rand::RngExt,
@@ -89,13 +86,12 @@ pub fn spawn_burst(
     }
 }
 
-/// Muzzle-flash marker for the render phase. No `MuzzleFlash` comp or
-/// `FiredWeapon` marker existed: firing only spawned yellow
-/// [`Particle`] bursts via `muzzle_burst`, which have no quad mapping.
-/// `spawn_pellets` spawns one of these per volley (pos = muzzle origin,
-/// dir = shot aim); [`tick_fired_weapons`] expires it after
-/// [`FIRED_WEAPON_TICKS`] sim ticks so the renderer can draw a short
-/// muzzle tongue without touching firing logic.
+/// Muzzle-flash marker for the render phase (no `MuzzleFlash` comp or `FiredWeapon`
+/// marker existed: firing only spawned yellow [`Particle`] bursts via `muzzle_burst`,
+/// which have no quad mapping). `spawn_pellets` spawns one of these per volley
+/// (pos = muzzle origin, dir = shot aim); [`tick_fired_weapons`] expires it after
+/// [`FIRED_WEAPON_TICKS`] sim ticks, so the renderer can draw a short muzzle tongue
+/// without touching firing logic.
 pub const FIRED_WEAPON_TICKS: u8 = 3;
 
 #[derive(Component, Clone, Copy, Debug)]
@@ -126,16 +122,14 @@ pub fn tick_fired_weapons(mut commands: Commands, mut q: Query<(Entity, &mut Fir
     }
 }
 
-/// Step tick-based FX state once per sim tick (Always tail):
-/// [`Particle`] integrate + despawn, [`DamageNumber`] rise + despawn,
-/// [`Trauma`] decay, and [`FlashWhite`] fade-out.
+/// Step tick-based FX state once per sim tick (Always tail).
 ///
 /// `repame-fx` steps on 100 Hz ticks while the sim runs 30 Hz, so
-/// `ticks = round(delta * 100)` (3 per steady tick; 0 pauses, matching
-/// the `ticks <= 0` no-op in the fx step fns). `Trauma` previously
-/// never decayed sim-side and `FlashWhite.timer` was never ticked, so
-/// both stuck at peak until now; this is the bevy `2d_screen_shake`
-/// 1.5/s decay and the game-utils flash fade.
+/// `ticks = round(delta * 100)` (3 per steady tick; 0 pauses, matching the
+/// `ticks <= 0` no-op in the fx step fns). `Trauma` previously never decayed
+/// sim-side and `FlashWhite.timer` was never ticked, so both stuck at peak until
+/// now; this is the bevy `2d_screen_shake` 1.5/s decay and the game-utils flash
+/// fade.
 pub fn step_fx(
     time: Res<SimTime>,
     mut commands: Commands,

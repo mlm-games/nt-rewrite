@@ -1,16 +1,12 @@
 //! Headless sim schedule: bevy `FixedUpdate` order without the engine.
 //!
-//! Mirrors the former bevy `game/mod.rs` (`NtSimSet::Always` →
-//! `Input` → `Combat` → `Progression` → `Cleanup`) as one chained
-//! tuple, so bevy `.before()`/`.after()` edges hold by position
-//! (`update_carpet_occupancy` before `boss_ai`, `handle_throne_room_props`
-//! after `move_projectiles`). `gameplay_active` gates the same subsets
-//! bevy gates; `Update`-set UI systems stay out (shell
-//! phase), as do the deferred render/UI systems listed in the audit
+//! Mirrors bevy `game/mod.rs` (`NtSimSet::Always` → `Input` → `Combat`
+//! → `Progression` → `Cleanup`) as one chained tuple, so bevy
+//! `.before()`/`.after()` edges hold by position (`update_carpet_occupancy`
+//! before `boss_ai`, `handle_throne_room_props` after `move_projectiles`).
+//! `gameplay_active` gates the same subsets bevy gates; `Update`-set UI
+//! systems stay out (shell phase), as do the deferred render/UI systems
 //! (sprite strips, toasts-as-text, HUD bridge).
-//!
-//! Coverage notes live on [`build_sim_schedule`]; the gap list is in
-//! the module docs of the audit (see repo notes, not code).
 
 use bevy_ecs::prelude::*;
 
@@ -69,38 +65,30 @@ pub fn in_game(state: Res<AppState>) -> bool {
 
 /// Build the fixed-step sim schedule in bevy order.
 ///
-/// Registered: every ported `FixedUpdate` system, including the
-/// secret-area observers/detects (`secrets::observe_oasis_floor_start`,
-/// `detect_oasis_eligibility`, `detect_cursed_caves`, `detect_hq`,
-/// `secret_debug_toast` in `Always`; `tick_oasis_bandit_window` in
-/// `Combat`), `loop_transition::tick_campfire` (`Always`, before
-/// `flush_pending_enemy_spawns`), `loop_transition::tick_yv_couch`
-/// (campfire couch anim, `Always`), `deaths::tick_revive` (coop downed
-/// timers, `Always`), `environment::tick_fog` (area-fog scroll,
-/// `Always`, self-gated on pause), and the environment sim half
-/// (`tick_motes` / `tick_native_motion` / `tick_ground_flames` after
-/// `player_move`/`enemy_ai`, `recenter_prop_corpse` and
-/// `tick_environment_hazards` after `apply_explosions`, all `Combat`).
-/// NOT registered (audited gaps): presentation-only systems with no
-/// sim state (`face_aim` flip - resolved renderer-side from AimDir;
-/// `blink_player` alpha - resolved renderer-side from invuln;
-/// `animate_environment` alpha - resolved renderer-side from
-/// `SurfacePulse` via the same wave law; `sprite_from_candidates`
-/// records its pick in `PulseSprite` at spawn)
-/// and `Update`-set HUD systems (the area music/ambience trio
-/// `update_amb_filter` / `sync_area_audio` / `tick_area_audio_fades`
-/// IS registered, in the transient-FX tail below). `sample_input` IS ported (keyboard/mouse/gamepad/touch
-/// samplers feed `NtInput` through the `App` shell staging).
-/// `hurt_on_damage` / `prop_hurt_on_damage` ARE registered (state half
-/// only - image/rect/anchor/flip resolve renderer-side);
-/// `ensure_weapon_visual` / `tick_weapon_visuals` ARE registered
-/// (entity + wkick/wep state; pose/art resolve renderer-side);
-/// `clear_input_pulses`
-/// and `clear_input_when_inactive` ARE registered (see below).
-/// `combat::tick_hit_flash` is sim-side only (no bevy counterpart) and rides in `Always` as the `HitFlash` marker drain,
-/// with the transient-FX tail behind it (`effects::tick_fired_weapons`
-/// muzzle expiry, `effects::step_fx` particle/number/trauma/flash
-/// stepping).
+/// Cross-set edges carried over from bevy: environment sim (`tick_motes`,
+/// `tick_native_motion`, `tick_ground_flames`) after `player_move` /
+/// `enemy_ai`; `recenter_prop_corpse` and `tick_environment_hazards`
+/// after `apply_explosions`; `tick_campfire` before
+/// `flush_pending_enemy_spawns`. `environment::tick_fog` is in `Always`
+/// but self-gates on pause.
+///
+/// NOT registered (audited gaps): presentation-only systems with no sim state -
+/// `face_aim` flip, `blink_player` alpha and `animate_environment` alpha all resolve
+/// renderer-side (the last from `SurfacePulse` via the same wave law;
+/// `sprite_from_candidates` records its pick in `PulseSprite` at spawn) - and the
+/// `Update`-set HUD systems, except the area music/ambience trio, which is
+/// registered in the transient-FX tail.
+///
+/// `sample_input` IS ported (keyboard/mouse/gamepad/touch samplers feed
+/// `NtInput` through the `App` shell staging). `hurt_on_damage` /
+/// `prop_hurt_on_damage` ARE registered (state half only - image/rect/
+/// anchor/flip resolve renderer-side); `ensure_weapon_visual` /
+/// `tick_weapon_visuals` ARE registered (entity + wkick/wep state;
+/// pose/art resolve renderer-side).
+///
+/// `combat::tick_hit_flash` is sim-side only (no bevy counterpart): rides in
+/// `Always` as the `HitFlash` marker drain, with the transient-FX tail
+/// behind it (muzzle expiry, then particle/number/trauma/flash stepping).
 pub fn build_sim_schedule() -> Schedule {
     use crate::anim;
     use crate::audio;
@@ -578,12 +566,10 @@ pub fn build_sim_schedule() -> Schedule {
                     .in_set(NtSimSet::Progression)
                     .run_if(gameplay_active),
                 // GML parity: `PortalClear` is a 5-step wall-blaster
-                // (`MenuGen/Alarm_1` pops one per campfire camper and it
-                // only ever meets `Floor`s, which die to anything), so it
-                // must also tick + despawn on the Title campfire - not
-                // just behind the `InGame` gameplay gate. Without this the
-                // clears never finish and their 64px white discs sit on
-                // the camp forever (the "white circle" bug).
+                // (`MenuGen/Alarm_1` pops one per camper, meets only `Floor`s), so
+                // it ticks + despawns on the Title campfire too, not just behind
+                // the `InGame` gate - else the clears never finish and their 64px
+                // white discs sit on the camp ("white circle" bug).
                 progression::tick_portal_clear.in_set(NtSimSet::Progression),
                 progression::portal_attract
                     .in_set(NtSimSet::Progression)
@@ -598,13 +584,11 @@ pub fn build_sim_schedule() -> Schedule {
                     .in_set(NtSimSet::Cleanup)
                     .run_if(in_game),
                 // Bevy `Update clear_input_when_inactive`: drops sampled
-                // pulses/axes when paused or out of game, after all
-                // consumers ran (this also subsumes `OnExit(InGame)
-                // clear_input_pulses` - the next tick outside InGame
-                // clears anything left). Live play drains the peek-only
-                // interact pulse in the same system (E tap would latch
-                // forever: `collect_pickups`/`tick_throne_sit` peek it,
-                // nothing takes it).
+                // pulses/axes when paused or out of game, after all consumers ran,
+                // which subsumes `OnExit(InGame) clear_input_pulses`. Live play
+                // drains the peek-only interact pulse here too (`collect_pickups` /
+                // `tick_throne_sit` peek it, nothing takes it - an E tap would
+                // latch forever).
                 crate::input::clear_input_when_inactive.in_set(NtSimSet::Cleanup),
             )
                 .chain(),
@@ -618,13 +602,11 @@ pub fn build_sim_schedule() -> Schedule {
 mod schedule_tests {
     use super::*;
 
-    /// Regression: menu rooms must survive full schedule ticks. Batch 1
-    /// once removed `LoopTransition` in `reset_menu_room_resources`,
-    /// and ungated `Always`-set systems (`tick_campfire` et al take it
-    /// as a bare `ResMut`) panicked the schedule every frame on menu
-    /// rooms - the remap-screen panic loop + stutter. Drives a real
-    /// `App` boot into the Title campfire, then ticks the sim schedule
-    /// the way `advance` does.
+    /// Regression: menu rooms must survive full schedule ticks. Batch 1 removed
+    /// `LoopTransition` from `reset_menu_room_resources`, and ungated
+    /// `Always`-set systems (`tick_campfire` et al take a bare `ResMut`)
+    /// panicked every frame on menu rooms (remap-screen panic loop + stutter).
+    /// Boots into the Title campfire, then ticks like `advance` does.
     #[test]
     fn menu_rooms_survive_schedule_tick() {
         let mut app = crate::App::new_with_seed(4242);

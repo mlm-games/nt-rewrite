@@ -1,11 +1,10 @@
-//! Weapon choice. GML `scripts/scrDecideWep/scrDecideWep.gml` verbatim
-//! (plus `scrDecideWepGold`): tier-gated uniform roll over ids 1..127
-//! with owned-weapon, tutorial, and special-gate rejection.
+//! Weapon choice. GML `scripts/scrDecideWep/scrDecideWep.gml` verbatim (plus
+//! `scrDecideWepGold`): tier-gated uniform roll over ids 1..127 with owned-weapon,
+//! tutorial, and special-gate rejection.
 //!
-//! `GameCont.hard` is the live `Run.hard` counter (see [`game_hard`]
-//! below): `Create_0` seeds it at 0 (13 in hardmode) and `Other_5:136`
-//! adds `hardmode ? 2 : 1` per room, so it equals
-//! `scrAreaGetDifficulty(area, subarea, loops)`.
+//! `GameCont.hard` is the live `Run.hard` counter (see [`game_hard`] below):
+//! `Create_0` seeds it at 0 (13 in hardmode) and `Other_5:136` adds
+//! `hardmode ? 2 : 1` per room.
 
 use bevy_ecs::prelude::*;
 use rand::RngExt;
@@ -47,16 +46,14 @@ pub const GUN_GUN: WeaponId = WeaponId(125);
 pub const FROG_PISTOL: WeaponId = WeaponId(120);
 pub const GOLDEN_FROG_PISTOL: WeaponId = crate::data::WEAPON_GOLDEN_FROG_PISTOL;
 
-/// GML `GameCont.hard` for the current room - the live counter
-/// `scrDecideWep` reads (`_tier_max = GameCont.hard + _extra`).
-/// `GameCont/Create_0:9` seeds it at 0 and `:85-87` at 13 (also
-/// `loops++`) under hardmode; `GameCont/Other_5:136` then adds
-/// `hardmode ? 2 : 1` on every room end. It is deliberately NOT
-/// `scrAreaGetDifficulty` (that formula is only used by custom runs,
-/// `scripts/scrRunStart/scrRunStart.gml:64`): on the 15-floor route the
-/// live counter trails `scrAreaGetDifficulty` by `loops + 1`, and under
-/// hardmode it starts 4 below it. Deriving it from `Run.floor` instead
-/// double-counts the loop, because `Run.floor` is the *global* floor
+/// GML `GameCont.hard` for the current room - the live counter `scrDecideWep` reads
+/// (`_tier_max = GameCont.hard + _extra`). `GameCont/Create_0:9` seeds it at 0 and
+/// `:85-87` at 13 (also `loops++`) under hardmode; `GameCont/Other_5:136` adds
+/// `hardmode ? 2 : 1` on every room end. Deliberately NOT
+/// `scrAreaGetDifficulty` (only used by custom runs,
+/// `scripts/scrRunStart/scrRunStart.gml:64`): on the 15-floor route the live counter
+/// trails it by `loops + 1`, and under hardmode starts 4 below it. Deriving it from
+/// `Run.floor` double-counts the loop, since `Run.floor` is the *global* floor
 /// (`31 * loops + route_floor`).
 pub fn game_hard(run: &Run) -> i32 {
     run.hard as i32
@@ -68,12 +65,11 @@ pub const RNG_A: i64 = 1_103_515_245;
 pub const RNG_C: i64 = 12_345;
 
 /// GML `RNGStates.WeaponDrops` (index 3) as a standalone LCG stream:
-/// `rng_next_int` is `state = (rng_a * state + rng_c) % rng_m` and
-/// `rng_next_float` divides that by `rng_m - 1`. `random_set_seed` is what
+/// `rng_next_int` is `state = (rng_a * state + rng_c) % rng_m`, `rng_next_float`
+/// divides that by `rng_m - 1`. `random_set_seed` is what
 /// `BigWeaponChest/Collision_Player.gml:14` and
-/// `CursedBigChest/Collision_Player.gml:14` do with the chest's
-/// `dropseed` right before rolling their three weapons, so a chest's
-/// contents are fixed at spawn.
+/// `CursedBigChest/Collision_Player.gml:14` do with the chest's `dropseed` before
+/// rolling their three weapons, so contents are fixed at spawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WeaponDropsRng {
     state: i32,
@@ -234,11 +230,10 @@ fn decide_wep_drawing(
 ///     _tier_min = median(6, 1, _tier_max + _extra)
 /// }
 /// ```
-/// The tier half lives in [`decide_wep`]; every caller rolls through this
-/// (or [`decide_wep_seeded_at`]) so the ally is never dropped. GML
-/// `objects/RobotA` is an eventless FX object (`eventList` empty, no
-/// parent), so it lands as the port's `Ally` (same shape as Rebel's
-/// Riot summon) and answers with that object's create sting.
+/// Tier half lives in [`decide_wep`]; every caller rolls through this (or
+/// [`decide_wep_seeded_at`]) so the ally is never dropped. GML `objects/RobotA` is
+/// eventless (`eventList` empty, no parent), so it lands as the port's `Ally` (same
+/// shape as Rebel's Riot summon) and answers with that object's create sting.
 pub fn decide_wep_at(
     commands: &mut Commands,
     rng: &mut impl RngExt,

@@ -1,11 +1,8 @@
-//! Crown effects. Port of the GML crown scripts (all 10
-//! functions): spawn-time stat application, per-tick Life / Protection /
-//! Love / Curses / Luck / Love-convert behaviors, floor-start bonuses,
-//! toast names, and pedestal pickup.
+//! Crown effects. Port of all 10 GML crown scripts.
 //!
-//! Render split: ally/projectile/pickup spawns keep gameplay components
-//! only (`Ally`, `Projectile`, `Pos`, …); sprite/handle/text code from
-//! the bevy build is omitted (render/UI phase), never stubbed.
+//! Render split: ally/projectile/pickup spawns carry gameplay components only
+//! (`Ally`, `Projectile`, `Pos`, …); sprite/handle/text code from the bevy build
+//! is omitted (render/UI phase), never stubbed.
 
 use std::collections::HashSet;
 
@@ -51,14 +48,13 @@ fn vault_statue_angle(rng: &mut impl RngExt) -> f32 {
     }
 }
 
-/// GML `CrownPickup/Create_0.gml:37-50` verbatim: the guard-statue angles
-/// around the crown pedestal, in spawn order, in degrees.
-/// `crownvisits >= 3` -> 4 at 0/90/180/270 and no RNG draw at all; else
-/// `crownvisits > 1 || instance_exists(CrownObject)` -> 2 on distinct
-/// `rng_choose` angles (the `do..until` rejection loop draws at least once);
-/// else none. `crownvisits` is the port's `SecretTriggers::vaults_entered`,
-/// already incremented on entry like GML's room-start
-/// `GameCont/Other_4.gml:8`.
+/// GML `CrownPickup/Create_0.gml:37-50` verbatim: guard-statue angles around the
+/// crown pedestal, in spawn order, in degrees. `crownvisits >= 3` -> 4 at
+/// 0/90/180/270 with no RNG draw at all; else `crownvisits > 1 ||
+/// instance_exists(CrownObject)` -> 2 on distinct `rng_choose` angles (the
+/// `do..until` rejection loop draws at least once); else none. `crownvisits` is the
+/// port's `SecretTriggers::vaults_entered`, incremented on entry like GML's
+/// room-start `GameCont/Other_4.gml:8`.
 pub fn vault_statue_angles(
     crownvisits: u8,
     crown_object: bool,
@@ -480,12 +476,11 @@ fn claim_crown_convert(run: &Run, done: &mut Local<Option<u64>>) -> bool {
     true
 }
 
-/// Crown of Love: `scripts/scrPopChests.gml:131-143` verbatim - `with
-/// chestprop { if object_index != ProtoChest && object_index !=
-/// RogueChest { -> AmmoChest } }` plus a second `with RadChest` arm.
-/// `chestprop` is hierarchy-inclusive, so the set is every chest kind
-/// except Proto and Rogue; the rad chests are `prop` descendants and get
-/// their own arm (the port keeps plain `RadChest` as a `Prop`).
+/// Crown of Love: `scripts/scrPopChests.gml:131-143` verbatim - `with chestprop {
+/// if object_index != ProtoChest && object_index != RogueChest { -> AmmoChest } }`
+/// plus a second `with RadChest` arm. `chestprop` is hierarchy-inclusive, so the set
+/// is every chest kind except Proto and Rogue; the rad chests are `prop`
+/// descendants and get their own arm (the port keeps plain `RadChest` as a `Prop`).
 pub fn tick_crown_love_convert(
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
@@ -640,10 +635,6 @@ pub fn crown_port_to_gml(id: u8) -> u8 {
     if id == 0 { 1 } else { id + 1 }
 }
 
-/// Crown pedestal pickup: touch range applies the crown, resets crown
-/// state, uncurses, opens the type-3 vault portal when the pedestal is
-/// undefended, zeroes every guard statue's hp, records the toast, and
-/// consumes the pedestal.
 /// Crown *unlocking* is not here: GML `scrCrownUnlock` only runs from
 /// `scrUnlocksWinOrLoop` (`scripts/scrUnlocks.gml:243-245`).
 pub fn tick_crown_pedestal(

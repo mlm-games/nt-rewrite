@@ -1,10 +1,9 @@
-//! Combat spawn helpers. Ported from nt's `game/combat.rs` spawners
-//! plus prop-death damage glue.
-//!
-//! Render split: entities spawn with `SpriteAnim` when the catalog has
-//! the strip; otherwise bare with renderer fallback (split/plasma art
-//! keys off `ProjectileTyp`, sentries/hazards off their markers).
-//! Juice pop-ins and bevy tint flashes are render juice (skipped).
+//! Combat spawn helpers. Ported from nt's `game/combat.rs` spawners plus
+//! prop-death damage glue.
+//! Render split: `SpriteAnim` when the catalog has the strip, else bare with
+//! renderer fallback (split/plasma art keys off `ProjectileTyp`, sentries and
+//! hazards off their markers). Bevy pop-ins and tint flashes dropped as render
+//! juice.
 
 use bevy_ecs::prelude::*;
 use rand::RngExt;
@@ -621,13 +620,10 @@ pub struct DropCtx<'a> {
     pub decide: Option<&'a crate::decide_wep::DecideCtx>,
 }
 
-/// Damage a destructible prop; on death run its corpse/effect chain,
-/// trigger secrets, spawn ambushes/drops, and despawn. Signature
-/// adapted: audio cues queue instead of audio commands.
-///
-/// No `scrDrop` context: `Cocoon/Destroy_0.gml:2` then has no player to
-/// weigh against and drops nothing (GML's own `if (_player == noone)
-/// exit`).
+/// Damage a destructible prop. Signature adapted: audio cues queue instead of
+/// audio commands.
+/// No `scrDrop` context: `Cocoon/Destroy_0.gml:2` then has no player to weigh
+/// against and drops nothing (GML's own `if (_player == noone) exit`).
 #[allow(clippy::too_many_arguments)]
 pub fn damage_destructible_prop(
     commands: &mut Commands,
@@ -679,9 +675,8 @@ pub fn damage_destructible_prop(
     );
 }
 
-/// [`damage_destructible_prop`] with the GML `scrDrop` player context, so
-/// props that drop (`Cocoon/Destroy_0.gml:2`) roll against real ammo
-/// need and can pay a `HealthChest`.
+/// [`damage_destructible_prop`] with the GML `scrDrop` player context
+/// (`Cocoon/Destroy_0.gml:2`), so those props roll against real ammo need.
 #[allow(clippy::too_many_arguments)]
 pub fn damage_destructible_prop_ctx(
     commands: &mut Commands,

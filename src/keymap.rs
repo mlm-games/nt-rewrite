@@ -4,16 +4,13 @@ use repose_core::input::{GamepadButton, Key, Modifiers, PointerButton};
 use repose_core::shortcuts::KeyChord;
 use serde::{Deserialize, Serialize};
 
-/// Remappable gameplay controls, GML `scrKeymapsSetup` parity.
-///
-/// Actions match the GML `Key` struct rows (`fire`, `spec`, `swap`,
-/// `pick`, `north`, `south`, `west`, `east`); `chat`/`console` stay
-/// out - chat has no co-op peer in this build and the debug console
-/// keeps its hardcoded backtick. Each action carries the GML default
-/// keyboard/mouse entry plus the gamepad fallback
-/// (`fire: [mb_left, gp_shoulderr]`, ...). Overrides persist per
-/// device family in the save file; the REMAP page arms a capture and
-/// the next pressed input resolves it.
+/// Remappable gameplay controls, GML `scrKeymapsSetup` parity. Actions match the
+/// GML `Key` struct rows (`fire`, `spec`, `swap`, `pick`, `north`, `south`,
+/// `west`, `east`); `chat`/`console` stay out - chat has no co-op peer in this
+/// build and the debug console keeps its hardcoded backtick. Each action carries
+/// the GML default keyboard/mouse entry plus the gamepad fallback (`fire:
+/// [mb_left, gp_shoulderr]`, ...). Overrides persist per device family in the
+/// save file; the REMAP page arms a capture the next input resolves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum NtAction {
     Fire,

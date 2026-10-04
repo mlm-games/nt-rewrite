@@ -1,29 +1,26 @@
 //! World → GPU sprite layer: sim [`World`] snapshots become
 //! [`SpriteInstance`]s through the repame engine crates.
+//! Renderer resolves art; sim owns truth.
 //!
-//! Render split (renderer resolves art, sim owns truth):
-//! - [`RenderAssets`] packs `assets/images/anims.ron` strips into a
-//!   [`repame_anim::AnimCatalog`] once and decodes the strip PNGs (via
-//   the `image` crate - repame ships no image dep; per
-//   `repame-atlas` docs games decode their own pixels).
-// - [`world_instances`] maps floor cells, walls, props, pickups/chests,
-//   player, enemies, projectiles and held-gun visuals to atlas uvs.
-//   Entity→strip NAME tables are ported from the bevy build
-//   (`world.rs` area sprites, `projectile_art.rs`, `pickups.rs`,
-//   `weapon_id_sprite`); no pixels live here.
-// - Portal/vortex is intentionally NOT sprite-mapped: it belongs to
-//   the fullscreen background pass (`crate::vortex_pass::VortexPass`),
-//   driven per frame from the [`crate::vortex::SpiralCtl`] snapshot.
-//   This layer exposes [`background_color`] (per-area dark fill) as the
-//   fallback where no vortex layer is mounted, and skips portal entities.
-//   See fidelity notes at the bottom.
-// - [`gml_camera_step`] is the GML `BackCont` camera law as a pure
-//   function; [`world_camera`] turns the look point into a
-//   [`Camera2d`] for the GPU view.
-// - [`hud_texts`] exposes [`HudState`] labels as world-anchored
-//   `(text, pos)` pairs; [`hud_texts_dp`] maps them to dp through the
-//   live [`effective_fit`]/[`world_to_dp`] (same fit the viewports
-//   paint with, so floaters sit on their sprites).
+//! [`RenderAssets`] packs `assets/images/anims.ron` strips into a
+//! [`repame_anim::AnimCatalog`] once and decodes the strip PNGs with the
+//! `image` crate: repame ships no image dep and `repame-atlas` docs have
+//! games decode their own pixels. Entity→strip NAME tables are ported from
+//! the bevy build (`world.rs` area sprites, `projectile_art.rs`,
+//! `pickups.rs`, `weapon_id_sprite`).
+//!
+//! Portal/vortex is intentionally NOT sprite-mapped: it belongs to the
+//! fullscreen pass (`crate::vortex_pass::VortexPass`) driven from
+//! [`crate::vortex::SpiralCtl`]. [`background_color`] (per-area dark fill)
+//! is the fallback where no vortex layer is mounted; portal entities are
+//! skipped.
+//!
+//! [`gml_camera_step`] is the GML `BackCont` camera law, a pure function;
+//! [`world_camera`] turns the look point into a [`Camera2d`].
+//!
+//! [`hud_texts_dp`] maps labels through the live [`effective_fit`]/
+//! [`world_to_dp`] - the fit the viewports paint with, so floaters sit on
+//! their sprites.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -344,14 +341,12 @@ pub(crate) fn read_asset_catalog(assets_dir: &Path) -> anyhow::Result<String> {
     }
 }
 
-/// Asset bytes, portable across desktop (plain files), Android
-/// (APK `assets/`, read through the NDK `AAssetManager`. Plain
-/// `std::fs` paths never resolve inside the APK) and web (the
-/// installed assets zip). The in-memory store wins when present; each
-/// platform then falls back to its own source. Paths are matched by
-/// their `images/…` / `fonts/…` tail so the dev checkout layout
-/// (`<dir>/images/anims.ron`), the APK layout (`assets/…`) and the
-/// zip layout all resolve to the same entry.
+/// Asset bytes across desktop (plain files), Android (APK `assets/` via the
+/// NDK `AAssetManager`; plain `std::fs` paths never resolve in an APK) and
+/// web (the installed assets zip). The in-memory store wins, then the
+/// platform's own source. Paths match on their `images/…` / `fonts/…` tail,
+/// so the dev checkout (`<dir>/images/anims.ron`), the APK (`assets/…`) and
+/// the zip layouts all resolve to one entry.
 fn read_asset_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
     if let Some(bytes) = crate::assetfs::get(path) {
         return Ok(bytes);
@@ -369,13 +364,12 @@ unsafe impl Sync for SendPtr {}
 #[cfg(target_os = "android")]
 static APK_ASSET_MGR: std::sync::OnceLock<SendPtr> = std::sync::OnceLock::new();
 
-/// Cache the APK `AAssetManager` pointer for [`read_asset_bytes`].
-/// Call once from `android_main` with
-/// `android_app.asset_manager().ptr()`. `init` is idempotent across
-/// Activity recreations (first pointer wins; the manager is `'static`
-/// per android-activity, so any generation's pointer stays valid).
-/// Replaces the old `ndk_context::android_context` lookup, which
-/// asserts single-init and panics on recreation.
+/// Cache the APK `AAssetManager` pointer for [`read_asset_bytes`]; call once
+/// from `android_main` with `android_app.asset_manager().ptr()`. Idempotent
+/// across Activity recreations: first pointer wins and the manager is
+/// `'static` per android-activity, so any generation stays valid. Replaces
+/// `ndk_context::android_context`, which asserts single-init and panics on
+/// recreation.
 #[cfg(target_os = "android")]
 pub fn init_apk_assets(mgr: ndk::asset::AssetManager) {
     let _ = APK_ASSET_MGR.set(SendPtr(mgr.ptr().as_ptr().cast()));
@@ -451,9 +445,7 @@ fn blit_cell(strip: &[u8], strip_w: u32, src: [u32; 4]) -> Vec<u8> {
     out
 }
 
-// ---------------------------------------------------------------------------
 // Name tables (ported from the bevy build; art keys only, no pixels).
-// ---------------------------------------------------------------------------
 
 /// GML `scrAreaGetMaxSubarea` verbatim (non-custom): the 3-floor
 /// areas plus HQ hold 3 subareas, everything else 1. The custom-mode
@@ -955,12 +947,11 @@ pub fn pickup_art(kind: &PickupKind) -> Cow<'static, str> {
     }
 }
 
-/// Resolve one projectile entity to its strip.
 /// Priority: explicit GML visual (Bullet1/Bullet2) → melee slash flags →
-/// player weapon table → enemy-kind table → team fallback. (nt-rewrite
-/// projectiles carry no art path; bevy attached `Sprite` + candidates at
-/// spawn, so this inverts the `player_projectile_candidates` /
-/// `enemy_projectile_sprite` choice.)
+/// player weapon table → enemy-kind table → team fallback. nt-rewrite
+/// projectiles carry no art path (bevy attached `Sprite` + candidates at
+/// spawn), so this inverts the `player_projectile_candidates` /
+/// `enemy_projectile_sprite` choice.
 fn projectile_art(
     proj: &Projectile,
     team: &Team,
@@ -1007,11 +998,11 @@ fn projectile_art(
 /// for the `AllyBullet.yy` spriteId `sprAllyBullet` body art.
 const ALLY_BULLET_FADE: &str = "images/sprAllyBulletHit.png";
 
-/// Bevy `sprite_from_projectile_path` frame law: 2-frame strips pin to
-/// the second cell; longer strips animate at 12 fps (`projectile_anim`).
-/// `life.elapsed_secs` drives the phase so identical bullets stay in
-/// sync like bevy's per-entity `SpriteAnim` timers started at spawn.
-/// Bevy `world.rs::wall_hash` verbatim: deterministic per-cell salt hash
+/// bevy `sprite_from_projectile_path` frame law: 2-frame strips pin to the
+/// second cell, longer strips animate at 12 fps (`projectile_anim`), phase
+/// driven by `life.elapsed_secs` so identical bullets stay in sync like
+/// bevy's per-entity `SpriteAnim` timers started at spawn.
+/// bevy `world.rs::wall_hash` verbatim: deterministic per-cell salt hash
 /// driving wall art variant frames from the run seed.
 fn wall_hash(seed: u64, wx: i32, wy: i32, salt: u64) -> u64 {
     let mut x = seed
@@ -1036,9 +1027,9 @@ pub fn strip_frames_pub(assets: &RenderAssets, path: &str) -> u32 {
     strip_frames(assets, path)
 }
 
-/// GML `Wall/Create_0:16-23` body variant verbatim: `random(150) < 1`
-/// takes 3, else `choose(0,0,0,0,0,0,0,1,2) + choose(0,4)`. The port hashes
-/// the cell into the same distribution deterministically. Shared by Bot AND
+/// GML `Wall/Create_0:16-23` body variant verbatim: `random(150) < 1` takes
+/// 3, else `choose(0,0,0,0,0,0,0,1,2) + choose(0,4)`; the port hashes the
+/// cell into the same distribution deterministically. Shared by Bot AND
 /// Top: GML draws `topspr` with the Bot's `image_index`
 /// (`SubTopCont/Draw_0:27`); the `topindex` roll (`Wall/Create_0:25-30`) is
 /// never read.
@@ -1088,13 +1079,13 @@ fn wall_out_crop(wall_set: &HashSet<(i32, i32)>, wx: i32, wy: i32) -> (f32, f32,
 }
 
 /// One GML `draw_sprite_part_ext` Out window: source rect `(l, r, w, h)` of
-/// the 24x32 strip frame (origin (4,12)), drawn with its top-left at GML
-/// `(x - 4 + l, y - 12 + r)`. Same window-padding law as
-/// [`hud_weapon_part`]: `l`/`r` can start outside the 24-wide cell
-/// (negative `x - 4` lead at the room edge) and `w`/`h` can overrun it
-/// (up to 24x32 against a shorter crop): GML clamps those samples to
-/// transparent edge texels, so only the in-bounds part draws - offset
-/// inside the window by the out-of-bounds lead.
+/// the 24x32 strip frame (origin (4,12)), drawn top-left at GML
+/// `(x - 4 + l, y - 12 + r)`. Window-padding law (same as
+/// [`hud_weapon_part`]): `l`/`r` can start outside the 24-wide cell
+/// (negative `x - 4` lead at the room edge) and `w`/`h` can overrun it (up
+/// to 24x32 against a shorter crop) - GML clamps those samples to
+/// transparent edge texels, so offset inside the window by the
+/// out-of-bounds lead.
 fn wall_out_part(
     assets: &RenderAssets,
     path: &str,
@@ -1156,15 +1147,13 @@ fn wall_out_part(
     })
 }
 
-/// GML `Top`/`TopSmall` chain, sorted for a stable draw order.
-///
-/// GML draws every `TopSmall` with sub-image `-1`, i.e. the strip's last frame
-/// (`SubTopCont/Draw_0:22`); the `image_index = irandom(image_number)` roll in
-/// `TopSmall/Create_0:7` is never read.
-///
-/// The cell set is [`crate::comps_a::TopSmalls`] - GML's live instances,
-/// accumulated at level start and extended per break, NOT a recompute. A
-/// destroyed wall therefore does not grow its Trans tile back.
+/// GML `Top`/`TopSmall` chain, sorted for stable draw order. Every
+/// `TopSmall` draws sub-image `-1`, the strip's last frame
+/// (`SubTopCont/Draw_0:22`); the `image_index = irandom(image_number)` roll
+/// in `TopSmall/Create_0:7` is never read. Cells are
+/// [`crate::comps_a::TopSmalls`] - GML's live instances, accumulated at
+/// level start and extended per break, NOT a recompute, so a destroyed wall
+/// does not grow its Trans tile back.
 fn trans_cells(cells: &TopSmalls, trans_frames: u32) -> Vec<((i32, i32), i32)> {
     let frame = trans_frames as i32 - 1;
     let mut sorted: Vec<(i32, i32)> = cells.cells.iter().copied().collect();
@@ -1246,28 +1235,27 @@ pub fn healthcol_dark(c: [f32; 4]) -> [f32; 4] {
 /// overlap is deterministic. Edge texels stretch ~3%: invisible.
 pub const GRID_OVERLAP: f32 = 1.0;
 
-/// Sprite z-ladder (GML `__global_object_depths` draw order for the
-/// `Draw_0` stage verbatim: higher GM depth draws first = further back,
-/// so the port's `z` runs the other way - larger `z` draws on top; the
-/// engine stable-sorts by `(blend, z, page)`, keeping push order on
-/// ties).
+/// Sprite z-ladder (GML `__global_object_depths` `Draw_0` stage verbatim):
+/// higher GM depth draws first = further back, so the port's `z` runs the
+/// other way - larger `z` draws on top. Engine stable-sorts by
+/// `(blend, z, page)`, keeping push order on ties.
 ///
-/// GM order (back → front): Floor(10) → Detail(8) → BackCont-shadows(5)
-/// → Corpse(1) → Wall/shots(0) → Player/Ally(-2) → Portal(-3) →
+/// GM order (back → front): Floor(10) → Detail(8) → BackCont-shadows(5) →
+/// Corpse(1) → Wall/shots(0) → Player/Ally(-2) → Portal(-3) →
 /// SubTopCont wall-tops/bloom(-6) → TopCont fog/crosshair/revive(-15) →
 /// SpiralCont figures(-101) → Draw-GUI chain (GUI Begin 74 → GUI 64 →
 /// GUI End 75, in stage order, ignoring instance depth) → Menu(-1001).
-/// The world batch keeps its internal push order at 0 (bevy parity -
-/// untouched); every chrome layer above it stamps one rung so atlas
-/// page can never lottery a HUD bar under a floor tile again.
+/// The world batch keeps its internal push order at 0 (bevy parity,
+/// untouched); every chrome layer above it stamps one rung so an atlas page
+/// can never lottery a HUD bar under a floor tile.
 ///
 /// Draw-GUI stages vs sprite rungs: GML `UberCont/Draw_74`
-/// (`scrDrawSidearts`) runs BEFORE the GUI-64 HUD text, while
-/// `UberCont/Draw_75` (the raw `sprCrosshair` cursor) runs AFTER it -
-/// the cursor is topmost by pipeline stage. The port implements
-/// `Draw_75` as a hardware cursor (`CursorIcon::Custom`, composited by
-/// the OS above every sprite and UI layer), so no sprite rung exists
-/// for it; sideart rungs above the room chrome but below HUD/menus.
+/// (`scrDrawSidearts`) runs BEFORE the GUI-64 HUD text, `UberCont/Draw_75`
+/// (the raw `sprCrosshair` cursor) runs AFTER it - the cursor is topmost by
+/// pipeline stage. The port implements `Draw_75` as a hardware cursor
+/// (`CursorIcon::Custom`, composited by the OS above every sprite and UI
+/// layer), so no sprite rung exists for it; sideart rungs above the room
+/// chrome but below HUD/menus.
 pub const Z_FLOOR: f32 = -3.0;
 pub const Z_GROUND_DETAIL: f32 = -2.5;
 pub const Z_SHADOW: f32 = -2.0;
@@ -1345,29 +1333,24 @@ fn projectile_frame(assets: &RenderAssets, path: &str, life: &crate::time::GTime
         _ => 0,
     }
 }
-
-// ---------------------------------------------------------------------------
 // Camera + background.
-// ---------------------------------------------------------------------------
 
-/// GML `objects/BackCont/Step_0.gml` camera law verbatim (replaces the
-/// earlier bevy `CameraFollow` approximation, whose two-stage smoothing
-/// never matched the original feel).
-///
-/// Per game step, with the local player at `player`:
+/// GML `objects/BackCont/Step_0.gml` camera law verbatim (replaces the bevy
+/// `CameraFollow` approximation, whose two-stage smoothing never matched).
+/// Per game step, local player at `player`:
 /// - POI pull: nearest Portal (else BecomeNothing/NothingDeath/
-///   Nothing2Death/SitDown) contributes `dist/6` along its heading,
-///   capped at 72 px for Portals and WeaponChests (the GML chain's
-///   second `BecomeNothing` check is dead code - the first branch
-///   already took it - so it contributes nothing here either).
-/// - Aim lean: `dis_fire / viewdist` along `dir_fire` (`viewdist` 4,
-///   8 for melee, 3 for bolts).
-/// - Shake: `orandom(shake * opt_shake)` added to the target.
+///   Nothing2Death/SitDown) contributes `dist/6` along its heading, capped
+///   at 72 px for Portals and WeaponChests; the GML chain's second
+///   `BecomeNothing` check is dead code (the first branch took it).
+/// - Aim lean: `dis_fire / viewdist` along `dir_fire` (`viewdist` 4, 8
+///   melee, 3 bolts).
+/// - Shake: `orandom(shake * opt_shake)` on the target.
 /// - Snap (level start): target jump (`m = 1`), knock decay zeroed.
-/// - `view = round(lerp(view, target, m))` with `m = 0.4` live.
-/// - Knock decay `round(viewx2 - viewx2 * 0.4)`; shake decay
-///   `*= power(0.8, timescale)` above 10 else `-= timescale` to 0;
-///   `opt_shake <= 0` zeroes shake + knock.
+/// - `view = round(lerp(view, target, m))`, `m = 0.4` live.
+/// - Knock decay `round(viewx2 - viewx2 * 0.4)`; shake decay `*=
+///   power(0.8, timescale)` above 10 else `-= timescale` to 0; `opt_shake
+///   <= 0` zeroes shake + knock.
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GmlCamera {
     /// Top-left view corner, world px (`view_xview`/`view_yview`).
@@ -1503,12 +1486,11 @@ pub fn gml_camera_step(cam: &mut GmlCamera, vw: f32, vh: f32, s: &CamStepInput, 
     }
 }
 
-/// Title view focus (GML `Menu/Create_0:104-110` + `Menu/Step_1`
-/// verbatim): the view centers on the selected race's camper
-/// (`Menu.char[race]`); Random centers on `char[0]`, the Campfire
-/// itself (`with (Menu) char[0] = other.id` - the Campfire entity,
-/// not a CampChar). Returns the focus point in world px, `None` when
-/// the camp actors are absent (falls back to the campfire spawn).
+/// GML `Menu/Create_0:104-110` + `Menu/Step_1` verbatim: view centers on the
+/// selected race's camper (`Menu.char[race]`); Random centers on `char[0]`,
+/// the Campfire entity itself (`with (Menu) char[0] = other.id`), not a
+/// CampChar. `None` when the camp actors are absent (the caller falls back to
+/// the campfire spawn).
 pub fn title_cam_focus(world: &mut World) -> Option<Vec2> {
     let selected = world
         .get_resource::<SelectedCharacter>()
@@ -1529,17 +1511,17 @@ pub fn title_cam_focus(world: &mut World) -> Option<Vec2> {
         .map(|(p, _)| p.0)
 }
 
-/// One GML `Menu/Step_1` title camera step: `t_lerp` toward centering
-/// on the [`title_cam_focus`] point (`view_xview = x - vw/2`,
-/// `view_yview = y - vh/2` at rate 0.1; `Create_0:104-110` snaps with
-/// `m = 1` on entry). `t_lerp(a, b, 0.1) = lerp(b, a, 0.9^timescale)`,
-/// i.e. close 10% of the gap per step at timescale 1 - no `round()`
-/// (unlike `BackCont`). `cam.snap` forces the snap and clears.
-/// Runs per compose with the clamped frame dt: `1-0.9^(dt*30)` equals
-/// 0.1 at 30 Hz and converges identically to GML's fixed steps across
-/// hitches (three 0.1 steps ≈ one 0.27 step). Entry snap targets the
-/// settled (post-scatter) camper pos while GML snaps pre-scatter and
-/// lerps after - transient (<1 s) and self-correcting.
+/// GML `Menu/Step_1` title camera step: `t_lerp` toward centering on the
+/// [`title_cam_focus`] point (`view_xview = x - vw/2`, `view_yview = y - vh/2`
+/// at rate 0.1; `Create_0:104-110` snaps with `m = 1` on entry).
+/// `t_lerp(a, b, 0.1) = lerp(b, a, 0.9^timescale)` - 10% of the gap per step
+/// at timescale 1, no `round()` (unlike `BackCont`). `cam.snap` forces the
+/// snap and clears.
+/// Per compose it runs the clamped frame dt: `1-0.9^(dt*30)` equals 0.1 at
+/// 30 Hz and converges identically to GML's fixed steps across hitches (three
+/// 0.1 steps ≈ one 0.27 step). Entry snap targets the settled (post-scatter)
+/// camper pos while GML snaps pre-scatter and lerps after - transient (<1 s)
+/// and self-correcting.
 pub fn title_camera_step(cam: &mut GmlCamera, vw: f32, vh: f32, focus: Vec2, dt: f32, snap: bool) {
     let m = if snap || cam.snap {
         1.0
@@ -1571,18 +1553,15 @@ pub fn world_camera(center: Vec2, scale: f32) -> Camera2d {
 }
 
 /// GML `scrSetViewSize` view law (`scripts/macros_general` +
-/// `UberCont/Create_0`): the framed view is 240 world px tall, widened to
-/// `view_width_max = 240 * aspect` when `opt_resolution` (default on),
-/// with a 320 floor. Returns the GML view rect in world units for a dp
-/// viewport - the single source of truth the whole GUI is measured in
-/// (see [`gml_frame`]).
-///
+/// `UberCont/Create_0`): view is 240 world px tall, widened to
+/// `view_width_max = 240 * aspect` under `opt_resolution` (default on), 320
+/// floor. The single source of truth the whole GUI is measured in (see
+/// [`gml_frame`]).
 /// The GML odd-width `+1` bump is deliberately NOT reproduced: it exists
-/// because GML's `view_width` is a *window* size that must be even for
-/// its own surface resize. Here 240 is the constant and the width
-/// follows the canvas, so keeping the exact value avoids a sub-pixel
-/// disagreement between where a sprite is drawn and where its hit test
-/// lands.
+/// because GML's `view_width` is a *window* size that must be even for its
+/// surface resize. Here 240 is the constant and width follows the canvas, so
+/// the exact value avoids a sub-pixel disagreement between where a sprite
+/// draws and where its hit test lands.
 pub fn gml_view_size(viewport_dp: [f32; 2]) -> [f32; 2] {
     let (w, h) = (viewport_dp[0].max(1.0), viewport_dp[1].max(1.0));
     [(240.0 * w / h).max(320.0), 240.0]
@@ -1671,9 +1650,7 @@ pub fn shadow_color(area: AreaId) -> [f32; 4] {
     }
 }
 
-// ---------------------------------------------------------------------------
 // View-space atmosphere: area fog + sideart chrome.
-// ---------------------------------------------------------------------------
 
 /// GML `#macro FOG_ALPHA 0.1` (`objects/TopCont/Create_0`).
 pub const FOG_ALPHA: f32 = 0.1;
@@ -1684,19 +1661,15 @@ pub const FOG_TILE_H: f32 = 360.0;
 /// GML sideart tile size (`sprSideArt` 64 px, `i * -64` tiling).
 pub const SIDEART_TILE: f32 = 64.0;
 
-/// The GML view frame for one window: the world-space view rect, the dp
-/// rect it renders into, and the dp-per-world scale.
-///
 /// GML makes GUI and view the same thing (`scrSetViewSize` ends with
-/// `display_set_gui_size(_width, _height)`; `device_mouse_x_to_gui` is
-/// the inverse of the view transform), so there is exactly ONE rect.
-/// The engine's contain-fit then scales it into the canvas and centres
-/// the remainder, which IS the letterbox/pillarbox: a window whose
-/// aspect differs from the GML view gets bars, and the GUI never leaves
-/// the box. The port used to hand the viewport the whole canvas with a
-/// scaled camera instead, which always filled the window and forced the
-/// GUI to be re-derived per axis - that is why a portrait window showed
-/// 320x668 of world under a 320x240 GUI (GUI crammed into the top 36%).
+/// `display_set_gui_size(_width, _height)`; `device_mouse_x_to_gui` is the
+/// inverse of the view transform), so there is exactly ONE rect. The engine's
+/// contain-fit then scales it into the canvas and centres the remainder -
+/// that IS the letterbox/pillarbox: a window whose aspect differs from the
+/// GML view gets bars and the GUI never leaves the box. (The earlier design
+/// handed the viewport the whole canvas with a scaled camera, forcing a
+/// per-axis GUI re-derive: a portrait window showed 320x668 of world under a
+/// 320x240 GUI, GUI crammed into the top 36%.)
 #[derive(Clone, Copy, Debug)]
 pub struct GmlFrame {
     /// World-space view rect `[x, y, w, h]`.
@@ -1825,11 +1798,10 @@ pub fn fog_sprites(
 }
 
 /// Sideart tile positions in view px (GML `scrDrawSidearts` verbatim):
-/// `n = view_width_max / 64` columns (`for i = 1; i <= n` → `floor`
-/// count), horizontal strips at `i * -64` and
-/// `view_width - 64 + i * 64` over `nh = ceil(view_height / 64) + 1`
-/// rows, then vertical `repeat 10` runs at `i * 64` above/below for
-/// `i in 0..n`.
+/// `n = view_width_max / 64` columns (`for i = 1; i <= n` → floor count),
+/// horizontal strips at `i * -64` and `view_width - 64 + i * 64` over
+/// `nh = ceil(view_height / 64) + 1` rows, then vertical `repeat 10` runs at
+/// `i * 64` above/below for `i in 0..n`.
 pub fn sideart_tiles(view_w: f32, view_h: f32) -> Vec<[f32; 2]> {
     let n = (view_w / SIDEART_TILE).floor().max(1.0) as usize;
     let nh = (view_h / SIDEART_TILE).ceil() as usize + 1;
@@ -1893,9 +1865,7 @@ pub fn sideart_sprites(
     out
 }
 
-// ---------------------------------------------------------------------------
 // World → instances.
-// ---------------------------------------------------------------------------
 
 fn flash_tint(flash: Option<&HitFlash>) -> [f32; 4] {
     flash.map(|f| f.color).unwrap_or([1.0, 1.0, 1.0, 1.0])
@@ -2115,15 +2085,13 @@ pub fn world_instances_cached(
             .collect();
 
     // Floor: GML draws the room background colour first
-    // (`background_set_colour`), then ONLY the live floor cells -
-    // there is no padded outside ring of floor tiles. The old
-    // ±6-cell darkened ring covered the whole viewport with opaque
-    // quads and buried the transparent vortex layer underneath on
-    // the campfire title (the "no vortex on the title screen"
-    // bug). Lit strip over mask cells only; the room colour shows
-    // everywhere else. Quads place by art top-left (`place_top_left`,
-    // bevy `sprite_at_gm_origin` parity): origin-(0,0) art would sit
-    // half a cell off if given cell centers.
+    // (`background_set_colour`), then ONLY the live floor cells - no padded
+    // outside ring of floor tiles (a ±6-cell ring buried the transparent
+    // vortex layer on the campfire title: the "no vortex on the title
+    // screen" bug). Lit strip over mask cells only; room colour elsewhere.
+    // Quads place by art top-left (`place_top_left`, bevy
+    // `sprite_at_gm_origin` parity): origin-(0,0) art would sit half a cell
+    // off if given cell centers.
     if let (Some(run), Some(mask)) = (
         world.get_resource::<Run>(),
         world.get_resource::<FloorMask>(),
@@ -2143,13 +2111,10 @@ pub fn world_instances_cached(
             maxy = maxy.max(cy);
         }
         // GML draws the room background colour first
-        // (`background_set_colour`), then ONLY the live floor cells -
-        // there is no padded outside ring of floor tiles. The old
-        // ±6-cell darkened ring covered the whole viewport with opaque
-        // quads and buried the transparent vortex layer underneath on
-        // the campfire title (the "no vortex on the title screen"
-        // bug). Lit strip over mask cells only; the room colour shows
-        // everywhere else.
+        // (`background_set_colour`), then ONLY the live floor cells - no
+        // padded outside ring of floor tiles (a ±6-cell ring buried the
+        // transparent vortex layer on the campfire title). Lit strip over
+        // mask cells only; room colour elsewhere.
         if minx <= maxx {
             for cy in miny..=maxy {
                 for cx in minx..=maxx {
@@ -2159,10 +2124,9 @@ pub fn world_instances_cached(
                     let top_left = Vec2::new(cx as f32 * TILE, cy as f32 * TILE);
                     // GML `Floor/Create_0:8-13` floor variant verbatim:
                     // `random(500) < 1` takes frame 3, else
-                    // `choose(0,0,0,0,0,0,0,1,2) + choose(0,4)`. The
-                    // port has no live RNG stream here, so the cell
-                    // coords hash into the same distribution
-                    // deterministically (1/500 rare, 7/9 plain,
+                    // `choose(0,0,0,0,0,0,0,1,2) + choose(0,4)`. No live
+                    // RNG stream here, so the cell coords hash into the same
+                    // distribution deterministically (1/500 rare, 7/9 plain,
                     // 1/9 mid, then +4 half the time).
                     let h = (cx
                         .wrapping_mul(0x8da6b343u32 as i32)
@@ -2238,12 +2202,12 @@ pub fn world_instances_cached(
         }
         let floor_end = out.len();
         // Walls: GML law (`GenCont/Alarm_0` + `SubTopCont/Draw_0`): Out
-        // skirt always (neighbor-cropped), Bot iff the screen-south tile
-        // is floor (`place_meeting(x, y + 16, Floor)` on the wall
-        // instance), Top always straddling the cell's top edge
-        // (top-left (wx*16, wy*16-8) here), then the full-ring Trans
-        // skirting pass. Both Bot and Top use the body's image_index
-        // (the `topindex` roll is never read). Push order = draw order.
+        // skirt always (neighbor-cropped), Bot iff the screen-south tile is
+        // floor (`place_meeting(x, y + 16, Floor)` on the wall instance),
+        // Top always straddling the cell's top edge (top-left
+        // (wx*16, wy*16-8)), then the full-ring Trans skirting pass. Bot and
+        // Top share the body's `image_index` (the `topindex` roll is never
+        // read). Push order = draw order.
         let mut walls: Vec<WallCell> = world
             .query_filtered::<&WallCell, With<WallTile>>()
             .iter(world)
@@ -2505,14 +2469,13 @@ pub fn world_instances_cached(
     }
 
     // Title campfire actors (GML `Campfire`/`LogMenu`/`CampChar`/`TV`
-    // instances from `scrCampfireMenuCreate`): drawn from the live
-    // `SpriteAnim` like any world instance. Campers run the
-    // `CampChar/Other_7` two-step verbatim: on animation end the arm
-    // re-paths to the transition strip (`spr_to` when newly selected,
-    // `spr_from` when deselected), then on the next end parks on the
-    // end strip (`spr_menu`/`spr_slct`) and holds. Transitions are
-    // oneshots; ends loop. Missing strips fall back to the `sprMutant`
-    // idle - the `_default` arg of `scr_race_get_sprite` - like GML.
+    // instances from `scrCampfireMenuCreate`), drawn from the live
+    // `SpriteAnim`. Campers run the `CampChar/Other_7` two-step verbatim: on
+    // animation end the arm re-paths to the transition strip (`spr_to` when
+    // newly selected, `spr_from` when deselected), then on the next end parks
+    // on the end strip (`spr_menu`/`spr_slct`) and holds. Transitions are
+    // oneshots; ends loop. Missing strips fall back to the `sprMutant` idle -
+    // the `_default` arg of `scr_race_get_sprite`.
     {
         let selected = world
             .get_resource::<SelectedCharacter>()
@@ -2540,13 +2503,12 @@ pub fn world_instances_cached(
                 continue;
             }
             if let Some(c) = camp {
-                // GML `CampChar/Other_7` ends come from the instance
-                // vars: `spr_menu`/`spr_to` when selected, `spr_slct`/
-                // `spr_from` when not. BigDog sleeps (`Sleep` idle,
-                // `Idle` end); the far Frog sits (`Sit` everywhere);
-                // the near Frog idles on `sprMutant15Idle` - `Step_0`
-                // forces `Walk` directly every step while near, which
-                // needs no arm here.
+                // GML `CampChar/Other_7` ends from the instance vars:
+                // `spr_menu`/`spr_to` when selected, `spr_slct`/`spr_from`
+                // when not. BigDog sleeps (`Sleep` idle, `Idle` end); the far
+                // Frog sits (`Sit` everywhere); the near Frog idles on
+                // `sprMutant15Idle` - `Step_0` forces `Walk` directly every
+                // step while near, needing no arm here.
                 let frog_far =
                     c.race_gml == 15 && fire_pos.is_some_and(|f| _pos.0.distance(f) > 600.0);
                 let strips = crate::comps_b::camper_strips(c.race_gml, frog_far);
@@ -2575,13 +2537,11 @@ pub fn world_instances_cached(
                 let on_end = anim.path == end;
                 let on_trans = anim.path == trans;
                 // GML `CampChar/Step_0` Frog arm verbatim: the far Frog
-                // rewrites all four strips to `Sit`, so the sitting
-                // camper never enters the two-step - it jumps straight
-                // to the end. The `Walk`/`GoSit` switch below is the
-                // `sprite_index == Walk -> GoSit, speed = 0` half; the
+                // rewrites all four strips to `Sit`, so the sitting camper
+                // never enters the two-step. The `Walk`/`GoSit` switch below
+                // is the `sprite_index == Walk -> GoSit, speed = 0` half; the
                 // `GoSit -> Sit on animation_end` half runs in the
-                // `c.swap.is_some() && anim.finished` arm (GoSit is a
-                // oneshot transition to the Sit end).
+                // `c.swap.is_some() && anim.finished` arm.
                 if c.race_gml == 15 && frog_far && !on_end {
                     flips.push((e, end, want_selected));
                     continue;
@@ -2612,13 +2572,12 @@ pub fn world_instances_cached(
         }
         for (e, path, want_selected) in flips {
             if let Some(def) = assets.catalog.def(&path) {
-                // Ends are the `spr_menu`/`spr_slct` strips (looping);
-                // transitions are the `spr_to`/`spr_from` strips
-                // (oneshots). Frog sit settling is an end even though
-                // `GoSit` reads like a transition: GML parks on it
-                // (`Sit` == `from` == `to` == `menu` out far, and the
-                // near-arm `GoSit -> Sit on animation_end` lands on
-                // the Sit end through the same path).
+                // Ends are the `spr_menu`/`spr_slct` strips (looping),
+                // transitions the `spr_to`/`spr_from` strips (oneshots).
+                // Frog sit settling is an end even though `GoSit` reads like
+                // a transition: GML parks on it (`Sit` == `from` == `to` ==
+                // `menu` out far, and the near-arm `GoSit -> Sit on
+                // animation_end` lands on the Sit end through the same path).
                 let frog_settle =
                     path == "images/sprMutant15Sit.png" || path == "images/sprMutant15GoSit.png";
                 let transition = !frog_settle
@@ -2698,11 +2657,10 @@ pub fn world_instances_cached(
         }
     }
     // Corpse pass (bevy z -6, under hazards/pickups): enemy husks
-    // (`Corpse`), prop corpses (`PropSprites` without `Prop`), and
-    // portal strips. Prop corpses keep their recorded `PropSprites`
-    // facing and the player husk its `Corpse.flip_x` (bevy parity).
-    // Hit-effect oneshots fade in their last 0.12 s (bevy
-    // `tick_hit_effects` law).
+    // (`Corpse`), prop corpses (`PropSprites` without `Prop`), portal strips.
+    // Prop corpses keep their recorded `PropSprites` facing, the player husk
+    // its `Corpse.flip_x` (bevy parity). Hit-effect oneshots fade in their
+    // last 0.12 s (bevy `tick_hit_effects`).
     {
         let mut q = world.query::<(
             Entity,
@@ -2773,15 +2731,14 @@ pub fn world_instances_cached(
     // Portal shock/clear/strike draw with the hit-FX pass below
     // (bevy z 14 band); see the FX section after projectiles.
 
-    // Pickups + chests: native strip-frame cells, exactly like bevy
-    // `spawn_pickup`/`spawn_chest` (which ignore `pickup_sprite`'s
-    // vestigial sizes and draw via `sprite_exact`). `sprite_for` already
-    // sizes to the catalog cell - no override. Animated kinds (rads at
-    // 12fps from a random start, chest idle shimmer) ride their live
-    // `SpriteAnim` frame; static kinds sit on frame 0.
-    // Chests drive a fractional `image_index` by hand (GML
-    // `chestprop/Step_0.gml:4-7`, `image_speed = 0`), so a live
-    // `GmlImage` on the pickup wins over the catalog-fps `SpriteAnim`.
+    // Pickups + chests: native strip-frame cells, like bevy
+    // `spawn_pickup`/`spawn_chest` (which ignore `pickup_sprite`'s vestigial
+    // sizes and draw via `sprite_exact`); `sprite_for` already sizes to the
+    // catalog cell, no override. Animated kinds (rads at 12fps from a random
+    // start, chest idle shimmer) ride their live `SpriteAnim` frame, static
+    // kinds sit on frame 0. Chests drive a fractional `image_index` by hand
+    // (GML `chestprop/Step_0.gml:4-7`, `image_speed = 0`), so a live
+    // `GmlImage` wins over the catalog-fps `SpriteAnim`.
     {
         let mut q = world.query::<(
             &Pos,
@@ -2845,12 +2802,11 @@ pub fn world_instances_cached(
 
     // IDPD spawn portal: GML `IDPDSpawn/Create_0.gml:26` runs the object
     // strip at `image_speed = 0.4`, `Other_7.gml:1` swaps
-    // `sprIDPDPortalStart` -> `sprIDPDPortalCharge` on animation end and
+    // `sprIDPDPortalStart` -> `sprIDPDPortalCharge` on animation end,
     // `Alarm_0.gml:2-3` parks `sprIDPDPortalClose` on frame 0. The sim
-    // exports only the close countdown, so that phase is exact (14 frames
-    // / 0.4 = the 35-step window it is armed with) and the open phase
-    // rides the charge strip - the 2-frame start window has no sim-side
-    // age to key off.
+    // exports only the close countdown, so that phase is exact (14 frames /
+    // 0.4 = its 35-step arming window) and the open phase rides the charge
+    // strip - the 2-frame start window has no sim-side age to key off.
     {
         let now = pulse_now(world);
         let mut q = world.query::<(&Pos, &crate::idpd::IdpdSpawnPortal)>();
@@ -2874,13 +2830,13 @@ pub fn world_instances_cached(
             }
         }
     }
-
     // Enemies: live SpriteAnim wins (idle/walk/hurt/fire already switched
-    // sim-side); headless spawns without one fall back to the def idle.
-    // (nt-rewrite never attaches `EnemySprites`; bevy's walk/hurt strips
-    // resolve here from the anim path instead.) Gun carriers draw their
-    // gun behind the body when aiming down-ish (gunangle ≤ 180°) and in
-    // front above it (GML per-kind `Draw_0` law).
+    // sim-side); headless spawns fall back to the def idle (nt-rewrite never
+    // attaches `EnemySprites`, so bevy's walk/hurt strips resolve here from
+    // the anim path). Gun carriers draw the gun behind the body when aiming
+    // down-ish (gunangle ≤ 180°) and in front above it (GML per-kind
+    // `Draw_0` law).
+
     {
         // Throne flames (`Nothing/Draw_0` verbatim): four flame quads,
         // Big while the beam charges.
@@ -3869,9 +3825,7 @@ pub fn world_instances_cached(
     out
 }
 
-// ---------------------------------------------------------------------------
 // Transient combat FX → instances.
-// ---------------------------------------------------------------------------
 
 /// Beam strip (320x32, 1 frame): stretched along the sim segment.
 pub const BEAM_STRIP: &str = "images/sprLightBeam.png";
@@ -3915,21 +3869,10 @@ fn white_quad(center: Vec2, rotation: f32, size: Vec2, tint: [f32; 4]) -> Sprite
     }
 }
 
-/// Snapshot transient sim FX into GPU sprites (drawn after
-/// [`world_instances`], on top): [`Beam`] strips, [`LightningArc`]
-/// segments, [`FiredWeapon`] muzzle tongues, [`HazardCloud`] pulses,
-/// and live [`Particle`]s (via [`particle_sprites`]).
-///
-/// Snapshot transient sim FX into GPU sprites (drawn after
-/// [`world_instances`], on top): [`Beam`] strips, [`LightningArc`]
-/// segments, [`FiredWeapon`] muzzle tongues, [`HazardCloud`] pulses,
-/// and live [`Particle`]s (via [`particle_sprites`]).
-///
 /// Legacy 320x240 GUI view map (bevy `menus::nt_view` law, kept for
-/// reference): fill scale `s = min(w/320, h/240)` with centered
-/// offsets. Superseded by the GML law ([`gml_view_size`]: the GUI is
-/// the live view, 426x240 at 16:9); the text pipeline now maps through
-/// [`gui_texts_dp`] instead.
+/// reference): fill scale `s = min(w/320, h/240)`, centered offsets.
+/// Superseded by the GML law ([`gml_view_size`]: the GUI is the live view,
+/// 426x240 at 16:9); the text pipeline now maps through [`gui_texts_dp`].
 #[derive(Clone, Copy, Debug)]
 pub struct NtView {
     pub s: f32,
@@ -3950,13 +3893,12 @@ pub fn nt_view_for(viewport_w: f32, viewport_h: f32) -> NtView {
     }
 }
 
-/// Fill-scale map from a world-space view rect. GML law verbatim:
-/// the GUI *is* the view (`display_set_gui_size(view_width,
-/// view_height)` in `scrSetViewSize`), so GUI px == view px 1:1 -
-/// identity map, no letterbox. Callers pass the live
-/// [`view_rect_world`] rect; `gx`/`gy` authored in GML view px land on
-/// the view 1:1 (at 16:9 the view is 426x240, so right-anchored rows
-/// use `view[2] - 2`, centered headers `view[2] / 2`).
+/// Fill-scale map from a world-space view rect. GML law verbatim: the GUI
+/// *is* the view (`display_set_gui_size(view_width, view_height)` in
+/// `scrSetViewSize`), so GUI px == view px 1:1 - identity map, no letterbox.
+/// Callers pass the live [`view_rect_world`] rect; `gx`/`gy` authored in GML
+/// view px land 1:1 (at 16:9 the view is 426x240: right-anchored rows use
+/// `view[2] - 2`, centered headers `view[2] / 2`).
 #[derive(Clone, Copy, Debug)]
 pub struct HudGuiMap {
     pub s: f32,
@@ -3979,16 +3921,12 @@ pub fn hud_gui_to_world(map: HudGuiMap, view: [f32; 4], gx: f32, gy: f32) -> Vec
     Vec2::new(view[0] + map.ox + gx * map.s, view[1] + map.oy + gy * map.s)
 }
 
-/// Place a strip by its art top-left in GUI px (bevy `gm_sprite`
-/// origin law for zero-origin art): quad top-left lands on the mapped
-/// GUI point, size = native * `mul` * map scale.
-///
-/// GML `draw_sprite` (NOT `_ext`) honors the strip origin: the DRAW POINT
-/// is `pos - origin`, i.e. art top-left lands on `pos - origin`. Callers
-/// pass the GML draw position verbatim for ALL strips - this helper reads
-/// the catalog origin and offsets the quad top-left by `-origin * mul *
-/// map.s`, so pixels land exactly where GML puts them regardless of the
-/// strip's origin (`sprUltraLevel` origin (4,5), Rogue pips (1,1), etc.).
+/// GML `draw_sprite` (NOT `_ext`) honors the strip origin: the DRAW POINT is
+/// `pos - origin`, so art top-left lands on `pos - origin` and size =
+/// native * `mul` * map scale. Callers pass the GML draw position verbatim
+/// for ALL strips; this helper reads the catalog origin and offsets the quad
+/// top-left by `-origin * mul * map.s`, so pixels land where GML puts them
+/// whatever the strip origin (`sprUltraLevel` (4,5), Rogue pips (1,1)).
 pub fn hud_gui_place(
     assets: &RenderAssets,
     path: &str,
@@ -4084,26 +4022,22 @@ fn hud_weapon_dx(pos: usize) -> f32 {
 
 /// GML `scrDrawPlayerHUD` text laws verbatim:
 /// - `"hp/max"` at (67,7) white centered (`23+44, 7`);
-/// - level number at (11,16) white centered middle-anchored, only while
-///   below the level cap (`PLAYER_LEVEL_MAX = 10`; max level draws the
-///   `sprUltraLevel` sprite instead);
-/// - per-slot ammo at (42+pos*44,21) left in active-first draw order:
-///   white when the slot's ammo type is active else silver; `c_uidark`
-///   when dry; red (active) or gray when at/below one pickup; skipped
-///   for melee/absent slots;
+/// - level number at (11,16) white centered middle-anchored, only below the
+///   level cap (`PLAYER_LEVEL_MAX = 10`; max level draws `sprUltraLevel`);
+/// - per-slot ammo at (42+pos*44,21) left, active-first draw order: white
+///   when the slot's ammo type is active else silver, `c_uidark` when dry,
+///   red (active) or gray at/below one pickup, skipped for melee/absent;
 /// - `"LOW HP"` at (110,7) red left when `hp <= 4 && hp != max` while
-///   recently hurt (`drawlowhp`; `HitFlash` stands in here, and the
-///   shell adds the `sin(wave)` blink);
-/// - `scrDrawMiscHUD` bottom-right rows, right-aligned at `view-2`:
-///   run clock then map name (gated on `show_timer`/`show_area`).
+///   recently hurt (`drawlowhp`; `HitFlash` stands in, the shell adds the
+///   `sin(wave)` blink);
+/// - `scrDrawMiscHUD` bottom-right rows right-aligned at `view-2`: run clock
+///   then map name (gated on `show_timer`/`show_area`).
 ///
-/// Deferred GML HUD rows (need sim state the port never tracks):
-/// `FAINTED` pulse, bleed gray bar, hurt white flash, and the analog
-/// `scrDrawClock` surface clock (only the digital `timer_string` is
-/// drawn). Everything else in `scrDrawPlayerHUD`/`scrDrawMiscHUD` draws:
-/// health/exp/ammo strips + ultra/skill rows (sprites), per-slot ammo +
-/// LOW-HP + low-ammo block (above), clock/area (below), event icons
-/// (sprites), interaction prompt (`hud_texts`).
+/// Deferred GML rows (need sim state the port never tracks): `FAINTED`
+/// pulse, bleed gray bar, hurt white flash, analog `scrDrawClock` (only the
+/// digital `timer_string` draws). Everything else draws: strips + rows
+/// (sprites), per-slot ammo/LOW-HP/low-ammo, clock/area, event icons,
+/// interaction prompt (`hud_texts`).
 pub fn hud_gui_texts(world: &mut World) -> Vec<HudGuiText> {
     use crate::data::{AmmoKind, ammo_pickup_amount};
 
@@ -4214,10 +4148,10 @@ pub fn hud_gui_texts(world: &mut World) -> Vec<HudGuiText> {
     // GML `scrDrawPlayerHUD:253-284` low-ammo block verbatim: the held
     // weapon (plus the second on Steroids when its type differs) shows
     // `LOW <type>` / `NOT ENOUGH <type>` / `EMPTY` / `NOT ENOUGH RADS`
-    // red-left at `(55 + icons*12, 35)` while `drawempty > 0` and the
-    // shell blinks (`sin(wave) > 0` gate lives in `hud_overlay_lines`).
-    // `drawempty` = the dry-fire toast window: the port raises it when
-    // the EMPTY / NOT ENOUGH RADS toast is live.
+    // red-left at `(55 + icons*12, 35)` while `drawempty > 0` and the shell
+    // blinks (`sin(wave) > 0` gate lives in `hud_overlay_lines`).
+    // `drawempty` = the dry-fire toast window (raised when the EMPTY /
+    // NOT ENOUGH RADS toast is live).
     {
         let dry = world
             .get_resource::<crate::comps_a::Toast>()
@@ -4360,11 +4294,10 @@ pub type GuiRow = (
 
 /// GML `draw_text_nt` `@`-tag colors verbatim
 /// (`scripts/draw_text_nt/draw_text_nt.gml:215-222`): `@s` silver
-/// (125,131,141), `@b` blue (22,97,223), `@r` red (252,56,0), `@y`
-/// yellow (250,171,0), `@d` dark gray (59,62,67), `@g` green
-/// (68,198,22), `@p` purple (86,34,110), `@w` white. Unknown tags
-/// (incl. `@q` shake, `@(`/sprite, `@[`/`@]` bold, `@.` reset) carry no
-/// color and render in the row's base color.
+/// (125,131,141), `@b` blue (22,97,223), `@r` red (252,56,0), `@y` yellow
+/// (250,171,0), `@d` dark gray (59,62,67), `@g` green (68,198,22), `@p` purple
+/// (86,34,110), `@w` white. Unknown tags (`@q` shake, `@(`/`@)` sprite,
+/// `@[`/`@]` bold, `@.` reset) carry no color: the row's base.
 pub fn nt_tag_color(tag: char) -> Option<[u8; 4]> {
     match tag {
         's' => Some([125, 131, 141, 255]),
@@ -4380,13 +4313,12 @@ pub fn nt_tag_color(tag: char) -> Option<[u8; 4]> {
 }
 
 /// Split GML `draw_text_nt` text into color runs: `@x` opens the tagged
-/// color, `\@` escapes a literal `@`. `#` stays inside the run as a
-/// literal line break (the shell wraps on it; GML `#` writes a newline
-/// via `string_hash_to_newline` before parsing). Raw `\n` never reaches
-/// this backend: multi-line rows are pre-split into one [`MenuGuiText`]
-/// per visual line at the producer (GML draws each line of the block at
-/// its own y). Every other `@?` sequence keeps its chars in the base
-/// color.
+/// color, `\@` escapes a literal `@`. `#` stays inside the run as a literal
+/// line break (the shell wraps on it; GML writes it as a newline via
+/// `string_hash_to_newline` before parsing). Raw `\n` never reaches this
+/// backend: multi-line rows are pre-split into one [`MenuGuiText`] per visual
+/// line at the producer (GML draws each line at its own y). Every other `@?`
+/// sequence keeps its chars in the base color.
 pub fn nt_text_segments(text: &str, base: [u8; 4]) -> Vec<(String, [u8; 4])> {
     fn push(seg: &mut Vec<(String, [u8; 4])>, buf: &mut String, color: [u8; 4]) {
         if buf.is_empty() {
@@ -4442,25 +4374,22 @@ pub fn nt_text_segments(text: &str, base: [u8; 4]) -> Vec<(String, [u8; 4])> {
     segs
 }
 
-/// Generic GUI text → dp mapper (GML law: the GUI is the live view,
-/// `scrSetViewSize` + `display_set_gui_size`; `vw` is the live GUI
-/// width in px from [`gml_view_size`], always 240 tall). Left texts sit
-/// at `gx * k`, centered texts center their `2*gx` box on `gx * k`,
-/// right texts right-align their `2*(vw-gx)` box `vw-gx` px from the
-/// canvas right edge (`scrDrawMiscHUD` clock/area at `view_width - 2`
-/// verbatim); `middle_y` centers the line on `gy`. `k` is dp per GUI
-/// px: contain-fit (`min(h/240, w/320)`), so on narrow windows the
-/// 320-floored GUI scales to fit width exactly like the sprite
-/// viewport (`effective_fit`) does - height-fit alone blew the text
-/// layer up in portrait while sprites stayed fitted. `(ox, oy)`
-/// centers the fitted GUI rect on the canvas (landscape: `oy` is 0,
-/// `ox` absorbs the sub-px `vw`-flooring crumbs).
-/// Silkscreen-vs-bitmap top bias in GUI px. GML HUD/menu fonts
-/// (`fntM1`) are bitmaps whose ink starts exactly at the draw y
-/// (digits `h:7, offset:0`); Silkscreen through parley puts the
-/// baseline at `round(1.03em)` with digit ink topping out at
-/// 0.625em, so ink starts ~2 GUI px below the box top. Top-anchored
-/// rows subtract this so ink lands on the GML y. `middle_y` rows are
+/// Generic GUI text → dp mapper. GML law: the GUI is the live view
+/// (`scrSetViewSize` + `display_set_gui_size`), `vw` the live GUI width in px
+/// from [`gml_view_size`] (always 240 tall). Left texts sit at `gx * k`;
+/// centered texts center their `2*gx` box on `gx * k`; right texts
+/// right-align their `2*(vw-gx)` box `vw-gx` px from the canvas right edge
+/// (`scrDrawMiscHUD` clock/area at `view_width - 2`); `middle_y` centers the
+/// line on `gy`. `k` is dp per GUI px, contain-fit (`min(h/240, w/320)`), so
+/// the 320-floored GUI scales to fit width exactly like the sprite viewport
+/// (`effective_fit`) - height-fit alone blew the text layer up in portrait
+/// while sprites stayed fitted. `(ox, oy)` centers the fitted GUI rect on the
+/// canvas (landscape: `oy` 0, `ox` absorbs the sub-px `vw`-flooring crumbs).
+/// Silkscreen-vs-bitmap top bias in GUI px: GML HUD/menu fonts (`fntM1`) are
+/// bitmaps whose ink starts exactly at the draw y (digits `h:7, offset:0`);
+/// Silkscreen via parley baselines at `round(1.03em)` with digit ink topping
+/// out at 0.625em, so ink starts ~2 GUI px below the box top. Top-anchored
+/// rows subtract this so ink lands on the GML y; `middle_y` rows are
 /// symmetric in both backends and need no nudge.
 pub const FONT_TOP_BIAS_GUI: f32 = 2.0;
 
@@ -4477,23 +4406,22 @@ pub fn gui_texts_dp(canvas_dp: [f32; 2], items: Vec<MenuGuiText>) -> Vec<GuiRow>
             let font_px = (t.px * k).round().clamp(8.0, 180.0);
             let (left, box_w, centered) = if t.centered {
                 // GML centers `draw_text_nt` on `gx`: the box spans the
-                // symmetric fit around `gx` (`2 * min(gx, vw - gx)`),
-                // centered content inside. View-centered rows (gx = cx)
-                // get the full width; column headers (stats TOTAL at
-                // `statx`) center on their column. The old full-width
-                // box dragged column headers to `vw/2` (the centered
-                // part of the "left-shortened stats" bug); the older
+                // symmetric fit around `gx` (`2 * min(gx, vw - gx)`) with
+                // content centered inside. View-centered rows (gx = cx) get
+                // the full width, column headers (stats TOTAL at `statx`)
+                // their own column - a full-width box dragged them to `vw/2`
+                // (the centered part of the "left-shortened stats" bug) and a
                 // symmetric fit without centering clipped wide rows.
                 let half = t.gx.min(vw - t.gx).max(1.0);
                 let bw = (2.0 * half * k).max(font_px);
                 (ox + t.gx * k - bw * 0.5, bw, true)
             } else if t.right {
-                // GML right-aligns on `gx`: the row's box right edge
-                // lands exactly on `gx * k`, content right-aligned
-                // inside. The old fixed 120px box pushed short rows
-                // left of their anchor (the "left-shortened stats"
-                // bug); HUD clock/area rows need a wide-enough box to
-                // reach `vw - 2`, stats names only need their column.
+                // GML right-aligns on `gx`: the row's box right edge lands
+                // exactly on `gx * k`, content right-aligned inside. A fixed
+                // 120px box pushed short rows left of their anchor (the
+                // "left-shortened stats" bug); HUD clock/area rows need a box
+                // wide enough to reach `vw - 2`, stats names only their
+                // column.
                 let right = ox + t.gx * k;
                 let bw = if t.gx >= vw - 3.0 {
                     (120.0 * k).max(font_px)
@@ -4556,24 +4484,21 @@ pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
     let vw = gml_view_size(canvas_dp)[0];
     let cx = vw * 0.5;
     let mut items: Vec<MenuGuiText> = Vec::new();
-    // GML `scrDrawPlayerHUD.gml:378-403`, the `is_touch` block: while a
-    // prompt overlaps the player, `_prompt_text` is re-drawn above the
-    // `ButtonAct` home (`x = view_width/2`, `y = 48`, `rad = 25`,
-    // `Create_0`) at `max(_height, y - rad * 0.5 - _height - 12)` - the
-    // fntM1 line measures 8 (`font_string_measure:65` fixed line
-    // height), so gy = 15.5 - top-anchored and centered on the home
-    // (`draw_align(fa_center, fa_top)` at `scrDrawPlayerHUD:13`; the
-    // second call from `scrDrawMobileControls:239` re-draws the same
-    // string - the port draws the centered copy once). `is_touch` =
-    // `!(opt_keyboard || opt_gamepad)` (`input::gml_input_device`, same
-    // law as `touch_sprites`). "PICK UP" is
-    // `loc("R:HUD:PickUpAction", "PICK UP")` (no lang.csv row, so the
-    // default stands) for the nearest weapon; each `prop_prompts` hit
-    // stacks its own text on the same anchor, in GML's
-    // `[WepPickup, CarVenusFixed, IceFlower, Van]` order. This rides
-    // the mobile-controls path (`TopCont/Draw_64:23` gates on
-    // `drawcontrols`, not `opt_hud`), so it ignores `show_hud` like
-    // `hud_texts` and `touch_sprites` do.
+    // GML `scrDrawPlayerHUD.gml:378-403` `is_touch` block: while a prompt
+    // overlaps the player, `_prompt_text` re-draws above the `ButtonAct` home
+    // (`x = view_width/2`, `y = 48`, `rad = 25`, `Create_0`) at
+    // `max(_height, y - rad * 0.5 - _height - 12)` - the fntM1 line measures 8
+    // (`font_string_measure:65` fixed line height), so gy = 15.5,
+    // top-anchored and centered on the home (`draw_align(fa_center, fa_top)`
+    // at `scrDrawPlayerHUD:13`; `scrDrawMobileControls:239` re-draws the same
+    // string, so the port draws the centered copy once). `is_touch` =
+    // `!(opt_keyboard || opt_gamepad)` (`input::gml_input_device`, same law as
+    // `touch_sprites`). "PICK UP" is `loc("R:HUD:PickUpAction", "PICK UP")`
+    // (no lang.csv row, default stands) for the nearest weapon; each
+    // `prop_prompts` hit stacks its own text on the same anchor in GML's
+    // `[WepPickup, CarVenusFixed, IceFlower, Van]` order. Rides the
+    // mobile-controls path (`TopCont/Draw_64:23` gates on `drawcontrols`, not
+    // `opt_hud`), so it ignores `show_hud` like `hud_texts`/`touch_sprites`.
     let (keyboard, gamepad) =
         crate::input::gml_input_device(world.get_resource::<crate::savedata_part::SaveData>());
     if player_alive && !keyboard && !gamepad {
@@ -4616,14 +4541,13 @@ pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
     }));
     let hud: HudState = sync_hud_state(world);
     // GML `SkillText` verbatim: `scrLevelUpScreenSubmit` spawns at
-    // `_ypos = view_yview + view_height - textheight - 76` (= 156 for
-    // one 8px fntM1 line) and `TopCont/Draw_75` / `LevCont/Draw_64`
-    // draw `"@d" + loc(txt)` centered-middle AT THE INSTANCE POS.
-    // The port has no SkillText entity, so the toast rides the same
-    // view-fixed anchor (middle-anchored, like GML's `fa_middle`
-    // draw), with the extra `-40` shift while a chained offer still has
-    // the prior SkillText alive - never the view center, which is where
-    // the player is.
+    // `_ypos = view_yview + view_height - textheight - 76` (= 156 for one 8px
+    // fntM1 line) and `TopCont/Draw_75` / `LevCont/Draw_64` draw
+    // `"@d" + loc(txt)` centered-middle AT THE INSTANCE POS. No SkillText
+    // entity in the port, so the toast rides that view-fixed anchor
+    // (middle-anchored, like GML's `fa_middle`), plus a `-40` shift while a
+    // chained offer still has the prior SkillText alive - never the view
+    // center, which is where the player is.
     if !hud.toast.is_empty() {
         let toast_y = world
             .get_resource::<MenuState>()
@@ -4669,10 +4593,8 @@ pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
     gui_texts_dp(canvas_dp, items)
 }
 
-// ---------------------------------------------------------------------------
 // Menu overlay texts (bevy `menus/mod.rs` + `title_screen.rs` verbatim:
 // strings, 320x240 positions, colors, px sizes).
-// ---------------------------------------------------------------------------
 
 const GUI_CREAM: [u8; 4] = [238, 239, 225, 255];
 const GUI_GRAY: [u8; 4] = [125, 131, 141, 255];
@@ -4715,13 +4637,12 @@ fn gui_center(text: impl Into<String>, gx: f32, gy: f32, color: [u8; 4]) -> Menu
 }
 
 fn gui_button(text: impl Into<String>, gx: f32, gy: f32, color: [u8; 4]) -> MenuGuiText {
-    // GML `MainMenuButton/Draw_0` law: `draw_text_bigname(x, y, name)`
-    // at the DEFAULT scale 0.65, centered-middle. fntBig glyphs are
-    // 18px tall, so the surface is `ceil(18 * 0.65) = 12` tall and
-    // the 7px-equivalent ink spans roughly `gy - 4 .. gy + 4`. A
-    // 10px Silkscreen row centers its ~8px ink on `gy` the same way -
-    // the old 12px row overshot both width and height. Bigname source:
-    // fill+stroke faux-bold for the heavy fntBig glyphs.
+    // GML `MainMenuButton/Draw_0` law: `draw_text_bigname(x, y, name)` at the
+    // DEFAULT scale 0.65, centered-middle. fntBig glyphs are 18px tall, so
+    // the surface is `ceil(18 * 0.65) = 12` tall and the 7px-equivalent ink
+    // spans ~`gy - 4 .. gy + 4`; a 10px Silkscreen row centers its ~8px ink
+    // on `gy` the same way (a 12px row overshot width and height).
+    // Bigname source: fill+stroke faux-bold for the heavy fntBig glyphs.
     MenuGuiText {
         text: text.into(),
         gx,
@@ -4736,14 +4657,13 @@ fn gui_button(text: impl Into<String>, gx: f32, gy: f32, color: [u8; 4]) -> Menu
 }
 
 /// GML `PauseButton/Draw_0` label law (steady state, `appear = 0`):
-/// `draw_text_bigname(_dx, _dy - 8, name, color, 1, 0.65)` with the
-/// image 0/1/4/7 `fa_left` branch (`_dx = x - half_w`, so the padded
-/// surface centers ~x + 2) or the 2/3/5/6 `fa_right` branch (mirrored,
-/// ~x - 2). The surface is 12 tall drawn at `y - 8 - 6 = y - 14`,
-/// so ink spans roughly `y - 8 .. y`. A 10px middle-anchored row
-/// centers ink on `gy`; passing `gy = button_y - 4` reproduces the
-/// footprint. `left` selects the branch (MENU/RETRY style vs
-/// mirrored); center-x keeps the ~2px surface-pad shift.
+/// `draw_text_bigname(_dx, _dy - 8, name, color, 1, 0.65)` with the image
+/// 0/1/4/7 `fa_left` branch (`_dx = x - half_w`, padded surface centers
+/// ~x + 2) or the 2/3/5/6 `fa_right` branch (mirrored, ~x - 2). The 12-tall
+/// surface draws at `y - 8 - 6 = y - 14`, so ink spans ~`y - 8 .. y`; a 10px
+/// middle-anchored row centers ink on `gy`, so `gy = button_y - 4` reproduces
+/// the footprint. `left` picks the branch (MENU/RETRY style vs mirrored);
+/// center-x keeps the ~2px surface-pad shift.
 fn push_shadowed_sprite(
     out: &mut Vec<SpriteInstance>,
     assets: &RenderAssets,
@@ -5079,14 +4999,13 @@ fn push_gamepad_glyph(
     }
 }
 
-/// GML `UberCont/Draw_75:1-16` CONFIRM prompt: right-aligned `@sCONFIRM`
-/// at `(gui_w - 8, gui_h - 40)` plus the `gp_face1` glyph, drawn while
-/// `opt_gamepad` and a MainMenuButton / PlayButton / MenuOptions instance
-/// is live - the port's `MainMenu` overlay (list + play submenu) and
-/// `Settings`. Char select (`Title`) and `Stats` stay out: clicking PLAY
-/// or OPTIONS destroys `MainMenuButton` (`MainMenuButton/Other_10.gml:12,
-/// 86`) and STATS destroys it too, so GML only keeps the prompt while the
-/// `PlayButton`/`MenuOptions` replacement is up.
+/// GML `UberCont/Draw_75:1-16` CONFIRM prompt: right-aligned `@sCONFIRM` at
+/// `(gui_w - 8, gui_h - 40)` plus the `gp_face1` glyph, drawn while
+/// `opt_gamepad` and a MainMenuButton / PlayButton / MenuOptions instance is
+/// live - the port's `MainMenu` overlay (list + play submenu) and `Settings`.
+/// Char select (`Title`) and `Stats` stay out: PLAY/OPTIONS/STATS all destroy
+/// `MainMenuButton` (`MainMenuButton/Other_10.gml:12, 86`), so GML keeps the
+/// prompt only while the `PlayButton`/`MenuOptions` replacement is up.
 const CONFIRM_GY: f32 = 200.0;
 /// GML `font_get_string_width("CONFIRM")` at the 7px Silkscreen body
 /// size: advances .75 + .75 + .875 + .625 + .375 + .75 + .875 = 5.0 em.
@@ -5218,13 +5137,12 @@ fn pending_offer_race(world: &mut World) -> RaceId {
         })
         .unwrap_or(RaceId::Fish)
 }
-/// GML `Credits/Other_11` `credittext` verbatim (unlocalized
-/// defaults): 14 titled sections. Rows carry their GML `@w`/`@s`/`@y`
-/// color tags and `#` line breaks; the tag backend (`nt_text_segments`
-/// + `AnnotatedText`) renders them. GML joins each section's array with
-/// `"\n@s"` and draws ONE centered-middle `draw_text_nt` at
-/// `(gui_w/2, gui_h/2)` - tall sections (`height > gui_h - 36`) pan via
-/// `scroll` (`MenuState::credits_scroll`).
+/// GML `Credits/Other_11` `credittext` verbatim (unlocalized defaults): 14
+/// titled sections. Rows carry GML `@w`/`@s`/`@y` color tags and `#` line
+/// breaks, rendered by the tag backend (`nt_text_segments` + `AnnotatedText`).
+/// GML joins each section with `"\n@s"` and draws ONE centered-middle
+/// `draw_text_nt` at `(gui_w/2, gui_h/2)`; tall sections
+/// (`height > gui_h - 36`) pan via `scroll` (`MenuState::credits_scroll`).
 pub const CREDIT_SECTIONS: &[&[&str]] = &[
     &["@yVLAMBEER @wPRESENTS"],
     &["@wA GAME BY"],
@@ -5383,15 +5301,13 @@ pub const CREDIT_SECTIONS: &[&[&str]] = &[
     &["@wNUCLEAR THRONE"],
 ];
 
-/// GML `TutCont/Draw_64` instruction text (the keyboard variant, GML
-/// `text[]` index 1, which is what `is_keyboard(global.index)` selects).
-/// Key names resolve from the live keymap (the `move` quartet on
-/// Walking, the step action otherwise), GML `keymap_get` parity.
-///
-/// NOT ported: the `text[]` index 0 (touch) and index 2 (gamepad)
-/// variants, the pulsing lime touch-highlight circle and the red
-/// chest pointer, and the 36px bottom letterbox bar GML draws behind
-/// the text.
+/// GML `TutCont/Draw_64` instruction text (keyboard variant, `text[]` index 1
+/// per `is_keyboard(global.index)`). Key names resolve from the live keymap
+/// (the `move` quartet on Walking, the step action otherwise), `keymap_get`
+/// parity.
+/// NOT ported: `text[]` index 0 (touch) / 2 (gamepad), the pulsing lime
+/// touch-highlight circle, the red chest pointer, the 36px bottom letterbox
+/// bar GML draws behind the text.
 pub fn tutorial_texts(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
     let step = world
         .get_resource::<crate::state::TutorialState>()
@@ -5552,40 +5468,33 @@ pub fn unlock_popup_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
     out
 }
 
-/// Menu overlay texts for one [`crate::MenuOverlay`] (bevy
-/// `compose_root` panels verbatim: splash is sprite-only (empty);
-/// loading shows GENERATING % + roadmap; main menu the 5 labels;
-/// title the race name/passive/active; mutation the offer + selection;
-/// game over the DEAD stats; pause the buttons; settings the full
-/// page stack; credits the static lines).
-///
-/// `vw` is the live GML GUI width in px ([`gml_view_size`], 426 at
-/// 16:9): view-centered rows use `vw / 2`, right-anchored rows
-/// `vw - N` (`scrMakePauseButtons`, `scrDrawMiscHUD` verbatim);
-/// left-anchored rows keep literal x.
+/// Menu overlay texts for one [`crate::MenuOverlay`], following bevy
+/// `compose_root` (splash is sprite-only, so empty here).
+/// `vw` is the live GML GUI width in px ([`gml_view_size`], 426 at 16:9):
+/// view-centered rows use `vw / 2`, right-anchored rows `vw - N`
+/// (`scrMakePauseButtons`, `scrDrawMiscHUD`), left-anchored rows literal x.
 pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -> Vec<MenuGuiText> {
     let cx = vw * 0.5;
     // GML `UberCont/Draw_75:1-16`: `opt_gamepad` plus a live
-    // MainMenuButton / PlayButton / MenuOptions draws the CONFIRM
-    // prompt - in the port that is the MainMenu list (MainMenuButton),
-    // its play submenu (PlayButton) and Settings (MenuOptions). Char
-    // select and Stats destroy MainMenuButton without a replacement,
-    // and the Co-op menu creates no PlayButton, so they stay out.
+    // MainMenuButton / PlayButton / MenuOptions draws the CONFIRM prompt -
+    // in the port the MainMenu list (MainMenuButton), its play submenu
+    // (PlayButton) and Settings (MenuOptions). Char select and Stats destroy
+    // MainMenuButton without a replacement and Co-op creates no PlayButton,
+    // so they stay out.
     let confirm = matches!(
         kind,
         crate::MenuOverlay::MainMenu | crate::MenuOverlay::Settings
     );
     let mut out = match kind {
-        // Boot reel captions (GML `Vlambeer/Draw_0` verbatim, expanded to
-        // one row per visual line: `gui_text_layer` renders each row
-        // `.single_line()`, so embedded `\n`/`#` would never break -
-        // GML's single `draw_text_nt` block must arrive pre-split).
-        // Mode 0 save note: 2 white lines, block middle at `cy+24`
-        // (140/150 middle-centers ≈ 144). Mode 1 Gamemaker line at
-        // `(cx, cy)`, `@s`-silver per GML. Mode 3 team block at
-        // `(cx, cy)`: `@yVLAMBEER`, `@s&`, four `@w` names,
-        // `PRESENT`; ys 80..160 average exactly 120 (blanks shape the
-        // rhythm). Modes 2/4 sprite-only.
+        // Boot reel captions (GML `Vlambeer/Draw_0` verbatim, one row per
+        // visual line: `gui_text_layer` renders each row `.single_line()`, so
+        // embedded `\n`/`#` would never break - GML's single `draw_text_nt`
+        // block must arrive pre-split).
+        // Mode 0 save note: 2 white lines, block middle at `cy+24` (140/150
+        // middle-centers ≈ 144). Mode 1 Gamemaker line at `(cx, cy)`,
+        // `@s`-silver. Mode 3 team block at `(cx, cy)`: `@yVLAMBEER`, `@s&`,
+        // four `@w` names, `PRESENT`; ys 80..160 average exactly 120.
+        // Modes 2/4 sprite-only.
         crate::MenuOverlay::Splash => {
             let mode = world
                 .get_resource::<SplashState>()
@@ -5653,13 +5562,12 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             }
         }
         crate::MenuOverlay::Loading => {
-            // GML `GenCont/Draw_0` text layer verbatim: `GENERATING... %`
-            // at `(_cx, _cy - 54)` from `Floor/goal` (pad-2), the
-            // `VERIFYING... %` Venuz branch (`level >= 10` + a Venuz
-            // player), the `@s`-tip at `(_cx, _cy + 24)`, and the
-            // roadmap area/kill strings at `(drawx-60/drawx+23,
-            // drawy-14)` (the dots ride `menu_sprites`). `_cx/_cy` is
-            // the view center (`vw/2`, 120 at 240 high).
+            // GML `GenCont/Draw_0` text layer verbatim: `GENERATING... %` at
+            // `(_cx, _cy - 54)` from `Floor/goal` (pad-2), the `VERIFYING... %`
+            // Venuz branch (`level >= 10` + a Venuz player), the `@s`-tip at
+            // `(_cx, _cy + 24)`, roadmap area/kill strings at
+            // `(drawx-60/drawx+23, drawy-14)` (dots ride `menu_sprites`).
+            // `_cx/_cy` is the view center (`vw/2`, 120 at 240 high).
             let progress = world
                 .get_resource::<crate::state::LoadingState>()
                 .map(|l| l.progress)
@@ -5854,21 +5762,19 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             };
             // GML `DrawStats/Draw_0` + `scrDrawStats` verbatim: title via
             // `draw_text_bigname` at `(view_center, view_top + 24)` in
-            // `c_uigray`; left column `statx = view_left + 110`,
-            // `staty = view_top + 36 + 4`; right column
-            // `statx = view_left + view_width - 70`. Names right-aligned
-            // uigray at `statx - 1`, values left white at `statx + 1`,
-            // headers centered; blank headers advance the (fractional)
-            // line.
+            // `c_uigray`; left column `statx = view_left + 110`, `staty =
+            // view_top + 36 + 4`; right column `statx = view_left +
+            // view_width - 70`. Names right-aligned uigray at `statx - 1`,
+            // values left white at `statx + 1`, headers centered; blank
+            // headers advance the (fractional) line.
             let stat_name = |out: &mut Vec<MenuGuiText>, col: f32, line: &mut f32, name: &str| {
-                // GML `draw_stat` verbatim: the NAME right-aligns on
-                // `statx - 1` (right edge = `col - 1`), so the row's box
-                // right edge sits at `col - 1`, not `col`. Top-anchored
-                // (`fa_top` persists from the Draw-GUI reset): the row
-                // top lands on `staty + line * 8` and the
-                // `FONT_TOP_BIAS_GUI` nudge puts Silkscreen ink where
-                // the 8px fntM1 glyphs sat - NOT middle-anchored, which
-                // dropped every row ~6px.
+                // GML `draw_stat` verbatim: NAME right-aligns on `statx - 1`
+                // (row box right edge = `col - 1`, not `col`) and is
+                // top-anchored (`fa_top` persists from the Draw-GUI reset):
+                // row top lands on `staty + line * 8` with the
+                // `FONT_TOP_BIAS_GUI` nudge putting Silkscreen ink where the
+                // 8px fntM1 glyphs sat - middle-anchored dropped every row
+                // ~6px.
                 out.push(MenuGuiText {
                     text: name.to_string(),
                     gx: col - 1.0,
@@ -5901,11 +5807,10 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     return;
                 }
                 // GML `draw_stat_header` verbatim: centered on `statx`
-                // (`fa_center` at `col`), NOT on the view center - the
-                // old `gui_center(name, col, ...)` built a full-width
-                // box that centered on `vw/2`, dragging "TOTAL" right
-                // of its column (the centered part of the
-                // "left-shortened stats" bug).
+                // (`fa_center` at `col`), not the view center - the old
+                // `gui_center(name, col, ...)` built a full-width box
+                // centered on `vw/2`, dragging "TOTAL" right of its column
+                // (the centered part of the "left-shortened stats" bug).
                 out.push(MenuGuiText {
                     text: name.to_string(),
                     gx: col,
@@ -5994,17 +5899,16 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 );
                 header(&mut out, rx, &mut r, "");
             }
-            // Deferred GML `scrDrawStats:108-114` DAILY block: it needs
-            // the daily-run systems the port lacks (`dbst_*` bests +
-            // `ctot_days` producers; DAILY/WEEKLY PLAY rows deny with
-            // `sndNoSelect`, so `dailies > 0` can never hold here).
-            // Deferred GML `scrDrawCharStats` per-race page: it needs
-            // per-race `ctot_*`/`cbst_*`/`hbst_*` tracking arrays plus a
-            // select overlay; the sim only keeps the global aggregates
-            // the TOTAL/BEST blocks above read.
-            // GML `scrDrawStats` HARD block verbatim: gated on `hardgot`
-            // + hard runs, shows the global hard-best race + hard map
-            // (`scrAreaGetMapName(..., hard = true)`), kills, and runs.
+            // Deferred GML `scrDrawStats:108-114` DAILY block: needs the
+            // daily-run systems the port lacks (`dbst_*` bests, `ctot_days`
+            // producers; DAILY/WEEKLY PLAY rows deny with `sndNoSelect`, so
+            // `dailies > 0` can never hold here).
+            // Deferred `scrDrawCharStats` per-race page: needs per-race
+            // `ctot_*`/`cbst_*`/`hbst_*` arrays plus a select overlay; the sim
+            // keeps only the global aggregates the TOTAL/BEST blocks read.
+            // GML `scrDrawStats` HARD block verbatim: gated on `hardgot` +
+            // hard runs, shows the global hard-best race + hard map
+            // (`scrAreaGetMapName(..., hard = true)`), kills, runs.
             if save.hardmode_unlocked && save.hard_runs > 0 {
                 header(&mut out, rx, &mut r, "HARD");
                 stat_name(&mut out, rx, &mut r, &race_name(save.hard_best_race));
@@ -6043,16 +5947,16 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 .map(|m| m.textappear[0])
                 .unwrap_or(0.0);
             let mut rows = Vec::new();
-            // GML `scrCampfireMenuDrawCharText:444-466` law: the white
-            // NAME draws unconditionally (only its shadow gates on
-            // `textappear != 2`); the SKILLS block hides at `appear ==
-            // 2` (selection-change hide before the typewriter).
-            // GML single-player `fa_left/fa_bottom`: `_bigname_y = 36
-            // + 32 = 68`, then `_bigname_y = h - 68 = 172` - the NAME's
-            // bottom edge lands at y=172 via `draw_text_bigname`, above
-            // the 36px letterbox. The 12px row is top-anchored, so its
-            // top is `172 - 12 = 160` (the mapper's Silkscreen top bias
-            // lands the ink where the bigname surface sat).
+            // GML `scrCampfireMenuDrawCharText:444-466` law: the white NAME
+            // draws unconditionally (only its shadow gates on `textappear !=
+            // 2`); the SKILLS block hides at `appear == 2` (selection-change
+            // hide before the typewriter).
+            // GML single-player `fa_left/fa_bottom`: `_bigname_y = 36 + 32 =
+            // 68`, then `_bigname_y = h - 68 = 172` - the NAME's bottom edge
+            // lands at y=172 via `draw_text_bigname`, above the 36px
+            // letterbox. The 12px row is top-anchored, so its top is
+            // `172 - 12 = 160` and the mapper's Silkscreen top bias lands the
+            // ink where the bigname surface sat.
             // Bigname source (scale 1): fill+stroke faux-bold.
             rows.push(MenuGuiText {
                 text: def.name.to_ascii_uppercase().to_string(),
@@ -6066,13 +5970,11 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                 bold: true,
             });
             if textappear != 2.0 {
-                // Skills block: ONE two-line `draw_text_nt`,
-                // `fa_middle`, block middle at
-                // `_bigname_y + (height div 2) + appear + 8` = `188 +
-                // appear` (block height 16 = 2x8px fntM1 lines). Line
-                // tops are `180 + appear` / `188 + appear`; the mapper
-                // applies the Silkscreen top bias so ink lands on the
-                // GML tops. x is `_x + 8`.
+                // Skills block: ONE two-line `draw_text_nt`, `fa_middle`,
+                // block middle at `_bigname_y + (height div 2) + appear + 8` =
+                // `188 + appear` (height 16 = 2x8px fntM1 lines). Line tops
+                // `180 + appear` / `188 + appear`; the mapper's Silkscreen top
+                // bias lands the ink on the GML tops. x is `_x + 8`.
                 let appear = textappear.max(0.0);
                 rows.push(MenuGuiText {
                     text: race_passive_text(race).to_string(),
@@ -6159,12 +6061,9 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                         }
                     }
                 }
-                // GML `Menu.unlock_hint` box verbatim (touch locked-pod
-                // hint): white `draw_text_nt` at `(gui_w/2, gui_h-30)`
-                // over the `c_tooltip` roundrect for 90 steps
-                // (`alarm[11]`), `pop` easing to 0. The sprite layer
-                // cannot draw rects, so the text row carries the
-                // position; the shell draws the box behind it.
+                // GML `Menu.unlock_hint`: white `draw_text_nt` `(gui_w/2, gui_h-30)` on
+                // the `c_tooltip` roundrect, 90 steps (`alarm[11]`), `pop`→0. Sprite layer
+                // draws no rects: shell draws the box, this row the position.
                 if let Some(menu) = menu.as_ref() {
                     if !menu.unlock_hint.is_empty() {
                         rows.push(MenuGuiText {
@@ -6363,14 +6262,11 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             out
         }
         crate::MenuOverlay::GameOver => {
-            // GML `GameOver/Draw_0` text layer verbatim: struggle line
-            // top-anchored at (vw/2, view_top+48) (no offset); the
-            // roadmap lives at (_x-48, _y-offsety) with the area/kill
-            // strings at (drawy-14) riding it; `KILLED BY` (or win
-            // `COMPLETION TIME` + clock) centered at (_x+86,
-            // _y-offsety-25/-10); MENU/RETRY are the two `PauseButton`s
-            // at ystart+offsety (178/210). Splat frames + roadmap prefix
-            // ride the anim state (`go_splat`, `go_death_pos`).
+            // GML `GameOver/Draw_0`: struggle line (vw/2, view_top+48), no offset;
+            // roadmap (_x-48, _y-offsety) with area/kill strings at (drawy-14);
+            // `KILLED BY` / win `COMPLETION TIME`+clock (_x+86, _y-offsety-25/-10);
+            // MENU/RETRY `PauseButton`s ystart+offsety (178/210). Splat frames + roadmap
+            // prefix ride `go_splat`, `go_death_pos`.
             let run = world.get_resource::<crate::comps_a::Run>();
             let (offsety, _death_pos) = world
                 .get_resource::<MenuState>()
@@ -6379,12 +6275,10 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             let mut out = Vec::new();
             if let Some(run) = run {
                 let max_sub = area_max_subarea(run.area);
-                // GML `GameOver/Create_0` verbatim: base text from the
-                // area/loop position, then a win only overrides to
-                // `THE STRUGGLE IS OVER` on the HQ final. The
-                // `Cinematic`-gated `YOU REACHED THE NUCLEAR THRONE`
-                // has no port counterpart (no Cinematic entity), so a
-                // non-HQ win keeps its base text like GML without one.
+                // GML `GameOver/Create_0`: base text from area/loop position; a win
+                // overrides to `THE STRUGGLE IS OVER` only on the HQ final. The
+                // `Cinematic`-gated `YOU REACHED THE NUCLEAR THRONE` has no counterpart (no
+                // Cinematic entity), so a non-HQ win keeps its base text.
                 let palace_final = run.area == AreaId::Palace && run.floor_in_area == max_sub;
                 let hq_final = run.area == AreaId::HQ && run.floor_in_area == max_sub;
                 let mut text = if palace_final {
@@ -6517,22 +6411,16 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             out
         }
         crate::MenuOverlay::Pause => {
-            // GML pause layer verbatim (`UberCont/Draw_0` paused branch
-            // + `scrMakePauseButtons` + `PauseButton/Draw_0/Other_10`):
-            // frozen `pausespr` screenshot (shell-owned, not drawn here)
-            // + 0.7 black scrim (shell-owned) + bigname `PAUSED`
-            // centered-middle at `(view_center + 1, 52 + 1 - yoff)`
-            // (`yoff = 4` on event/hardmode runs) + corner `sprCharSplat`
-            // pair (sprite layer) + full roadmap (sprite layer) +
-            // `PauseButton`s at MENU `(left+45, bottom-64, appear 1)`,
-            // RETRY `(left+60, bottom-32, appear 2)`, SETTINGS
-            // `(right-68, top, appear 3)`, CONTINUE `(right-78, bottom,
-            // appear 3)`. Buttons draw the bigname label at scale 0.65
-            // at `y + appear` while `appear < 2`, else the
-            // `sprPauseButton` art (`appear` ticks -1/step, `wait` 3
-            // steps gates clicks). The port draws the steady state
-            // (`appear = 0`); the appear lift is documented here so the
-            // shell can animate it. RETRY is suppressed on daily runs
+            // GML pause layer (`UberCont/Draw_0` paused branch + `scrMakePauseButtons` +
+            // `PauseButton/Draw_0/Other_10`): frozen `pausespr` screenshot + 0.7 black
+            // scrim are shell-owned; bigname `PAUSED` centered-middle `(view_center + 1,
+            // 52 + 1 - yoff)` (`yoff = 4` on event/hardmode); `sprCharSplat` pair + roadmap
+            // on the sprite layer; MENU `(left+45, bottom-64, appear 1)`, RETRY `(left+60,
+            // bottom-32, appear 2)`, SETTINGS `(right-68, top, appear 3)`, CONTINUE
+            // `(right-78, bottom, appear 3)`. Buttons: bigname label at scale 0.65 at
+            // `y + appear` while `appear < 2`, else `sprPauseButton` art (`appear` -1/step,
+            // `wait` 3 steps gates clicks). Port draws the steady state (`appear = 0`).
+            // RETRY suppressed on daily runs.
             let hardmode = world
                 .get_resource::<crate::comps_a::Run>()
                 .is_some_and(|r| r.hardmode);
@@ -6593,13 +6481,10 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
         }
         crate::MenuOverlay::Settings => settings_gui_texts(world, vw),
         crate::MenuOverlay::Credits => {
-            // GML `Credits/Draw_64` verbatim: the current section body
-            // is ONE centered-middle `draw_text_nt` at `(gui_w/2,
-            // gui_h/2)` - GML joins the section with `"\n@s"`; the tag
-            // backend splits `#` the same way. Tall sections pan via
-            // `MenuState::credits_scroll` (`_py += scroll - height +
-            // gui_h * 0.6`, top-anchored). When a `Logo` instance owns
-            // the credits (end-of-credits handoff) nothing draws.
+            // GML `Credits/Draw_64`: section body is ONE centered-middle `draw_text_nt`
+            // `(gui_w/2, gui_h/2)`; GML joins with `"\n@s"`, the tag backend splits `#`
+            // the same way. Tall sections pan via `MenuState::credits_scroll` (`_py +=
+            // scroll - height + gui_h * 0.6`). A `Logo` owning the credits draws nothing.
             let section = world
                 .get_resource::<MenuState>()
                 .map(|m| m.credits_section)
@@ -6653,14 +6538,10 @@ fn push_toggle(out: &mut Vec<MenuGuiText>, label: &str, y: f32, on: bool) {
     out.push(gui_body(if on { "ON" } else { "OFF" }, 200.0, y, GUI_GRAY));
 }
 
-// ---------------------------------------------------------------------------
-// Settings hot rows: the single source of truth for what each settings
-// row DOES, shared by mouse hit-testing (`settings_click_action`) and
-// keyboard nav (`tick_settings_nav` in `menus.rs`). `gy` mirrors
-// `settings_gui_texts` exactly (same literals); `cx`/`hw` is the mouse
-// hit box in GUI px (centered buttons at `vw/2`, value cells at `cx+32`,
-// and slider hits use the rendered track geometry).
-// ---------------------------------------------------------------------------
+// Settings hot rows: one source of truth shared by
+// `settings_click_action` and `tick_settings_nav` (`menus.rs`), so indices agree. `gy`
+// mirrors `settings_gui_texts` literals; `cx`/`hw` is the GUI-px mouse hit box (buttons at
+// `vw/2`, value cells at `cx+32`; sliders use the rendered track geometry).
 
 /// Player color presets cycled by the COLOR page button (bevy verbatim).
 pub const COLOR_PRESETS: [&str; 5] = ["FF0000", "00FF00", "0000FF", "", "FF00FF"];
@@ -6858,15 +6739,10 @@ pub fn settings_hot_rows(page: u8, vw: f32) -> Vec<SettingHotRow> {
             rows
         }
         16 => {
-            // GML `Controls_Experimental` verbatim (`Other_20.gml:786`):
-            // KEYBOARD MODE (`options_keyboard`), STICK REGIONS
-            // (`controls_stickregions`), HIDE JOYSTICKS
-            // (`controls_hiddensticks`, hidden while regions are on -
-            // the repositioning sticks never sit at home). The
-            // regions-on gate lives in the text layer plus
-            // `settings_row_available` (hover, click, splat, nav); the
-            // hot rows keep every row so every consumer agrees on
-            // indices.
+            // GML `Controls_Experimental` (`Other_20.gml:786`): `options_keyboard`,
+            // `controls_stickregions`, `controls_hiddensticks` (hidden while regions are
+            // on: the repositioning sticks never sit at home). Regions-on gate = text
+            // layer + `settings_row_available`; hot rows keep every row (index agreement).
             vec![
                 tog(48.0, SettingHotOp::Toggle("keyboard_enabled")),
                 tog(66.0, SettingHotOp::Toggle("stick_regions")),
@@ -7145,14 +7021,11 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             out.push(gui_button("BACK", cx, 200.0, GUI_GRAY));
         }
         3 => {
-            // GML `Game` category verbatim (`Other_20.hml:218`): boss
-            // intros, tutorial, timer, area, pause-button (mobile-only
-            // in GML; shown here - desktop shells ignore it), the
-            // `ACHIEVEMENT#POPUPS` two-line switch, auto-pause
-            // (desktop-only in GML), VIEW CREDITS, then PROFILE (the
-            // COLOR/DATA leaves live under PROFILE in GML; the port
-            // surfaces all three here so they stay reachable without
-            // the text-entry pages).
+            // GML `Game` category (`Other_20.hml:218`): pause-button mobile-only, auto-pause
+            // desktop-only in GML - both shown here (desktop shells ignore them);
+            // `ACHIEVEMENT#POPUPS` is a two-line switch. GML puts the COLOR/DATA leaves under
+            // PROFILE; the port surfaces all three here to keep them reachable without the
+            // text-entry pages.
             out.push(gui_button("GAME", cx, 24.0, GUI_MID));
             let mut y = 48.0;
             for (label, on) in [
@@ -7191,18 +7064,14 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             out.push(gui_button("BACK", cx, 228.0, GUI_GRAY));
         }
         4 => {
-            // GML `Controls` category verbatim (`Other_20.gml:520`):
-            // GAMEPAD, GAMEPAD STYLE (XBOX ONE for XBONE, dimmed to
-            // `c_menudark` while the switch is off -
-            // `Other_20.gml:527-531` + `Other_10.gml:663`), the
-            // mobile-only AIM ASSIST / FULL AUTOAIM / VOLUME CONTROLS /
-            // SPLIT AIM & FIRE / FIXED SIGHT / SIZE SCALE rows (shown
-            // here; desktop shells ignore them), REMAP CONTROLS with
-            // GML's `(GAMEPAD)` suffix while the switch is on
-            // (`Other_20.gml:569-581`; the `(KEYBOARD)` branch needs
-            // `is_keyboard() && !is_desktop`, never true here),
-            // CHARACTER PREFERENCES + EXPERIMENTAL OPTIONS (mobile-only
-            // in GML). Names use the GML loc defaults.
+            // GML `Controls` category (`Other_20.gml:520`): GAMEPAD STYLE is XBOX ONE
+            // for XBONE, dimmed to `c_menudark` while the switch is off
+            // (`Other_20.gml:527-531` + `Other_10.gml:663`). Mobile-only rows (AIM ASSIST
+            // / FULL AUTOAIM / VOLUME CONTROLS / SPLIT AIM & FIRE / FIXED SIGHT / SIZE
+            // SCALE, CHARACTER PREFERENCES, EXPERIMENTAL OPTIONS) shown here; desktop
+            // shells ignore them. REMAP CONTROLS takes GML's `(GAMEPAD)` suffix while the
+            // switch is on (`Other_20.gml:569-581`); `(KEYBOARD)` needs
+            // `is_keyboard() && !is_desktop`, never true here. Names use GML loc defaults.
             out.push(gui_button("CONTROLS", cx, 24.0, GUI_MID));
             let mut y = 48.0;
             push_toggle(&mut out, "GAMEPAD", y, s.gamepad_enabled);
@@ -7324,12 +7193,10 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             let capturing = world
                 .get_resource::<crate::keymap::InputMapState>()
                 .and_then(|s| s.session.capture.clone());
-            // GML `Other_10.gml:779-793,832-843`: the value column reads
-            // `keymap_get` (`Key[key][opt_gamepad]`, `scrOptionsKeymaps:
-            // 111`) - the pad side while the GAMEPAD switch is on - and
-            // swaps the text for its `draw_gamepad_button` glyph; the
-            // walk rows leave the list entirely
-            // (`_opt.visible = _opt.available`, `scrOptionsMenu.gml:189`).
+            // GML `Other_10.gml:779-793,832-843`: value column = `keymap_get`
+            // (`Key[key][opt_gamepad]`, `scrOptionsKeymaps:111`) - the pad side while
+            // GAMEPAD is on - swapped for a `draw_gamepad_button` glyph; walk rows leave
+            // the list (`scrOptionsMenu.gml:189`, `_opt.visible = _opt.available`).
             let gamepad_ui = gamepad_ui_on(world);
             let rows = settings_hot_rows(13, vw);
             let mut y = 56.0;
@@ -7519,15 +7386,11 @@ fn ability_hud_sprites(
     out
 }
 
-/// Sprite HUD bars (GML `scrDrawPlayerHUD` regions verbatim, bevy
-/// `spawn_hud_art` GUI positions): health bar frame 2 at GUI (20,4)
-/// with ghost/live fills at (22,7) width `84*frac`, rad bar at (4,4),
-/// ammo row at y=32, weapon icons at y=16, offer icons bottom row at
-/// y=219, held ultra/skills top-right from (`view_width-12`,13).
-/// View-anchored: `view` is the world-space view rect; GUI offsets map
-/// through [`hud_gui_map`] (identity: GUI px == view px). `dt_secs`
-/// drives the `lsthealth` ghost decay
-/// (GML `Player/Step_0`: lerp 0.2 past a 20 gap, else 0.5/step).
+/// Sprite HUD bars (GML `scrDrawPlayerHUD` regions, bevy `spawn_hud_art`
+/// GUI positions): bar frame 2 (20,4), fills (22,7) width `84*frac`, rad bar (4,4),
+/// ammo row y=32, weapon icons y=16, offer icons y=219, held ultra/skills from
+/// (`view_width-12`,13). GUI px == view px ([`hud_gui_map`]). `dt_secs` drives the
+/// `lsthealth` ghost decay (GML `Player/Step_0`: lerp 0.2 past a 20 gap, else 0.5/step).
 pub fn hud_sprites(
     world: &mut World,
     assets: &RenderAssets,
@@ -7612,13 +7475,11 @@ pub fn hud_sprites(
         last
     };
 
-    // Health bar + fills (GML `scrDrawPlayerHUD:17-58`: bar frame 2 at
-    // (20,4) via `draw_sprite` (origin (0,0): pixels at exactly
-    // (20,4)); fills are `draw_sprite_ext` frame 0 xscale-stretched
-    // from (22,7) - `sprHealthFill` is a (0,0)-origin 1x8 strip so the
-    // left edge pins at x=22 while the width shrinks. Ghost in the
-    // darkened HSV variant, live in `opt_healthcol`; hurt flash =
-    // white frame 0 at the hp width. Desktop nudges both by +0.01.
+    // Health bar + fills (GML `scrDrawPlayerHUD:17-58`): bar frame 2 at (20,4) via
+    // `draw_sprite` (origin (0,0), so pixels land exactly there); fills `draw_sprite_ext`
+    // frame 0 xscale-stretched from (22,7) - a (0,0)-origin 1x8 strip, so the left edge
+    // pins at x=22 as the width shrinks. Ghost darkened HSV, live `opt_healthcol`, hurt
+    // flash white frame 0 at the hp width. Desktop nudges +0.01.
     let gm = hud_gui_map(view);
     if let Some(s) = hud_gui_place(
         assets,
@@ -7677,12 +7538,11 @@ pub fn hud_sprites(
         }
     }
 
-    // Rad/exp bar + level badge (GML `scrDrawPlayerHUD:184-202`
-    // verbatim: `sprExpBarLevel` first while an offer is pending
-    // (`skillpoints/ultrapoints/wantdestinyskill`), then `sprExpBar` with
-    // `frac*16` at GUI (4,4) on top; `sprNomutsLevel` at (11,16) when
-    // the level cap is 0, the number while below cap, `sprUltraLevel`
-    // at cap). The cap is `PLAYER_LEVEL_MAX` (10, 0 in no-muts custom).
+    // Rad/exp bar + level badge (GML `scrDrawPlayerHUD:184-202`): `sprExpBarLevel`
+    // first while an offer is pending (`skillpoints/ultrapoints/wantdestinyskill`),
+    // then `sprExpBar` frame `frac*16` at (4,4); `sprNomutsLevel` (11,16) at level cap 0,
+    // the number below cap, `sprUltraLevel` at cap. Cap = `PLAYER_LEVEL_MAX` (10; 0 in
+    // no-muts custom).
     let offer_pending = world.get_resource::<PendingMutation>().is_some()
         || world.get_resource::<PendingUltra>().is_some();
     if offer_pending {
@@ -7717,14 +7577,11 @@ pub fn hud_sprites(
     ) {
         out.push(s);
     }
-    // GML `_level_max <= 0` (no-muts custom): the port never sets a 0
-    // cap (level floor is 1), so this arm is vacuous - documented, not
-    // drawn.
-    // GML `sprUltraLevel` at (11,16) via `draw_sprite` (NOT `_ext`):
-    // honors the strip origin (4,5 of 8x8), so pixels center near
-    // (11,16) - the old `sprite_scaled_rotated` treated (11,16) as the
-    // quad center, shifting it half a cell. `hud_gui_place` lands the
-    // art top-left on the GUI point like `draw_sprite` does.
+    // GML `_level_max <= 0` (no-muts custom) never occurs (port floor is 1):
+    // that arm is vacuous. `sprUltraLevel` at (11,16) via `draw_sprite` (not `_ext`)
+    // honors the strip origin (4,5 of 8x8); `sprite_scaled_rotated` read (11,16) as the
+    // quad center and shifted it half a cell. `hud_gui_place` lands the top-left on the
+    // GUI point.
     if hud.level >= PLAYER_LEVEL_MAX {
         if let Some(s) = hud_gui_place(
             assets,
@@ -7741,12 +7598,10 @@ pub fn hud_sprites(
         }
     }
 
-    // Ammo icon pairs (GML `scrDrawPlayerHUD:209-230` verbatim: GUI row
-    // y=32, `dx = 2+(t-1)*10` minus 2 at Bolts and up; BG frame 2 when
-    // the type matches the primary weapon (or the secondary on
-    // Steroids), 1 for the secondary, else 0; icon drains against the
-    // SHARED `sprBulletIcon` frame count (`_frames` is computed once,
-    // not per type) over the Back-Muscle-adjusted cap).
+    // Ammo icon pairs (GML `scrDrawPlayerHUD:209-230`): row y=32, `dx = 2+(t-1)*10` -2 at
+    // Bolts and up; BG frame 2 for the primary (secondary on Steroids), 1 for the
+    // secondary, else 0; icon drains against the SHARED `sprBulletIcon` frame count
+    // (`_frames` once, not per type) over the Back-Muscle-adjusted cap.
     const AMMO_ICONS: [(&str, &str); 5] = [
         ("images/sprBulletIconBG.png", "images/sprBulletIcon.png"),
         ("images/sprShotIconBG.png", "images/sprShotIcon.png"),
@@ -7797,21 +7652,16 @@ pub fn hud_sprites(
             out.push(s);
         }
     }
-    // GML `scrDrawPlayerHUD:231-245` event/continued icons verbatim at
-    // GUI y=33: daily/weekly icon at x=56 on event runs (weekly picks
-    // the weekly sprite), custom icon +12 when custom, continued icon
-    // +12 per flag. The port has no daily/weekly/custom/continued
-    // runs (PLAY sub-rows deny; `Run` carries no continued flag), so
-    // all three arms are vacuous - documented, not drawn.
+    // GML `scrDrawPlayerHUD:231-245` event/continued icons at y=33: daily/weekly icon at
+    // x=56 on event runs (weekly picks the weekly sprite), custom icon +12, continued
+    // icon +12 per flag. No daily/weekly/custom/continued runs in the port (PLAY
+    // sub-rows deny; `Run` has no continued flag): all three arms vacuous.
 
-    // Rogue/Cuz ammo pips (GML GUI `draw_sprite(sprite, sub, 110, 4)`:
-    // top-left origin art drawn with its TOP-LEFT at (110,4) - GML
-    // `draw_sprite` (not `_ext`) honors the strip origin, and these
-    // strips carry origin (1,1), so pixels land at (109,3). Subimage
-    // `ammo ? max(1, floor((frames-1) * progress)) : 0`; Cuz draws
-    // `sprCuzAmmoHUDU` under the Emotional ultra. `hud_gui_place`
-    // already lands the art top-left on the GUI point (same helper
-    // as the health bar/ammo icons), so pass the GML point verbatim.
+    // Rogue/Cuz ammo pips: `draw_sprite(sprite, sub, 110, 4)` honors the strip origin
+    // (not `_ext`); these strips carry origin (1,1), so pixels land at (109,3). Subimage
+    // `ammo ? max(1, floor((frames-1) * progress)) : 0`; Cuz draws `sprCuzAmmoHUDU` under
+    // the Emotional ultra. `hud_gui_place` lands the top-left on the GUI point: pass the
+    // GML point verbatim.
     if let Some((race, skin)) = race_skin {
         let pip = if race == RaceId::Rogue {
             let cskin = skin == crate::data::SkinLetter::C;
@@ -7867,20 +7717,15 @@ pub fn hud_sprites(
         patience_used,
     ));
 
-    // Weapon strip (GML `scrDrawPlayerHUD:99-146` verbatim): `_wep`
-    // at GUI x=24, `_bwep` at 68, then +20 for extras, y=16 (slot
-    // order - position 0 is always the primary slot; swapping guns
-    // swaps `_wep`/`_bwep` sim-side via `scrSwapWeps`, never the draw
-    // order). Each gun is a `draw_sprite_part_ext` pixel window
-    // `(xoffset, yoffset+swapanim-8, weapon_width, 14+swapanim)` with
-    // `weapon_width` 16 (32 for a slot-0 melee): the window's top-left
-    // lands exactly on `(dx, dy)`, 4-way outline (white when
-    // `_is_active_weapon = (index==0 || Steroids)` else `#404040`,
-    // only for active/broke/darkness/letterbox) at ±1 px, body in
-    // `c_black`; `gpu_fog` tints for curse (`c_curse`) / ultra rad guns
-    // (`c_ultra`) / golden (`c_gold`).
-    // (`swapanim` y-offset + the white 0.2 reload wipe are sim-state the
-    // port never tracks, so the steady frame draws.)
+    // Weapon strip (GML `scrDrawPlayerHUD:99-146`): `_wep` x=24, `_bwep` 68, +20 per
+    // extra, y=16 (position 0 is always primary; `scrSwapWeps` swaps `_wep`/`_bwep`
+    // sim-side, never the draw order). Each gun is a `draw_sprite_part_ext` window
+    // `(xoffset, yoffset+swapanim-8, weapon_width, 14+swapanim)`, `weapon_width` 16 (32
+    // for a slot-0 melee), top-left landing exactly on `(dx, dy)`; 4-way outline at ±1 px
+    // (white when `_is_active_weapon = (index==0 || Steroids)`, else `#404040`; only
+    // active/broke/darkness/letterbox), body `c_black`; `gpu_fog` tints curse (`c_curse`)
+    // / ultra rad (`c_ultra`) / golden (`c_gold`). `swapanim` y-offset and the white 0.2
+    // reload wipe are untracked: the steady frame draws.
     for (pos, slot) in order.iter().copied().enumerate() {
         let Some(id) = hud.weapon_ids.get(slot).copied() else {
             continue;
@@ -7953,17 +7798,13 @@ pub fn hud_sprites(
     out
 }
 
-/// One GML `draw_sprite_part_ext` weapon window: source rect
-/// `(xoffset, yoffset-8, ww, 14)` of strip frame 1 (steady
-/// `swapanim = 0`), drawn with its top-left at GUI `(dx, dy)`.
-/// The window routinely starts OUTSIDE the cell (negative xorigin,
-/// `yoffset - 8 < 0`) and overruns it (14-tall window over a shorter
-/// cell): GML clamps those samples to transparent edge texels, so
-/// only the in-bounds part of the window draws - offset inside the
-/// window by the out-of-bounds lead (`max(0,-sx)`, `max(0,-sy)`).
-/// Drawing the clamped cell at `(dx, dy)` instead shifts every gun
-/// up-left (revolver 2x5 px). UVs lerp over the in-bounds sub-rect
-/// (the atlas packs whole frames); the quad keeps a centered anchor.
+/// One GML `draw_sprite_part_ext` weapon window: source rect `(xoffset, yoffset-8, ww,
+/// 14)` of strip frame 1 (steady `swapanim = 0`), top-left at GUI `(dx, dy)`. Windows
+/// start outside the cell (negative xorigin, `yoffset - 8 < 0`) and overrun it (14-tall
+/// over a shorter cell); GML clamps those samples to transparent edge texels, so only the
+/// in-bounds part draws, offset by the lead (`max(0,-sx)`, `max(0,-sy)`) - drawing the
+/// clamped cell at `(dx, dy)` shifts every gun up-left (revolver 2x5 px). UVs lerp over
+/// the in-bounds sub-rect (the atlas packs whole frames); anchor stays centered.
 fn hud_weapon_part(
     assets: &RenderAssets,
     path: &str,
@@ -8022,12 +7863,10 @@ fn hud_weapon_part(
     })
 }
 
-/// Coop fainted bars (GML `TopCont/Draw_0` `Revive` block verbatim):
-/// `sprFaintedBar` at the view-clamped pos, then the grace bar
-/// (`alarm[4] / 300 * 28`, red-black pulse from `sin(tottimer / 4)`)
-/// or the bleed bar (`alarm[5] / 30 * 28`, red - including GML's
-/// missing `+ 2` on the bleed right edge). Alarm values ride the
-/// [`HudState`] snapshot; `view` is the world-space view rect.
+/// Coop fainted bars (GML `TopCont/Draw_0` `Revive` block): `sprFaintedBar` at the
+/// view-clamped pos, then the grace bar (`alarm[4] / 300 * 28`, red-black pulse from
+/// `sin(tottimer / 4)`) or the bleed bar (`alarm[5] / 30 * 28`, red - GML's missing
+/// `+ 2` on the bleed right edge). Alarms ride the [`HudState`] snapshot.
 pub fn fainted_bar_sprites(
     world: &mut World,
     assets: &RenderAssets,
@@ -8118,30 +7957,21 @@ pub const CROSSHAIR_DEADZONE: f32 = 32.0 * 0.4125;
 /// `sprNomutsLevel` arm stays vacuous (noted at its draw site).
 pub const PLAYER_LEVEL_MAX: u32 = 10;
 
-/// World-space crosshair (GML `TopCont/Draw_0` player block verbatim):
-/// `sprCrosshair[opt_crosshair]` lerped toward
-/// `player + (16 + dis)` along the aim heading (0.8 active / 0.1 idle),
-/// alpha lerped toward 5/0 at 0.4 (drawn as `min(1, alpha)`), active
-/// past the attack deadzone. Skipped while paused (GML `PauseImage`
-/// gate) and until the first hover stages a cursor. GML `with Player`:
-/// no player entity, no crosshair - death removes it outright.
-/// Runs for keyboard AND pad players alike (GML draws the lerped
-/// crosshair unless the player is a keyboard-mode LOCAL - see the gate
-/// below); the raw `Draw_75` cursor draws over it in keyboard mode
-/// (owned by the menu-crosshair path in lib.rs) and replaces it on
-/// touch.
+/// World-space crosshair (GML `TopCont/Draw_0` player block): `sprCrosshair[opt_crosshair]`
+/// lerped toward `player + (16 + dis)` along the aim heading (0.8 active / 0.1 idle),
+/// alpha toward 5/0 at 0.4 (drawn `min(1, alpha)`), active past the attack
+/// deadzone. Skipped while paused (`PauseImage` gate) and until the first hover stages a
+/// cursor; `with Player`, so death removes it. Keyboard-mode LOCAL exclusion, the
+/// `Draw_75` cursor and the touch path: gate below.
 pub fn crosshair_sprites(
     world: &mut World,
     assets: &RenderAssets,
     dt_secs: f32,
 ) -> Vec<SpriteInstance> {
     let mut out = Vec::new();
-    // Live gameplay only: paused/menus/offers keep the last aim but
-    // hide the cursor, and game over draws nothing here (GML
-    // `TopCont/Draw_0` is `with Player` - the entity is gone after
-    // death, so the lerped crosshair is gone too; the cursor over the
-    // GameOver screen is `UberCont/Draw_75`'s raw mouse sprite, owned
-    // by the menu-crosshair path in lib.rs).
+    // GML `TopCont/Draw_0` is `with Player`: no entity, no lerped crosshair.
+    // The GameOver cursor is `UberCont/Draw_75`'s raw mouse sprite (menu-crosshair path
+    // in lib.rs).
     let live = world
         .get_resource::<crate::state::AppState>()
         .is_some_and(|s| *s == crate::state::AppState::InGame)
@@ -8160,15 +7990,12 @@ pub fn crosshair_sprites(
     if !live {
         return out;
     }
-    // GML `TopCont/Draw_0:43` + `scrHandleInputsGeneral` verbatim:
-    // `if !UberCont.opt_keyboard || index != global.index ||
-    // is_gamepad(index)` - the lerped world crosshair is skipped ONLY
-    // for a keyboard-driven local player (the raw `Draw_75` cursor
-    // covers their aim). Device facts come from the one shared law
-    // (`input::gml_input_device`): `keyboard[index] = opt_keyboard &&
-    // !opt_gamepad`, `gamepad[index] = opt_gamepad`. A touch-only
-    // device is never keyboard-driven, so a touch local always draws
-    // the lerped crosshair - that IS the GML Android cursor - while
+    // GML `TopCont/Draw_0:43` + `scrHandleInputsGeneral`, gate `!opt_keyboard ||
+    // index != global.index || is_gamepad(index)`: skip ONLY a keyboard-driven local player
+    // (raw `Draw_75` cursor covers their aim). Device facts come from the one shared law
+    // (`input::gml_input_device`): `keyboard[index] = opt_keyboard && !opt_gamepad`,
+    // `gamepad[index] = opt_gamepad`. A touch-only device is never keyboard-driven, so a
+    // touch local always draws the lerped crosshair - the GML Android cursor - and
     // `Draw_75` never fires there.
     let (keyboard_local, _) = crate::input::gml_input_device(
         world.get_resource::<crate::savedata_part::SaveData>(),
@@ -8190,12 +8017,10 @@ pub fn crosshair_sprites(
     } else {
         Vec2::X
     };
-    // GML `dis_fire` source by device: keyboard reads the hover
-    // distance, touch reads the attack-stick SMOOTHED deflection
-    // (`vdis`, carried in `NtInput.touch_dis`). `vdis` eases toward
-    // `dis` while held and decays at 2 px/tick after release
-    // (`JoystickAttack/Other_10`), so the crosshair glides home
-    // instead of snapping to the player on lift.
+    // GML `dis_fire` source by device: keyboard reads the hover distance, touch
+    // the attack-stick SMOOTHED deflection (`vdis` in `NtInput.touch_dis`), easing toward
+    // `dis` while held and decaying at 2 px/tick after release
+    // (`JoystickAttack/Other_10`), so the crosshair glides home on lift.
     let touch_dis = world
         .get_resource::<crate::input::NtInput>()
         .map(|i| i.touch_dis)
@@ -8409,15 +8234,12 @@ fn push_pickup_shadow(
     }
 }
 
-/// Soft blob shadows under actors (GML `scrShadows` entity half,
-/// composited under the actors by `BackCont/Draw_0`). The per-object
-/// `spr_shadow` values and offsets are resolved from the modeled kind;
-/// missing strips simply produce no shadow.
+/// Soft blob shadows under actors (GML `scrShadows` entity half, composited
+/// by `BackCont/Draw_0`). `spr_shadow` values and offsets resolve from the modeled kind;
+/// missing strips draw nothing.
 ///
-/// Every emitter is tinted with [`shadow_color`] at [`SHADOW_ALPHA`]
-/// because GML never draws these to the frame directly: `scrShadows`
-/// stamps opaque black into the `shad` surface and `BackCont/Draw_0`
-/// fogs that surface to the area color at 0.4 alpha.
+/// Tinted [`shadow_color`] at [`SHADOW_ALPHA`]: GML stamps opaque black into `shad`, then
+/// `BackCont/Draw_0` fogs it to the area color at 0.4 alpha.
 pub fn shadow_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInstance> {
     let mut out = Vec::new();
     let tint = world
@@ -8569,13 +8391,11 @@ pub fn bloom_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInst
     }
     out
 }
-/// Char-pod layout (GML `Menu/Create_0` campfire law verbatim): `count`
-/// pods of height `slot_h` on a 240-tall view. `step = min(20,
-/// floor((320-40)/count))` over the fixed `game_screen_width` (320, NOT
-/// the live view width), `xstart = 8`,
-/// `ystart = H-slot_h-((36-slot_h) div 2)`. `wh[1]` is the view height
-/// (always 240); `wh[0]` is accepted for call-site symmetry but ignored
-/// for the step so widescreen keeps the GML left-clustered pods.
+/// Char-pod layout (GML `Menu/Create_0` campfire law): `count` pods of height
+/// `slot_h` on a 240-tall view, `step = min(20, floor((320-40)/count))` over the fixed
+/// `game_screen_width` (320, NOT the live view width), `xstart = 8`, `ystart =
+/// H-slot_h-((36-slot_h) div 2)`. `wh[0]` is ignored for the step, so widescreen keeps
+/// the GML left-clustered pods.
 pub fn char_pod_layout(wh: [f32; 2], count: usize, slot_h: f32) -> Vec<[f32; 2]> {
     let step = go_step(count);
     let y = wh[1] - slot_h - ((36.0 - slot_h) / 2.0).floor();
@@ -8601,9 +8421,6 @@ pub fn go_button_pos(wh: [f32; 2], count: usize, bbox_h: f32) -> [f32; 2] {
     ]
 }
 
-// ---------------------------------------------------------------------------
-// Title click routing (GML campfire pods + GO + loadout zones).
-// ---------------------------------------------------------------------------
 
 /// Character-pod hit size (GML `CharSelect` sprite bbox: the pods are
 /// `sprCharSelect` cells drawn at the layout origin; `title_click_action`
@@ -8625,12 +8442,9 @@ pub fn loadout_available_for_race(race: RaceId) -> bool {
     )
 }
 
-/// Title click → [`UiAction`](crate::audio::UiAction). `slot_h`,
-/// `crownsize` and `skinsize` are the same native-size values
-/// `menu_sprites` draws with (callers pass the catalog sizes or the
-/// 20px fallback); all other geometry mirrors the draw code so clicks
-/// land on the sprites. Stray clicks route to nothing (the old blind
-/// confirm-anywhere is gone).
+/// Title click → [`UiAction`](crate::audio::UiAction). `slot_h`, `crownsize`,
+/// `skinsize` are the native-size values `menu_sprites` draws with (catalog sizes or the
+/// 20px fallback); the rest mirrors the draw geometry. Stray clicks route to nothing.
 pub fn title_click_action(
     world: &mut World,
     gx: f32,
@@ -8694,13 +8508,10 @@ pub fn title_click_action(
 
 /// Mutation/ultra offer icon hit-test → [`UiAction`](crate::audio::UiAction).
 /// Geometry mirrors the offer-icon draw in `hud_sprites` exactly (same
-/// `step`/`half`/`start_x`/`icon_y` formulas over the same live `vw`,
-/// including the `-12` shift at `n >= 10`); the hit box is the bevy
-/// `mutation_panel` size (`24*scale` x `32*scale` centered on the icon,
-/// top at `icon_y - 16*scale`). Two-step bevy law: an unhighlighted card
-/// highlights (`SelectMutation`), the highlighted card commits
-/// (`PickMutation`). Stray clicks and empty offers route to nothing, so a
-/// misclick can never confirm a pick or leak into gameplay.
+/// `step`/`half`/`start_x`/`icon_y` over the same live `vw`, `-12` shift at
+/// `n >= 10`); hit box is bevy `mutation_panel` size (`24*scale` x `32*scale` centered,
+/// top at `icon_y - 16*scale`). Two-step bevy law: unhighlighted highlights
+/// (`SelectMutation`), highlighted commits (`PickMutation`).
 pub fn mutation_icon_hit_action(world: &mut World, gx: f32, gy: f32, vw: f32) -> Option<UiAction> {
     // Ultra offers win over normal ones (same precedence as `sync_hud_state`
     // and `tick_mutation_mirror`, bevy `hud.rs`): when both resources
@@ -9123,14 +8934,12 @@ fn push_loadout_weapon(
     }
 }
 
-/// Closed-frame loadout preview (GML `scrCampfireMenuCreate` "Current
-/// loadout" region: mini crown/weapons ride the closed frame for any
-/// non-Random race; splat + arrow need an available loadout, and trio
-/// races get minis only - `!scr_loadout_is_available_for_race` kills
-/// just the splat toggle). Mini positions are headless steady-state
-/// (`_splat_pointed = 0`): crown at `(splat-60, splat-40)`, weapons at
-/// `(splat-44/splat-68, splat-15)`. The haste-crown clock
-/// (`scrDrawClock`) is dropped.
+/// Closed-frame loadout preview (GML `scrCampfireMenuCreate` "Current loadout"
+/// region): mini crown/weapons for any non-Random race; splat + arrow need an available
+/// loadout, trio races get minis only (`!scr_loadout_is_available_for_race` kills just
+/// the splat toggle). Minis sit at the headless steady state (`_splat_pointed = 0`): crown
+/// `(splat-60, splat-40)`, weapons `(splat-44/splat-68, splat-15)`. Haste-crown clock
+/// (`scrDrawClock`) dropped.
 #[allow(clippy::too_many_arguments)]
 fn menu_loadout_closed_sprites(
     world: &mut World,
@@ -9317,15 +9126,11 @@ pub fn race_skin_subimage(race: RaceId, skin: u8) -> i32 {
     }
 }
 
-/// Campfire big-portrait resolution (GML
-/// `scrCampfireMenuDrawRacePortrait` portrait region verbatim):
-/// headless Chicken when hp <= 0 (frame = skin), hooded Rebel B-skin
-/// in the city, else `sprBigPortrait` + [`race_skin_subimage`].
-/// `hp` is `None` when no live player of that race exists (char
-/// select before the run: treated as alive). Returns `None` for
-/// Random (GML subimage -1 skips the draw). The port has no separate
-/// rebel-hood flag - GML keys it purely on B skin + city area, which
-/// is what this checks.
+/// Campfire big-portrait resolution (GML `scrCampfireMenuDrawRacePortrait` portrait
+/// region): headless Chicken at hp <= 0 (frame = skin), hooded Rebel B-skin in the city,
+/// else `sprBigPortrait` + [`race_skin_subimage`]. `hp` `None` = no live player of that
+/// race (char select: alive). `None` for Random (GML subimage -1 skips the draw). No
+/// rebel-hood flag in the port - GML keys on B skin + city only.
 pub fn big_portrait_for(
     race: RaceId,
     skin: u8,
@@ -9408,15 +9213,12 @@ pub fn splash_sprites(
             }
         }
         2 => {
-            // GML `Vlambeer/Draw_0` verbatim: `draw_sprite(sprite_index,
-            // 0, view_x + (view_w - sprite_w)/2, view_y + (view_h -
-            // sprite_h))` - top-left pinned at `center_x - w/2`,
-            // `bottom - h`, drawn CENTERED (`sprite_for`, not the
-            // top-left `hud_gui_place`: `sprVlambeer` is a top-left
-            // zero-origin strip). + 10 additive shimmer copies at
-            // `orandom(4)` (±4 px), alpha 0.1. GML re-rolls every draw,
-            // so offsets jitter each 30 Hz step (quantized from `t` to
-            // stay deterministic), not frozen on a static hash.
+            // GML `Vlambeer/Draw_0`: `draw_sprite(sprite_index, 0, view_x + (view_w -
+            // sprite_w)/2, view_y + (view_h - sprite_h))` - top-left pinned at `center_x -
+            // w/2`, `bottom - h`, drawn CENTERED (`sprite_for`, not top-left
+            // `hud_gui_place`: `sprVlambeer` is a top-left zero-origin strip). Plus 10
+            // additive shimmer copies at `orandom(4)` (±4 px), alpha 0.1; GML re-rolls
+            // each draw, so offsets jitter per 30 Hz step (quantized from `t`).
             let (fw, fh) = assets
                 .native_size("images/sprVlambeer.png")
                 .map(|v| (v.x, v.y))
@@ -9555,14 +9357,12 @@ fn roadmap_loop_tint(loop_count: u32) -> [f32; 4] {
     [r + m, g + m, b + m, 1.0]
 }
 
-/// GML `draw_line_pixelated` verbatim (`scrDrawRoadmap` local):
-/// `dist = point_distance`, `dir = point_direction` (0 east, 90 south,
-/// y-down degrees); y-bias +2 when `dir in [90,270)` else +1, then
-/// `draw_sprite_ext(sprPixel, 0, x1, y1b, dist, 1, dir, color, alpha)`.
-/// The sprite pipe has a rotation channel but no line primitive, so the
-/// line rides a stretched `sprPixel` centered at the biased midpoint
-/// with `rotation = atan2(dy, dx)` (beam law). Zero-length draws are
-/// skipped (GML `xscale = 0` draws nothing).
+/// GML `draw_line_pixelated` (`scrDrawRoadmap` local): `dist = point_distance`, `dir =
+/// point_direction` (0 east, 90 south, y-down degrees); y-bias +2 when `dir in [90,270)`
+/// else +1, then `draw_sprite_ext(sprPixel, 0, x1, y1b, dist, 1, dir, color, alpha)`.
+/// No line primitive in the sprite pipe: a stretched `sprPixel` centered on the biased
+/// midpoint, `rotation = atan2(dy, dx)` (beam law). Zero-length draws skipped (GML
+/// `xscale = 0` draws nothing).
 fn pixel_line(
     assets: &RenderAssets,
     to_world: &dyn Fn(f32, f32) -> Vec2,
@@ -9612,18 +9412,13 @@ fn pixel_line(
     out.push(white_quad(center, rot, Vec2::new(dist.max(1.0), 1.0), tint));
 }
 
-/// `scrDrawRoadmap` sprite layer (`GameOver/Draw_0`,
-/// `GenCont/Draw_0`): score splats + kills icon (the area/kill strings
-/// ride the text overlay), the 7-area dot strip (`sprMapDot` 3px,
-/// segment 9px, strip 135px wide centered on `drawx`), the palace
-/// crown, and the waypoint dots + connector lines from
-/// `Run.waypoints` (`pos` caps the drawn prefix; game-over passes the
-/// full log). GML area ids: `waypnt % 100` with secrets on a second
-/// row 10px down (`sprMapDotOut`); per-loop colors come from
-/// [`roadmap_loop_tint`]. Connector lines ride [`pixel_line`] (GML
-/// `draw_line_pixelated`: stretched `sprPixel` at `point_direction`
-/// rotation with the +1/+2 y-bias); the background hatch is 3 black +
-/// 1 white lines verbatim, the waypoint shadow 3 black + 1 color line.
+/// `scrDrawRoadmap` sprite layer (`GameOver/Draw_0`, `GenCont/Draw_0`): score splats +
+/// kills icon (area/kill strings ride the text overlay), the 7-area dot strip (`sprMapDot`
+/// 3px, segment 9px, strip 135px wide centered on `drawx`), palace crown, waypoint dots +
+/// connectors from `Run.waypoints` (`pos` caps the drawn prefix; game-over passes the
+/// full log). GML ids `waypnt % 100`, secrets on a second row 10px down (`sprMapDotOut`);
+/// loop colors from [`roadmap_loop_tint`]. Connectors ride [`pixel_line`]; background
+/// hatch 3 black + 1 white lines, waypoint shadow 3 black + 1 color line.
 pub fn roadmap_sprites(
     assets: &RenderAssets,
     to_world: &dyn Fn(f32, f32) -> Vec2,
@@ -9918,19 +9713,13 @@ pub fn place_touch_sprite_rot(
     })
 }
 
-/// Menu art sprites (`Menu/Draw_0`, portrait, loadout, logo, and
-/// game-over splats verbatim where the UI framework cannot draw them):
-/// char pods (`sprCharSelect` frame = race, locked gray), GO button,
-/// selected-race portrait + splat, logo, and game-over splats.
-/// Positions are GML view px (`Menu/Draw_0` snaps pods/buttons to
-/// `view + start`): view-space points map to world through the live
-/// view rect (GUI == view, [`hud_gui_map`] identity).
+/// Menu art sprites (`Menu/Draw_0`, drawn here where the UI framework cannot):
+/// positions are GML view px (`Menu/Draw_0` snaps pods/buttons to `view + start`); view
+/// points map to world through the live view rect (GUI == view, [`hud_gui_map`] identity).
 ///
-/// Touch controls (`scrDrawMobileControls` verbatim) live here too:
-/// they're GUI-space chrome drawn from `NtInput` stick anchors, not
-/// world entities. Gated on a live touch session
-/// (`move_stick`/`attack_stick` claimed at least once); hidden sticks
-/// (`opt_hiddensticks`) render at 0.2 alpha only while touched.
+/// Touch controls (`scrDrawMobileControls`) too: GUI-space chrome from `NtInput` stick
+/// anchors, not world entities. Gated on a live touch session (`move_stick`/`attack_stick`
+/// claimed once); hidden sticks (`opt_hiddensticks`) at 0.2 alpha only while touched.
 pub fn touch_sprites(
     world: &mut World,
     assets: &RenderAssets,
@@ -9946,16 +9735,13 @@ pub fn touch_sprites(
     let Some(input) = world.get_resource::<crate::input::NtInput>().cloned() else {
         return out;
     };
-    // GML `TopCont/Draw_64:23` gate verbatim: `drawcontrols && player &&
-    // !(MenuOptions && editing_mode) && !opt_keyboard && !opt_gamepad`.
-    // The two option reads go through the one shared device law
-    // (`input::gml_input_device`) so the chrome and the touch INPUT can
-    // never disagree about which device this is - the input sampler
-    // runs on fingers-down, and reading the persisted flags here alone
-    // is what let the chrome vanish on a phone while the sticks still
-    // answered. Binds the whole chrome (sticks at home + act/swap/
-    // ability/splitfire art), not just live claims - GML draws the
-    // homes at all times in a run.
+    // GML `TopCont/Draw_64:23` gate: `drawcontrols && player && !(MenuOptions &&
+    // editing_mode) && !opt_keyboard && !opt_gamepad`. Both option reads go through the
+    // one shared device law (`input::gml_input_device`) so chrome and touch INPUT cannot
+    // disagree - the sampler runs on fingers-down, and reading the persisted flags alone
+    // is what let chrome vanish on a phone while sticks still answered. Binds the whole
+    // chrome (stick homes + act/swap/ability/splitfire), not just live claims: GML draws
+    // the homes at all times.
     let (keyboard, gamepad) = crate::input::gml_input_device(save.as_ref());
     if keyboard || gamepad {
         return out;
@@ -10089,26 +9875,19 @@ pub fn touch_sprites(
             }
         }
     }
-    // Fixed buttons (`ButtonAct`/`ButtonSwap`/`ButtonActive` homes from
-    // `sample_touch`):
-    // - `ButtonActive`: `sprMobileControlAbility` at 0.75x in `c_white`
-    //   at `_alpha = min(1, rogue_hide / 60)` - GML starts `rogue_hide`
-    //   at 180, so the resting state is full-bright white. `c_lime`
-    //   (`activeforever`) / `c_gray` (claimed) / the volume-control
-    //   colors need the claim + hold state, which the sampler keeps
-    //   local; this draws the resting state.
-    // - `ButtonAct`: `sprMobileControlCorners` at the act home, only
-    //   while the pickup prompt is lit (GML `alpha > 0`, see
-    //   [`crate::state::ActButton`]). GML additionally fills its
-    //   `37/255` black disc (`scrDrawMobileControls:221-223`), which
-    //   the port does not draw; the 1.6x corner re-draw at
-    //   `scrDrawPlayerHUD.gml:391-394` is a no-op in GML itself
-    //   (`ButtonAct` never gets a `sprite_index`).
-    // - splitfire `ButtonAttack`: corners sprite + double crosshair at
-    //   the button home.
-    // Button homes mirror the sampler (`ButtonAct` w/2,48;
-    // `ButtonSwap` 64,h/2-48; `ButtonActive` w-64,h/2-48;
-    // `ButtonAttack` w-48,h/2) - the view width in GUI px is `vw`.
+    // Fixed buttons (`ButtonAct`/`ButtonSwap`/`ButtonActive` homes from `sample_touch`):
+    // homes mirror the sampler (`ButtonAct` w/2,48; `ButtonSwap` 64,h/2-48; `ButtonActive`
+    // w-64,h/2-48; `ButtonAttack` w-48,h/2), `vw` = view width in GUI px.
+    // - `ButtonActive`: `sprMobileControlAbility` 0.75x `c_white` at `_alpha = min(1,
+    //   rogue_hide / 60)`; GML starts `rogue_hide` at 180, so resting is full-bright
+    //   white. `c_lime` (`activeforever`) / `c_gray` (claimed) / volume colors need the
+    //   sampler's local claim + hold state: resting state only.
+    // - `ButtonAct`: `sprMobileControlCorners` at the act home, only while the pickup
+    //   prompt is lit (GML `alpha > 0`, [`crate::state::ActButton`]). GML also fills its
+    //   `37/255` black disc (`scrDrawMobileControls:221-223`), undrawn here; the 1.6x
+    //   corner re-draw at `scrDrawPlayerHUD.gml:391-394` is a GML no-op (`ButtonAct`
+    //   never gets a `sprite_index`).
+    // - splitfire `ButtonAttack`: corners sprite + double crosshair at the button home.
     {
         let gui_w = vw;
         let gui_h = 240.0;
@@ -10129,11 +9908,10 @@ pub fn touch_sprites(
         ) {
             out.push(s);
         }
-        // `ButtonAct` (the pickup prompt). GML `scrDrawMobileControls`:
-        // `if (!instance_exists(_player)) alpha = 1; else if (alpha <= 0)
-        // continue` - and `alpha` only ever holds up while the player
-        // stands on a pickup (`scrDrawPlayerHUD` raises `active`, see
-        // [`crate::state::ActButton`]). Drawing it unconditionally is the
+        // `ButtonAct` pickup prompt: GML `scrDrawMobileControls` `if
+        // (!instance_exists(_player)) alpha = 1; else if (alpha <= 0) continue`, and
+        // `alpha` holds up only while the player stands on a pickup (`scrDrawPlayerHUD`
+        // raises `active`, [`crate::state::ActButton`]). Unconditional draw = the
         // "pickup indicator always showing" bug.
         let act_lit = world
             .get_resource::<crate::state::ActButton>()
@@ -10249,15 +10027,12 @@ pub fn touch_sprites(
     out
 }
 
-/// GML in-run pause button (`UberCont/Draw_64:46-61` verbatim):
-/// `draw_sprite_ext(sprMobilePauseButton, 0, view_width - 24, 16, 0.75,
-/// 0.75, 0, c_white, 0.5)` - drawn on EVERY device (`opt_pausebutton`
-/// gates it, never the input mode), so it lives outside the touch chrome
-/// while still sharing its GUI space. `UberCont` depth -1000 is lower
-/// than `TopCont`'s -15 and `Menu`'s -1001, so it paints OVER the
-/// mobile controls and the menus (see [`Z_PAUSE_BUTTON`]).
-/// Gated on `opt_pausebutton` + a live Player. Geometry and the hit
-/// test live in [`crate::input`] next to the rest of the GML input law.
+/// GML in-run pause button (`UberCont/Draw_64:46-61`):
+/// `draw_sprite_ext(sprMobilePauseButton, 0, view_width - 24, 16, 0.75, 0.75, 0, c_white,
+/// 0.5)` - on EVERY device (`opt_pausebutton` gates it, never the input mode), so it lives
+/// outside the touch chrome. `UberCont` depth -1000 < `TopCont`'s -15 and `Menu`'s -1001,
+/// so it paints OVER mobile controls and menus ([`Z_PAUSE_BUTTON`]). Hit test in
+/// [`crate::input`].
 pub fn pause_button_sprite(
     world: &mut World,
     assets: &RenderAssets,
@@ -10357,12 +10132,10 @@ pub fn menu_sprites(
                 .enumerate()
             {
                 let race = roster[i];
-                // GML `CharSelect/Draw_0` verbatim: `can =
-                // scr_race_is_unlocked(race) || UberCont.weekly_run`,
-                // `draw_sprite_ext(can ? sprite_index :
-                // sprCharSelectLocked, race, x, y, 1, 1, 0, color, 1)`
-                // with `color = (can && selected) ? c_white : c_gray`
-                // (`c_gray` = 128,128,128 - NOT half-alpha). Pods are
+                // GML `CharSelect/Draw_0`: `can = scr_race_is_unlocked(race) ||
+                // UberCont.weekly_run`, `draw_sprite_ext(can ? sprite_index :
+                // sprCharSelectLocked, race, x, y, 1, 1, 0, color, 1)`, `color = (can &&
+                // selected) ? c_white : c_gray` (128,128,128 - NOT half-alpha). Pods
                 // view-snapped (`x = view_xview + xstart`).
                 let weekly = menu.as_ref().is_some_and(|m| m.weekly_run_menu);
                 let can = save.as_ref().is_some_and(|s| s.race_unlocked(race)) || weekly;
@@ -10409,12 +10182,9 @@ pub fn menu_sprites(
                 }
             }
             // Selected-race portrait + splat + name plate (GML
-            // scrCampfireMenuDrawRacePortrait/CharText: headless
-            // chicken, hooded rebel, skin subimages, char splat,
-            // big-name art). Single-player port: only index 0 draws.
-            // GML orders P2-P4 after (`scrMenuDrawPlayersOrdered`,
-            // back-layer gray at index >= 2) - vacuous here, the port
-            // has no coop player instances.
+            // scrCampfireMenuDrawRacePortrait/CharText): single-player port draws only
+            // index 0; GML's P2-P4 order (`scrMenuDrawPlayersOrdered`, back-layer gray at
+            // index >= 2) is vacuous with no coop instances.
             let race = CHAR_SELECT_ORDER[selected.min(CHAR_SELECT_ORDER.len() - 1)];
             let skin = save
                 .as_ref()
@@ -10470,14 +10240,11 @@ pub fn menu_sprites(
             ) {
                 out.push(s);
             }
-            // Big-name sprite: GML draws it ONLY when the name is
-            // unlocalized AND multiplayer
-            // (`scrCampfireMenuDrawCharText:444`); single-player always
-            // uses the bigname text (the overlay lines), so no sprite
-            // GO button (armed only + GML `Menu/Create_0:49` space gate:
-            // created only if the pod row leaves room,
-            // `_slot_x < view_width - 30`; single-player is always
-            // `is_server`).
+            // Big-name sprite: GML draws it ONLY for an unlocalized name in
+            // multiplayer (`scrCampfireMenuDrawCharText:444`); single-player uses the
+            // bigname text (the overlay lines), so no sprite.
+            // GO button: armed only + GML `Menu/Create_0:49` space gate (`_slot_x <
+            // view_width - 30`); single-player is always `is_server`.
             let last_pod_x = 8.0 + roster.len().saturating_sub(1) as f32 * go_step(roster.len());
             let go_space = last_pod_x < vw - 30.0;
             if go_visible && go_space {
@@ -10676,13 +10443,10 @@ pub fn menu_sprites(
                 ));
             }
         }
-        // GML `LevCont/Draw_0` calls `scrDrawSpiral()` (opaque clear)
-        // then draws ONLY the offer chrome: title/subtitle text plus
-        // the SkillIcon/UltraIcon/CrownIcon cards. No camp pods, no
-        // roadmap, no PlayerHUD - those rooms never had them. The text
-        // half lives in `menu_gui_texts(Mutation)`; the cards compose
-        // here so they sit under the opaque cover pass with the rest of
-        // the viewport.
+        // GML `LevCont/Draw_0`: `scrDrawSpiral()` (opaque clear) then ONLY the
+        // offer chrome - title/subtitle text plus SkillIcon/UltraIcon/CrownIcon cards. No
+        // camp pods, roadmap or PlayerHUD (those rooms never had them). Text half in
+        // `menu_gui_texts(Mutation)`; cards compose here, under the cover pass.
         crate::MenuOverlay::Mutation => {
             let cx = vw * 0.5;
             let menu = world.get_resource::<MenuState>().cloned();
@@ -11287,15 +11051,12 @@ pub fn spiral_figure_layout(
     out
 }
 
-/// Spiral center figures (`scripts/scrDrawSpiral` CPU layer verbatim):
-/// the carried crown orbiting the spiral center plus one hurt-frame
-/// player figure per player, over the vortex background. `center` is the
-/// view center (GML `fishx/fishy`), `angle_deg` the spiral angle in
-/// degrees (GML `image_angle`; port `SpiralCtl.angle` is degrees too).
-/// Skipped while Throne II lives (GML `Nothing2` gate: Nothing2,
-/// Nothing2Corpse and Nothing2Death all suppress the figures - the port
-/// reads it off any live Throne-II enemy) or while `Credits` runs
-/// without a crown carrier (GML `!instance_exists(Credits)` gate).
+/// Spiral center figures (`scripts/scrDrawSpiral` CPU layer): the carried
+/// crown orbiting the spiral center plus one hurt-frame player figure per player, over the
+/// vortex background. `center` = view center (GML `fishx/fishy`), `angle_deg` = spiral
+/// angle in degrees (GML `image_angle`; `SpiralCtl.angle` too). Skipped while Throne II
+/// lives (GML `Nothing2` gate: Nothing2/Nothing2Corpse/Nothing2Death all suppress - port
+/// reads any live Throne-II enemy) or while `Credits` runs without a crown carrier.
 pub fn spiral_figures(
     world: &mut World,
     assets: &RenderAssets,
@@ -11348,9 +11109,8 @@ pub fn spiral_figures(
     out
 }
 
-/// Damage numbers ride [`fx_texts`] instead: [`SpriteInstance`] cannot
-/// carry text, so [`DamageNumber`] comps resolve to [`WorldText`] for
-/// the repose text overlay.
+/// Damage numbers ride [`fx_texts`]: [`SpriteInstance`] carries no text, so
+/// [`DamageNumber`] comps resolve to [`WorldText`] for the repose text overlay.
 /// GML `draw_pickup_button` sprite half (`draw_gamepad_button.gml:43-101`):
 /// the `sprEPickup` pill at `(x, y - 7)`, plus the `pick` pad glyph at
 /// `(x, y - 15)` while the GAMEPAD switch is on.
@@ -11391,17 +11151,13 @@ fn push_pickup_prompt(
 pub fn fx_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInstance> {
     let mut out = Vec::new();
 
-    // GML `scrDrawInteractionHUD` (`scripts/scrDrawPlayerHUD/
-    // scrDrawPlayerHUD.gml:339-376`) + `draw_pickup_button`
-    // (`scripts/draw_gamepad_button/draw_gamepad_button.gml:43-101`).
-    // The prompt TEXT lines ride the text pass; the sprite parts ride
-    // this one: the `sprEPickup` "E" pill at `(x, y-7)` (drawn at
-    // full opacity with `_offset = 7`, once per `prop_prompts` hit as
-    // well, since GML runs `draw_pickup_button` before the
-    // weapon/prop branch at `:355`), and `scrDrawTypeAmmo`'s
-    // background/icon pair at `(x + 7, y - 14)` with the background on
-    // subimage 2 and the icon at `_frames - ceil(_frames * fill)`, so
-    // a full magazine is icon frame 0.
+    // GML `scrDrawInteractionHUD` (`scripts/scrDrawPlayerHUD/scrDrawPlayerHUD.gml:339-376`)
+    // + `draw_pickup_button` (`scripts/draw_gamepad_button/draw_gamepad_button.gml:43-101`).
+    // Prompt TEXT rides the text pass; sprite parts here: `sprEPickup` "E" pill at
+    // `(x, y-7)` (full opacity, `_offset = 7`, once per `prop_prompts` hit too since GML
+    // runs `draw_pickup_button` before the weapon/prop branch at `:355`), and
+    // `scrDrawTypeAmmo`'s background/icon pair at `(x + 7, y - 14)` - background subimage 2,
+    // icon at `_frames - ceil(_frames * fill)`, so a full magazine is icon frame 0.
     {
         if let Some(label) = world.get_resource::<crate::pickups::WeaponLabel>() {
             // GML `draw_pickup_button.gml:49-56`: under the GAMEPAD
@@ -11449,12 +11205,10 @@ pub fn fx_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInsta
         }
     }
 
-    // Beams: oriented strip quads spanning the sim segment. `Pos` is
-    // the segment center (`spawn_beam_shot`/`boss_ai` parity), so the
-    // quad stays center-anchored (the strip's own `[0, 0.5]` anchor is
-    // overridden) and `size.x = length` spans the endpoints. Tint is
-    // the bevy `BeamSpec`/sprite color (ion cyan, laser red, boss
-    // orange/green), carried on the sim `Beam`.
+    // Beams: `Pos` is the sim segment center (`spawn_beam_shot`/`boss_ai` parity),
+    // so the quad stays center-anchored (the strip's `[0, 0.5]` anchor overridden) and
+    // `size.x = length` spans the endpoints. Tint = bevy `BeamSpec`/sprite color (ion
+    // cyan, laser red, boss orange/green).
     {
         let mut q = world.query::<(&Pos, &Beam)>();
         for (pos, beam) in q.iter(world) {
@@ -11496,9 +11250,8 @@ pub fn fx_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInsta
     // is the yellow `muzzle_burst` particle spray (spawned sim-side)
     // plus gun wkick. `FiredWeapon` markers expire silently.
 
-    // Hazard clouds: static translucent kind-tinted rects (bevy spawns
-    // the cloud `Sprite` with the spec color, no pulse; the ring strip
-    // has no catalog entry here, so ring degrades to a disc).
+    // Hazard clouds: kind-tinted translucent rects, no pulse; the ring has no
+    // catalog entry, so ring degrades to a disc.
     {
         let mut q = world.query::<(&Pos, &HazardCloud)>();
         for (pos, cloud) in q.iter(world) {
@@ -11547,16 +11300,11 @@ pub fn fx_texts(world: &mut World) -> Vec<WorldText> {
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// HUD labels.
-// ---------------------------------------------------------------------------
 
 /// World-anchored HUD labels for the repose `Text` overlay: run extras
-/// with no bevy `nt_hud_overlay` equivalent (toast, floor/score/kills,
-/// GML clock + map name, boss bar, IDPD warning, game-over line, weapon
-/// pickup label). The core HP/level/ammo/LOW-HP rows live in
-/// [`hud_gui_texts`] (bevy content + positions verbatim) and are NOT
-/// duplicated here.
+/// with no bevy `nt_hud_overlay` equivalent (toast, floor/score/kills, GML clock + map
+/// name, boss bar, IDPD warning, game-over line, weapon pickup label). Core HP/level/
+/// ammo/LOW-HP rows live in [`hud_gui_texts`], not here.
 pub fn hud_texts(world: &mut World) -> Vec<(String, [f32; 2])> {
     let hud: HudState = sync_hud_state(world);
     let player_pos = world
@@ -11608,14 +11356,11 @@ pub fn hud_texts(world: &mut World) -> Vec<(String, [f32; 2])> {
             [0.0, 0.0],
         ));
     }
-    // GML `scrDrawInteractionHUD` verbatim (nearest-pickup half):
-    // the nearest weapon pickup's name at the pickup `+(0,-31)` in
-    // room px (world-anchored here; the view subtracts the camera).
-    // GML draws at `(floor(x - view_xview), floor(y - view_yview) - 31)`
-    // = room pos - 31 px, i.e. world `[gun.x, gun.y - 31]`. (The ammo
-    // gauge + touch `ButtonAct` ring ride the deferred sprite pass.)
-    // The `Prompt{Object}` prop lines (`:371-376`) ride the same law
-    // at each `prop_prompts` hit.
+    // GML `scrDrawInteractionHUD` (nearest-pickup half): the nearest weapon
+    // pickup's name at the pickup `+(0,-31)` in room px (world-anchored here; the view
+    // subtracts the camera) - GML draws at `(floor(x - view_xview), floor(y - view_yview)
+    // - 31)` = world `[gun.x, gun.y - 31]`. Ammo gauge + touch `ButtonAct` ring ride the
+    // deferred sprite pass; `Prompt{Object}` prop lines (`:371-376`) ride the same law.
     if let Some(label) = world.get_resource::<crate::pickups::WeaponLabel>() {
         if let Some(target) = label.target {
             if let Some(gun) = world.get::<Pos>(target) {
@@ -11651,61 +11396,46 @@ pub fn hud_texts_dp(
         .collect()
 }
 
-// ---------------------------------------------------------------------------
 // Fidelity notes.
-// ---------------------------------------------------------------------------
 //
-// Compromises vs the bevy build (all art-name level; sim truth kept):
-// - Wall quads composite Out/Bot/Top + Trans with the seeded bevy
-//   variant frames and GM-origin placement, but top decals
-//   (`sprNightDesert…`) are not drawn. The darkened outside-floor ring
+// Compromises vs bevy (art-name level; sim truth kept):
+// - Wall quads composite Out/Bot/Top + Trans with the seeded bevy variant frames + GM
+//   origins; top decals (`sprNightDesert…`) undrawn. Darkened outside-floor ring
 //   (`sprFloorEx1` + 0.45 tint) is drawn.
-// - Ground decals draw the route floor's top-decal strip (bevy
-//   `area_sprites` 6th column) at gray 0.5 via `GroundDecalTint`.
-// - Projectile strips follow the bevy frame law (`projectile_frame`:
-//   2-frame strips pin to the second cell, longer strips animate at
-//   12 fps off the projectile's life clock).
-// - Projectile custom sizes (plasma growth, bolt stretch) are skipped:
-//   quads use catalog cell size (pickups too: bevy `spawn_pickup`
-//   ignores `pickup_sprite`'s sizes and draws native strip frames).
-// - Chest idle shimmer rides the live `SpriteAnim` frame (bevy
-//   attaches the strip the same way); opened chests draw the
+// - Ground decals draw the route floor's top-decal strip (bevy `area_sprites` 6th column)
+//   at gray 0.5 via `GroundDecalTint`.
+// - Projectile strips follow `projectile_frame`: 2-frame strips pin to the second cell,
+//   longer strips animate at 12 fps off the life clock. Custom sizes (plasma growth, bolt
+//   stretch) skipped - catalog cell size (pickups too: bevy `spawn_pickup` ignores
+//   `pickup_sprite` sizes, draws native strip frames).
+// - Chest idle shimmer rides the live `SpriteAnim` frame; opened chests draw
 //   kind-specific open art frozen on bevy's last frame.
-// - Transient FX ride `fx_instances` / `fx_texts`: beams stretch
-//   `sprLightBeam` along the sim segment, arcs stretch `sprLightning`
-//   (frame follows life), muzzles are warm tinted quads (no muzzle
-//   strip exists in the catalog), hazards are kind-tinted translucent
-//   discs (the bevy ring sprite has no strip here, so ring → disc),
-//   particles map 1:1 through `particle_sprites`, and damage numbers
-//   resolve as `WorldText` (sprites cannot carry text).
-// - Beam tint rides the sim `Beam.color` (bevy `BeamSpec`/sprite
-//   parity: ion cyan, laser red, boss orange/green).
-// - Hazard discs ignore per-cloud alpha: alpha pulses on the sim clock
-//   instead of the cloud's own timer fraction.
-// - Portal bodies draw their live strip (spawn/idle/disappear swaps
-//   ride `animate_portal`); shock/clear/strike draw 1-frame-per-step
-//   strips in the hit-FX pass. The vortex background itself is not a
-//   sprite (it is the fullscreen `crate::vortex_pass::VortexPass`).
-// - Dynamic art paths bevy built at runtime (`weapon_id_sprite` falls
-//   back to revolver here too when `wep_sprt` is `mskNone`/absent, and
-//   secret tile families fall back to route strips when the pack lacks
-//   `sprFloor10x` - same `has` law, smaller pack).
-// - Camera follow is the GML `BackCont` law verbatim
-//   (`gml_camera_step`: POI pull /6 cap 72, aim lean dis/viewdist,
-//   orandom shake, snap, round, knock decay; view-layer state in
-//   `App`); the only deviation is no per-run snap reset beyond boot
-//   and floor starts, so transitions don't re-swoop from the origin.
+// - FX ride `fx_instances`/`fx_texts`: beams stretch `sprLightBeam` along the sim
+//   segment (tint = sim `Beam.color`: ion cyan, laser red, boss orange/green), arcs
+//   stretch `sprLightning` (frame follows life), muzzles are warm tinted quads (no
+//   muzzle strip in the catalog), hazards are kind-tinted discs ignoring per-cloud
+//   alpha (pulse on the sim clock, not the cloud's timer fraction; ring has no strip, so
+//   ring → disc), particles map 1:1 through `particle_sprites`, damage numbers resolve
+//   as `WorldText`.
+// - Portal bodies draw their live strip (swaps ride `animate_portal`); shock/clear/
+//   strike draw 1-frame-per-step strips in the hit-FX pass. The vortex background is
+//   not a sprite (fullscreen `crate::vortex_pass::VortexPass`).
+// - Dynamic art paths bevy built at runtime (`weapon_id_sprite` falls back to revolver
+//   here too when `wep_sprt` is `mskNone`/absent; secret tile families fall back to
+//   route strips when the pack lacks `sprFloor10x`).
+// - Camera follow is the GML `BackCont` law verbatim (`gml_camera_step`: POI pull /6
+//   cap 72, aim lean dis/viewdist, orandom shake, snap, round, knock decay; view-layer
+//   state in `App`); only deviation: no per-run snap reset beyond boot and floor
+//   starts, so transitions don't re-swoop from the origin.
 
 #[cfg(test)]
 mod verbatim_ui_layers {
     use super::*;
 
-    /// Reported bug verbatim: HUD bars/icons rendered behind floor
-    /// ground. Every sprite used to share z=0, so the engine's
-    /// `(blend, z, page)` sort let atlas page decide - floor tiles won
-    /// over the health bar whenever their page sorted later. The
-    /// z-ladder (GML `__global_object_depths` order) keeps GUI chrome
-    /// above world chrome on every backend.
+    /// Reported bug: HUD bars/icons behind floor ground - every sprite shared
+    /// z=0, so the engine's `(blend, z, page)` sort let atlas page decide and floor tiles
+    /// won. The z-ladder (GML `__global_object_depths` order) keeps GUI chrome above world
+    /// chrome on every backend.
     #[test]
     fn z_ladder_orders_chrome_above_world() {
         assert!(Z_SHADOW < Z_WORLD);
@@ -11732,12 +11462,10 @@ mod verbatim_ui_layers {
         assert!(v.iter().all(|s| s.z == Z_HUD));
     }
 
-    /// GML `BackCont/Draw_0:9-14` never draws a `scrShadows` emitter to the
-    /// frame: it stamps opaque black into the `shad` surface, then composites
-    /// that surface with `draw_set_alpha(0.4)` and
-    /// `gpu_set_fog(1, shadow_color, ...)`. So every shadow is the AREA's
-    /// shadow color at 40% alpha - the port used to draw them fully opaque
-    /// and untinted.
+    /// GML `BackCont/Draw_0:9-14` never draws a `scrShadows` emitter to
+    /// the frame: it stamps opaque black into `shad`, then composites it with
+    /// `draw_set_alpha(0.4)` + `gpu_set_fog(1, shadow_color, ...)`. Every shadow is the
+    /// AREA's shadow color at 40% alpha.
     #[test]
     fn shadows_composite_through_the_shad_surface() {
         assert_eq!(SHADOW_ALPHA, 0.4);
@@ -11858,11 +11586,10 @@ mod ui_parity_regression {
     }
 
     /// GML `draw_text_nt` block law: one row per visual line (the shell
-    /// renders `.single_line()`), so multi-line producers pre-split.
-    /// The Title passive/active pair arrives as two rows at `180 +
-    /// appear` / `188 + appear` (GML `scrCampfireMenuDrawCharText`:
-    /// `fa_middle` block centered on `172 + height/2 + appear + 8`),
-    /// never one `\n` row (the literal-`\n` overlap bug).
+    /// renders `.single_line()`), so multi-line producers pre-split. The Title
+    /// passive/active pair arrives as two rows at `180 + appear` / `188 + appear` (GML
+    /// `scrCampfireMenuDrawCharText`: `fa_middle` block centered on `172 + height/2 +
+    /// appear + 8`), never one `\n` row.
     #[test]
     fn title_skill_rows_are_two_rows() {
         let mut world = World::new();

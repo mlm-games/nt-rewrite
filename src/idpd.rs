@@ -1,23 +1,18 @@
-//! IDPD raid director. Ported from the bevy reference `game/idpd.rs`
-//! (`is_idpd_kind`, `may_queue_new_raid`, `should_trigger_idpd`,
-//! `choose_wave`, `edge_spawn_points_away_from`, `tick_idpd_raids`,
-//! `spawn_raid_wave`, `spawn_at`/`grunt`/`shield`/`elite`/`van`,
-//! `tick_idpd_vans`, `hq_pressure`) with positions as [`Pos`] (`Vec2`)
-//! instead of `Transform.translation`.
+//! IDPD raid director. Ported from the bevy reference `game/idpd.rs` with
+//! positions as [`Pos`] (`Vec2`) instead of `Transform.translation`.
 //!
-//! Render split: portal bursts route through
-//! [`crate::effects::spawn_burst`] and trauma through
-//! `repame_fx::Trauma`, matching the bevy `VfxSpawner`/`ScreenEffects`
-//! call sites. The warning sting is the `VanSpawn/Create_0:41` cue
-//! (`sndOasisPopo` under water, else `sndVanWarning`) at 1.0/0.0; the
-//! portal whoosh goes through [`GameAudio::play_portal`].
+//! Render split: portal bursts route through [`crate::effects::spawn_burst`]
+//! and trauma through `repame_fx::Trauma`, matching the bevy
+//! `VfxSpawner`/`ScreenEffects` call sites. The warning sting is the
+//! `VanSpawn/Create_0:41` cue (`sndOasisPopo` under water, else
+//! `sndVanWarning`) at 1.0/0.0; the portal whoosh goes through
+//! [`GameAudio::play_portal`].
 //!
-//! Spawn path: waves call [`crate::enemies::spawn_enemy_at`] (base
-//! bundle + brains + table stats), so no second spawn pipeline.
-//! Timing is [`GTimer`] driven off [`SimTime`]; the
-//! [`LoopTransition`] gating matches `loop_transition.rs` exactly
-//! (`blocks_new_idpd_raids`, `throne_ii_alive`, `loop_ready`,
-//! `campfire_active`).
+//! Spawn path: waves call [`crate::enemies::spawn_enemy_at`] (base bundle +
+//! brains + table stats), so no second spawn pipeline. Timing is [`GTimer`]
+//! driven off [`SimTime`]; the [`LoopTransition`] gating matches
+//! `loop_transition.rs` exactly (`blocks_new_idpd_raids`, `throne_ii_alive`,
+//! `loop_ready`, `campfire_active`).
 
 use bevy_ecs::prelude::*;
 use rand::RngExt;
@@ -100,11 +95,11 @@ pub fn idpd_elite_roll(loop_count: u32, area: AreaId) -> bool {
     eligible && rand::rng().random::<f32>() < 0.2
 }
 
-/// GML `IDPDSpawn/Alarm_1` spawn table: a lone `PopoFreak` on deep
-/// loops (`loops - (area == 0) >= 3`), else the popolevel-gated dir roll
-/// (`rng_choose(1, 1, 2, 3)`, dir 3 needs popolevel 3+, dir 2 needs 5+;
-/// loop 0 with LilHunter alive forces dir 1). Elites swap the whole dir
-/// pick for their elite kind.
+/// GML `IDPDSpawn/Alarm_1` spawn table: a lone `PopoFreak` on deep loops
+/// (`loops - (area == 0) >= 3`), else the popolevel-gated dir roll
+/// (`rng_choose(1, 1, 2, 3)`, dir 3 needs popolevel 3+, dir 2 needs 5+; loop 0
+/// with LilHunter alive forces dir 1). Elites swap the whole dir pick for their
+/// elite kind.
 pub fn roll_idpd_table(
     loop_count: u32,
     area: AreaId,
@@ -167,12 +162,11 @@ pub fn roll_idpd_dir(
     }
 }
 
-/// GML `objects/IDPDSpawn/Create_0.gml` - the popo portal, distinct from
-/// the `Portal` object. `alarm[0]` fires at `40 + instance_number * 3`
-/// frames, arms `alarm[1]` 12 frames later, and `alarm[1]` raises the
-/// wave; `Other_7` destroys the instance when the close strip ends.
-/// The elite flag is stamped once in `Create_0`, so it is fixed before
-/// the `dir` roll in `Alarm_1`.
+/// GML `objects/IDPDSpawn/Create_0.gml` - the popo portal, distinct from the
+/// `Portal` object. `alarm[0]` fires at `40 + instance_number * 3` frames, arms
+/// `alarm[1]` 12 frames later, and `alarm[1]` raises the wave; `Other_7` destroys
+/// the instance when the close strip ends. The elite flag is stamped once in
+/// `Create_0`, so it is fixed before the `dir` roll in `Alarm_1`.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct IdpdSpawnPortal {
     /// `Create_0.gml:30-34`: 1-in-5 once the loops/area gate passes.
@@ -235,10 +229,10 @@ pub struct IdpdVanDeployed;
 
 /// GML `objects/Van` deploy bookkeeping. `right` is stamped at spawn
 /// (`Create_0.gml:14-23`) because `Alarm_1` places its payload at
-/// `x - 55 * right` / `x - 50 * right`; `frames` counts the
-/// `alarm[0] = 40` (`Create_0.gml:28`) plus `Alarm_0`'s `alarm[1] = 10`
-/// down to the one-shot deploy, and `inert` re-arms once
-/// `Alarm_2` (15) + `Alarm_3` (20) have parked the van for good.
+/// `x - 55 * right` / `x - 50 * right`; `frames` counts `alarm[0] = 40`
+/// (`Create_0.gml:28`) plus `Alarm_0`'s `alarm[1] = 10` down to the one-shot
+/// deploy, and `inert` re-arms once `Alarm_2` (15) + `Alarm_3` (20) have parked
+/// the van for good.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct IdpdVanDeploy {
     pub right: f32,
@@ -263,23 +257,15 @@ pub const VAN_INERT_FRAMES: f32 = 35.0;
 /// repeat 6 { with instance_create(x, y, IDPDSpawn) { ... } }
 /// ```
 ///
-/// Each `IDPDSpawn` runs its own `Create_0`, so this raises six portals
-/// that each bump `GameCont.popolevel` (which is what gates the
-/// Shielders / Inspectors / Elites / PopoFreak table in `Alarm_1`),
-/// stamp their own elite flag, take their own
-/// `40 + instance_number * 3` slot in the open window, and play their
-/// own spawn sting. `live_portals` is the current `IdpdSpawnPortal`
-/// count, so a raid raised alongside existing portals lands in the same
-/// stagger GML's `instance_number` produces. Returns the elite count.
-///
-/// `during_worldgen` is the port's stand-in for GML's
-/// `if instance_exists(GenCont) exit`: the generator is pure, so the
-/// caller states the phase.
-/// GML `IDPDChest/Destroy_0.gml:11-20`: `repeat 6 instance_create(x, y,
-/// IDPDSpawn)`. Each `IDPDSpawn/Create_0` bumps `GameCont.popolevel` and
-/// schedules its wave 52+ frames out, so this raises six PORTALS, never
-/// six grunts. `instance_number(IDPDSpawn)` is 1-based and counts every
-/// live portal, so a batch staggers 55, 58, 61, 64, 67, 70.
+/// `Destroy_0.gml:11-20`: `repeat 6 instance_create(x, y, IDPDSpawn)`, so this
+/// raises six PORTALS, never six grunts. Each runs its own `IDPDSpawn/Create_0`
+/// and bumps `GameCont.popolevel` (which gates the Shielders / Inspectors /
+/// Elites / PopoFreak table in `Alarm_1`), schedules its wave 52+ frames out,
+/// stamps its own elite flag and plays its own spawn sting.
+/// `instance_number(IDPDSpawn)` is 1-based and counts every live portal, so a
+/// batch staggers 55, 58, 61, 64, 67, 70; `live_portals` is the current
+/// `IdpdSpawnPortal` count, keeping a raid raised alongside existing portals in
+/// the same stagger GML's `instance_number` produces. Returns the elite count.
 fn idpd_portals(
     commands: &mut Commands,
     run: &mut Run,
@@ -958,17 +944,14 @@ fn spawn_van(
     e
 }
 
-/// GML `objects/Van/Alarm_1.gml` in full: `drive = 0`, the freak
-/// self-destruct, then `repeat 3 + GameCont.loops` grunts at
-/// `x - 55 * right, y + orandom(5)` and a 50/50 second wave -
-/// `1 + loops` of one `{Inspector, Shielder}` or `loops` of one
-/// `{EliteGrunt, EliteInspector, EliteShielder}`, all at
-/// `x - 50 * right, y + orandom(5)`. It fires ONCE, 50 frames after
-/// spawn (`Create_0.gml:28` `alarm[0] = 40` + `Alarm_0.gml:3`
-/// `alarm[1] = 10`), and the van goes inert 35 frames later
-/// (`Alarm_2` 15 + `Alarm_3` 20). The `drive` half of the law
-/// (`drivespeed` / `wallbreak` / `x += right * drivespeed`) lives in
-/// `enemies.rs`.
+/// GML `objects/Van/Alarm_1.gml` in full: `drive = 0`, the freak self-destruct,
+/// then `repeat 3 + GameCont.loops` grunts at `x - 55 * right, y + orandom(5)`
+/// and a 50/50 second wave - `1 + loops` of one `{Inspector, Shielder}` or
+/// `loops` of one `{EliteGrunt, EliteInspector, EliteShielder}`, all at
+/// `x - 50 * right, y + orandom(5)`. Fires ONCE, 50 frames after spawn
+/// (`Create_0.gml:28` `alarm[0] = 40` + `Alarm_0.gml:3` `alarm[1] = 10`), and the
+/// van goes inert 35 frames later (`Alarm_2` 15 + `Alarm_3` 20). The `drive` half
+/// (`drivespeed` / `wallbreak` / `x += right * drivespeed`) lives in `enemies.rs`.
 pub fn tick_idpd_vans(
     time: Res<SimTime>,
     mut commands: Commands,

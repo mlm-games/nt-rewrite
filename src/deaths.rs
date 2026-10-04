@@ -1,8 +1,8 @@
-//! Player-death resolution. Third leg of the death pipeline, run after
-//! `resolve_death_drops`: revives first (headless, strong spirit,
-//! melting skeleton), else game over with corpse, drops, and save
-//! writes. Split into two systems only because bevy_ecs caps systems
-//! at 16 params; order matches the bevy function top to bottom.
+//! Player-death resolution, third leg of the death pipeline after
+//! `resolve_death_drops`: revives first (headless, strong spirit, melting
+//! skeleton), else game over with corpse, drops and save writes. Split in two
+//! systems only because bevy_ecs caps systems at 16 params; order matches the
+//! bevy function top to bottom.
 
 use bevy_ecs::prelude::*;
 use rand::RngExt;
@@ -152,11 +152,10 @@ pub fn resolve_player_revives(
 }
 
 /// Coop downed timers (GML `Revive/Step_0` + `Alarm_4/5`): generation
-/// (`FloorTransition.active`, the `GenCont`/`LevCont` stand-in) holds
-/// every grace at 300, otherwise each [`Revive`] steps its alarms.
-/// Hurt pulses only re-arm the timer here - applying the 1-damage
-/// `Alarm_5` hit and spawning/despawning downed markers need coop
-/// downing, which the port does not simulate yet (single-player).
+/// (`FloorTransition.active`, the `GenCont`/`LevCont` stand-in) holds every grace
+/// at 300, otherwise each [`Revive`] steps its alarms. Hurt pulses only re-arm the
+/// timer here: the 1-damage `Alarm_5` hit and the downed markers need coop
+/// downing, which the port does not simulate (single-player).
 pub fn tick_revive(
     time: Res<repame_sim::SimTime>,
     transition: Option<Res<FloorTransition>>,

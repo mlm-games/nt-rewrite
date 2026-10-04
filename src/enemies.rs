@@ -1,28 +1,17 @@
 //! Enemy AI. Ported from the bevy reference `game/enemies.rs` (`enemy_ai`
-/// and its spawn/fire/tick helpers) with positions as [`Pos`] (`Vec2`)
-/// instead of `Transform.translation` (`Vec3`).
-///
-/// Render split: `Sprite`/`Anchor`/`Transform.rotation` writes, hurt/fire
-/// strip swaps, `Juice::pop_in`, and `VfxSpawner` bursts stay out - the
-/// render phase resolves visuals from sim state. Gameplay effects are
-/// kept: movement impulses, projectile spawns with full combat traits
-/// (`typ`/fade/friction/bounce/split/homing/fuse), pending-spawn queues,
-/// trauma, hitstop, toasts, and audio stems routed as [`AudioCue`]s
-/// through the [`Queue`] (the bevy build played them via direct asset
-/// loads inside the 16-param system; here they queue like every other
-/// sim system).
-///
-/// Timer adaptation: bevy `Timer` -> [`GTimer`]; `tick()` returns `()`,
-/// then `just_finished()`/`finished()` are queried. The bevy
-/// `ready_timer()` (finished from birth, silent until re-armed) has no
-/// direct `GTimer` equivalent - `GTimer::disarmed()` reports
-/// `just_finished()` on *every* tick - so the local [`ready_timer`]
-/// double-ticks a 10 ms `Once` timer into the same observable state
-/// (finished, not just-finished).
-///
-/// `enemy_ai` carries 14 params (under the bevy_ecs 16-param cap), so no
-/// record-split is needed; the verbatim per-kind ticks are separate
-/// systems, and the Inspector tail lives in [`tick_bigmaggot_inspector`].
+/// and its spawn/fire/tick helpers); positions as [`Pos`] (`Vec2`), not
+/// `Transform.translation` (`Vec3`). Sprite/rotation writes, hurt/fire strip
+/// swaps, `Juice::pop_in` and `VfxSpawner` bursts stay render-side; bevy played
+/// audio by direct asset load inside the 16-param system, here stems queue as
+/// [`AudioCue`]s through the [`Queue`].
+/// Timer adaptation: bevy `Timer` -> [`GTimer`]; `tick()` returns `()` then
+/// `just_finished()`/`finished()` are queried. bevy `ready_timer()` (finished
+/// from birth, silent until re-armed) has no direct `GTimer` equivalent -
+/// `GTimer::disarmed()` reports `just_finished()` on *every* tick - so
+/// [`ready_timer`] double-ticks a 10 ms `Once` timer into the same observable
+/// state (finished, not just-finished).
+/// `enemy_ai` carries 14 params, under the bevy_ecs 16-param cap; the Inspector
+/// tail lives in [`tick_bigmaggot_inspector`].
 use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
@@ -90,24 +79,20 @@ pub fn difficulty_multiplier(floor: u32) -> f32 {
     1.0 + loop_n * 0.05 + rf * 0.015
 }
 
-/// GML spawn-HP law verbatim (`enemy/Create_0`: every enemy scales
-/// `max_hp *= 1 + loops/20`; bosses override with their own formulas,
-/// single-player values). `base_hp` is the table (loop-0) value.
-///
-/// Boss laws (all `1 + loops/3` except ScrapBoss `/1.2` and
-/// ProtoStatue flat 120): BigBandit, Throne, ThroneII, Hyper+Technomancer
-/// (coop `((pc/2)+0.5)` factor is 1.0 solo - GML `/` is float division,
-/// so `(1/2)+0.5 = 1.0`), LilHunter, FrogQueen, Last (`Last`: base 1100).
-/// Single-player-only bosses with no loop term stay flat: YV (700 +
-/// coop-only scaling). `Mom`/`Captain`/`OldGuardian`/`PalaceGuardian`
-/// have no GML object (spawn-table-only kinds); they ride the default
-/// `/20` law like every other non-boss.
+/// GML spawn-HP law verbatim: the object's own `Create_0` expression,
+/// then `enemy/Create_0:7` scales *every* enemy by `max_hp *= 1 +
+/// loops/20`. `base_hp` is the table (loop-0) value.
+/// Boss: `1 + loops/3` except ScrapBoss `/1.2` and ProtoStatue flat 120 -
+/// BigBandit, Throne, ThroneII, Hyper, Technomancer, LilHunter,
+/// FrogQueen, Last (base 1100). Their coop `((pc/2)+0.5)` factor is 1.0
+/// solo: GML `/` is float division, so `(1/2)+0.5 = 1.0`.
+/// No loop term: YV (700 + coop-only scaling). `Mom`/`Captain`/
+/// `OldGuardian`/`PalaceGuardian` have no GML object (spawn-table-only
+/// kinds) and ride the default `/20` law.
 pub fn spawn_hp(kind: EnemyKind, base_hp: i32, loops: u32) -> i32 {
     let l = loops as f32;
-    // GML writes each object's own `Create_0` expression first, then
-    // `enemy/Create_0:7` multiplies *every* enemy by `1 + loops / 20`.
-    // `ceil` only where the object's own line uses it; GML keeps `hp` a real
-    // otherwise.
+    // `ceil` only where the object's own `Create_0` line uses it; GML keeps
+    // `hp` a real otherwise.
     let (hp, ceil) = match kind {
         EnemyKind::BigBandit | EnemyKind::BigBanditLoop => (100.0 * (1.0 + l / 3.0), true),
         EnemyKind::BigDog | EnemyKind::BigDogLoop => (300.0 * (1.0 + l / 1.2), true),
@@ -141,13 +126,11 @@ pub struct EnemySpawnContext {
     pub heavy_heart: bool,
 }
 
-/// Full enemy spawn: base bundle from [`crate::setup::spawn_enemy`]
-/// (cleanup markers, `Team`, `Pos`, `Velocity`, `Hitbox`, table `Enemy`)
-/// plus difficulty/face/heart scaling, the randomized [`EnemyBrain`]
-/// attack/strafe/gunangle state, boss/IDPD brains, and a [`SpriteAnim`]
-/// seed when the catalog carries the idle strip (so `tick_fire_anims`
-/// can resolve [`crate::comps_b::FireAnim`] markers from
-/// [`show_enemy_fire`]; visual strips themselves stay render-side).
+/// Full enemy spawn: base bundle from [`crate::setup::spawn_enemy`], plus
+/// difficulty/face/heart scaling, the randomized [`EnemyBrain`] state,
+/// boss/IDPD brains, and a [`SpriteAnim`] seed when the catalog carries
+/// the idle strip (so `tick_fire_anims` can resolve
+/// [`crate::comps_b::FireAnim`] from [`show_enemy_fire`]).
 pub fn spawn_enemy(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
@@ -572,12 +555,10 @@ pub fn flush_pending_enemy_spawns(
     }
 }
 
-/// Enemies that spawned inside a solid cell (the hardcoded
-/// secret-entrance guard ring in `setup::spawn_secret_entrances`,
-/// the vault-statue bandits, the boss coordinates) start in
-/// contact, so `move_contact_solid` walks them out along the contact
-/// normal while `separate`'s random jitter flings them. Snap them
-/// onto the nearest walkable cell and kill the stored velocity.
+/// Enemies that spawned inside a solid cell (the secret-entrance guard ring in
+/// `setup::spawn_secret_entrances`, the vault-statue bandits, the boss
+/// coordinates) start in contact, so `move_contact_solid` walks them out while
+/// `separate`'s jitter flings them.
 pub fn unstuck_enemies(mask: Res<FloorMask>, mut q: Query<(&mut Pos, &mut Velocity), With<Enemy>>) {
     for (mut pos, mut vel) in &mut q {
         if mask.snap_inside(&mut pos.0) {
@@ -773,9 +754,9 @@ fn cap_gml_speed(brain: &mut EnemyBrain, vel: &mut Velocity, cap_f: f32) {
 
 /// GML `Other_10` shape shared by `Bandit`, `Scorpion`, `GoldScorpion`,
 /// `Sniper` and `JungleBandit`: the impulse is gated on `walk > 0` but the
-/// speed cap is **unconditional** (`if speed > N speed = N` sits outside the
-/// block). Gating the cap too let `separate` ratchet a stopped enemy up to
-/// the 16 px/frame separation clamp.
+/// cap is **unconditional** (`if speed > N speed = N` sits outside the
+/// block) - gating it too let `separate` ratchet a stopped enemy up to the
+/// 16 px/frame separation clamp.
 #[inline]
 fn walk_step(brain: &mut EnemyBrain, vel: &mut Velocity, impulse_f: f32, cap_f: f32, dt: f32) {
     if brain.walk > 0.0 {
@@ -820,10 +801,10 @@ enum EnemyWallLaw {
 }
 
 /// GML per-object `Collision_Wall`. Only objects that do **not** override it
-/// inherit `enemy/Collision_Wall`'s `busycollisions` branch (save direction and
-/// speed, bounce, `motion_add(_dir, speed)`, restore `speed`, then slide each
-/// blocked axis by `friction`). Every object listed below overrides the event,
-/// so the restore and the friction slide are dead code for it.
+/// inherit `enemy/Collision_Wall`'s `busycollisions` branch: save direction
+/// and speed, bounce, `motion_add(_dir, speed)`, restore `speed`, slide each
+/// blocked axis by `friction`. Everything listed below overrides the event,
+/// so the restore and friction slide are dead code for them.
 fn wall_law(kind: EnemyKind) -> EnemyWallLaw {
     match kind {
         // `Maggot/Collision_Wall.gml:4-5`: slide, then push 1 px/frame off the
@@ -1025,13 +1006,11 @@ fn gml_drift_stops_while_firing(kind: EnemyKind) -> bool {
 }
 
 /// GML objects that arm `walk` and never spend it, so the impulse runs every
-/// step until the alarm re-arms: `Freak/Other_10:5-7`, `ExploFreak/Other_10:6-8`
-/// and `RhinoFreak/Other_10:6-8` have no `walk -= 1`, and
-/// `ExploGuardian/Other_10` relies on `Alarm_1:3` re-arming `walk` instead.
-///
+/// step until the alarm re-arms: `Freak/Other_10:5-7`,
+/// `ExploFreak/Other_10:6-8`, `RhinoFreak/Other_10:6-8` have no `walk -= 1`;
+/// `ExploGuardian/Other_10` leans on `Alarm_1:3` re-arming `walk`.
 /// `PopoFreak` is deliberately NOT here: `PopoFreak/Other_10:5` does
-/// `walk -= 1`. Leaving it on this list made every PopoFreak that had ever
-/// seen the player drift at its 4.5 px/frame cap forever.
+/// `walk -= 1` - on this list it drifted at its 4.5 px/frame cap forever.
 fn gml_walk_never_decrements(kind: EnemyKind) -> bool {
     matches!(
         kind,
@@ -1114,10 +1093,9 @@ fn integrate_verbatim(
     let saved_speed = vel.0.length();
     let parent = matches!(law, EnemyWallLaw::Parent) && loops <= 3;
     // GML's `move_bounce_solid(bounce)` argument is the *bounce* flag, not a
-    // "silent" event suppressor: `false` slides along the surface and kills
-    // the normal component, which is what `Maggot/Collision_Wall.gml:4` and
-    // `JungleFly/Collision_Wall.gml:4` ask for. Every other wall law passes
-    // `true`.
+    // "silent" suppressor: `false` slides along the surface and kills the
+    // normal component, which is what `Maggot/Collision_Wall.gml:4` and
+    // `JungleFly/Collision_Wall.gml:4` ask for. Every other law passes `true`.
     let bounce = matches!(law, EnemyWallLaw::Parent | EnemyWallLaw::PlainBounce);
     let contact = move_bounce_solid(&mut pos.0, &mut vel.0, radius, dt, solids, Some(mask), bounce);
 
@@ -1440,11 +1418,10 @@ fn ornd<R: RngExt + ?Sized>(rng: &mut R, n: f32) -> f32 {
 }
 
 /// GML `objects/<kind>/Alarm_2` for the objects whose decide only staged a
-/// volley. Each spends `ammo`, re-arms `alarm[2]` on its own period, and -
-/// where the object has an `else` arm - re-arms the DECIDE at the post-volley
-/// value. That last part is why these live here rather than inside the
-/// decide: the crab, the turret and the salamander each sit idle for a
-/// different stretch after firing than before it.
+/// volley: spend `ammo`, re-arm `alarm[2]` on its own period, and - where
+/// the object has an `else` arm - re-arm the DECIDE at the post-volley
+/// value (crab, turret and salamander idle a different stretch after
+/// firing than before it).
 fn gml_alarm_2_volley(
     kind: EnemyKind,
     entity: Entity,
@@ -1612,16 +1589,14 @@ fn gml_alarm_2_volley(
 }
 
 /// GML `HostileHorror/Other_10:20-33`: the radial spray. Every step it
-/// re-aims at the player, and once a step it buys `round(charge + 1)` bullets
-/// out of its own `raddrop` and grows `charge` by 0.1 - so the pattern widens
-/// quadratically and eventually runs the boss's 90 rads dry. `charge` resets
-/// to 0 whenever `ammo` is 0.
-///
+/// re-aims at the player and buys `round(charge + 1)` bullets out of its own
+/// `raddrop`, growing `charge` by 0.1 - the pattern widens quadratically and
+/// eventually runs the boss's 90 rads dry. `charge` resets to 0 when `ammo`
+/// is 0.
 /// `HorrorBullet` lives 300 frames (`Create_0:4` `alarm[1] = 300`), is
-/// slash-destructible, knocks back 2 and cannot drop rads of its own. Its
-/// `damage` is the one value the export does not carry (it inherits the
-/// `folders/Objects/Projectiles` parent, which is not shipped); 1 here, to
-/// match the one-pixel spray it draws.
+/// slash-destructible, knocks back 2, drops no rads. Its `damage` is the one
+/// value the export lacks (the `folders/Objects/Projectiles` parent is not
+/// shipped); 1 here, matching the one-pixel spray it draws.
 fn hostile_horror_spray(
     commands: &mut Commands,
     entity: Entity,
@@ -1674,15 +1649,12 @@ fn hostile_horror_spray(
     brain.ammo -= 1;
 }
 
-/// GML `objects/<kind>/Alarm_1` for the objects that reach the generic decide.
-/// One function per object, transcribed arm for arm from the `.gml` source;
-/// each arms `alarm[1]` itself exactly as the source does, so the idle
-/// cadence matches.
-///
-/// Arms that only stage a volley (`ammo` + `alarm[2]`) still draw their rolls
-/// and still set the registers, so the decide's cadence is unchanged; the
-/// volley itself is only drawn by the objects whose `Alarm_2` the port models
-/// (the Wolf roll, below).
+/// GML `objects/<kind>/Alarm_1` for the objects that reach the generic decide,
+/// transcribed arm for arm from the `.gml` source; each arms `alarm[1]`
+/// itself, so the idle cadence matches.
+/// Volley-staging arms (`ammo` + `alarm[2]`) still draw their rolls and set
+/// the registers, so the decide's cadence is unchanged; only the objects
+/// whose `Alarm_2` the port models (the Wolf roll, below) draw the volley.
 #[allow(clippy::too_many_arguments)]
 fn gml_alarm_1_decide<R: RngExt + ?Sized>(
     kind: EnemyKind,
@@ -2413,12 +2385,10 @@ pub fn enemy_ai(
         // emplacement. The laser crystals drift, so pinning them froze them.
         let emplacement = enemy.kind == EnemyKind::Turret;
 
-        // Kinds with a dedicated verbatim ticker own their `Other_10` and
-        // their alarm cadence. The generic timers/walk/decide ran as well, so
-        // their impulse was the sum of both (IDPD 0.8 + 0.4, Ratking 0.5 +
-        // 0.5), `walk` counted down twice per step, and every alarm fired
-        // twice. Their tickers apply the cap themselves, so skipping the
-        // generic cap here too is correct.
+        // Kinds with a dedicated verbatim ticker own their `Other_10` and alarm
+        // cadence; running the generic timers/walk/decide too summed both impulses
+        // (IDPD 0.8 + 0.4, Ratking 0.5 + 0.5), counted `walk` down twice a step and
+        // fired every alarm twice. Their tickers apply the cap themselves.
         let owns_motion = has_dedicated_tick(enemy.kind);
         // `DogGuardian/Other_10:18-24` puts `speed = 8` outside both caps
         // while the leap is up.
@@ -2427,13 +2397,11 @@ pub fn enemy_ai(
 
         if !owns_motion {
             brain.melee.tick(dt);
-            // GML steps every alarm on every instance each step, so the decide
-            // alarm and the fire alarm each tick exactly once per frame here and
-            // every block below only reads `just_finished()`.
+            // GML steps every alarm on every instance each step, so each ticks
+            // exactly once per frame here; every block below only reads
+            // `just_finished()`.
             brain.attack.tick(dt);
             brain.fire_alarm.tick(dt);
-            // GML steps every alarm every step; the decide and the fire
-            // blocks below only read `just_finished()`.
             brain.burst_timer.tick(dt);
             if enemy.kind == EnemyKind::DogGuardian && brain.burst_timer.just_finished() {
                 let leap = dog_leaps.entry(entity).or_default();
@@ -2458,17 +2426,16 @@ pub fn enemy_ai(
                 );
             }
 
-            // Objects whose GML `Other_10`/`Step_0` applies `motion_add` every
-            // step with no `walk` gate: they drift continuously and only ever
-            // change heading by bouncing. `Guardian/Step_0:9-10` caps at 0.6, so
-            // running them through the `walk` law pinned them whenever `walk`
-            // was 0.
+            // Objects whose `Other_10`/`Step_0` applies `motion_add` every step with
+            // no `walk` gate: they drift continuously and only change heading by
+            // bouncing. `Guardian/Step_0:9-10` caps at 0.6, so the `walk` law
+            // pinned them whenever `walk` was 0.
             let heading = brain.heading;
             if let Some((impulse_f, cap_f)) = gml_constant_drift(enemy.kind) {
-                // `sprite_index != spr_hurt`, except the laser crystals which
-                // gate on `sprite_index != spr_fire` instead. `DogGuardian`
-                // takes `Other_10:18-35` while `leap` is up and gates the
-                // drift on `spr_idle == sprDogGuardianWalk` (`Other_10:7`).
+                // `sprite_index != spr_hurt`, except the laser crystals which gate on
+                // `sprite_index != spr_fire`. `DogGuardian` takes
+                // `Other_10:18-35` while `leap` is up and gates the drift on
+                // `spr_idle == sprDogGuardianWalk` (`Other_10:7`).
                 if enemy.kind == EnemyKind::DogGuardian {
                     let leap = dog_leaps.entry(entity).or_default();
                     if leap.land > 0.0 {
@@ -2530,15 +2497,14 @@ pub fn enemy_ai(
                     gml_clamp_speed(&mut brain, &mut vel, enemy.kind, cap_f);
                 }
             } else if enemy.kind == EnemyKind::RobotGuard {
-                // GML `SnowBot/Other_10:3-6`: the impulse runs along
-                // `gunangle`, not `direction`, so the sled steers off its
-                // own heading. `Other_10:11-13` caps at 8 while
-                // `sprite_index == spr_fire` and 3 otherwise: `Alarm_1:13-14`
-                // raises the sprite WITH `meleedamage` on the charge arm,
-                // but a hit swaps in `spr_hurt` and `enemy/Step_0:27-29`
-                // drops to `spr_idle`/`spr_walk`, never back to `spr_fire`
-                // - so `touch_damage` alone outlives the sprite and the
-                // decide re-arms it instead.
+                // GML `SnowBot/Other_10:3-6`: the impulse runs along `gunangle`, not
+                // `direction`, so the sled steers off its own heading.
+                // `Other_10:11-13` caps at 8 while `sprite_index == spr_fire`
+                // and 3 otherwise: `Alarm_1:13-14` raises the sprite WITH
+                // `meleedamage` on the charge arm, but a hit swaps in `spr_hurt`
+                // and `enemy/Step_0:27-29` drops to `spr_idle`/`spr_walk`, never
+                // back to `spr_fire` - `touch_damage` alone outlives the sprite
+                // and the decide re-arms it.
                 if brain.walk > 0.0 {
                     let gun = brain.gunangle;
                     add_gml_motion(&mut brain, &mut vel, gun, 1.0, dt);
@@ -2556,11 +2522,10 @@ pub fn enemy_ai(
                 gml_clamp_speed(&mut brain, &mut vel, enemy.kind, cap);
             } else if brain.walk > 0.0 {
                 let (impulse_f, cap_f) = gml_walk_law(enemy.kind);
-                // GML `PopoFreak/Other_10:6-7` swaps the push to `walkdir`
-                // at 1 while the hurt sprite is up; `Freak/Other_10:8`,
-                // `ExploFreak/Other_10:8` and `RhinoFreak/Other_10:8` gate
-                // the whole `motion_add` on `sprite_index != spr_hurt` and
-                // push nothing while hurt.
+                // GML `PopoFreak/Other_10:6-7` swaps the push to `walkdir` at 1
+                // while the hurt sprite is up; `Freak/Other_10:8`,
+                // `ExploFreak/Other_10:8` and `RhinoFreak/Other_10:8` gate the
+                // whole `motion_add` on `sprite_index != spr_hurt`.
                 let hurt_gated = matches!(
                     enemy.kind,
                     EnemyKind::Freak | EnemyKind::ExploFreak | EnemyKind::RhinoFreak
@@ -2571,21 +2536,20 @@ pub fn enemy_ai(
                 } else if !hurt_gated || hurt.is_none() {
                     add_gml_motion(&mut brain, &mut vel, heading, impulse_f, dt);
                 }
-                // The walk law's cap is `Other_10`'s own `if (speed > N) speed
-                // = N`, and it sits OUTSIDE the `walk` gate - dropping it let
-                // the `separate` push drive these to its 16 px/frame clamp.
+                // The walk law's cap is `Other_10`'s own `if (speed > N) speed =
+                // N`, OUTSIDE the `walk` gate - dropping it let `separate` drive
+                // these to its 16 px/frame clamp.
                 gml_clamp_speed(&mut brain, &mut vel, enemy.kind, cap_f);
                 // GML `Spider/Other_10:12` caps at `maxspeed`, which
-                // `Spider/Alarm_1` holds at 3 and raises to 5 only on the
-                // close chase, so it overrides the walk law's flat 5.
+                // `Spider/Alarm_1` holds at 3 and raises to 5 only on the close
+                // chase, so it overrides the walk law's flat 5.
                 if brain.maxspeed.is_finite() {
                     let cap_f = brain.maxspeed / crate::SIM_HZ as f32;
                     gml_clamp_speed(&mut brain, &mut vel, enemy.kind, cap_f);
                 }
-                // GML `Freak/Other_10:5`, `ExploFreak/Other_10:6` and
-                // `RhinoFreak/Other_10:6` have no `walk -= 1`, so their
-                // impulse runs every step for as long as the alarm keeps
-                // `walk` armed.
+                // `Freak/Other_10:5`, `ExploFreak/Other_10:6` and
+                // `RhinoFreak/Other_10:6` have no `walk -= 1`, so the impulse
+                // runs every step while the alarm keeps `walk` armed.
                 if !gml_walk_never_decrements(enemy.kind) {
                     brain.walk -= dt * 30.0;
                     if brain.walk < 0.0 {
@@ -2658,8 +2622,7 @@ pub fn enemy_ai(
 
         // GML `Guardian` has no lunge: `Step_0:9-10` applies
         // `motion_add(direction, 0.6)` and caps at 0.6 px/frame every step. The
-        // port invented an 18 px/frame dash, 30x the object's ceiling, so the
-        // lunge is gone entirely.
+        // port invented an 18 px/frame dash, 30x that ceiling, so it is gone.
         if brain.dash > 0.0 {
             brain.dash = (brain.dash - dt).max(0.0);
         }
@@ -2669,22 +2632,21 @@ pub fn enemy_ai(
         if emplacement {
             vel.0 = glam::Vec2::ZERO;
         } else if dashing {
-            // GML's dash only sets `speed`/`direction` (`Raven/Alarm_1.gml`);
-            // the translation happens once, inside `enemy/Collision_Wall`'s
-            // `move_bounce_solid` below. Moving here as well integrated
-            // `vel * dt` twice, and the second (swept) test started from
-            // the unchecked first position - so a dash into a wall
-            // resolved from inside geometry and fought the bounce.
+            // GML's dash only sets `speed`/`direction` (`Raven/Alarm_1.gml`); the
+            // translation happens once, inside `enemy/Collision_Wall`'s
+            // `move_bounce_solid` below. Moving here too integrated `vel * dt`
+            // twice, and the second (swept) test started from the unchecked
+            // first position - a dash into a wall resolved from inside
+            // geometry and fought the bounce.
         } else {
-            // Not gated on live velocity. GML has no such rule: the decide
-            // alarm fires on its own schedule whatever `speed` happens to be,
-            // and "this object has no motion law" is a static property that
-            // `emplacement` already encodes (`Turret/Other_10` and
-            // `Technomancer/Other_10` both set `speed = 0`). Gating the alarm
-            // on a live `speed` swallowed the decide on any frame the enemy
-            // happened to be at rest, and its re-arm never came back.
-            // Kinds with their own `Alarm_1` further down must not also run
-            // the generic decide, or its re-arm starves their own decide.
+            // Not gated on live velocity: GML's decide alarm fires on its own
+            // schedule whatever `speed` is, and "no motion law" is static,
+            // which `emplacement` already encodes (`Turret/Other_10` and
+            // `Technomancer/Other_10` both set `speed = 0`). Gating on a live
+            // `speed` swallowed the decide on any frame the enemy was at rest
+            // and its re-arm never came back.
+            // Kinds with their own `Alarm_1` further down must not also run the
+            // generic decide, or its re-arm starves their own.
             let owns_decide = matches!(
                 enemy.kind,
                 EnemyKind::Gator
@@ -2817,12 +2779,11 @@ pub fn enemy_ai(
             current_frame,
         );
 
-        // GML keeps `direction`/`speed` as the authoritative pair: `motion_add`
-        // and `move_bounce_solid` leave `direction` pointing along the current
-        // velocity, which is what the next frame's `Other_10` reads. Without
-        // this the generic path's `brain.heading` stayed frozen at the spawn
-        // value, so every walk impulse went the same way for the enemy's whole
-        // life.
+        // GML keeps `direction`/`speed` authoritative: `motion_add` and
+        // `move_bounce_solid` leave `direction` pointing along the current
+        // velocity, which the next frame's `Other_10` reads. Without this,
+        // `brain.heading` stayed frozen at the spawn value and every walk
+        // impulse went one way for the enemy's whole life.
         sync_heading(&mut brain, &vel);
 
         if enemy.kind == EnemyKind::Necromancer {
@@ -5540,13 +5501,12 @@ pub fn finish_enemy_bullet(ec: &mut EntityCommands, kind: EnemyKind) {
     }
 }
 
-/// Per-pellet aim offsets and random spread for `fire_enemy_shot`, in radians.
-///
-/// GML spells most of these out per object rather than deriving them:
-/// `Molesarge/Alarm_1` fires at `gunangle + {0, -15, +15, -30, +30}` with no
-/// extra jitter, `SuperFireBaller/Alarm_1` uses `orandom(6)`, and
-/// `Molefish/Alarm_1` uses `random(4) - 2`. Everything else keeps the evenly
-/// spaced table fan and the table's spread.
+/// Per-pellet aim offsets and random spread for `fire_enemy_shot`, radians.
+/// GML spells most of these out per object: `Molesarge/Alarm_1` fires at
+/// `gunangle + {0, -15, +15, -30, +30}` with no extra jitter,
+/// `SuperFireBaller/Alarm_1` uses `orandom(6)`, `Molefish/Alarm_1` uses
+/// `random(4) - 2`. Everything else keeps the evenly spaced table fan and
+/// the table's spread.
 fn gml_fan(kind: EnemyKind, total: usize, table_spread: f32) -> ([f32; 8], f32) {
     let mut offsets = [0.0f32; 8];
     match kind {
@@ -6278,13 +6238,12 @@ pub fn tick_toxic_gas(
     }
 }
 
-/// Verbatim `objects/Throne2Ball` law (`Step_0`): friction 0.25 bleeds
-/// speed; once stalled, `timeout` accrues and past 15 ticks the ball
-/// sprays an `EnemyBullet2` (Horror stats: damage 2 at 10 px/tick) along
-/// the latched `angle` every tick, dying past `40 + loops * 10` ticks.
-/// While stalled but young it aims at the nearest player (±30 degrees).
-/// (Position integration rides `move_projectiles`; the aim-converge
-/// particles are visual-only.)
+/// Verbatim `objects/Throne2Ball` law (`Step_0`): friction 0.25 bleeds speed;
+/// once stalled, `timeout` accrues and past 15 ticks the ball sprays an
+/// `EnemyBullet2` (Horror stats: damage 2 at 10 px/tick) along the latched
+/// `angle` every tick, dying past `40 + loops * 10` ticks; while stalled but
+/// young it aims at the nearest player (±30 degrees). (Position integration
+/// rides `move_projectiles`; aim-converge particles are visual-only.)
 pub fn tick_throne_balls(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -6413,22 +6372,16 @@ fn gml_right_from_gunangle(gunangle_rad: f32) -> f32 {
 }
 
 /// GML `objects/Grunt` and `objects/EliteGrunt` - the two IDPD units that
-/// roll. `Alarm_1` chooses between a roll, a shot, a walk and a `PopoNade`
-/// / `IDPDRocket` lob; every aggressive arm is gated on `freeze > 40`.
-///
-/// `freeze` accrues one frame per step while the target is moving or this
-/// object is damaged (`Grunt/Other_10:14-18`), plus three frames while the
-/// player cannot shoot (`Grunt/Other_10:16-18`, `scrFire.gml:8` clears
-/// `can_shoot` until the reload finishes).
-///
-/// Register map: `brain.attack` = `alarm[1]`, `brain.burst_timer` =
-/// `alarm[2]`, `brain.freeze` = `freeze`, `brain.roll` = `roll`,
-/// `brain.roll_angle` = `angle`, `brain.fuel` = `fuel`,
-/// `brain.grenades` = `grenades`, `brain.last_seen` = `lastx/lasty`,
-/// `brain.right` = `right`, `brain.walk` = `walk`, `brain.wkick` = `wkick`,
-/// `brain.gunangle` = `gunangle` (radians), `brain.ammo` = `ammo`. The
-/// GML `direction` register rides a local heading map, as in
-/// [`tick_elite_inspectors`].
+/// roll. `Alarm_1` picks a roll, a shot, a walk or a `PopoNade`/`IDPDRocket`
+/// lob; every aggressive arm is gated on `freeze > 40`. `freeze` accrues 1
+/// frame a step while the target moves or this object is damaged
+/// (`Grunt/Other_10:14-18`), +3 while the player cannot shoot
+/// (`Grunt/Other_10:16-18`, `scrFire.gml:8`).
+/// Register map: `brain.attack` = `alarm[1]`, `burst_timer` = `alarm[2]`,
+/// `roll` = `roll`, `roll_angle` = `angle`, `last_seen` = `lastx/lasty`,
+/// `gunangle` = `gunangle` (radians); `freeze`, `fuel`, `grenades`, `right`,
+/// `walk`, `wkick` and `ammo` keep their GML names. GML `direction` rides a
+/// local heading map, as in [`tick_elite_inspectors`].
 #[allow(clippy::too_many_arguments)]
 pub fn tick_popo_rolls(
     time: Res<SimTime>,
@@ -6482,7 +6435,7 @@ pub fn tick_popo_rolls(
             .or_insert_with(|| glam::Vec2::from_angle(aim))
             .clone();
 
-        // ---- GML `Grunt/Other_10` / `EliteGrunt/Step_0` ----
+        // GML `Grunt/Other_10` / `EliteGrunt/Step_0`
         if !brain.roll {
             if elite {
                 brain.fuel = 100.0;
@@ -6543,7 +6496,7 @@ pub fn tick_popo_rolls(
             );
         }
 
-        // ---- GML `EliteGrunt/Alarm_2` (3-round burst) ----
+        // GML `EliteGrunt/Alarm_2` (3-round burst)
         if elite {
             brain.burst_timer.tick(dt);
             if brain.burst_timer.just_finished() {
@@ -6569,7 +6522,7 @@ pub fn tick_popo_rolls(
             }
         }
 
-        // ---- GML `Alarm_1` ----
+        // GML `Alarm_1`
         brain.attack.tick(dt);
         if !brain.attack.just_finished() {
             continue;
@@ -6894,17 +6847,14 @@ fn fire_popo_rocket(
     ));
 }
 
-/// GML `objects/VenuzTV/Destroy_0` and `objects/VaultStatue/Destroy_0`.
-///
-/// Both props raise other objects on death, which the generic prop-damage
-/// path has no queries to do, so this owns their death outright (the generic
-/// path sees [`SpecialPropDeath`] and leaves them at `hp <= 0`).
-///
-/// `VaultStatue/Destroy_0.gml:1-14`: raise a `CrownGuardian` on the spot,
-/// zero every *other* statue (so one hit cascades), destroy the
-/// `CrownPickup`, and leave a `sprVaultStatueDead` corpse. Because GML
-/// defers `instance_destroy`, N statues yield N guardians.
-///
+/// GML `objects/VenuzTV/Destroy_0` and `objects/VaultStatue/Destroy_0`: both
+/// props raise other objects on death, which the generic prop-damage path has
+/// no queries to do, so this owns their death outright (the generic path sees
+/// [`SpecialPropDeath`] and leaves them at `hp <= 0`).
+/// `VaultStatue/Destroy_0.gml:1-14`: raise a `CrownGuardian` on the spot, zero
+/// every *other* statue (one hit cascades), destroy the `CrownPickup`, leave a
+/// `sprVaultStatueDead` corpse. GML defers `instance_destroy`, so N statues
+/// yield N guardians.
 /// `VenuzTV/Destroy_0.gml:3-14`: eight money feathers, destroy the
 /// `YungVenuzCouch`, raise `YVBoss`, destroy the `VenuzCouch`.
 pub fn tick_special_props(
@@ -6989,14 +6939,13 @@ pub fn tick_special_props(
     }
 }
 
-/// GML `objects/IceFlower` - the only route into `area_jungle`. The port
-/// previously had no flower at all, so LAST WISH was spent on nothing.
-///
-/// `Create_0.gml:7-10` snaps the flower onto the nearest `Floor` and nudges
-/// it clear of geometry. `Player/Collision_IceFlower.gml:4-22` feeds it on an
-/// interact press (1 damage to the player, blood, `feed++`) and then runs the
-/// flower's own step on the spot, so the fourth feed opens the route in the
-/// same press. Lines 24-29 drag the player in at 1 px a step.
+/// GML `objects/IceFlower` - the only route into `area_jungle`; the port
+/// previously had no flower, so LAST WISH was spent on nothing.
+/// `Create_0.gml:7-10` snaps the flower onto the nearest `Floor` and nudges it
+/// clear of geometry. `Player/Collision_IceFlower.gml:4-22` feeds it on an
+/// interact press (1 damage, blood, `feed++`) then runs the flower's own step
+/// on the spot, so the fourth feed opens the route in the same press. Lines
+/// 24-29 drag the player in at 1 px a step.
 pub fn tick_ice_flowers(
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
@@ -7088,20 +7037,15 @@ pub fn tick_ice_flowers(
     }
 }
 
-/// GML `objects/Shielder` and `objects/Inspector` - the two non-rolling
-/// IDPD gunners. `Shielder` alternates an 8-round `IDPDBullet` burst, a
-/// `PopoShield`, and a walk; `Inspector` mind-controls the player, slugs,
-/// and lobs `PopoNade` at the last-seen position.
-///
-/// Both re-arm inside the branch they took, so the cadence is
-/// branch-specific and there is no table cooldown here.
-///
-/// Register map: `brain.attack` = `alarm[1]`, `brain.burst_timer` =
-/// `alarm[2]`, `brain.ammo` = `ammo`, `brain.freeze` = `freeze`,
-/// `brain.grenades` = `grenades`, `brain.last_seen` = `lastx/lasty`,
-/// `brain.right` = `right`, `brain.control` = `control`,
-/// `brain.walk` = `walk`, `brain.wkick` = `wkick`, `brain.gunangle` =
-/// `gunangle` (radians). GML `direction` rides the local heading map.
+/// GML `objects/Shielder` and `objects/Inspector` - the two non-rolling IDPD
+/// gunners. `Shielder` alternates an 8-round `IDPDBullet` burst, a
+/// `PopoShield`, and a walk; `Inspector` mind-controls the player, slugs, and
+/// lobs `PopoNade` at the last-seen position. Both re-arm inside the branch
+/// they took, so the cadence is branch-specific - no table cooldown here.
+/// Register map: `brain.attack` = `alarm[1]`, `burst_timer` = `alarm[2]`,
+/// `last_seen` = `lastx/lasty`, `gunangle` = `gunangle` (radians);
+/// `ammo`, `freeze`, `grenades`, `right`, `control`, `walk` and `wkick` keep
+/// their GML names. GML `direction` rides the local heading map.
 #[allow(clippy::too_many_arguments)]
 pub fn tick_popo_gunners(
     time: Res<SimTime>,
@@ -7158,7 +7102,7 @@ pub fn tick_popo_gunners(
             .or_insert_with(|| glam::Vec2::from_angle(aim))
             .clone();
 
-        // ---- GML `Other_10` ----
+        // GML `Other_10`
         if brain.walk > 0.0 {
             gml_motion_add_clamp(&mut vel.0, heading, 0.8, if shielder { 3.5 } else { 3.0 }, dt);
             brain.walk -= frames;
@@ -7189,7 +7133,7 @@ pub fn tick_popo_gunners(
             }
         }
 
-        // ---- GML `Shielder/Alarm_2` ----
+        // GML `Shielder/Alarm_2`
         if shielder {
             brain.burst_timer.tick(dt);
             if brain.burst_timer.just_finished()
@@ -7220,7 +7164,7 @@ pub fn tick_popo_gunners(
             }
         }
 
-        // ---- GML `Alarm_1` ----
+        // GML `Alarm_1`
         brain.attack.tick(dt);
         if !brain.attack.just_finished() {
             continue;
@@ -7300,7 +7244,7 @@ pub fn tick_popo_gunners(
             continue;
         }
 
-        // ---- GML `Inspector/Alarm_1` ----
+        // GML `Inspector/Alarm_1`
         let mut next = rng.random_range(20.0..40.0);
         let was_control = brain.control;
         brain.control = false;
@@ -7480,12 +7424,11 @@ pub fn tick_popo_shields(
 }
 
 /// GML `objects/Turret`. Bolted down (`Other_10` pins `x/y` to
-/// `xprevious/yprevious`) and dies if it is not standing on floor. `Alarm_1`
-/// arms a 10-round burst only on sight inside 160 px; `Alarm_3`, set to 1 at
-/// create, is the one-shot that carves every wall it is embedded in.
-///
-/// Register map: `brain.attack` = `alarm[1]`, `brain.burst_timer` =
-/// `alarm[2]`, `brain.ammo` = `ammo`, `brain.gunangle` = `gunangle`.
+/// `xprevious/yprevious`), dies off-floor. `Alarm_1` arms a 10-round burst only
+/// on sight inside 160 px; `Alarm_3`, set to 1 at create, is the one-shot that
+/// carves every wall it is embedded in.
+/// Register map: `brain.attack` = `alarm[1]`, `burst_timer` = `alarm[2]`;
+/// `ammo` and `gunangle` keep their GML names.
 pub fn tick_turrets(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -7588,12 +7531,10 @@ pub fn tick_turrets(
 /// GML `objects/MeleeFake`: a dormant `MeleeBandit` that wakes into its real
 /// self. Until then it does not move and does not attack -- the port had it
 /// chasing and hitting for 1.
-///
 /// GML `Step_0` wakes on any of: damaged (`hp < max_hp`), alone
-/// (`!instance_number(enemy)`), or the player within 64 px on a clear line
-/// with no `Portal` on the floor. `Destroy_0` runs the *real* object's
-/// create/destroy pair, so a fake that is killed while dormant still drops
-/// the real assassin's rads.
+/// (`!instance_number(enemy)`), or the player within 64 px on a clear line with
+/// no `Portal` on the floor. `Destroy_0` runs the *real* object's create/destroy
+/// pair, so a fake killed while dormant still drops the real assassin's rads.
 pub fn tick_melee_fakes(
     mut commands: Commands,
     run: Res<Run>,
@@ -7640,15 +7581,12 @@ pub fn tick_melee_fakes(
 }
 
 /// GML `objects/Ratking`, and the `instance_change(RatkingRage, false)` it
-/// rolls into after vomiting more than 24 rats (`Alarm_2:14-19`). The rage
-/// form charges at touch 4, destroys the walls it hits
-/// (`Collision_Wall:4`), and bursts five `FastRat` plus five `AcidStreak`
-/// on death.
-///
-/// Register map: `brain.attack` = `alarm[1]`, `brain.burst_timer` =
-/// `alarm[2]`, `brain.ammo` = `ammo`, `brain.ratking_spawns` = `spawns`,
-/// `brain.ratking_rage` = the `instance_change`,
-/// `brain.mydir`-equivalent rides the local heading map.
+/// rolls into after vomiting more than 24 rats (`Alarm_2:14-19`). The rage form
+/// charges at touch 4, destroys the walls it hits (`Collision_Wall:4`), and
+/// bursts five `FastRat` plus five `AcidStreak` on death.
+/// Register map: `brain.attack` = `alarm[1]`, `burst_timer` = `alarm[2]`,
+/// `ammo` = `ammo`, `ratking_spawns` = `spawns`, `ratking_rage` = the
+/// `instance_change`; `brain.mydir`-equivalent rides the local heading map.
 pub fn tick_ratking(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -7692,7 +7630,7 @@ pub fn tick_ratking(
             .or_insert_with(|| glam::Vec2::from_angle(aim))
             .clone();
 
-        // ---- GML `Other_10` ----
+        // GML `Other_10`
         if brain.walk > 0.0 {
             let cap = if brain.ratking_rage { 6.0 } else { 2.0 };
             gml_motion_add_clamp(&mut vel.0, heading, if brain.ratking_rage { 1.5 } else { 0.5 }, cap, dt);
@@ -7716,7 +7654,7 @@ pub fn tick_ratking(
             );
         }
 
-        // ---- GML `Alarm_2`: the rat stream ----
+        // GML `Alarm_2`: the rat stream
         brain.burst_timer.tick(dt);
         if brain.burst_timer.just_finished() {
             if brain.ammo > 0 {
@@ -7745,7 +7683,7 @@ pub fn tick_ratking(
             }
         }
 
-        // ---- GML `Alarm_1` ----
+        // GML `Alarm_1`
         brain.attack.tick(dt);
         if !brain.attack.just_finished() {
             continue;
@@ -7800,17 +7738,15 @@ pub fn tick_ratking(
 }
 
 /// Verbatim `objects/EliteInspector` law (`Alarm_1`/`Alarm_2`/`Other_10`):
-/// freeze-gated control field that drags projectiles and pulls the
-/// player, close-range baton dash-slash (`EnemySlash` damage 8), and
-/// `PopoNade` lobs at the last-seen position (5-grenade budget).
-///
-/// Register map: `brain.attack` = `alarm[1]`, `brain.slash_delay` =
-/// `alarm[2]` countdown (ticks), `brain.ammo` = `grenades`,
-/// `brain.burst_left` = `freeze`, `brain.walk` = `walk`,
-/// `brain.gunangle` = `gunangle` (radians), `brain.strafe_dir` = `control`
-/// (0/1), `boss.target`-equivalent heading in `EnemyBrain` is unused so
-/// the move heading rides `Velocity`, last-seen rides a local map.
-/// (Baton art, `wepangle` flips, and enter/taunt sounds are out.)
+/// freeze-gated control field that drags projectiles and pulls the player,
+/// close-range baton dash-slash (`EnemySlash` damage 8), `PopoNade` lobs at the
+/// last-seen position (5-grenade budget).
+/// Register map: `brain.attack` = `alarm[1]`, `slash_delay` = `alarm[2]`
+/// countdown (ticks), `ammo` = `grenades`, `burst_left` = `freeze`,
+/// `gunangle` = `gunangle` (radians), `strafe_dir` = `control` (0/1);
+/// `walk` keeps its GML name. `boss.target`-equivalent heading in `EnemyBrain`
+/// is unused, so the move heading rides `Velocity` and last-seen a local map.
+/// (Baton art, `wepangle` flips, enter/taunt sounds are out.)
 #[allow(clippy::too_many_arguments)]
 pub fn tick_elite_inspectors(
     time: Res<SimTime>,
@@ -8041,13 +7977,13 @@ pub fn tick_elite_inspectors(
 }
 
 /// Verbatim `objects/EliteShielder` law (`Alarm_1`/`Alarm_2`/`Other_10`):
-/// freeze-gated 6-round `PopoPlasma` bursts (damage 8 at 1.5 px/tick),
-/// and the `EliteShield` carry that teleports the shielder to a floor
-/// 120..300 px away. Register map mirrors the Inspector
-/// (`brain.attack` = `alarm[1]`, `brain.slash_delay` = `alarm[2]`
-/// countdown, `brain.ammo` = burst rounds, `brain.burst_left` = `freeze`).
-/// (The shield's projectile-block field has no port equivalent and is
-/// out; the teleport + disappear poof are kept.)
+/// freeze-gated 6-round `PopoPlasma` bursts (damage 8 at 1.5 px/tick), and the
+/// `EliteShield` carry that teleports the shielder to a floor 120..300 px away.
+/// Register map mirrors the Inspector (`brain.attack` = `alarm[1]`,
+/// `slash_delay` = `alarm[2]` countdown, `ammo` = burst rounds,
+/// `burst_left` = `freeze`).
+/// (The shield's projectile-block field has no port equivalent; the teleport +
+/// disappear poof are kept.)
 #[allow(clippy::too_many_arguments)]
 pub fn tick_elite_shielders(
     time: Res<SimTime>,
@@ -8452,11 +8388,10 @@ fn separate(
     let mut rng = rand::rng();
     for (other_entity, other, other_size, other_radius) in positions {
         // GML collision events only fire against *other* instances. The
-        // snapshot includes self, and self sits at distance 0, so it always
-        // passed the overlap test and contributed a `normalize(-orandom)`
-        // impulse every step. With nothing removing that velocity between
-        // decides, every enemy random-walked up to the 16 px/frame cap
-        // (480 px/s) and stayed there.
+        // snapshot includes self at distance 0, so it always passed the overlap
+        // test and contributed a `normalize(-orandom)` impulse every step - with
+        // nothing removing it between decides, every enemy random-walked up to
+        // the 16 px/frame cap (480 px/s) and stayed.
         if *other_entity == entity {
             continue;
         }
@@ -8480,14 +8415,12 @@ fn separate(
     *vel = vel.clamp_length_max(16.0 * crate::SIM_HZ as f32);
 }
 
-/// Corpse slide + expiry (bevy `enemies.rs:2552` parity: `Corpse` life
-/// ticks, corpses drift with GML 0.4 friction, expiry despawns).
-/// Port adaptation: `Transform.translation` is [`Pos`] here; corpses
-/// without [`Velocity`] (player-kill drops) only tick life.
-///
-/// Also slides `GroundPhysics` gibs/debris (player-death blood gibs):
-/// GML gives them flat friction like every ground slide, and nothing
-/// else ticks them - without this they coast at full speed for their
+/// Corpse slide + expiry (bevy `enemies.rs:2552` parity: `Corpse` life ticks,
+/// corpses drift with GML 0.4 friction, expiry despawns). `Transform.translation`
+/// is [`Pos`] here; corpses without [`Velocity`] (player-kill drops) only tick
+/// life.
+/// Also slides `GroundPhysics` gibs/debris: GML gives them flat friction and
+/// nothing else ticks them - without this they coast at full speed for their
 /// whole 0.9 s life and land ~144 px away.
 pub fn tick_corpses(
     time: Res<SimTime>,

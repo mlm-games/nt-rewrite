@@ -1,42 +1,32 @@
-//! App states and run flags. Mirrors the bevy `AppState` machine; the
-//! shell driver (not shown) transitions these, systems gate on them.
+//! App states and run flags; mirrors the bevy `AppState` machine (the shell
+//! driver, not shown, transitions them; systems gate on them).
 //!
-//! App state layer (transition laws
-//! only, no rendering) plus `src/screens/mod.rs` (loading law):
-//! - `AppState` boot order Splash -> MainMenu -> Loading -> Title ->
-//!   InGame (same as the bevy build).
-//! - `OverlayMenu` / `PendingUnpause` / `Paused` pause laws
-//!   (`handle_pause_input`, `tick_pending_unpause`, `reset_pause_on_exit`,
-//!   `force_death_overlay_state`).
-//! - `SplashState` boot-intro law (`game/ui_art.rs::boot_intro`:
-//!   modes 0-3 advance on press or `MODE_SECS` timeout, mode 4 plays the
-//!   logo gunfire and leaves on press).
-//! - `LoadingState` loading law (`screens/mod.rs::tick_loading`: 1.2 s
-//!   minimum, then InGame via the existing `setup_run` entry).
+//! transition laws only, no rendering (loading law in `screens/mod.rs`):
+//! - boot order Splash -> MainMenu -> Loading -> Title -> InGame
+//! - pause laws: `handle_pause_input`, `tick_pending_unpause`,
+//!   `reset_pause_on_exit`, `force_death_overlay_state`
+//! - splash (`ui_art.rs::boot_intro`): modes 0-3 advance on press or
+//!   `MODE_SECS` timeout, mode 4 plays logo gunfire, leaves on press
+//! - loading (`screens/mod.rs::tick_loading`): 1.2 s floor, then InGame via
+//!   `setup_run`
 //!
 //! Splash auto-advance is opt-in ([`SplashAutoAdvance`]): bevy parity is
-//! press-only everywhere, and unattended boots (tests, kiosk) insert
+//! press-only; unattended boots (tests, kiosk) insert
 //! `SplashAutoAdvance(true)` to leave the logo ~1 s after the gun reel.
 //!
-//! Fidelity compromises (need shell/window services):
-//! - Animated `Transition<AppState>` (fade/circle wipe, `block_input`)
-//!   is deferred to the repose shell: `goto_state` transitions
-//!   instantly. `tick_escape_pause` still takes a `block_input` flag so
-//!   the shell can gate it once transitions exist.
-//! - Asset-gated loading progress (`AssetsLoading` + `AssetServer`) is
-//!   headless-complete (progress = 1.0); only the 1.2 s floor remains.
-//! - Splash shake/sprites are render; `SplashState` keeps mode + timer +
-//!   gun count and `tick_splash` emits the splash cues (GML
-//!   `Vlambeer/Create_0` `sndVlambeer` boot sting, `Vlambeer/Alarm_0`
-//!   `sndRestart`, `Logo/Alarm_0` gun steps). The press path is
-//!   bevy-verbatim (mode 4 leaves only on press); the timed
-//!   auto-advance additionally requires [`SplashAutoAdvance`], so
-//!   unattended boots reach the menu without changing attended UX.
-//! - `QuitApp` has no window service headless: it sets `QuitRequested`,
-//!   which the shell polls.
-//! - Locale/i18n (`LocaleResources`) is shell-side; language gating uses
-//!   the `AVAILABLE_LANGUAGES` list in `menus` (same codes as bevy
-//!   `LOCALES`).
+//! fidelity compromises (need shell/window services):
+//! - animated `Transition<AppState>` (fade/circle wipe, `block_input`)
+//!   deferred to the repose shell: `goto_state` transitions instantly,
+//!   `tick_escape_pause` keeps `block_input` for the shell to gate
+//! - `AssetsLoading` + `AssetServer` progress is headless-complete
+//!   (progress = 1.0); only the 1.2 s floor remains
+//! - splash shake/sprites are render; `tick_splash` emits the cues (GML
+//!   `Vlambeer/Create_0` `sndVlambeer`, `Vlambeer/Alarm_0` `sndRestart`,
+//!   `Logo/Alarm_0` gun steps); press path bevy-verbatim, timed
+//!   auto-advance requires [`SplashAutoAdvance`]
+//! - `QuitApp` sets `QuitRequested`; the shell polls it
+//! - `LocaleResources` is shell-side; gating uses `AVAILABLE_LANGUAGES`
+//!   in `menus` (bevy `LOCALES` codes)
 
 use bevy_ecs::prelude::*;
 use repame_sim::SimTime;
@@ -124,11 +114,9 @@ impl TutorialStep {
 }
 
 /// Tutorial controller state (GML `objects/TutCont` verbatim, minus
-/// visuals): the scripted first-floor walkthrough. `step` is the
-/// current step, `complete` latches the 30-step advance (`Alarm_0`),
-/// `timer` counts it down, `portal_open` latches the Fin exit (GML
-/// spawns the `Portal` past `Fin`; that portal runs `game_restart()`,
-/// not a floor advance).
+/// visuals). `complete` latches the 30-step advance (`Alarm_0`) counted
+/// down by `timer`; `portal_open` latches the Fin exit (GML spawns the
+/// `Portal` past `Fin`; it runs `game_restart()`, not a floor advance).
 #[derive(Debug, Clone, Resource)]
 pub struct TutorialState {
     pub step: TutorialStep,
@@ -268,10 +256,9 @@ pub struct SplashAutoAdvance(pub bool);
 /// `Other_10` per step: `active` → `alpha = 1.1, active = 0`, else
 /// `alpha -= 0.1`; `scrDrawPlayerHUD` raises `active` while the player
 /// stands on a pickup). `alpha > 0` is the WHOLE visibility law for the
-/// act button and the pickup art riding it
-/// (`scrDrawMobileControls`: `if (!instance_exists(_player)) alpha = 1;
-/// else if (alpha <= 0) continue`) - so the button is lit only near a
-/// pickup, plus a ~3 s grace when the run starts.
+/// button and its pickup art (`scrDrawMobileControls`: `alpha = 1` with
+/// no `_player`, `else if (alpha <= 0) continue`), so it lights only
+/// near a pickup, plus a ~3 s grace at run start.
 #[derive(Debug, Clone, Copy, Resource)]
 pub struct ActButton {
     pub alpha: f32,
@@ -327,10 +314,9 @@ impl Default for LoadingState {
 pub const LOADING_MIN_SECS: f32 = 1.2;
 
 /// GML `MakeGame` boot flags verbatim (`Create_0` + `Alarm_0` + `Vlambeer`
-/// recontinue arm): the fan-recreation disclaimer gate, the save-continue
-/// roadmap, and the recontinue cap. Headless defaults preserve the
-/// current boot (disclaimer accepted, no save file on disk) so existing
-/// shells/tests boot straight to the menu; shells with disk set the
+/// recontinue arm): disclaimer gate, save-continue roadmap, recontinue cap.
+/// Headless defaults keep the current boot (disclaimer accepted, no save
+/// on disk) so shells/tests reach the menu; shells with disk set the
 /// fields before the first tick.
 #[derive(Debug, Clone, Resource)]
 pub struct BootFlags {
@@ -423,20 +409,17 @@ pub struct QuitRequested(pub bool);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Resource)]
 pub struct TransitionBlock(pub bool);
 
-/// Instant state transition with bevy `reset_pause_on_exit` side
-/// effects (paused/overlay/pending cleared; `Run::game_over` cleared
-/// when leaving InGame or entering a menu state; menu transients
-/// cleared). Replaces bevy `NextState` + animated `Transition`
-/// (deferred to the shell - see module docs).
+/// Instant state transition with bevy `reset_pause_on_exit` side effects
+/// (paused/overlay/pending cleared; `Run::game_over` cleared when leaving
+/// InGame or entering a menu state; menu transients cleared). Replaces
+/// bevy `NextState` + animated `Transition` (shell, see module docs).
 ///
-/// GML room-restart parity: entering `MainMenu` from anywhere rebuilds
-/// the logo room (the blanket teardown + campfire `Run` reset live in
-/// `setup_title_campfire`; calling it here as well as in the action arms
-/// keeps direct `goto_state(MainMenu)` callers - tests, splash timeout -
-/// on the same clean-room law, and it is idempotent). Entering `Title`
-/// rebuilds the campfire room the same way. Both are skipped when the
-/// world already reads as a fresh campfire room so repeated enters stay
-/// free.
+/// GML room-restart parity: entering `MainMenu` from anywhere rebuilds the
+/// logo room and `Title` the campfire room (blanket teardown + campfire
+/// `Run` reset live in `setup_title_campfire`; calling it here as well as
+/// in the action arms keeps direct `goto_state` callers - tests, splash
+/// timeout - on the same clean-room law, and it is idempotent). Both skip
+/// when the world already reads as a fresh campfire room.
 pub fn goto_state(world: &mut World, next: AppState) {
     let prev = world
         .get_resource::<AppState>()
@@ -471,12 +454,11 @@ pub fn goto_state(world: &mut World, next: AppState) {
         AppState::Loading => {
             // GML `room_restart` parity (bevy `teardown_game` on InGame
             // exit): the generating room starts empty - `GenCont` draws
-            // only the spiral + GENERATING + roadmap. Without this the
-            // stale Title camp (fresh runs) or dead run (RETRY) renders
-            // through the whole 1.2 s load. `setup_run` re-teardowns at
-            // the end of the load; both are idempotent. Run/MenuState
-            // resources survive (setup_run resets them) - only session
-            // entities + the floor mask go.
+            // only spiral + GENERATING + roadmap; otherwise the stale
+            // Title camp (fresh runs) or dead run (RETRY) renders through
+            // the whole 1.2 s load. `setup_run` re-teardowns at load end;
+            // both idempotent. Run/MenuState survive (setup_run resets
+            // them) - only session entities + the floor mask go.
             crate::setup::teardown_session_entities(world);
             world.init_resource::<crate::comps_a::FloorMask>();
             *world.resource_mut::<crate::comps_a::FloorMask>() =
@@ -580,31 +562,27 @@ pub fn reset_pause_state(world: &mut World) {
         menu.mutation_selected = None;
         menu.game_over = None;
         menu.settings_cursor = usize::MAX;
-        menu.settings_splat = 0.0;
-        menu.settings_splat_page = 0;
-        menu.settings_splat_cursor = usize::MAX;
+        menu.settings_splats.clear();
         menu.settings_back_hover = false;
         menu.play_submenu = false;
         menu.play_cursor = 0;
     }
 }
 
-/// Splash tick (bevy `boot_intro` state half verbatim, plus the
-/// opt-in logo-hold auto-advance for unattended boots). `pressed` = any
-/// key/mouse edge this tick (bevy: any just-pressed key or mouse
-/// button). Only runs in `Splash`; finishing enters `MainMenu`.
+/// Splash tick (bevy `boot_intro` state half verbatim, plus the opt-in
+/// logo-hold auto-advance for unattended boots). `pressed` = any key/mouse
+/// edge this tick. Only runs in `Splash`; finishing enters `MainMenu`.
 ///
-/// Emits the GML splash cues per event: `sndVlambeer` once when the
-/// reel is created (`Vlambeer/Create_0:139` - the fresh-boot `else`
-/// branch; the quit-to-menu and continue-run branches `exit` before
-/// it), `sndRestart` on each of the three `Vlambeer/Alarm_0:13`
-/// `mode++` advances (timer- or press-triggered alike - `Draw_0.gml:5-6`
-/// just performs the same alarm; the mode 3 -> 4 arm creates the logo
-/// and plays none), `sndMachinegun` per gun-step increment 1..=6
-/// (`Logo/Alarm_0:18`), and the `Logo/Alarm_0:8-12` finale `sndShovel` +
-/// `sndMeatExplo` + `sndExplosion` on increment 7. The finale's
-/// `sndLogoLoop` half is a looping ambience track
-/// (`audio::AmbienceCue::LogoLoop`).
+/// GML splash cues per event: `sndVlambeer` once at reel creation
+/// (`Vlambeer/Create_0:139`, the fresh-boot `else` branch; quit-to-menu
+/// and continue-run branches `exit` before it), `sndRestart` on each of
+/// the three `Vlambeer/Alarm_0:13` `mode++` advances (timer- or
+/// press-triggered alike - `Draw_0.gml:5-6` performs the same alarm; the
+/// mode 3 -> 4 arm creates the logo and plays none), `sndMachinegun` per
+/// gun-step increment 1..=6 (`Logo/Alarm_0:18`), `Logo/Alarm_0:8-12`
+/// finale `sndShovel` + `sndMeatExplo` + `sndExplosion` on increment 7
+/// (its `sndLogoLoop` half is a looping ambience track,
+/// `audio::AmbienceCue::LogoLoop`).
 pub fn tick_splash(world: &mut World, dt: f32, pressed: bool) {
     if world
         .get_resource::<AppState>()
@@ -716,8 +694,8 @@ pub fn tick_loading(world: &mut World, dt: f32) {
 /// Escape-pause tick (bevy `handle_pause_input` verbatim, minus engine
 /// key reads: the shell passes `escape_pressed`). Gated to InGame,
 /// `block_input` (transition animation, shell-owned), live runs
-/// (game-over swallows Escape, bevy parity), and non-generating rooms:
-/// GML `UberCont/Step_1` only honors `want_pause` when no `GenCont`
+/// (game-over swallows Escape, bevy parity) and non-generating rooms:
+/// GML `UberCont/Step_1` honors `want_pause` only when no `GenCont`
 /// exists, so Escape during a floor transition or mutation/ultra offer
 /// is swallowed.
 pub fn tick_escape_pause(
@@ -746,9 +724,7 @@ pub fn tick_escape_pause(
             menu.hover_label.clear();
             menu.settings_page = 0;
             menu.settings_page_stack.clear();
-            menu.settings_splat = 0.0;
-            menu.settings_splat_page = 0;
-            menu.settings_splat_cursor = usize::MAX;
+            menu.settings_splats.clear();
         }
         OverlayMenu::Pause => {
             if menu.pause_confirm.is_some() {

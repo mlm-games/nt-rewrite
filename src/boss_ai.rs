@@ -1,36 +1,32 @@
-//! Boss AI. Ported from the bevy reference `game/boss_ai.rs` (`boss_ai`
-//! dispatcher plus every boss handler) with positions as [`Pos`] (`Vec2`)
-//! instead of `Transform.translation` (`Vec3`).
+//! Boss AI. Ported from the bevy reference `game/boss_ai.rs` with positions
+//! as [`Pos`] (`Vec2`) instead of `Transform.translation` (`Vec3`).
 //!
-//! Render split: `Sprite`/`Anchor`/`Transform.rotation`/`Transform.scale`
-//! writes, fire-strip swaps (`play_fire`), and `VfxSpawner` bursts stay
-//! out - the render phase resolves visuals from sim state. Gameplay
-//! effects are kept: movement impulses, fan/ring volleys with full combat
-//! traits, `Explosion` + `Beam` spawns, pending-spawn queues, trauma, and
-//! wall-break queues. Muzzle markers ride [`show_enemy_fire`] exactly like
-//! normal enemies (no-op without a seeded [`SpriteAnim`]).
+//! Render split: `Sprite`/`Anchor`/`Transform` writes, fire-strip swaps
+//! (`play_fire`) and `VfxSpawner` bursts stay out; kept: movement impulses,
+//! fan/ring volleys with full combat traits, `Explosion` + `Beam` spawns,
+//! pending-spawn queues, trauma, wall-break queues. Muzzle markers ride
+//! [`show_enemy_fire`] as for normal enemies (no-op without a seeded
+//! [`SpriteAnim`]).
 //!
-//! Timer adaptation: bevy `Timer` -> [`GTimer`]; `tick(dt)` returns `()`,
-//! then `just_finished()`/`finished()` are queried. The bevy
-//! `short_ready_timer` (finished from birth) has no direct `GTimer`
-//! equivalent, so the local [`ready_timer`] double-ticks a 10 ms `Once`
-//! timer into the same observable state (finished, not just-finished).
+//! Timer adaptation: bevy `Timer` -> [`GTimer`] (`tick(dt)`, then
+//! `just_finished()`/`finished()`). bevy `short_ready_timer` (finished from
+//! birth) has no `GTimer` equivalent: [`ready_timer`] double-ticks a 10 ms
+//! `Once` timer into the same observable state (finished, not
+//! just-finished).
 //!
-//! LOS adaptation: bevy traced wall *entities*
-//! (`segment_hits_wall_query`); the headless build does the same through
-//! the `(center, cell)` wall snapshot (`segment_hits_wall_legacy`).
-//! Wall *breaking* during charges still
+//! LOS adaptation: bevy traced wall *entities* (`segment_hits_wall_query`);
+//! headless uses the `(center, cell)` wall snapshot
+//! (`segment_hits_wall_legacy`). Wall *breaking* during charges still
 //! queues [`PendingWallBreak`]s against the wall entities.
 //!
 //! `Collision_Wall` adaptation: the GML event fires on mask overlap after
 //! motion, so `boss_wall_law` is a response-only pass
-//! (`move_bounce_solid_displacement` with a zero displacement) run by the
+//! (`move_bounce_solid_displacement`, zero displacement) run by the
 //! dispatcher after the handler, plus the per-kind destroy/bounce split.
 //!
-//! The `boss_ai` dispatcher carries 12 params (under the bevy_ecs 16-param
-//! cap), so no record-split is needed. Handlers are plain functions over
-//! snapshots (`&[(Vec2, Vec2)]` props, `&[(Vec2, (i32, i32))]` walls) so
-//! tests can drive them without a world.
+//! the `boss_ai` dispatcher carries 12 params (bevy_ecs 16-param cap), so no
+//! record-split; handlers take snapshots (`&[(Vec2, Vec2)]` props,
+//! `&[(Vec2, (i32, i32))]` walls) so tests drive them without a world.
 
 use bevy_ecs::prelude::*;
 use rand::RngExt;
@@ -60,10 +56,6 @@ use crate::spatial::{
     solid_contact,
 };
 use crate::time::{GTimer, TimerMode};
-
-// ---------------------------------------------------------------------------
-// Pattern helpers (bevy `boss_patterns.rs` parity, `glam::Vec2` throughout).
-// ---------------------------------------------------------------------------
 
 /// Evenly spaced fan around `base_angle` (`spread` radians between shots).
 pub fn fan_angles(base_angle: f32, count: usize, spread: f32) -> Vec<f32> {
@@ -99,10 +91,8 @@ pub fn hyper_orbit_count(loop_count: u32) -> usize {
     3 + loop_count as usize * 2
 }
 
-// ---------------------------------------------------------------------------
 // Shared firing / spawn helpers (boss-specific thin wrappers; enemy fire
 // lives in `crate::enemies` and is NOT duplicated here).
-// ---------------------------------------------------------------------------
 
 /// Loop-scaled spawn difficulty for boss adds (bevy parity).
 pub fn difficulty_for_loop(enraged: bool) -> f32 {
@@ -490,9 +480,7 @@ pub fn spawn_enemy_beam(
     ));
 }
 
-// ---------------------------------------------------------------------------
 // Dispatcher.
-// ---------------------------------------------------------------------------
 
 /// Boss brains: enrage check, timer ticks, per-kind handler, arena clamp
 /// (bevy `boss_ai` top to bottom; non-bosses `continue` before the first
@@ -830,20 +818,17 @@ pub fn boss_ai(
     }
 }
 
-// ---------------------------------------------------------------------------
 // Big Bandit.
-// ---------------------------------------------------------------------------
 
 /// Verbatim `objects/BanditBoss` law: decide (`Alarm_1`), shotgun burst
-/// (`Alarm_2`), telegraph / dash / recovery (`Alarm_3`..`Alarm_5`),
-/// walk + dash locomotion (`Other_10`), and the destroy-or-bounce wall law
-/// (`Collision_Wall`).
+/// (`Alarm_2`), telegraph/dash/recovery (`Alarm_3`..`Alarm_5`), walk + dash
+/// (`Other_10`), destroy-or-bounce wall law (`Collision_Wall`).
 ///
-/// Register map: `attack_timer` = `alarm[1]`, `special_timer` = `alarm[2]`,
-/// `phase_timer` = `alarm[4]`, `phase` = `charge` (Telegraph 0, Charging 1,
-/// Cooldown -1), `boss.aux` = `intro`, `pattern_index` = `chargewait`,
-/// `brain.fire` = `shot`, `brain.ammo` = `ammo`, `brain.walk` = `walk`,
-/// `brain.gunangle` = `gunangle` (radians), `boss.target` = `direction`.
+/// register map: `attack_timer`/`special_timer`/`phase_timer` =
+/// `alarm[1]`/`alarm[2]`/`alarm[4]`; `phase` = `charge` (Telegraph 0,
+/// Charging 1, Cooldown -1); `boss.aux` = `intro`; `pattern_index` =
+/// `chargewait`; `brain.fire`/`ammo`/`walk`/`gunangle` = `shot`/`ammo`/
+/// `walk`/`gunangle` (radians); `boss.target` = `direction`.
 #[allow(clippy::too_many_arguments)]
 fn big_bandit_ai(
     commands: &mut Commands,
@@ -1055,16 +1040,14 @@ fn big_bandit_ai(
     fired
 }
 
-// ---------------------------------------------------------------------------
 // Scrap Boss (Big Dog).
-// ---------------------------------------------------------------------------
 
 /// Verbatim `objects/ScrapBoss` law: decide tick (`Alarm_0`), spin-fire
-/// tick (`Alarm_1`), walk/homing locomotion (`Other_10`).
+/// tick (`Alarm_1`), walk/homing (`Other_10`).
 ///
-/// Register map: `attack_timer` = `alarm[0]`, `special_timer` = `alarm[1]`,
-/// `brain.ammo` = `ammo`, `boss.aux` = `turn`, `brain.walk` = `walk`,
-/// `brain.gunangle` = `gunangle` (radians), `boss.target` = move heading.
+/// register map: `attack_timer`/`special_timer` = `alarm[0]`/`alarm[1]`;
+/// `brain.ammo`/`walk`/`gunangle` = `ammo`/`walk`/`gunangle` (radians);
+/// `boss.aux` = `turn`; `boss.target` = move heading.
 #[allow(clippy::too_many_arguments)]
 fn big_dog_ai(
     commands: &mut Commands,
@@ -1199,22 +1182,19 @@ fn big_dog_ai(
     fired
 }
 
-// ---------------------------------------------------------------------------
 // Lil Hunter.
-// ---------------------------------------------------------------------------
 
 /// Verbatim `objects/LilHunter` + `objects/LilHunterFly` law: bouncer fan
 /// and sniper hose (`Alarm_1`), anti-camp liftoff (`Alarm_2`), walk/dodge
-/// locomotion (`Other_10`), teleport flight with landing fire ring, and
-/// the 80-flame death ring (`Destroy_0`).
+/// (`Other_10`), teleport flight with landing fire ring, 80-flame death
+/// ring (`Destroy_0`).
 ///
-/// Register map: `attack_timer` = `alarm[1]`, `special_timer` = `alarm[2]`,
-/// `brain.ammo` = `spawns`, `brain.burst_left` = init/intro flag,
-/// `brain.walk` = `walk`, `brain.dash` = `dodge`, `brain.gunangle` =
-/// `gunangle` (radians), `boss.target` = move heading, `boss.aux` = fly
-/// height `z`, `boss.phase` Teleport = airborne (`pattern_index` 1 ascend,
-/// 2 descend). (Rogue force-liftoff, taunts, and `LilHunterDie`/music cues
-/// are out as meta/visual.)
+/// register map: `attack_timer`/`special_timer` = `alarm[1]`/`alarm[2]`;
+/// `brain.ammo` = `spawns`; `brain.burst_left` = init/intro flag;
+/// `brain.walk`/`dash`/`gunangle` = `walk`/`dodge`/`gunangle` (radians);
+/// `boss.target` = move heading; `boss.aux` = fly height `z`; `boss.phase`
+/// Teleport = airborne (`pattern_index` 1 ascend, 2 descend). (Rogue
+/// force-liftoff, taunts, `LilHunterDie`/music cues out as meta/visual.)
 #[allow(clippy::too_many_arguments)]
 fn lil_hunter_ai(
     commands: &mut Commands,
@@ -1256,7 +1236,6 @@ fn lil_hunter_ai(
     let dist = to_player.length();
     let aim = to_player.y.atan2(to_player.x);
 
-    // --- Flight (`LilHunterFly/Step_0`). ---
     if boss.phase == BossPhase::Teleport {
         if boss.pattern_index == 1 {
             // Ascend 8 px/tick until offscreen (port: height past 160).
@@ -1560,32 +1539,29 @@ pub fn tick_boss_taunts(
     }
 }
 
-// ---------------------------------------------------------------------------
 // Throne.
-// ---------------------------------------------------------------------------
 
 /// Verbatim `objects/Nothing` law: walk-in brain with statue-break
-/// (`Alarm_1`), mirrored Horror-fan triplets (`Alarm_2`), and capped
-/// stomp locomotion (`Other_10`).
+/// (`Alarm_1`), mirrored Horror-fan triplets (`Alarm_2`), capped stomp
+/// (`Other_10`).
 ///
-/// Register map: `attack_timer` = `alarm[1]`, `special_timer` = `alarm[2]`,
-/// `brain.ammo` = `ammo`, `brain.gunangle` = `addangle` (radians),
-/// `boss.aux` = `mode`, `brain.walk` = `walk`, `boss.target` = `walkdir`
-/// heading, `pattern_index` = `introwalk`, `brain.burst_left` = `dmg`
-/// counter (reset while hurt). The `NothingBeam` charge delay rides
-/// `BossPhase::Telegraph`. (Statue art, flame sprites, and hurt-voice
-/// tiers are out as visual/audio.)
+/// register map: `attack_timer`/`special_timer` = `alarm[1]`/`alarm[2]`;
+/// `brain.ammo`/`walk`/`gunangle` = `ammo`/`walk`/`addangle` (radians);
+/// `boss.aux` = `mode`; `boss.target` = `walkdir` heading; `pattern_index` =
+/// `introwalk`; `brain.burst_left` = `dmg` counter (reset while hurt). The
+/// `NothingBeam` charge delay rides `BossPhase::Telegraph`. (Statue art,
+/// flame sprites, hurt-voice tiers out as visual/audio.)
 #[allow(clippy::too_many_arguments)]
 /// GML `objects/Nothing/Collision_prop.gml:4-5` verbatim:
-/// `if other.object_index != BigGenerator { other.hp = 0 }`. The Throne
-/// body annihilates every prop it overlaps, which is what makes a barrel
+/// `if other.object_index != BigGenerator { other.hp = 0 }` - the Throne body
+/// annihilates every prop it overlaps, which is what makes a barrel
 /// chain-explode when it walks through one. Statues take the
-/// `ThroneStatue/Step_1.gml:11` route instead - a direct
-/// `instance_destroy` on `place_meeting(x, y, Nothing)`, because they are
-/// `canbreak = 0` and so immune to damage - and their `Destroy_0` spawns
-/// the guardians. The generators are exempt under the `object_index`
-/// test, which also covers `BigGeneratorInactive` (it converts to a
-/// `BigGenerator` in place via `Nothing/Create_0.gml:5-11`).
+/// `ThroneStatue/Step_1.gml:11` route instead: direct `instance_destroy` on
+/// `place_meeting(x, y, Nothing)`, because they are `canbreak = 0` and so
+/// damage-immune, and their `Destroy_0` spawns the guardians. Generators are
+/// exempt under the `object_index` test, which also covers
+/// `BigGeneratorInactive` (converts to `BigGenerator` in place via
+/// `Nothing/Create_0.gml:5-11`).
 pub fn throne_annihilate_props(
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
@@ -1911,20 +1887,16 @@ fn throne_ai(
     fired
 }
 
-// ---------------------------------------------------------------------------
 // Throne II.
-// ---------------------------------------------------------------------------
 
 /// Verbatim `objects/Nothing2` law: strafe walk (`Alarm_0`), the three
-/// rotating attacks with haste (`Alarm_1`), and capped surge locomotion
-/// (`Other_10`).
+/// rotating attacks with haste (`Alarm_1`), capped surge (`Other_10`).
 ///
-/// Register map: `attack_timer` = `alarm[1]`, `special_timer` = `alarm[0]`
-/// (strafe), `phase_timer` = `alarm[2]` (intro), `boss.aux` = `attack`,
-/// `brain.ammo` = `shots`, `brain.gunangle` = `aimdir` (radians),
-/// `brain.strafe_dir` = `side`, `brain.dash` = `flip`, `boss.target` =
-/// `walkdir` heading, `brain.walk` = `walk`. (Top kills and taunts are
-/// out as visual/audio.)
+/// register map: `attack_timer` = `alarm[1]`, `special_timer` = `alarm[0]`
+/// (strafe), `phase_timer` = `alarm[2]` (intro); `boss.aux` = `attack`;
+/// `brain.ammo`/`walk`/`gunangle` = `shots`/`walk`/`aimdir` (radians);
+/// `brain.strafe_dir` = `side`; `brain.dash` = `flip`; `boss.target` =
+/// `walkdir` heading. (Top kills and taunts out as visual/audio.)
 #[allow(clippy::too_many_arguments)]
 fn throne_ii_ai(
     commands: &mut Commands,
@@ -2127,9 +2099,7 @@ fn throne_ii_ai(
     fired
 }
 
-// ---------------------------------------------------------------------------
 // Hyper Crystal.
-// ---------------------------------------------------------------------------
 
 /// Slow drifter seeding orbit crystals + seeker detonations (bevy
 /// `hyper_ai` parity).
@@ -2306,9 +2276,7 @@ pub fn tick_hyper_orbit_crystals(
     }
 }
 
-// ---------------------------------------------------------------------------
 // Mom.
-// ---------------------------------------------------------------------------
 
 /// Kiting spore ring + egg spawns (bevy `mom_ai` parity).
 #[allow(clippy::too_many_arguments)]
@@ -2379,20 +2347,16 @@ fn mom_ai(
     fired
 }
 
-// ---------------------------------------------------------------------------
 // Frog Queen.
-// ---------------------------------------------------------------------------
 
-/// Verbatim `objects/FrogQueen` law: aim-drift brain (`Alarm_1`), the
-/// hatch stream into a single gas mortar (`Alarm_2`), and capped waddle
-/// locomotion (`Other_10`).
+/// Verbatim `objects/FrogQueen` law: aim-drift brain (`Alarm_1`), hatch
+/// stream into a single gas mortar (`Alarm_2`), capped waddle (`Other_10`).
 ///
-/// Register map: `attack_timer` = `alarm[1]`, `special_timer` = `alarm[2]`,
-/// `brain.ammo` = `ammo`, `brain.walk` = `walk`, `boss.target` = move
-/// heading (`direction`), `brain.gunangle` = `gunangle` (radians),
-/// `pattern_index` = `intro`, `brain.burst_left` = init flag. (Friction 0,
-/// taunts, `FrogQueenDeath`/music cues, and the frog-pistol tribute are
-/// out as feel/visual/meta.)
+/// register map: `attack_timer`/`special_timer` = `alarm[1]`/`alarm[2]`;
+/// `brain.ammo`/`walk`/`gunangle` = `ammo`/`walk`/`gunangle` (radians);
+/// `boss.target` = move heading (`direction`); `pattern_index` = `intro`;
+/// `brain.burst_left` = init flag. (Friction 0, taunts,
+/// `FrogQueenDeath`/music cues, frog-pistol tribute out as feel/visual/meta.)
 #[allow(clippy::too_many_arguments)]
 fn frog_queen_ai(
     commands: &mut Commands,
@@ -2520,9 +2484,7 @@ fn frog_queen_ai(
     fired
 }
 
-// ---------------------------------------------------------------------------
 // Technomancer.
-// ---------------------------------------------------------------------------
 
 /// Stationary summoner alternating Necromancer/Freak + Freak packs
 /// (bevy `technomancer_ai` parity).
@@ -2570,24 +2532,22 @@ fn technomancer_ai(
     vel.0 = glam::Vec2::ZERO;
 }
 
-// ---------------------------------------------------------------------------
 // Captain.
-// ---------------------------------------------------------------------------
 
-/// Verbatim `objects/Last` law: decide (`Alarm_1`), the two 30-round spin
-/// patterns (`Alarm_2`), the 17-step warp-out (`Alarm_3`), the two-stage
-/// dash (`Alarm_4`), the shared reset + `LastBall` (`Alarm_5`), the intro
-/// chain (`Alarm_6`/`Alarm_7`), capped dash/walk locomotion (`Step_0`), and
-/// the destroy-or-bounce wall law (`Collision_Wall`).
+/// Verbatim `objects/Last` law: decide (`Alarm_1`), two 30-round spin
+/// patterns (`Alarm_2`), 17-step warp-out (`Alarm_3`), two-stage dash
+/// (`Alarm_4`), shared reset + `LastBall` (`Alarm_5`), intro chain
+/// (`Alarm_6`/`Alarm_7`), capped dash/walk (`Step_0`), destroy-or-bounce
+/// wall law (`Collision_Wall`).
 ///
-/// Register map: `attack_timer` = `alarm[1]`, `special_timer` = `alarm[2]`,
-/// `phase_timer` = `alarm[5]`, `pattern_index` = `attacktype`,
-/// `brain.ammo` = `ammo`, `brain.walk` = `walk`, `brain.gunangle` =
-/// `gunangle` (radians), `boss.target` = `direction`, `boss.aux` = `intro`,
-/// `brain.fire` = `introcharge`, `brain.burst_timer` = `alarm[6]`/`alarm[7`,
-/// `phase` = `charge` + `drawspr` (Telegraph = `alarm[3]` warp-out,
-/// Charging = `charge == 1`, Cooldown = `charge == -1`, Radial =
-/// `sprLastSpin`, Landing = `sprLastWarpIn`).
+/// register map: `attack_timer`/`special_timer`/`phase_timer` =
+/// `alarm[1]`/`alarm[2]`/`alarm[5]`; `pattern_index` = `attacktype`;
+/// `brain.ammo`/`walk`/`gunangle` = `ammo`/`walk`/`gunangle` (radians);
+/// `boss.target` = `direction`; `boss.aux` = `intro`; `brain.fire` =
+/// `introcharge`; `brain.burst_timer` = `alarm[6]`/`alarm[7]`; `phase` =
+/// `charge` + `drawspr` (Telegraph = `alarm[3]` warp-out, Charging =
+/// `charge == 1`, Cooldown = `charge == -1`, Radial = `sprLastSpin`,
+/// Landing = `sprLastWarpIn`).
 #[allow(clippy::too_many_arguments)]
 fn captain_ai(
     commands: &mut Commands,
@@ -2861,9 +2821,7 @@ fn captain_idpd_bullet(
     ));
 }
 
-// ---------------------------------------------------------------------------
 // Old Guardian.
-// ---------------------------------------------------------------------------
 
 /// Kiting fan + enrage-scaled ring (bevy `old_guardian_ai` parity).
 #[allow(clippy::too_many_arguments)]
@@ -2932,17 +2890,15 @@ fn old_guardian_ai(
     fired
 }
 
-// ---------------------------------------------------------------------------
 // YV (Gun God).
-// ---------------------------------------------------------------------------
 
-/// Verbatim `objects/YVBoss` law: weapon-switch brain (`Alarm_1`),
-/// per-weapon fire tick (`Alarm_2`), cooldown gate (`Alarm_4`),
-/// intro on first empty revolver (`Alarm_5`).
+/// Verbatim `objects/YVBoss` law: weapon-switch brain (`Alarm_1`), per-weapon
+/// fire tick (`Alarm_2`), cooldown gate (`Alarm_4`), intro on first empty
+/// revolver (`Alarm_5`).
 ///
-/// Register map: `boss.pattern_index` = `wep` (0 golden revolver, 1
-/// golden shotgun, 2 golden bazooka, 3 minigun), `brain.ammo` = `ammo`,
-/// `brain.gunangle` (radians) = `gunangle`, `boss.aux` = `minigun_side`,
+/// register map: `boss.pattern_index` = `wep` (0 golden revolver, 1 golden
+/// shotgun, 2 golden bazooka, 3 minigun); `brain.ammo` = `ammo`;
+/// `brain.gunangle` (radians) = `gunangle`; `boss.aux` = `minigun_side`;
 /// `boss.phase` Idle = pre-intro. `attack_timer`/`special_timer`/
 /// `phase_timer` are `alarm[1]`/`alarm[2]`/`alarm[4]` in seconds.
 #[allow(clippy::too_many_arguments)]
@@ -3268,6 +3224,4 @@ fn yv_boss_ai(
     fired
 }
 
-// ---------------------------------------------------------------------------
 // Tests: headless parity for routing, volley counts, orbit, difficulty.
-// ---------------------------------------------------------------------------

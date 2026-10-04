@@ -1,15 +1,11 @@
 //! nt portal vortex background pass (SpiralCont/Spiral), game content.
-//!
-//! Layering: the generic fullscreen-pass mechanism lives in
-//! `repame-sprite` (`FullscreenPass`); everything nt-specific - the
-//! WGSL (`shaders/vortex.wgsl`, ported from nt's `Material2d`), the
-//! GameMaker spiral laws baked into it, the 30 Hz tick shapes below -
-//! lives here in the main crate next to the [`crate::vortex`] sim state.
-//! (It used to be a separate `repame-vortex` crate; nothing else ever
-//! reused it, so it was folded in to cut workspace friction.)
-//!
-//! A future game background brings its own shader + snapshot in its own
-//! module and never touches this one.
+//! Layering: the generic fullscreen-pass mechanism lives in `repame-sprite`
+//! (`FullscreenPass`); everything nt-specific - the WGSL
+//! (`shaders/vortex.wgsl`, ported from nt's `Material2d`), the GameMaker spiral
+//! laws baked into it, the 30 Hz tick shapes below - lives here in the main crate
+//! next to the [`crate::vortex`] sim state. (It used to be a separate
+//! `repame-vortex` crate; nothing else reused it, so it was folded in to cut
+//! workspace friction.)
 
 use std::sync::Arc;
 
@@ -46,14 +42,12 @@ pub fn vard_slot(path: &str) -> Option<usize> {
         .position(|candidate| *candidate == path)
 }
 
-/// Plain-data snapshot. Field-for-field the nt tick outputs: ring and
-/// debris arrays with nt's paddings (`NEG_ONE` wisps, `-1000` debris),
-/// per-wisp lightning streams (`[lanim, langle_rad, xscale]`, indexed
-/// exactly like `wisps`; dead slots hold `lanim = -1`),
-/// `glob_a = (ticks, drain_bias, bg_r, bg_g)`,
-/// `glob_b = (bg_b, bg_alpha, thresh, kindpacked)`, followed by the
-/// view rect and a flag slot for the portal-bolt pass.
-/// The game ticks spiral state at 30 Hz (nt law) and hands this over.
+/// Plain-data snapshot, field-for-field the nt tick output: ring and debris
+/// arrays with nt's paddings (`NEG_ONE` wisps, `-1000` debris), per-wisp lightning
+/// streams (`[lanim, langle_rad, xscale]`, indexed exactly like `wisps`; dead slots
+/// hold `lanim = -1`), then `ticks, drain_bias, bg_r, bg_g, bg_b, bg_alpha,
+/// thresh, kindpacked`, the view rect and the portal-bolt flag slots. Spiral
+/// state ticks at 30 Hz (nt law).
 pub struct VortexSnapshot {
     pub wisps: [[f32; 4]; VORTEX_WISPS],
     pub debris: [[f32; 4]; VORTEX_DEBRIS],
