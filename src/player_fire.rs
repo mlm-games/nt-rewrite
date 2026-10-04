@@ -32,6 +32,7 @@
 //! - `ProjectileArchetype` (bevy `projectile_archetypes.rs`) is re-expressed
 //!   minimally as [`FireArch`]: only the fields the fire path branches on.
 
+use crate::anim::SpriteAnim;
 use bevy_ecs::prelude::*;
 use glam::Vec2;
 use rand::RngExt;
@@ -52,9 +53,9 @@ use crate::comps_a::{
 };
 use crate::comps_b::{
     Ally, BIG_DOG_MISSILE_DAMAGE, BIG_DOG_MISSILE_HP, BIG_DOG_MISSILE_RADIUS, BigDogMissileState,
-    BloodAmmo, ChestKind, CryAnim, CustomExplosion, Dash, DeploysSentry, Enemy, GmlImage,
+    BloodAmmo, ChestKind, Corpse, CryAnim, CustomExplosion, Dash, DeploysSentry, Enemy, GmlImage,
     HazardCloud, HorrorCharge, NativeAngle, NativeDepth, NativeExplosionKind, NativeFlip,
-    PickupKind, PlasmaBurst, PopPopCharges, PortalStrike, PortalSucking, Prop, PropSprites,
+    PickupKind, PlasmaBurst, PopPopCharges, Portal, PortalStrike, PortalSucking, Prop, PropSprites,
     SecretEntrance, Shield, Slowed, SpawnsWeaponPickup, SwingFx, Telekinesis, WeaponVisual,
 };
 use crate::data::{
@@ -62,8 +63,8 @@ use crate::data::{
     UltraMutationId, WeaponId, ammo_pickup_amount,
 };
 use crate::effects::{
-    ChromaticAberration, FiredWeapon, HitStop, RumbleRequest, SlowMotion, chromatic_pulse, rumble,
-    slow_motion, spawn_burst,
+    ChromaticAberration, FiredWeapon, HitStop, RumbleRequest, SlowMotion, rumble, slow_motion,
+    spawn_burst,
 };
 use crate::environment::{
     PropDeathEffect, spawn_native_explosion_visual, spawn_native_smoke_mote, spawn_prop_corpse,
@@ -2759,6 +2760,87 @@ pub fn robot_eat_drops(
 
 // player_ability
 
+/// GML `scrPowers.gml:89-99`: `game_screen_width div 2` x
+/// `game_screen_height div 2` around the player. The GML GUI is a fixed
+/// 320x240 (`scripts/macros_general/macros_general.gml:6-7`).
+pub fn corpse_blast_box(at: Vec2) -> (f32, f32, f32, f32) {
+    (at.x - 160.0, at.y - 120.0, at.x + 160.0, at.y + 120.0)
+}
+
+/// GML's `x > _left && y > _top && x < _right && y < _bottom` chain: strictly
+/// inside, edges excluded.
+pub fn in_blast_box(at: Vec2, left: f32, top: f32, right: f32, bottom: f32) -> bool {
+    at.x > left && at.y > top && at.x < right && at.y < bottom
+}
+
+/// GML `scrMeltingCorpseExplosion` (`scrPowers.gml:464-517`). Purely cosmetic:
+/// it deals no damage, so the caller owns the actual corpse/enemy removal.
+fn melting_corpse_explosion(commands: &mut Commands, from: Vec2, at: Vec2, size: i32, tb: bool) {
+    let mut rng = rand::rng();
+
+    // GML `:466` - one BloodStreak thrown away from the player at 8px/step.
+    let away = (at - from).normalize_or_zero();
+    commands.spawn((
+        GameCleanup,
+        LevelCleanup,
+        GmlImage::animated("images/sprBloodStreak.png", 5, 0.4, true),
+        Pos(at),
+        Velocity(away * 8.0 * 30.0),
+    ));
+    // GML `:470`
+    commands.spawn((
+        GameCleanup,
+        LevelCleanup,
+        GmlImage::animated("images/sprMeltSplat.png", 10, 0.4, true),
+        Pos(at),
+    ));
+
+    // GML `:472-482` - Throne Butt adds its own ring of three, 24px out at
+    // 120-degree steps, independent of the corpse's size.
+    if tb {
+        meat_explosion_ring(commands, at, rng.random_range(0.0..std::f32::consts::TAU));
+    }
+
+    // GML `:484-494` - the corpse's own size then decides a second ring, or a
+    // single blast on the spot for a size-1 corpse.
+    if size >= 2 {
+        meat_explosion_ring(commands, at, rng.random_range(0.0..std::f32::consts::TAU));
+    } else {
+        commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            GmlImage::animated("images/sprMeatExplosion.png", 5, 0.4, true),
+            Pos(at),
+        ));
+    }
+}
+
+/// GML `repeat 3 { instance_create(x + ldrx(24, _ang), ..., MeatExplosion); _ang += 120 }`.
+fn meat_explosion_ring(commands: &mut Commands, at: Vec2, start: f32) {
+    for step in 0..3 {
+        let a = start + step as f32 * std::f32::consts::TAU / 3.0;
+        let off = Vec2::new(a.cos(), a.sin()) * 24.0;
+        commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            GmlImage::animated("images/sprMeatExplosion.png", 5, 0.4, true),
+            Pos(at + off),
+        ));
+    }
+}
+
+/// Screen-feel sinks the racial ability press path drives (bundled so
+/// `player_ability` stays within the system-param limit, same as `BoomFeel`
+/// in `combat.rs`).
+#[derive(bevy_ecs::system::SystemParam)]
+pub struct AbilityFeel<'w> {
+    pub trauma: ResMut<'w, Trauma>,
+    pub chroma: ResMut<'w, ChromaticAberration>,
+    pub slow_mo: ResMut<'w, SlowMotion>,
+    pub hitstop: ResMut<'w, HitStop>,
+    pub mainvol: ResMut<'w, MainVol>,
+}
+
 /// One-shot racial abilities. Visual bursts are omitted; every sim effect
 /// (timers, damage, spawns, ammo/hp costs, unlocks) is kept. Steroids has
 /// no tap ability (bevy early-return parity).
@@ -2766,20 +2848,14 @@ pub fn robot_eat_drops(
 pub fn player_ability(
     mut input: ResMut<NtInput>,
     mut commands: Commands,
-    mut trauma: ResMut<Trauma>,
-    mut chroma: ResMut<ChromaticAberration>,
-    mut slow_mo: ResMut<SlowMotion>,
-    mut hitstop: ResMut<HitStop>,
+    mut feel: AbilityFeel<'_>,
     mut cues: ResMut<Queue<AudioCue>>,
     mut rumble_q: ResMut<Queue<RumbleRequest>>,
     mut toast: ResMut<Toast>,
     mut pop_q: Query<&mut PopPopCharges>,
-    mut persist: ParamSet<(
-        ResMut<SaveData>,
-        ResMut<SaveDirty>,
-        Res<Run>,
-        ResMut<MainVol>,
-    )>,
+    corpses: Query<(Entity, &Pos, &Corpse, Option<&SpriteAnim>), With<Corpse>>,
+    portals: Query<Entity, With<Portal>>,
+    mut persist: ParamSet<(ResMut<SaveData>, ResMut<SaveDirty>, Res<Run>)>,
     catalog: Res<repame_anim::AnimCatalog>,
     mut tut: Option<ResMut<crate::state::TutorialState>>,
     mut player_q: Query<
@@ -2807,7 +2883,7 @@ pub fn player_ability(
         Query<Entity, (With<Tangle>, Without<Player>)>,
         Query<&mut WeaponVisual>,
     )>,
-    mut enemies: Query<(Entity, &Pos, &mut Health), (With<Enemy>, Without<Player>)>,
+    mut enemies: Query<(Entity, &Pos, &mut Health, &Enemy), (With<Enemy>, Without<Player>)>,
 ) {
     let Ok((
         player_e,
@@ -2858,7 +2934,7 @@ pub fn player_ability(
             let from = ppos.0;
             let dir = aim.0;
             let mut victim: Option<(glam::Vec2, f32)> = None;
-            for (_, epos, _) in &enemies {
+            for (_, epos, _, _) in &enemies {
                 let to = epos.0 - from;
                 let along = to.dot(dir);
                 if along < 0.0 || along > 213.0 {
@@ -2971,8 +3047,8 @@ pub fn player_ability(
             });
             health.invuln = GTimer::from_seconds(15.0 / 30.0, TimerMode::Once);
             vel.0 = dir * 900.0;
-            trauma.add(0.12);
-            slow_motion(&mut slow_mo, 0.55, 0.2);
+            feel.trauma.add(0.12);
+            slow_motion(&mut feel.slow_mo, 0.55, 0.2);
             rumble(&mut rumble_q, 0.2, 0.2, 0.1);
             if player.throne_butt {
                 cue(&mut cues, "sndFishRollUpg", 1.0, 0.0);
@@ -2987,7 +3063,7 @@ pub fn player_ability(
             } else {
                 commands.entity(player_e).insert(Shield { timer });
             }
-            trauma.add(0.08);
+            feel.trauma.add(0.08);
             cue(
                 &mut cues,
                 if matches!(player.ultra, Some(UltraMutationId::CrystalJuggernaut)) {
@@ -3008,22 +3084,54 @@ pub fn player_ability(
             }
         }
         AbilityKind::Detonate => {
-            if health.hp <= 1 {
+            // GML `scrPowers.gml:88`: the press is inert unless something is
+            // left to blow up (a live enemy, or an open exit Portal).
+            if enemies.is_empty() && portals.is_empty() {
                 return;
             }
-            health.hp -= 1;
-            let radius = 150.0 * ability_mult.clamp(1.0, 2.0);
-            let damage = (3.0 * ability_mult).round() as i32;
-            for (_, epos, mut ehealth) in &mut enemies {
-                if epos.0.distance(pos) < radius {
-                    ehealth.hp -= damage;
+
+            // GML `scrPowers.gml:89-99`: a half-view box around the player,
+            // 320x240 GUI at its fixed size.
+            let (left, top, right, bottom) = corpse_blast_box(ppos.0);
+
+            // GML `scrPowers.gml:101-105`: only corpses whose death animation
+            // has finished (`image_speed == 0`) qualify.
+            for (ce, cpos, ccorpse, anim) in &corpses {
+                if !anim.is_some_and(|a| a.finished) {
+                    continue;
+                }
+                if !in_blast_box(cpos.0, left, top, right, bottom) {
+                    continue;
+                }
+                melting_corpse_explosion(
+                    &mut commands,
+                    ppos.0,
+                    cpos.0,
+                    ccorpse.size,
+                    player.throne_butt,
+                );
+                commands.entity(ce).despawn();
+            }
+
+            // GML `scrPowers.gml:107-113` `UltraSkill.BrainCapacity`: the same
+            // blast also takes out wounded enemies outright.
+            if player.ultra == Some(UltraMutationId::MeltingBrainCapacity) {
+                for (_, epos, mut ehealth, enemy) in &mut enemies {
+                    if ehealth.hp > 5 {
+                        continue;
+                    }
+                    if in_blast_box(epos.0, left, top, right, bottom) {
+                        melting_corpse_explosion(
+                            &mut commands,
+                            ppos.0,
+                            epos.0,
+                            crate::enemy_data::enemy_def(enemy.kind).size as i32,
+                            player.throne_butt,
+                        );
+                        ehealth.hp = 0;
+                    }
                 }
             }
-            trauma.add(0.5);
-            chromatic_pulse(&mut chroma, 0.4);
-            rumble(&mut rumble_q, 0.6, 0.8, 0.25);
-            hitstop.trigger(0.25, 0.12);
-            cue(&mut cues, "sndExplosionL", 0.9, 0.04);
         }
         AbilityKind::Snare => {
             // GML `scrPowers.gml:120-129`: a `TangleSeed` already in
@@ -3259,7 +3367,7 @@ pub fn player_ability(
             let beam_len = 320.0 * ability_mult.clamp(1.0, 1.8);
             let beam_damage = (4.0 * ability_mult).round() as i32;
             let beam_width = 22.0 * ability_mult.sqrt();
-            for (_, epos, mut ehealth) in &mut enemies {
+            for (_, epos, mut ehealth, _) in &mut enemies {
                 let to = epos.0 - pos;
                 let proj = to.dot(dir);
                 if proj < 0.0 || proj > beam_len {
@@ -3282,7 +3390,7 @@ pub fn player_ability(
                 },
                 Pos(pos + dir * 160.0),
             ));
-            trauma.add(0.18);
+            feel.trauma.add(0.18);
             cue(&mut cues, "sndHorrorBeam", 1.0, 0.0);
         }
         AbilityKind::PortalStrike => {
@@ -3350,7 +3458,7 @@ pub fn player_ability(
                     Pos(spawn_pos),
                 ));
             }
-            trauma.add(0.25);
+            feel.trauma.add(0.25);
             cue(&mut cues, "sndBigDogMissile", 1.0, 0.0);
         }
         AbilityKind::BloodGamble => {
@@ -3377,17 +3485,16 @@ pub fn player_ability(
             let shake_scale: f32 = persist.p0().settings.screenshake.clamp(0.0, 2.0);
             let underwater = matches!(persist.p2().area, AreaId::Oasis);
             let mut vis_q = walls_and_allies.p4();
-            let mut mainvol = persist.p3();
             let mut fx = FireFx {
-                trauma: &mut trauma,
-                hitstop: &mut hitstop,
+                trauma: &mut feel.trauma,
+                hitstop: &mut feel.hitstop,
                 cues: &mut cues,
                 rumble: &mut rumble_q,
                 toast: &mut toast,
                 shake_scale,
                 underwater,
                 catalog: &catalog,
-                mainvol: &mut mainvol,
+                mainvol: &mut feel.mainvol,
             };
             let shot = GunShot {
                 player_ent: player_e,
@@ -3677,3 +3784,31 @@ pub fn tick_big_dog_missiles(
 }
 
 // Tests: headless parity for the combat block
+
+#[cfg(test)]
+mod melting_tests {
+    use super::*;
+
+    /// GML `scrPowers.gml:102` gates on `x > _left && y > _top && x < _right
+    /// && y < _bottom`, so the box is half-open on every side: a corpse sitting
+    /// exactly 160px to the right is already out of reach.
+    #[test]
+    fn blast_box_is_half_open_on_all_four_sides() {
+        let (l, t, r, b) = corpse_blast_box(Vec2::ZERO);
+        assert_eq!((l, t, r, b), (-160.0, -120.0, 160.0, 120.0));
+
+        assert!(in_blast_box(Vec2::new(0.0, 0.0), l, t, r, b));
+        assert!(in_blast_box(Vec2::new(159.9, 119.9), l, t, r, b));
+        assert!(!in_blast_box(Vec2::new(160.0, 0.0), l, t, r, b));
+        assert!(!in_blast_box(Vec2::new(-160.0, 0.0), l, t, r, b));
+        assert!(!in_blast_box(Vec2::new(0.0, 120.0), l, t, r, b));
+        assert!(!in_blast_box(Vec2::new(0.0, -120.0), l, t, r, b));
+    }
+
+    /// The box is anchored on the player, not the room.
+    #[test]
+    fn blast_box_follows_the_player() {
+        let (l, t, r, b) = corpse_blast_box(Vec2::new(1000.0, -500.0));
+        assert_eq!((l, t, r, b), (840.0, -620.0, 1160.0, -380.0));
+    }
+}

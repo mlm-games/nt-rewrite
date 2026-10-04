@@ -614,6 +614,7 @@ pub fn resolve_enemy_deaths(
                     Team::Player,
                     Corpse {
                         kind: enemy.kind,
+                        size: source_size,
                         life: GTimer::from_seconds(12.0, TimerMode::Once),
                         pos,
                         flip_x: false,

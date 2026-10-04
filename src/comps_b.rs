@@ -1619,6 +1619,9 @@ pub struct ThroneCarpet {
 #[derive(Component, Debug)]
 pub struct Corpse {
     pub kind: EnemyKind,
+    /// GML corpse `size` (`Corpse/Create_0.gml:1` defaults to 1;
+    /// `enemy/Destroy_0.gml:11` copies the dying enemy's).
+    pub size: i32,
     pub life: Timer,
     pub pos: Vec2,
     /// Facing recorded at death (bevy `corpse_sprite.flip_x` parity;

@@ -279,6 +279,8 @@ pub fn resolve_player_gameover(
         },
         Corpse {
             kind: crate::data::EnemyKind::Bandit,
+            // GML `Player/Destroy_0.gml:71`: the player husk is always size 1.
+            size: 1,
             life: GTimer::from_seconds(12.0, TimerMode::Once),
             pos,
             // Bevy preserves the dying sprite's flip on the husk.
