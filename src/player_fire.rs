@@ -2574,23 +2574,49 @@ pub fn tick_slowed(
     }
 }
 
+/// GML `PortalStrike/Create_0.gml:3` `size = 28` and `:7` `ammo = 5`.
+const PORTAL_STRIKE_SIZE: f32 = 28.0;
+const PORTAL_STRIKE_BLASTS: i32 = 5;
+
+/// GML `PortalStrike`: an armed five-blast line that only goes off when the
+/// key is released, so the player can watch and steer the trajectory first.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn tick_portal_strikes(
     time: Res<SimTime>,
+    input: Res<NtInput>,
     mut commands: Commands,
     mut trauma: ResMut<Trauma>,
     mut cues: ResMut<Queue<AudioCue>>,
     save: Res<SaveData>,
-    mut q: Query<(Entity, &Pos, &mut PortalStrike)>,
-    mut enemies: Query<(&Pos, &mut Health), With<Enemy>>,
+    mut q: Query<
+        (Entity, &mut Pos, &mut PortalStrike),
+        (With<PortalStrike>, Without<Player>, Without<Enemy>),
+    >,
+    mut enemies: Query<(&Pos, &mut Health), (With<Enemy>, Without<Player>)>,
 ) {
+    let dt = time.delta_secs;
+
     for (e, spos, mut strike) in &mut q {
-        strike.timer.tick(time.delta_secs);
+        // GML `PortalStrike/Step_0.gml:48-51`: while the key is still down the
+        // strike just tracks the aim; releasing fires it.
+        if strike.armed {
+            if !input.spec_held {
+                strike.armed = false;
+                strike.timer = GTimer::from_seconds(2.0 / 30.0, TimerMode::Once);
+            }
+            continue;
+        }
+
+        strike.timer.tick(dt);
         if !strike.timer.just_finished() {
             continue;
         }
-        let pos = spos.0;
+
+        // GML `PortalStrike/Alarm_0.gml:3-6`: detonate at the running offset,
+        // then step the offset along the aim for the next shot.
+        let at = spos.0 + strike.explo;
         for (epos, mut h) in &mut enemies {
-            if epos.0.distance(pos) <= strike.radius {
+            if epos.0.distance(at) <= strike.radius {
                 h.hp -= strike.damage;
             }
         }
@@ -2599,11 +2625,20 @@ pub fn tick_portal_strikes(
         spawn_native_explosion_visual(
             &mut commands,
             save.settings.particles,
-            pos,
+            at,
             NativeExplosionKind::Popo,
             false,
         );
-        commands.entity(e).despawn();
+
+        let step = strike.heading * strike.size;
+        strike.explo += step;
+        strike.ammo_left -= 1;
+        if strike.ammo_left <= 0 {
+            // GML `:35-37` - the fifth blast despawns the strike.
+            commands.entity(e).despawn();
+        } else {
+            strike.timer = GTimer::from_seconds(2.0 / 30.0, TimerMode::Once);
+        }
     }
 }
 
@@ -3463,13 +3498,26 @@ pub fn player_ability(
                 return;
             }
             player.rogue_ammo = player.rogue_ammo.saturating_sub(1);
-            let target = pos + aim_v.normalize_or_zero() * 180.0;
+            // GML `scrPowers.gml:352-358`: the strike spawns on the cursor, or
+            // 64px along the fire direction on gamepad/touch. `Create_0.gml:3-7`
+            // then primes `explo_x` back by `size * 0.5 * (ammo - 0.5)` so the
+            // five blasts straddle the aim point rather than all trailing it.
+            let heading = aim_v.normalize_or_zero();
+            let target = pos + heading * 64.0;
+            let size = PORTAL_STRIKE_SIZE;
             commands.spawn((
                 LevelCleanup,
                 PortalStrike {
-                    timer: GTimer::from_seconds(0.55, TimerMode::Once),
-                    radius: 90.0,
+                    timer: GTimer::from_seconds(2.0 / 30.0, TimerMode::Once),
+                    // GML `PopoExplosion/Create_0.gml:23` damage 8, and its
+                    // `mskExplosion` is 64x64.
+                    radius: 32.0,
                     damage: 8,
+                    size,
+                    ammo_left: PORTAL_STRIKE_BLASTS,
+                    explo: -heading * (size * 0.5 * (PORTAL_STRIKE_BLASTS as f32 - 0.5)),
+                    heading,
+                    armed: true,
                 },
                 Pos(target),
             ));

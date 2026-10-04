@@ -1475,6 +1475,17 @@ pub struct PortalStrike {
     pub timer: Timer,
     pub radius: f32,
     pub damage: i32,
+    /// GML `PortalStrike/Create_0.gml:3-7`: `size = 28` spacing between the
+    /// five blasts, and `ammo = 5` shots left.
+    pub size: f32,
+    pub ammo_left: i32,
+    /// Running offset along `direction` (`explo_x`/`explo_y` in GML).
+    pub explo: Vec2,
+    /// Unit vector the five blasts march along, fixed when the key went down.
+    pub heading: Vec2,
+    /// GML `PortalStrike/Step_0.gml:41-49`: the strike is an armed trajectory
+    /// preview that only detonates once the key comes back up.
+    pub armed: bool,
 }
 
 #[derive(Component)]
