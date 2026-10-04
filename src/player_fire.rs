@@ -681,6 +681,7 @@ pub fn player_fire(
             &mut health,
             &mut vel,
             &mut cooldown,
+            true,
             &mut pop_q,
             &mut vis_q,
         );
@@ -709,6 +710,7 @@ pub fn player_fire(
             &mut health,
             &mut vel,
             &mut cooldown,
+            true,
             &mut pop_q,
             &mut vis_q,
         );
@@ -752,6 +754,7 @@ fn fire_one_gun(
     health: &mut Health,
     vel: &mut Velocity,
     cooldown: &mut FireCooldown,
+    consume_ammo: bool,
     pop_q: &mut Query<&mut PopPopCharges>,
     vis_q: &mut Query<&mut WeaponVisual>,
 ) {
@@ -785,7 +788,7 @@ fn fire_one_gun(
     let shot = GunShot { def, ..*shot };
     let shot = &shot;
 
-    if def.melee.is_none() {
+    if def.melee.is_none() && consume_ammo {
         // GML `scrPlayerFiring`: blood weapons consume ammo normally; on empty
         // (press path only, not bursts/dups) the click refills cost-worth of ammo for
         // 1 HP (`scrBloodAmmoRefill`) and fires the same click - modelled as: ammo
@@ -2770,7 +2773,13 @@ pub fn player_ability(
     mut cues: ResMut<Queue<AudioCue>>,
     mut rumble_q: ResMut<Queue<RumbleRequest>>,
     mut toast: ResMut<Toast>,
-    mut persist: ParamSet<(ResMut<SaveData>, ResMut<SaveDirty>, Res<Run>)>,
+    mut pop_q: Query<&mut PopPopCharges>,
+    mut persist: ParamSet<(
+        ResMut<SaveData>,
+        ResMut<SaveDirty>,
+        Res<Run>,
+        ResMut<MainVol>,
+    )>,
     catalog: Res<repame_anim::AnimCatalog>,
     mut tut: Option<ResMut<crate::state::TutorialState>>,
     mut player_q: Query<
@@ -2796,6 +2805,7 @@ pub fn player_ability(
         Query<Entity, With<Ally>>,
         Query<&SnareSeed>,
         Query<Entity, (With<Tangle>, Without<Player>)>,
+        Query<&mut WeaponVisual>,
     )>,
     mut enemies: Query<(Entity, &Pos, &mut Health), (With<Enemy>, Without<Player>)>,
 ) {
@@ -3344,17 +3354,76 @@ pub fn player_ability(
             cue(&mut cues, "sndBigDogMissile", 1.0, 0.0);
         }
         AbilityKind::BloodGamble => {
+            // GML `scrPowers.gml:385`: `_press && can_shoot && reload <= 0`.
+            // `can_shoot` IS `reload <= 0` in the port, so one gate covers both.
+            if !cooldown.timer.is_finished() {
+                return;
+            }
             let cur = inv.weapons[inv.current.min(inv.weapon_slots.saturating_sub(1))];
             if cur == WeaponId::NONE {
                 return;
             }
             let meta = weapon_meta(cur);
             let ammo_kind = weapon_ammo(cur);
-            let amount = ammo_pickup_amount(ammo_kind).max(1);
             let cost = meta.wep_cost as i32;
+            // GML `scrPowers.gml:386`: a costless weapon cannot be gambled.
             if cost <= 0 {
                 return;
             }
+
+            // GML `scrPowers.gml:388`: the gamble IS the shot. `scrFire(wep,
+            // false)` spends neither ammo nor rads and arms the weapon's own
+            // reload, which is what rate-limits the ability.
+            let shake_scale: f32 = persist.p0().settings.screenshake.clamp(0.0, 2.0);
+            let underwater = matches!(persist.p2().area, AreaId::Oasis);
+            let mut vis_q = walls_and_allies.p4();
+            let mut mainvol = persist.p3();
+            let mut fx = FireFx {
+                trauma: &mut trauma,
+                hitstop: &mut hitstop,
+                cues: &mut cues,
+                rumble: &mut rumble_q,
+                toast: &mut toast,
+                shake_scale,
+                underwater,
+                catalog: &catalog,
+                mainvol: &mut mainvol,
+            };
+            let shot = GunShot {
+                player_ent: player_e,
+                pos: ppos.0,
+                aim: aim.0,
+                weapon_id: cur,
+                def: weapon_runtime_def(cur),
+                visual_slot: 0,
+                burst: false,
+            };
+            fire_one_gun(
+                &mut commands,
+                &mut fx,
+                &shot,
+                &mut player,
+                &mut inv,
+                &mut health,
+                &mut vel,
+                &mut cooldown,
+                false,
+                &mut pop_q,
+                &mut vis_q,
+            );
+
+            // GML `scrPowers.gml:392-394` `UltraSkill.Damnation`:
+            // `reload = max(1, reload * 0.2)`, one frame being the floor.
+            if matches!(player.ultra, Some(UltraMutationId::SkeletonNecromancy)) {
+                let d = (cooldown.timer.duration() * 0.2).max(1.0 / 30.0);
+                cooldown.timer.set_duration(d);
+            }
+
+            // GML `scrPowers.gml:405-406` reads `scrAmmoGetPickupAmount`, which
+            // folds in the Fish bonus and the Haste crown; the flat table omits both.
+            let fish = u32::from(race_state.race == RaceId::Fish);
+            let haste = u32::from(player.crown == CrownKind::Haste);
+            let amount = crate::data::ammo_pickup_amount_for(ammo_kind, fish, haste).max(1);
             player.skeleton_gamble += 1;
             let mut rng = rand::rng();
             let proc = rng.random_range(0..amount) < cost;
