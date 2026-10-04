@@ -307,7 +307,7 @@ fn run_tape() -> Vec<TickSnap> {
         // (Key-up events above already landed in staging this frame;
         // the snapshot carries the matching level clear.)
         let mut sched = scheduler(&hw);
-        app.feed_polled(&mut sched);
+        app.feed_polled(&sched);
         app.feed_input();
         // Key-up dispatch parity: live, winit delivers the Up event
         // through the same focus route. The tape asserts Down via

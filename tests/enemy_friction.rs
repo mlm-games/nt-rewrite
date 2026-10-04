@@ -97,7 +97,7 @@ fn enemy_speed_decays_by_gml_friction_each_step() {
     // pure friction: 3.0 decays to 0 in 8 frames, 9.8 px total.
     let expect: [f32; 8] = [2.6, 2.2, 1.8, 1.4, 1.0, 0.6, 0.2, 0.0];
     for (frame, want) in expect.iter().enumerate() {
-        app.feed_polled(&mut sched);
+        app.feed_polled(&sched);
         app.feed_input();
         app.advance(STEP);
         let w = &mut app.sim.world;
@@ -121,7 +121,7 @@ fn enemy_speed_decays_by_gml_friction_each_step() {
     // Then it must come to rest and STAY there: no walk, no decide, so GML's
     // friction alone drives the last 0.2 px/frame to zero and holds it.
     for frame in 8..12 {
-        app.feed_polled(&mut sched);
+        app.feed_polled(&sched);
         app.feed_input();
         app.advance(STEP);
         let w = &mut app.sim.world;
