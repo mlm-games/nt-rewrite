@@ -2782,6 +2782,7 @@ pub fn player_ability(
             &mut Velocity,
             &mut AimDir,
             &mut Inventory,
+            &mut FireCooldown,
             &RaceState,
             Option<&mut Shield>,
             Option<&mut Telekinesis>,
@@ -2806,6 +2807,7 @@ pub fn player_ability(
         mut vel,
         mut aim,
         mut inv,
+        mut cooldown,
         race_state,
         shield,
         telek,
@@ -3092,6 +3094,7 @@ pub fn player_ability(
             inv.cursed[slot] = false;
             if let Some(next) = (0..inv.weapon_slots).find(|&i| inv.weapons[i] != WeaponId::NONE) {
                 inv.current = next;
+                cooldown.swap_slots();
             }
             robot_eat_drops(
                 &mut commands,
@@ -3181,6 +3184,7 @@ pub fn player_ability(
             inv.cursed[slot] = false;
             if let Some(next) = (0..inv.weapon_slots).find(|&i| inv.weapons[i] != WeaponId::NONE) {
                 inv.current = next;
+                cooldown.swap_slots();
             }
             cue(&mut cues, "sndChickenThrow", 1.0, 0.0);
         }

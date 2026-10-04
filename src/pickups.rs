@@ -1683,7 +1683,11 @@ pub fn collect_pickups(
                     // `prop/Destroy_0.gml:12` to turn the inherited `raddrop =
                     // 25` (`RadChest/Create_0.gml:20`) into 25 rads.
                     run.noradch = 0;
-                    crate::environment::spawn_rad_chest_burst(&mut commands, true, pickup_pos_value);
+                    crate::environment::spawn_rad_chest_burst(
+                        &mut commands,
+                        true,
+                        pickup_pos_value,
+                    );
                     scr_rad_drop(
                         &mut commands,
                         &catalog,
@@ -1700,7 +1704,11 @@ pub fn collect_pickups(
                     // GML `RadChestBig` overrides only `Create_0`
                     // (`raddrop = 45`, `max_hp = 20`), so it runs the
                     // inherited `RadChest/Destroy_0` body verbatim.
-                    crate::environment::spawn_rad_chest_burst(&mut commands, true, pickup_pos_value);
+                    crate::environment::spawn_rad_chest_burst(
+                        &mut commands,
+                        true,
+                        pickup_pos_value,
+                    );
                     scr_rad_drop(
                         &mut commands,
                         &catalog,
@@ -1788,9 +1796,17 @@ pub fn collect_pickups(
                     // `RadChest/Destroy_0.gml:4-12`, which repeats the same 4 x `Smoke`
                     // + `ExploderExplo` + `sndEXPChest` before its own
                     // `event_inherited()` reaches `prop/Destroy_0.gml:12`.
-                    crate::environment::spawn_rad_chest_burst(&mut commands, true, pickup_pos_value);
+                    crate::environment::spawn_rad_chest_burst(
+                        &mut commands,
+                        true,
+                        pickup_pos_value,
+                    );
                     audio.play_exp_chest(&mut cues);
-                    crate::environment::spawn_rad_chest_burst(&mut commands, true, pickup_pos_value);
+                    crate::environment::spawn_rad_chest_burst(
+                        &mut commands,
+                        true,
+                        pickup_pos_value,
+                    );
                     scr_rad_drop(
                         &mut commands,
                         &catalog,
@@ -2102,17 +2118,11 @@ pub fn collect_pickups(
                     &mut commands,
                     &catalog,
                     &mut inv,
+                    fire_cd.as_deref_mut(),
                     weapon,
                     pickup_pos_value,
                     pickup_cursed,
                 );
-                // GML `Player/Collision_WepPickup.gml:57-58`:
-                // `can_shoot = true; reload = 0` - a gun picked up
-                // mid-reload can fire immediately. The port carries the
-                // reload on `FireCooldown.timer`.
-                if let Some(cd) = fire_cd.as_deref_mut() {
-                    cd.timer.reset();
-                }
                 if matches!(player.ultra, Some(UltraMutationId::RobotRefinedTaste)) {
                     health.hp = (health.hp + 1).min(health.max);
                 }
@@ -2562,6 +2572,7 @@ fn equip_weapon(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
     inv: &mut Inventory,
+    mut cooldown: Option<&mut crate::comps_a::FireCooldown>,
     weapon: WeaponId,
     at: glam::Vec2,
     curse: bool,
@@ -2570,6 +2581,13 @@ fn equip_weapon(
         inv.weapons[empty] = weapon;
         inv.cursed[empty] = curse;
         inv.current = empty;
+        // GML `Collision_WepPickup.gml:50-58`: the old `wep` becomes `bwep`
+        // (keeping its own reload) and the new gun enters `wep` with
+        // `reload = 0`, so exchange the roles then disarm the new held gun.
+        if let Some(cd) = cooldown.as_deref_mut() {
+            cd.swap_slots();
+            cd.clear_current();
+        }
         return;
     }
 
@@ -2581,6 +2599,10 @@ fn equip_weapon(
     }
     inv.weapons[slot] = weapon;
     inv.cursed[slot] = curse;
+    // GML `Collision_WepPickup.gml:56-58` runs `reload = 0` on both branches.
+    if let Some(cd) = cooldown {
+        cd.clear_current();
+    }
 }
 
 /// GML `Player/Collision_WepPickup.gml:90-104` verbatim - the block sits

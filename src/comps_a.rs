@@ -827,6 +827,26 @@ pub struct FireCooldown {
     pub burst_timer_b: Timer,
 }
 
+impl FireCooldown {
+    /// GML `scrSwapWeps.gml:16-27` verbatim: `reload`/`breload` and
+    /// `can_shoot`/`bcan_shoot` travel *with the weapon* across a swap, so
+    /// switching guns exchanges the two roles' cooldowns instead of leaving
+    /// each timer bound to its slot index.
+    pub fn swap_slots(&mut self) {
+        std::mem::swap(&mut self.timer, &mut self.timer_b);
+        std::mem::swap(&mut self.burst_left, &mut self.burst_left_b);
+        std::mem::swap(&mut self.burst_timer, &mut self.burst_timer_b);
+    }
+
+    /// GML `Player/Collision_WepPickup.gml:56-58`: a freshly picked-up gun
+    /// enters `wep` with `can_shoot = true` and `reload = 0`.
+    pub fn clear_current(&mut self) {
+        self.timer = Timer::disarmed();
+        self.burst_left = 0;
+        self.burst_timer = Timer::disarmed();
+    }
+}
+
 pub const MAX_WEAPON_SLOTS: usize = 3;
 pub const MAX_AMMO_TYPES: usize = 6;
 
@@ -1318,5 +1338,58 @@ mod gml_top_small_tests {
         assert!(!tops.cells.is_empty());
         tops.clear();
         assert!(tops.cells.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod fire_cooldown_tests {
+    use super::*;
+
+    fn cooldown() -> FireCooldown {
+        FireCooldown {
+            timer: Timer::from_seconds(0.5, TimerMode::Once),
+            burst_left: 3,
+            burst_timer: Timer::from_seconds(0.25, TimerMode::Once),
+            timer_b: Timer::from_seconds(1.5, TimerMode::Once),
+            burst_left_b: 7,
+            burst_timer_b: Timer::from_seconds(0.75, TimerMode::Once),
+        }
+    }
+
+    /// GML `scrSwapWeps.gml:16-27` carries `reload`/`breload` with the weapon,
+    /// so switching guns exchanges the two roles' cooldowns instead of leaving
+    /// each timer bound to its slot index.
+    #[test]
+    fn swap_slots_carries_cooldowns_with_the_weapons() {
+        let mut cd = cooldown();
+        cd.swap_slots();
+        assert_eq!(cd.timer.duration(), 1.5);
+        assert_eq!(cd.timer_b.duration(), 0.5);
+        assert_eq!(cd.burst_left, 7);
+        assert_eq!(cd.burst_left_b, 3);
+        assert_eq!(cd.burst_timer.duration(), 0.75);
+        assert_eq!(cd.burst_timer_b.duration(), 0.25);
+
+        cd.swap_slots();
+        assert_eq!(cd.timer.duration(), 0.5);
+        assert_eq!(cd.timer_b.duration(), 1.5);
+        assert_eq!(cd.burst_left, 3);
+        assert_eq!(cd.burst_left_b, 7);
+    }
+
+    /// GML `Player/Collision_WepPickup.gml:50-58`: the old `wep` moves to `bwep`
+    /// keeping its reload, and the newly picked-up gun enters `wep` with
+    /// `can_shoot = true; reload = 0`.
+    #[test]
+    fn picking_up_a_gun_readies_it_and_keeps_the_old_reload() {
+        let mut cd = cooldown();
+        cd.swap_slots();
+        cd.clear_current();
+        assert!(cd.timer.is_finished());
+        assert_eq!(cd.burst_left, 0);
+        assert!(cd.burst_timer.is_finished());
+        assert_eq!(cd.timer_b.duration(), 0.5);
+        assert_eq!(cd.burst_left_b, 3);
+        assert_eq!(cd.burst_timer_b.duration(), 0.25);
     }
 }

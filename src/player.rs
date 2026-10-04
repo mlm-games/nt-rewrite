@@ -218,11 +218,11 @@ pub fn player_aim(
 pub fn weapon_switch(
     mut input: ResMut<NtInput>,
     audio: Res<GameAudio>,
-    mut q: Query<&mut Inventory, With<Player>>,
+    mut q: Query<(&mut Inventory, &mut crate::comps_a::FireCooldown), With<Player>>,
     mut cues: ResMut<Queue<AudioCue>>,
     mut tut: Option<ResMut<crate::state::TutorialState>>,
 ) {
-    let Ok(mut inv) = q.single_mut() else {
+    let Ok((mut inv, mut cooldown)) = q.single_mut() else {
         return;
     };
     let mut switched = false;
@@ -260,6 +260,7 @@ pub fn weapon_switch(
     }
 
     if switched {
+        cooldown.swap_slots();
         // GML `Step_0:30`: swap pops `swapanim`.
         inv.swapanim = 1.0;
         // GML `scrSwapWeps:43` verbatim: any swap latches the tutorial
