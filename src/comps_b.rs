@@ -924,13 +924,28 @@ pub struct CrownObject {
     pub refresh: u32,
 }
 
-/// GML Chicken-throw flung weapon (`scrWeaponPickupCreate` + `motion_set`
-/// gunangle±2 speed 16, `team`/`creator` set; Determination ultra arms
-/// the 60-tick `alarm[1]` return).
+/// GML Chicken-thrown weapon. `scrWeaponPickupCreate` + `motion_set`
+/// gunangle±2 at speed 16 with `friction = 0` and `mask_index = mskPlasma`,
+/// plus the Determination ultra's `alarm[1]` return.
+///
+/// Self-integrating rather than using `GroundPhysics`, because the thrown gun
+/// has no friction at all while it flies (GML sets `friction = 0`) and the
+/// resting pickups' fixed 0.4 decay would stop it after ~26px.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct FlungWeapon {
     pub team: Team,
     pub creator: Entity,
+    /// px/step, mirroring GML's `speed` unit (16 on throw).
+    pub vel: Vec2,
+    /// GML `mask_index == mskPlasma` while `speed > 0`, flipping to
+    /// `mskWepPickup` once it stops (`WepPickup/Step_0.gml:17-23`). Only the
+    /// plasma mask damages things.
+    pub airborne: bool,
+    /// GML `friction`: 0 while flying, 0.5 once it has hit something.
+    pub friction: f32,
+    /// GML `scr_skill_get(mut_throne_butt)` on a Chicken: the throw pierces
+    /// (`speed *= 0.8`) instead of sticking.
+    pub pierce: bool,
     pub return_ticks: u8,
 }
 

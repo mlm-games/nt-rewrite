@@ -3288,14 +3288,17 @@ pub fn player_ability(
             let mut rng = rand::rng();
             let fling = aim_angle + rng.random_range(-2.0f32.to_radians()..2.0f32.to_radians());
             let determination = matches!(player.ultra, Some(UltraMutationId::ChickenDetermination));
+            // GML `scrPowers.gml:225`: `scrWeaponPickupCreate(x, y, wep)` puts
+            // the gun on the player's own origin, not out along the muzzle.
             spawn_flung_weapon_pickup(
                 &mut commands,
                 &catalog,
                 held,
-                pos + aim_v.normalize_or_zero() * 18.0,
+                pos,
                 fling,
                 Team::Player,
                 player_e,
+                player.throne_butt,
                 if determination { 60 } else { 0 },
             );
             inv.weapons[slot] = WeaponId::NONE;

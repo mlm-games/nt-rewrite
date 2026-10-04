@@ -13,8 +13,8 @@ use crate::anim::SpriteAnim;
 use crate::audio::{AudioCue, GameAudio};
 use crate::combat::queue_enemy_spawn_birth;
 use crate::comps_a::{
-    FloorMask, GameCleanup, Health, Inventory, LevelCleanup, MAX_WEAPON_SLOTS, Player, RaceState,
-    Run, Team, Toast,
+    FloorMask, GameCleanup, Health, Hitbox, Inventory, LevelCleanup, MAX_WEAPON_SLOTS, Player,
+    RaceState, Run, Team, Toast,
 };
 use crate::comps_b::{
     ChestArt, ChestKind, CursedAmmoBlink, DropSeed, Enemy, FlungWeapon, GmlImage, GroundPhysics,
@@ -806,55 +806,120 @@ pub fn spawn_flung_weapon_pickup(
     angle_rad: f32,
     team: Team,
     creator: Entity,
+    pierce: bool,
     return_ticks: u8,
 ) -> Entity {
     let e = spawn_pickup(commands, catalog, PickupKind::Weapon(weapon), pos, 0, false);
     let dir = glam::Vec2::new(angle_rad.cos(), angle_rad.sin());
-    commands.entity(e).insert(GroundPhysics {
-        vel: dir * 16.0 * 30.0,
-        rotspeed: 0.0,
-    });
     commands.entity(e).insert(FlungWeapon {
         team,
         creator,
+        vel: dir * 16.0,
+        airborne: true,
+        friction: 0.0,
+        pierce,
         return_ticks,
     });
     e
 }
 
-/// GML `WepPickup/Alarm_1`: when the Determination return alarm fires,
-/// fling the pickup back at its creator (`sndChickenReturn`).
+/// GML `mskPlasma` is a 9x9 mask (`sprites/mskPlasma/mskPlasma.yy` bbox
+/// 7..16 on both axes), so a flying thrown gun strikes with ~4.5px of reach.
+const PLASMA_RADIUS: f32 = 4.5;
+
+/// Chicken-thrown gun: GML `WepPickup` in its `mskPlasma` flying state.
+///
+/// Self-integrating rather than using `GroundPhysics`, because GML gives it
+/// `friction = 0` and `speed = 16` px/step held until something stops it; the
+/// resting pickups' fixed 0.4 decay would halt it after about 26px. Damage
+/// only lands while `speed > 4` and the mask is still `mskPlasma`
+/// (`WepPickup/Collision_hitme.gml:1`).
 pub fn tick_flung_weapons(
+    time: Res<SimTime>,
     mut commands: Commands,
     mut cues: ResMut<Queue<AudioCue>>,
-    mut q: Query<(Entity, &Pos, &mut FlungWeapon, Option<&mut GroundPhysics>)>,
-    creators: Query<&Pos, Without<FlungWeapon>>,
+    mask: Res<FloorMask>,
+    run: Res<Run>,
+    mut q: Query<(Entity, &mut Pos, &mut FlungWeapon), Without<Enemy>>,
+    mut enemies: Query<(Entity, &Pos, &Hitbox, &mut Health), (With<Enemy>, Without<Player>)>,
 ) {
-    for (e, pos, mut flung, ground) in &mut q {
-        if flung.return_ticks == 0 {
+    let dt = time.delta_secs;
+    // GML `WepPickup/Collision_hitme.gml:2-3`: `22 + 2 * GameCont.level`. The
+    // level term applies because a Player threw it.
+    let damage = 22 + 2 * run.floor as i32;
+    let mut struck: Vec<(Entity, glam::Vec2)> = Vec::new();
+
+    for (_, mut pos, mut flung) in &mut q {
+        // GML `WepPickup/Step_0.gml:17-19`: while the gun still moves, the
+        // Determination return is pulled in to at most 30 ticks out.
+        if flung.vel != glam::Vec2::ZERO && flung.return_ticks > 30 {
+            flung.return_ticks = 30;
+        }
+
+        if !mask.is_walkable(pos.0) {
+            // GML `WepPickup/Collision_Wall.gml:4-8`: bounce, restore friction
+            // if it was flying frictionless, bleed off 60% of the speed.
+            if flung.vel.length() > 4.0 {
+                cues.push(AudioCue {
+                    name: "sndHitWall",
+                    volume: 0.2,
+                    variance: 0.0,
+                });
+            }
+            if flung.friction == 0.0 {
+                flung.friction = 0.5;
+            }
+            flung.vel *= 0.4;
+            pos.0 += flung.vel * dt;
             continue;
         }
-        flung.return_ticks -= 1;
-        if flung.return_ticks > 0 {
-            continue;
+
+        if flung.airborne && flung.vel.length() > 4.0 {
+            for (ee, epos, hitbox, _) in &enemies {
+                if epos.0.distance(pos.0) > hitbox.radius + PLASMA_RADIUS {
+                    continue;
+                }
+                struck.push((ee, pos.0));
+                if flung.pierce {
+                    // GML `:11` - a Chicken under Throne Butt punches through.
+                    flung.vel *= 0.8;
+                } else {
+                    // GML `:13-17` - stick: friction on, punted away from the
+                    // victim, speed cut to a third plus one.
+                    flung.friction = 0.5;
+                    let speed = flung.vel.length();
+                    flung.vel += (pos.0 - epos.0).normalize_or_zero() * speed * 1.5;
+                    flung.vel = flung.vel / 3.0 + glam::Vec2::ONE;
+                }
+                break;
+            }
         }
-        let Ok(cpos) = creators.get(flung.creator) else {
-            continue;
-        };
-        let dir = (cpos.0 - pos.0).normalize_or_zero();
-        let vel = dir * 16.0 * 30.0;
-        if let Some(mut g) = ground {
-            g.vel = vel;
-        } else {
-            commands
-                .entity(e)
-                .insert(GroundPhysics { vel, rotspeed: 0.0 });
+
+        pos.0 += flung.vel * dt;
+        let friction = flung.friction;
+        if friction > 0.0 {
+            flung.vel *= (1.0 - friction).powf(dt * crate::SIM_HZ as f32);
         }
-        cues.push(AudioCue {
-            name: "sndChickenReturn",
-            volume: 1.0,
-            variance: 0.0,
-        });
+
+        // GML `WepPickup/Step_0.gml:20-23`: a stopped gun drops out of the
+        // damaging mask and takes the resting pickup's friction.
+        if flung.vel.length() < 0.5 {
+            flung.vel = glam::Vec2::ZERO;
+            flung.airborne = false;
+            flung.friction = 0.4;
+        }
+    }
+
+    for (ee, at) in struck {
+        if let Ok((_, _, _, mut ehealth)) = enemies.get_mut(ee) {
+            ehealth.hp -= damage;
+        }
+        commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            GmlImage::animated("images/sprThrowHit.png", 5, 0.4, true),
+            Pos(at),
+        ));
     }
 }
 
