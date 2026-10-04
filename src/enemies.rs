@@ -35,10 +35,10 @@ use crate::comps_a::{
 use crate::comps_b::{
     BossBrain, Corpse, CorpseCollision, CrownPedestal, EliteBlocker, Enemy, EnemyBrain, FxAngle,
     GmlImage, HitWarning, HurtAnim, IdpdShieldUnit, IdpdVanBrain, LilHunterDie, MaggotSpawnCharge,
-    MaggotSpawnInternalDrain, MomShot, NativeAngle, NativeDepth, PendingDelayedBoss, Pickup,
-    PickupLifetime, PopoNadeM, PopoShieldM, PortalClear, Prop, PropSprites, ProtoGuardian,
-    SCRAP_BOSS_MISSILE_RADIUS, ScrapBossMissileState, ShieldFollower, SpecialPropDeath, StaticFx,
-    ThroneBall, ToxicGasState, YvCouch,
+    MaggotSpawnInternalDrain, MomShot, NativeAngle, NativeDepth, NecroReviveArea,
+    PendingDelayedBoss, Pickup, PickupLifetime, PopoNadeM, PopoShieldM, PortalClear, Prop,
+    PropSprites, ProtoGuardian, SCRAP_BOSS_MISSILE_RADIUS, ScrapBossMissileState, ShieldFollower,
+    SpecialPropDeath, StaticFx, ThroneBall, ToxicGasState, YvCouch,
 };
 use crate::data::{AreaId, EnemyKind, SplitDef};
 use crate::effects::{HitStop, spawn_burst};
@@ -438,6 +438,9 @@ fn spawn_enemy_impl(
         ec.insert(BossBrain::new(kind, pos));
     }
     match kind {
+        EnemyKind::Technomancer => {
+            ec.insert(crate::comps_b::TechnomancerState::default());
+        }
         EnemyKind::IdpdVan => {
             ec.insert((IdpdVanBrain::default(), IdpdShieldUnit));
         }
@@ -684,6 +687,10 @@ fn gml_fire_rearm_secs(kind: EnemyKind, rng: &mut impl RngExt) -> f32 {
 
 /// Wall-aware sight check (bevy parity: 8 px samples, 16 px tile-center
 /// recheck, arena-exterior samples ignored).
+pub fn line_of_sight_public(from: glam::Vec2, to: glam::Vec2, mask: &FloorMask) -> bool {
+    has_line_of_sight(from, to, mask)
+}
+
 fn has_line_of_sight(from: glam::Vec2, to: glam::Vec2, mask: &FloorMask) -> bool {
     let dir = to - from;
     let dist = dir.length();
@@ -6880,6 +6887,47 @@ fn fire_popo_rocket(
 /// yield N guardians.
 /// `VenuzTV/Destroy_0.gml:3-14`: eight money feathers, destroy the
 /// `YungVenuzCouch`, raise `YVBoss`, destroy the `VenuzCouch`.
+/// GML `objects/NecroReviveArea/Alarm_0.gml`: after 15 frames the nearest
+/// corpse is re-created as a `Necromancer`, but only if the marker still
+/// overlaps it and the spot is free. `GameCont.kills -= 1` gives the kill back.
+pub fn tick_necro_revive_areas(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mut cues: ResMut<Queue<AudioCue>>,
+    mask: Res<FloorMask>,
+    mut areas: Query<(Entity, &Pos, &mut NecroReviveArea), With<NecroReviveArea>>,
+    corpses: Query<(Entity, &Pos), (With<Corpse>, Without<NecroReviveArea>)>,
+) {
+    let dt = time.delta_secs;
+    for (e, apos, mut area) in &mut areas {
+        area.timer.tick(dt);
+        if !area.timer.just_finished() {
+            continue;
+        }
+        if let Some((ce, cpos)) = corpses
+            .iter()
+            .min_by(|a, b| {
+                apos.0.distance_squared(a.1 .0)
+                    .total_cmp(&apos.0.distance_squared(b.1 .0))
+            })
+            // GML `place_meeting(x, y, other)` against `sprNecroReviveArea`'s
+            // 33x36 bbox.
+            && (apos.0.x - cpos.0.x).abs() <= 17.0
+            && (apos.0.y - cpos.0.y).abs() <= 18.0
+            && mask.is_walkable(cpos.0)
+        {
+            commands.entity(ce).despawn();
+            queue_enemy_spawn(&mut commands, EnemyKind::Necromancer, cpos.0, 1.0, 0);
+        }
+        commands.entity(e).despawn();
+        cues.push(AudioCue {
+            name: "sndNecromancerRevive",
+            volume: 0.2,
+            variance: 0.0,
+        });
+    }
+}
+
 pub fn tick_special_props(
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,

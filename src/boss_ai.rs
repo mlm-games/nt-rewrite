@@ -44,8 +44,9 @@ use crate::comps_a::{
 };
 use crate::comps_b::{
     Beam, BigGenerator, BossBrain, BossPhase, CustomExplosion, Enemy, EnemyBrain, HitWarning,
-    HurtAnim, HyperOrbitCrystal, InvisiWall, MomShot, Portal, PortalClear, Prop, PropNestMarkers,
-    PropSprites, SecretEntrance, ThroneBall, ThroneStatueProp,
+    HurtAnim, HyperOrbitCrystal, InvisiWall, MomShot, NecroReviveArea, Portal, PortalClear, Prop,
+    PropNestMarkers, PropSprites, SecretEntrance, TechnoVisual, TechnomancerState, ThroneBall,
+    ThroneStatueProp,
 };
 use crate::data::{AreaId, EnemyKind};
 use crate::enemies::show_enemy_fire;
@@ -489,7 +490,7 @@ pub fn spawn_enemy_beam(
 /// Boss brains: enrage check, timer ticks, per-kind handler, arena clamp
 /// (bevy `boss_ai` top to bottom; non-bosses `continue` before the first
 /// timer tick, exactly like bevy).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn boss_ai(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -508,6 +509,7 @@ pub fn boss_ai(
             &mut Health,
             Option<&mut SpriteAnim>,
             Option<&HurtAnim>,
+            Option<&mut TechnomancerState>,
         ),
         (With<Enemy>, With<BossBrain>, Without<Prop>),
     >,
@@ -515,6 +517,7 @@ pub fn boss_ai(
     walls: Query<(&WallCell, &Pos), (With<WallTile>, Without<Enemy>)>,
     children: Query<(Entity, &Enemy, &Pos), (With<Enemy>, Without<BossBrain>)>,
     portals: Query<Entity, With<Portal>>,
+    corpses: Query<&Pos, (With<crate::comps_b::Corpse>, Without<Prop>, Without<Enemy>)>,
     wall_ids: Query<(Entity, &Pos), (With<WallTile>, Without<Enemy>)>,
     catalog: Res<repame_anim::AnimCatalog>,
     mask: Res<FloorMask>,
@@ -555,9 +558,26 @@ pub fn boss_ai(
         .filter(|(_, e, _)| e.kind == EnemyKind::Ballguy || e.kind == EnemyKind::SuperFrog)
         .map(|(_, e, _)| if e.kind == EnemyKind::SuperFrog { 2 } else { 1 })
         .sum();
+    // GML `TechnoMancer/Alarm_1.gml:28` gates emplacing on the live Turret
+    // count, and `Alarm_1:13-19` / `Alarm_2` need the nearest Corpse.
+    let corpse_list: Vec<glam::Vec2> = corpses.iter().map(|c| c.0).collect();
+    let turret_count = children
+        .iter()
+        .filter(|(_, e, _)| e.kind == EnemyKind::Turret)
+        .count();
 
-    for (entity, mut enemy, mut boss, mut brain, mut vel, mut pos, health, mut anim, hurt) in
-        &mut bosses
+    for (
+        entity,
+        mut enemy,
+        mut boss,
+        mut brain,
+        mut vel,
+        mut pos,
+        health,
+        mut anim,
+        hurt,
+        mut tech,
+    ) in &mut bosses
     {
         let kind = enemy.kind;
         let def = enemy_def(kind);
@@ -733,14 +753,20 @@ pub fn boss_ai(
                 run.loop_count,
             ),
             EnemyKind::Technomancer => {
-                technomancer_ai(
-                    &mut commands,
-                    &mut trauma,
-                    &mut boss,
-                    &mut vel,
-                    epos,
-                    run.loop_count,
-                );
+                if let Some(st) = tech.as_deref_mut() {
+                    technomancer_ai(
+                        &mut commands,
+                        &catalog,
+                        &mut toast,
+                        st,
+                        epos,
+                        player_pos,
+                        &corpse_list,
+                        turret_count,
+                        run.loop_count,
+                        &mask,
+                    );
+                }
                 false
             }
             EnemyKind::Captain => captain_ai(
@@ -2498,50 +2524,187 @@ fn frog_queen_ai(
 
 // Technomancer.
 
-/// Stationary summoner alternating Necromancer/Freak + Freak packs
-/// (bevy `technomancer_ai` parity).
+/// Verbatim `objects/TechnoMancer` law: a six-alarm machine over
+/// `main`/`intro`/`drawspr` that never moves (`Other_10`: `speed = 0`,
+/// `x = xstart`). The live instance alternates between reviving corpses and
+/// emplacing turrets; the others stay dormant.
+///
+/// `alarm[1]` is the 90-tick decide. While `main` and mid-appearance it
+/// finishes appearing and hands off; while awake it revives three corpses
+/// when one is visible, else emplaces `1 + loops` turrets while fewer than
+/// `4 * loops` exist; otherwise it disowns the fight (`drawspr` becomes
+/// `sprTechnoMancerDisappear`).
+#[allow(clippy::too_many_arguments)]
 fn technomancer_ai(
     commands: &mut Commands,
-    trauma: &mut Trauma,
-    boss: &mut BossBrain,
-    vel: &mut Velocity,
+    catalog: &repame_anim::AnimCatalog,
+    toast: &mut Toast,
+    state: &mut TechnomancerState,
     epos: glam::Vec2,
+    player_pos: glam::Vec2,
+    corpses: &[glam::Vec2],
+    turrets: usize,
     loops: u32,
+    mask: &FloorMask,
 ) {
-    if boss.attack_timer.just_finished() {
-        boss.pattern_index += 1;
-        let kind = if boss.pattern_index % 2 == 0 {
-            EnemyKind::Necromancer
-        } else {
-            EnemyKind::Freak
-        };
-        let ang = boss.pattern_index as f32 * 1.7;
-        queue_enemy_spawn(
-            &mut *commands,
-            kind,
-            epos + glam::Vec2::new(ang.cos(), ang.sin()) * 90.0,
-            difficulty_for_loop(boss.enraged),
-            loops,
-        );
-        trauma.add(0.1);
+    let dt = 1.0 / crate::SIM_HZ as f32;
+    for a in [
+        &mut state.alarm1,
+        &mut state.alarm2,
+        &mut state.alarm4,
+        &mut state.alarm5,
+        &mut state.alarm6,
+    ] {
+        a.tick(dt);
     }
 
-    if boss.special_timer.just_finished() {
-        let n = if boss.enraged { 4 } else { 2 };
-        for i in 0..n {
-            let a = i as f32 * (std::f32::consts::TAU / n as f32);
-            queue_enemy_spawn(
-                &mut *commands,
-                EnemyKind::Freak,
-                epos + glam::Vec2::new(a.cos(), a.sin()) * 110.0,
-                1.15,
-                loops,
-            );
+    // GML `Alarm_4`: whichever instance is nearest the player takes the fight
+    // and starts appearing.
+    if state.alarm4.just_finished() {
+        state.visual = TechnoVisual::Inactive;
+        state.main = true;
+        state.visual = TechnoVisual::Appear;
+        state.alarm5 = gml_alarm(17.0);
+    }
+
+    // GML `Alarm_3` (`scrBossIntro(7)`), fired off `alarm[5]` once the
+    // instance is awake with a clear line to the player.
+    if state.alarm5.just_finished() && !state.intro && state.visual == TechnoVisual::Active {
+        state.intro = true;
+        toast.show("TECHNOMANCER");
+        commands.spawn((
+            GameCleanup,
+            BossIntro {
+                timer: GTimer::from_seconds(1.1, TimerMode::Once),
+            },
+        ));
+    }
+
+    // GML `Alarm_6`: the emplaced turrets, each snapped to its floor tile.
+    if state.alarm6.just_finished() {
+        spawn_techno_turrets(commands, catalog, epos, 1 + loops, mask);
+    }
+
+    // GML `Alarm_2`: three corpses, at the player-facing bearing and +-80deg.
+    if state.alarm2.just_finished() {
+        revive_techno_corpses(commands, epos, player_pos, corpses, mask);
+    }
+
+    if !state.alarm1.just_finished() {
+        return;
+    }
+    state.alarm1 = gml_alarm(90.0);
+
+    if !state.main {
+        return;
+    }
+
+    match state.visual {
+        // GML `Alarm_1:4-9`: finish appearing, then stand down as `main` so
+        // the next tick's `Alarm_4` can re-elect whoever is nearest.
+        TechnoVisual::Appear => {
+            state.visual = TechnoVisual::Active;
+            state.main = false;
+            state.alarm5 = gml_alarm(17.0);
         }
-        trauma.add(0.22);
+        TechnoVisual::Inactive => {}
+        _ => {
+            // GML `Alarm_1:13-27`. The revive gate is `random(5) < 6`, always
+            // true in GML, so any visible corpse outranks emplacing turrets.
+            let sees_corpse = nearest_walkable(corpses, epos, mask).is_some();
+            if sees_corpse {
+                state.alarm5 = gml_alarm(70.0);
+                state.alarm2 = gml_alarm(55.0);
+            } else if (turrets as u32) < 4 * loops {
+                state.alarm5 = gml_alarm(52.0);
+                state.alarm6 = gml_alarm(35.0);
+            } else {
+                // GML `Alarm_1:36-46`: not the elected instance.
+                state.visual = TechnoVisual::Disappear;
+                state.alarm4 = gml_alarm(22.0);
+                state.main = false;
+            }
+        }
     }
+}
 
-    vel.0 = glam::Vec2::ZERO;
+/// GML `TechnoMancer/Alarm_6.gml:1-9`: `1 + loops` turrets at 60..160px out,
+/// each moved onto its nearest floor tile.
+fn spawn_techno_turrets(
+    commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
+    at: glam::Vec2,
+    count: u32,
+    mask: &FloorMask,
+) {
+    let mut rng = rand::rng();
+    for _ in 0..count {
+        let ang = rng.random_range(0.0..std::f32::consts::TAU);
+        let d = 60.0 + rng.random_range(0.0..100.0);
+        let spot = snap_to_floor(at + glam::Vec2::new(ang.cos(), ang.sin()) * d, mask);
+        queue_enemy_spawn(commands, EnemyKind::Turret, spot, 1.0, 0);
+    }
+    let _ = catalog;
+}
+
+/// GML `TechnoMancer/Alarm_2.gml:1-21`: revive the nearest corpse to each of
+/// three bearings around the player-facing one, each offset 80px out plus a
+/// fresh +-40 jitter, and only when the line is clear.
+fn revive_techno_corpses(
+    commands: &mut Commands,
+    at: glam::Vec2,
+    player_pos: glam::Vec2,
+    corpses: &[glam::Vec2],
+    mask: &FloorMask,
+) {
+    let mut rng = rand::rng();
+    let base = (at - player_pos).y.atan2((at - player_pos).x);
+    for bearing in [
+        base,
+        base + 80.0_f32.to_radians(),
+        base - 80.0_f32.to_radians(),
+    ] {
+        let probe = at
+            + glam::Vec2::new(bearing.cos(), bearing.sin()) * 80.0
+            + glam::Vec2::new(rng.random_range(-40.0..40.0), rng.random_range(-40.0..40.0));
+        let Some(corpse) = nearest_walkable(corpses, probe, mask) else {
+            continue;
+        };
+        commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            NecroReviveArea {
+                target: corpse,
+                timer: GTimer::from_seconds(15.0 / 30.0, TimerMode::Once),
+            },
+            Pos(corpse),
+        ));
+    }
+}
+
+/// Nearest point to `from` that is not inside geometry, if any.
+fn nearest_walkable(
+    points: &[glam::Vec2],
+    from: glam::Vec2,
+    mask: &FloorMask,
+) -> Option<glam::Vec2> {
+    points
+        .iter()
+        .filter(|p| crate::enemies::line_of_sight_public(from, **p, mask))
+        .min_by(|a, b| {
+            from.distance_squared(**a)
+                .total_cmp(&from.distance_squared(**b))
+        })
+        .copied()
+}
+
+/// GML `instance_nearest(x, y, Floor)` then `x = dir.x + 16`.
+fn snap_to_floor(at: glam::Vec2, mask: &FloorMask) -> glam::Vec2 {
+    mask.cells
+        .iter()
+        .map(|c| mask.cell_center(*c))
+        .min_by(|a, b| a.distance_squared(at).total_cmp(&b.distance_squared(at)))
+        .unwrap_or(at)
 }
 
 // Captain.

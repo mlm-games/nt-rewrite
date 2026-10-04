@@ -329,6 +329,9 @@ pub fn build_sim_schedule() -> Schedule {
                     enemies::tick_special_props
                         .in_set(NtSimSet::Combat)
                         .run_if(gameplay_active),
+                    enemies::tick_necro_revive_areas
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
                 )
                     .chain(),
                 (

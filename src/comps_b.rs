@@ -949,6 +949,67 @@ pub struct FlungWeapon {
     pub return_ticks: u8,
 }
 
+/// GML `objects/NecroReviveArea`: a 15-frame marker dropped on a corpse; when
+/// it expires the corpse is re-created as a `Necromancer` if the spot is
+/// still clear.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct NecroReviveArea {
+    pub target: Vec2,
+    pub timer: Timer,
+}
+
+/// GML `TechnoMancer` registers. The boss runs a six-alarm state machine over
+/// `main`/`intro`/`drawspr`, which does not fit the shared [`BossBrain`] pair of
+/// timers, so it carries its own.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct TechnomancerState {
+    /// `alarm[1]`: the 90-tick decide cadence, armed 300 at create.
+    pub alarm1: Timer,
+    /// `alarm[2]`: fires 55 ticks after a corpse revive is armed.
+    pub alarm2: Timer,
+    /// `alarm[4]`: 9 ticks to finish appearing, 22 to finish disappearing.
+    pub alarm4: Timer,
+    /// `alarm[5]`: 70 after arming a revive, 52 after arming turrets,
+    /// 17 for the first appearance.
+    pub alarm5: Timer,
+    /// `alarm[6]`: 35 ticks before armed turrets actually appear.
+    pub alarm6: Timer,
+    /// `main`: this instance is the live one; the rest are dormant.
+    pub main: bool,
+    /// `intro`: the boss intro has already played.
+    pub intro: bool,
+    /// `drawspr`, which also gates whether the instance can act.
+    pub visual: TechnoVisual,
+}
+
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TechnoVisual {
+    /// `sprTechnoMancerInactive`
+    Inactive,
+    /// `sprTechnoMancerAppear`
+    Appear,
+    /// `sprTechnoMancer`
+    Active,
+    /// `sprTechnoMancerDisappear`
+    Disappear,
+}
+
+impl Default for TechnomancerState {
+    fn default() -> Self {
+        Self {
+            // GML `TechnoMancer/Create_0.gml:21` `alarm[1] = 300`.
+            alarm1: Timer::from_seconds(300.0 / 30.0, TimerMode::Once),
+            alarm2: Timer::disarmed(),
+            alarm4: Timer::disarmed(),
+            alarm5: Timer::disarmed(),
+            alarm6: Timer::disarmed(),
+            main: true,
+            intro: false,
+            visual: TechnoVisual::Inactive,
+        }
+    }
+}
+
 /// GML Cuz cry-sprite swap (`sprite_index = spr_cry` on fire): headless
 /// marker with the swap lifetime so the render phase can show it.
 #[derive(Component, Clone, Copy, Debug)]
