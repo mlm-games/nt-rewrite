@@ -189,6 +189,22 @@ pub enum UnlockPopup {
     Skin(RaceId, u8),
 }
 
+pub const UNLOCK_ARM_FRAMES: f32 = 45.0;
+pub const UNLOCK_CONTINUE_FRAMES: f32 = 20.0;
+pub const UNLOCK_CONTINUE_BAND: f32 = 240.0 - 36.0;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UnlockPopupState {
+    pub arm: f32,
+    pub visible: bool,
+    pub splat: f32,
+    pub addy: f32,
+    pub addy2: f32,
+    pub continue_arm: f32,
+    pub can_continue: bool,
+    pub pointed: bool,
+}
+
 /// GML `scr_death_cause_is_valid` + `scrDeathCauseGetSprite` verbatim over
 /// [`HitId`](crate::comps_a::HitId): enemy hits (explicit kind or `Enemy(id)`)
 /// resolve to `enemy_def(kind).sprite`, the same `spr*Idle` table GML
@@ -376,12 +392,11 @@ pub struct MenuState {
     /// Mouse moves own `pointed_item` directly while `mouse_active` and
     /// never write this; `tick_settings_nav` only runs off it).
     pub settings_cursor: usize,
-    pub settings_splat: f32,
-    pub settings_splat_page: u8,
-    pub settings_splat_cursor: usize,
+    pub settings_splats: Vec<Vec<f32>>,
     pub settings_back_hover: bool,
     /// Pending unlock popups (producer deferred; see module docs).
     pub unlock_queue: Vec<UnlockPopup>,
+    pub unlock: UnlockPopupState,
     /// Credits section index (GML `Credits.show` over `credittext`).
     pub credits_section: usize,
     /// Seconds on the current credits section (GML `timer`).
@@ -463,11 +478,10 @@ impl Default for MenuState {
             credits_t: 0.0,
             credits_scroll: 0.0,
             settings_cursor: usize::MAX,
-            settings_splat: 0.0,
-            settings_splat_page: 0,
-            settings_splat_cursor: usize::MAX,
+            settings_splats: Vec::new(),
             settings_back_hover: false,
             unlock_queue: Vec::new(),
+            unlock: UnlockPopupState::default(),
             game_over: None,
             go_death_pos: 0.0,
             go_offsety: 128.0,
@@ -522,6 +536,30 @@ pub fn dismiss_unlock(menu: &mut MenuState) -> bool {
     }
     menu.unlock_queue.remove(0);
     true
+}
+
+pub const SETTINGS_SPLAT_MAX: f32 = 3.0;
+
+impl MenuState {
+    pub fn settings_splat_get(&self, page: u8, row: usize) -> f32 {
+        self.settings_splats
+            .get(page as usize)
+            .and_then(|rows| rows.get(row))
+            .copied()
+            .unwrap_or(0.0)
+    }
+}
+
+fn settings_splat_slot(menu: &mut MenuState, page: u8, row: usize) -> &mut f32 {
+    let pages = &mut menu.settings_splats;
+    if pages.len() <= page as usize {
+        pages.resize(page as usize + 1, Vec::new());
+    }
+    let rows = &mut pages[page as usize];
+    if rows.len() <= row {
+        rows.resize(row + 1, 0.0);
+    }
+    &mut rows[row]
 }
 
 /// Bevy `handle_mutation_keys` routing verbatim: out-of-range digits
@@ -919,7 +957,10 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
         }
         UiAction::DismissUnlock => {
             if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
-                dismiss_unlock(&mut menu);
+                if menu.unlock.can_continue {
+                    dismiss_unlock(&mut menu);
+                    menu.unlock = UnlockPopupState::default();
+                }
             }
             emit_cue(world, &UiAction::DismissUnlock);
         }
@@ -956,9 +997,7 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 menu.settings_page_stack.clear();
                 menu.pause_confirm = None;
                 menu.settings_cursor = usize::MAX;
-                menu.settings_splat = 0.0;
-                menu.settings_splat_page = 0;
-                menu.settings_splat_cursor = usize::MAX;
+                menu.settings_splats.clear();
                 menu.settings_back_hover = false;
             }
             world.init_resource::<OverlayMenu>();
@@ -2215,19 +2254,77 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
             .get_resource::<MenuState>()
             .map(|menu| (menu.settings_page, menu.settings_cursor))
             .unwrap_or((0, usize::MAX));
+        let rows = crate::render::settings_hot_rows(page, 320.0);
+        let blooms: Vec<bool> = rows
+            .iter()
+            .enumerate()
+            .map(|(idx, row)| {
+                idx == cursor
+                    && !matches!(row.op, crate::render::SettingHotOp::Back)
+                    && crate::render::settings_row_in_vision(row.gy)
+                    && crate::render::settings_row_available(world, page, row)
+            })
+            .collect();
         if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
-            if page != menu.settings_splat_page || cursor != menu.settings_splat_cursor {
-                menu.settings_splat = 0.0;
-                menu.settings_splat_page = page;
-                menu.settings_splat_cursor = cursor;
-            } else if cursor != usize::MAX {
-                menu.settings_splat = (menu.settings_splat + steps).min(3.0);
+            for (idx, bloom) in blooms.into_iter().enumerate() {
+                let slot = settings_splat_slot(&mut menu, page, idx);
+                *slot = if bloom {
+                    (*slot + steps).min(SETTINGS_SPLAT_MAX)
+                } else {
+                    (*slot - 1.0).max(0.0)
+                };
             }
         }
     }
 
     let run_over = world.get_resource::<Run>().is_some_and(|run| run.game_over);
     let game_over = game_over_visible(world);
+
+    {
+        let steps = world
+            .get_resource::<repame_sim::SimTime>()
+            .map(|time| (time.delta_secs * 30.0).max(0.0))
+            .unwrap_or(1.0);
+        let player_gone = !world.iter_entities().any(|entity| entity.contains::<Player>());
+        if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
+            if menu.unlock_queue.is_empty() {
+                menu.unlock = UnlockPopupState::default();
+            } else {
+                let mut unlock = menu.unlock;
+                if !unlock.visible {
+                    if player_gone && unlock.arm <= 0.0 {
+                        unlock.arm = UNLOCK_ARM_FRAMES;
+                    }
+                    if unlock.arm > 0.0 {
+                        unlock.arm -= steps;
+                        if unlock.arm <= 0.0 {
+                            unlock.arm = 0.0;
+                            unlock.visible = true;
+                            unlock.continue_arm = UNLOCK_CONTINUE_FRAMES;
+                        }
+                    }
+                } else {
+                    unlock.splat = (unlock.splat + 1.0).min(3.0);
+                    if unlock.splat > 1.0 {
+                        unlock.addy = (unlock.addy + 1.0).min(2.0);
+                    }
+                    if unlock.addy2 > 0.0 {
+                        unlock.addy2 = (unlock.addy2 - 2.0).max(0.0);
+                    }
+                    if unlock.continue_arm > 0.0 {
+                        unlock.continue_arm -= steps;
+                        if unlock.continue_arm <= 0.0 {
+                            unlock.continue_arm = 0.0;
+                            unlock.can_continue = true;
+                            unlock.pointed = true;
+                            unlock.addy2 = 2.0;
+                        }
+                    }
+                }
+                menu.unlock = unlock;
+            }
+        }
+    }
 
     // GML `Portal/Alarm_1` tutorial arm verbatim: the tutorial exit
     // portal restarts the run (`game_restart()` - same path as the
@@ -2374,7 +2471,7 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
             || *world.resource::<OverlayMenu>() != OverlayMenu::None
             || world
                 .get_resource::<MenuState>()
-                .is_some_and(|menu| !menu.unlock_queue.is_empty());
+                .is_some_and(|menu| menu.unlock.visible);
         if menu_open {
             let mut input = world.resource_mut::<NtInput>();
             let _ = input.take_spec_pressed();
@@ -2505,11 +2602,9 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
         OverlayMenu::None => {
             let has_unlocks = world
                 .get_resource::<MenuState>()
-                .is_some_and(|menu| !menu.unlock_queue.is_empty());
+                .is_some_and(|menu| !menu.unlock_queue.is_empty() && menu.unlock.can_continue);
             if confirm && has_unlocks {
-                if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
-                    dismiss_unlock(&mut menu);
-                }
+                apply_menu_action(world, UiAction::DismissUnlock);
                 return;
             }
         }

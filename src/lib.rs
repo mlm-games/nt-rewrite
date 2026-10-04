@@ -1908,7 +1908,7 @@ impl App {
                 .sim
                 .world
                 .get_resource::<MenuState>()
-                .is_none_or(|m| m.unlock_queue.is_empty());
+                .is_none_or(|m| !m.unlock.visible);
         let menu_open = state == AppState::InGame
             && (paused
                 || overlay != OverlayMenu::None
@@ -1916,7 +1916,7 @@ impl App {
                     .sim
                     .world
                     .get_resource::<MenuState>()
-                    .is_some_and(|m| !m.unlock_queue.is_empty()))
+                    .is_some_and(|m| m.unlock.visible))
             && !run_over;
 
         // Context switch (Godot `_gui_input`-before-`_unhandled_input`
@@ -3095,6 +3095,22 @@ impl App {
                     menu.hover_label.clear();
                 }
             }
+            MenuOverlay::Unlock => {
+                let band = crate::state::menus::UNLOCK_CONTINUE_BAND;
+                let (can_continue, was_pointed) = self
+                    .sim
+                    .world
+                    .get_resource::<MenuState>()
+                    .map(|m| (m.unlock.can_continue, m.unlock.pointed))
+                    .unwrap_or((false, false));
+                let pointed = can_continue && gy >= band;
+                if let Some(mut menu) = self.sim.world.get_resource_mut::<MenuState>() {
+                    menu.unlock.pointed = pointed;
+                }
+                if pointed != was_pointed {
+                    crate::state::menus::emit_hover(&mut self.sim.world);
+                }
+            }
             _ => {}
         }
     }
@@ -3550,7 +3566,7 @@ impl App {
                     .sim
                     .world
                     .get_resource::<crate::state::menus::MenuState>()
-                    .is_none_or(|m| m.unlock_queue.is_empty())
+                    .is_none_or(|m| !m.unlock.visible)
                 && self
                     .sim
                     .world
@@ -4370,12 +4386,11 @@ impl App {
             // (178/255); pause/settings/credits/stats sit on the
             // near-opaque bevy `scrim` (230/255). The Draw_75 cursor
             // draws after, so it stays full-bright over the dim.
-            let scrim_alpha =
-                if matches!(menu_kind, Some(MenuOverlay::Pause | MenuOverlay::GameOver)) {
-                    178
-                } else {
-                    230
-                };
+            let scrim_alpha = match menu_kind {
+                Some(MenuOverlay::Pause | MenuOverlay::GameOver) => 178,
+                Some(MenuOverlay::Unlock) => 153,
+                _ => 230,
+            };
             if dim_menu {
                 layers.push(UiBox(
                     Modifier::new()
@@ -5087,15 +5102,14 @@ pub fn menu_overlay_kind(
             _ => Some(MenuOverlay::Title),
         },
         AppState::InGame => {
+            // GML `TopCont/Step_2.gml:18-26`: an `UnlockScreen` instance
+            // short-circuits the block, so `GameOver` is never created
+            // while an unlock is pending.
+            if !menu.unlock_queue.is_empty() && menu.unlock.visible {
+                return Some(MenuOverlay::Unlock);
+            }
             if game_over {
                 return Some(MenuOverlay::GameOver);
-            }
-            // GML `UnlockScreen` panels surface over gameplay (TopCont
-            // draws the queued head while a run is live); they take
-            // precedence over pause/settings/credits/mutation so the
-            // unlock is seen before any other overlay.
-            if !menu.unlock_queue.is_empty() {
-                return Some(MenuOverlay::Unlock);
             }
             match overlay {
                 OverlayMenu::Pause => Some(MenuOverlay::Pause),

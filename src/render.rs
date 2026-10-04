@@ -5394,76 +5394,73 @@ pub fn credit_section_count() -> usize {
 pub fn unlock_popup_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
     use crate::state::menus::UnlockPopup;
     let cx = vw * 0.5;
+    let state = world.get_resource::<MenuState>().map(|m| m.unlock).unwrap_or_default();
     let popup = world
         .get_resource::<MenuState>()
         .and_then(|m| m.unlock_queue.first().copied());
+    if !state.visible {
+        return Vec::new();
+    }
     let Some(popup) = popup else {
         return Vec::new();
     };
-    let (name, sub) = match popup {
-        UnlockPopup::Race(race) => (
-            crate::savedata_part::character_def(race)
-                .name
-                .to_ascii_uppercase(),
-            String::new(),
-        ),
-        UnlockPopup::Skin(race, skin) => (
-            crate::savedata_part::character_def(race)
-                .name
-                .to_ascii_uppercase(),
-            format!("SKIN {}", (b'A' + skin.min(3)) as char),
-        ),
+    let (race, skin) = match popup {
+        UnlockPopup::Race(race) => (race, 0u8),
+        UnlockPopup::Skin(race, skin) => (race, skin),
     };
-    let mut out = vec![
-        MenuGuiText {
+    let mut name = crate::savedata_part::character_def(race)
+        .name
+        .to_ascii_uppercase();
+    if skin > 0 {
+        name.push(' ');
+        name.push((b'A' + skin.min(3)) as char);
+    }
+    let mut out = Vec::new();
+    if state.addy > 0.0 {
+        out.push(MenuGuiText {
             text: name,
             gx: cx,
-            gy: 100.0,
+            gy: 240.0 - 92.0 - state.addy + 8.0,
             color: GUI_WHITE,
             px: 14.0,
             centered: true,
             middle_y: true,
             right: false,
             bold: true,
-        },
-        MenuGuiText {
+        });
+    }
+    if state.addy > 1.0 {
+        out.push(MenuGuiText {
             text: "UNLOCKED!".to_string(),
             gx: cx,
-            gy: 120.0,
+            gy: 240.0 - 62.0 - state.addy + 10.0,
             color: GUI_WHITE,
             px: 10.0,
             centered: true,
             middle_y: true,
             right: false,
             bold: true,
-        },
-        MenuGuiText {
+        });
+    }
+    if state.can_continue {
+        out.push(MenuGuiText {
             text: "CONTINUE".to_string(),
             gx: cx,
-            gy: 220.0,
-            color: GUI_MID,
+            gy: 240.0
+                - 16.0
+                - state.addy2
+                - if state.pointed { 1.0 } else { 0.0 },
+            color: if state.addy2 > 0.0 || state.pointed {
+                GUI_WHITE
+            } else {
+                GUI_GRAY
+            },
             px: 10.0,
             centered: true,
             middle_y: true,
             right: false,
             bold: true,
-        },
-    ];
-    if !sub.is_empty() {
-        out.insert(
-            1,
-            MenuGuiText {
-                text: sub,
-                gx: cx,
-                gy: 112.0,
-                color: GUI_MID,
-                px: 7.0,
-                centered: true,
-                middle_y: true,
-                right: false,
-                bold: false,
-            },
-        );
+        });
     }
     out
 }
@@ -6585,6 +6582,12 @@ pub enum SettingHotOp {
     Remap(&'static str),
     /// REMAP page: restore GML `scrKeymapsSetup` defaults.
     RemapReset,
+}
+
+pub const SETTINGS_LETTERBOX: f32 = 36.0;
+
+pub fn settings_row_in_vision(gy: f32) -> bool {
+    gy >= SETTINGS_LETTERBOX && gy <= 240.0 - SETTINGS_LETTERBOX
 }
 
 /// Actionable rows for a settings page in visual order (headers and
@@ -8958,10 +8961,16 @@ fn menu_loadout_closed_sprites(
         .cloned();
     let loadout = save.as_ref().map(|s| s.race_loadout(race).clone());
     let splat = [w + 2.0, h - 36.0 + 2.0];
+    let splat_frames = strip_frames(assets, "images/sprLoadoutSplat.png");
+    let splat_frame = world
+        .get_resource::<MenuState>()
+        .map(|menu| menu.splatindex.floor() as i32)
+        .unwrap_or_else(|| char_splat_frame(race, splat_frames))
+        .clamp(0, splat_frames.saturating_sub(1) as i32);
     if available && include_chrome {
         if let Some(s) = assets.sprite_stretched(
             "images/sprLoadoutSplat.png",
-            0,
+            splat_frame,
             to_world(splat),
             Vec2::new(1.0, 1.05),
             0.0,
@@ -10420,7 +10429,7 @@ pub fn menu_sprites(
                     assets,
                     "images/sprPauseButton.png",
                     frame,
-                    cx + 2.0,
+                    cx,
                     gy,
                     0.65,
                     tint,
@@ -10616,21 +10625,22 @@ pub fn menu_sprites(
                 .cloned()
                 .unwrap_or_default();
             let settings = &save.settings;
-            if menu
+            let splat = menu
                 .as_ref()
-                .is_some_and(|m| m.settings_splat > 0.0 && m.settings_cursor != usize::MAX)
+                .map(|m| m.settings_splat_get(page, cursor))
+                .unwrap_or(0.0);
+            if splat > 0.0
+                && menu.as_ref().is_some_and(|m| m.settings_cursor != usize::MAX)
                 && let Some(row) = settings_hot_rows(page, vw).get(cursor)
                 && !matches!(row.op, SettingHotOp::Back)
                 && settings_row_available(world, page, row)
+                && settings_row_in_vision(row.gy)
             {
                 if let Some(s) = assets.sprite_for(
                     "images/sprMainMenuSplat.png",
-                    menu
-                        .as_ref()
-                        .map(|m| m.settings_splat.floor() as i32)
-                        .unwrap_or(0)
-                        .min(3),
-                    gui_to_world(row.cx, row.gy),
+                    (splat.floor() as i32)
+                        .min(crate::state::menus::SETTINGS_SPLAT_MAX as i32),
+                    gui_to_world(cx, row.gy),
                     false,
                     0.0,
                     [1.0; 4],
@@ -10899,27 +10909,23 @@ pub fn menu_sprites(
 
         }
         crate::MenuOverlay::Unlock => {
-            // GML `UnlockScreen/Other_10` sprite layer verbatim: the
-            // queued head's `sprBigPortrait[skin_subimage]` rising
-            // `addy 0 -> 2` (headless: settled at 2) over the dimmed
-            // game, plus the `sprMutationSplat[splatimg]` settling at
-            // 3. Portrait art resolves from the race/skin ids.
             use crate::state::menus::{UnlockPopup, race_skin_subimage};
+            let state = world.get_resource::<MenuState>().map(|m| m.unlock).unwrap_or_default();
             let popup = world
                 .get_resource::<MenuState>()
                 .and_then(|m| m.unlock_queue.first().copied());
-            if let Some(popup) = popup {
+            if state.visible && let Some(popup) = popup {
                 let (race_gml, skin) = match popup {
                     UnlockPopup::Race(race) => (race as usize, 0u8),
                     UnlockPopup::Skin(race, skin) => (race as usize, skin),
                 };
                 let sub = race_skin_subimage(race_gml, skin);
-                if sub >= 0 {
+                if state.splat > 1.0 && sub >= 0 {
                     let path = format!("images/sprBigPortrait{}.png", sub);
                     if let Some(s) = assets.sprite_for(
                         Box::leak(path.into_boxed_str()) as &str,
                         0,
-                        gui_to_world(vw * 0.5, 120.0 - 2.0),
+                        gui_to_world(vw * 0.5 - 60.0, 240.0 - 10.0 + state.addy),
                         false,
                         0.0,
                         [1.0; 4],
@@ -10927,10 +10933,18 @@ pub fn menu_sprites(
                         out.push(s);
                     }
                 }
+                for gy in [0.0, 240.0 - 32.0] {
+                    out.push(white_quad(
+                        gui_to_world(vw * 0.5, gy + 16.0),
+                        0.0,
+                        Vec2::new(vw, 32.0),
+                        [0.0, 0.0, 0.0, 1.0],
+                    ));
+                }
                 if let Some(s) = assets.sprite_for(
                     "images/sprMutationSplat.png",
-                    3,
-                    gui_to_world(vw * 0.5, 120.0),
+                    (state.splat.floor() as i32).min(3),
+                    gui_to_world(vw * 0.5, 240.0 - 20.0),
                     false,
                     0.0,
                     [1.0; 4],

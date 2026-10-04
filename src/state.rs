@@ -564,6 +564,7 @@ pub fn reset_pause_state(world: &mut World) {
         menu.settings_cursor = usize::MAX;
         menu.settings_splats.clear();
         menu.settings_back_hover = false;
+        menu.unlock = crate::state::menus::UnlockPopupState::default();
         menu.play_submenu = false;
         menu.play_cursor = 0;
     }

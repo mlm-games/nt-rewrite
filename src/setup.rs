@@ -493,6 +493,10 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
     world.init_resource::<crate::state::QuitRequested>();
     world.init_resource::<crate::state::menus::MenuState>();
     world.init_resource::<crate::state::menus::MenuEdge>();
+    if let Some(mut menu) = world.get_resource_mut::<crate::state::menus::MenuState>() {
+        menu.unlock_queue.clear();
+        menu.unlock = crate::state::menus::UnlockPopupState::default();
+    }
     world.init_resource::<crate::audio::AudioChannels>();
     world.init_resource::<crate::audio::MainVol>();
     world.init_resource::<Queue<crate::audio::UiBridgeAction>>();
