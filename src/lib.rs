@@ -2172,6 +2172,7 @@ impl App {
                     }
                 }
                 touch_menu_positions = still_down;
+                input.rehome_sticks(frame.gui_width());
                 let need_touch = !contacts.is_empty()
                     || had
                     || !input.touch_lifted.is_empty()

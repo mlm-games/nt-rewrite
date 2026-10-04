@@ -49,6 +49,7 @@ pub struct NtInput {
     /// swapped `press_fire` + release consumers; anything else → no
     /// edge, GML reads releases off the claiming element only).
     pub touch_lifted: Vec<i64>,
+    touch_home_width: f32,
 }
 
 /// GML `MobileUI` stick claim: claimed touch id (`index`, -1 = free),
@@ -148,6 +149,7 @@ impl Default for NtInput {
             touch_released_swap: false,
             touch_released_fire: false,
             touch_lifted: Vec::new(),
+            touch_home_width: 0.0,
         }
     }
 }
@@ -248,6 +250,19 @@ impl NtInput {
     /// Drain the peek-only interact pulse (Cleanup tail, live play).
     pub(crate) fn clear_interact_pulse(&mut self) {
         self.interact_pressed = false;
+    }
+
+    pub fn rehome_sticks(&mut self, width: f32) {
+        if self.touch_home_width == width {
+            return;
+        }
+        if let Some(s) = self.move_stick.as_mut() {
+            s.anchor = Vec2::new(64.0, 240.0 - 64.0);
+        }
+        if let Some(s) = self.attack_stick.as_mut() {
+            s.anchor = Vec2::new(width - 64.0, 240.0 - 64.0);
+        }
+        self.touch_home_width = width;
     }
 
     pub fn clear_transient(&mut self) {
@@ -1009,6 +1024,7 @@ pub fn sample_touch_full(
     // `get_nearest_touch` picks the touch whose *current* position is
     // nearest the claimant; `scrStickRegions` runs only on the press
     // edge, so the claim runs on `just_pressed` contacts there.
+    output.rehome_sticks(width);
     let mut move_stick = output.move_stick.unwrap_or(TouchStick {
         anchor: move_home,
         touch: -1,
