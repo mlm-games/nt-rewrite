@@ -1423,9 +1423,11 @@ fn prop_idle_for(
 
 /// Rad chest container: destructible prop + container marker; opening
 /// logic lives in `tick_rad_container_contact`'s port phase.
-/// GML `RadChest/Create_0.gml:12,15`: `spr_dead = sprRadChestCorpse` and
-/// `image_speed = 0`, so the closed chest never animates and its corpse
-/// is the dedicated 3-frame strip.
+/// GML `RadChest/Create_0.gml:12,15` pairs `spr_dead = sprRadChestCorpse`
+/// with `image_speed = 0`, which only switches off GameMaker's automatic
+/// index advance; `RadChest/Step_1.gml:3-8` drives it by hand with the
+/// `chestprop/Step_0.gml` ramp (`random(0.04)` inside frame 0, then
+/// `+0.4` per step). `RadChestBig` and `RadMaggotChest` inherit that step.
 pub fn spawn_rad_container(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
@@ -1463,8 +1465,8 @@ pub fn spawn_rad_container(
         Pos(pos),
     ));
     if let Some(def) = catalog.def(idle_path) {
-        let mut anim = SpriteAnim::new(idle_path, def);
-        anim.fps = 0.0;
+        let mut anim = SpriteAnim::with_image_speed(idle_path, def, 0.4);
+        anim.frame0_rate = 0.04;
         ec.insert(anim);
     }
     ec.id()

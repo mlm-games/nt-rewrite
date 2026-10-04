@@ -618,14 +618,10 @@ pub fn spawn_chest_with(
             };
     let art = chest_art(kind, ctx, cursed);
     // GML `RadChest/Create_0.gml:15`, `RadChestBig/Create_0.gml:7` and
-    // `RadMaggotChest/Create_0.gml:4` all set `image_speed = 0` right after
-    // `event_inherited()`, so those three never animate their (otherwise busy)
-    // idle strips. Everything else runs the chestprop ramp; the
-    // `RogueChest/Step_1.gml` `scrFirstFrameAnim(0.4)` jitters `0.4 * 0.05 = 0.02`.
-    let frozen = matches!(
-        kind,
-        ChestKind::Rad | ChestKind::RadBig | ChestKind::RadMaggot
-    );
+    // `RadMaggotChest/Create_0.gml:4` set `image_speed = 0`, which only
+    // switches off the automatic advance: `RadChest/Step_1.gml:3-8` drives
+    // the index by hand on the same ramp as `chestprop/Step_0.gml:4-7`
+    // (`random(0.04)` inside frame 0, then `+0.4` per step).
     let first_jitter = if kind == ChestKind::Rogue { 0.02 } else { 0.04 };
     let frames = catalog.def(art.idle).map(|def| def.frames).unwrap_or(1);
 
@@ -641,12 +637,7 @@ pub fn spawn_chest_with(
             idle: art.idle,
             open: art.open,
         },
-        GmlImage::ramped(
-            art.idle,
-            frames,
-            if frozen { 0.0 } else { 0.4 },
-            first_jitter,
-        ),
+        GmlImage::ramped(art.idle, frames, 0.4, first_jitter),
         Pos(pos),
     ));
     if kind == ChestKind::Proto {

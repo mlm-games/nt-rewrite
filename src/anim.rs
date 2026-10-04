@@ -33,6 +33,13 @@ pub struct SpriteAnim {
     pub timer: GTimer,
     pub oneshot: bool,
     pub finished: bool,
+    /// GML `chestprop/Step_0.gml:4-5` and the identical
+    /// `RadChest/Step_1.gml:3-8`: while the index is still inside frame 0 the
+    /// step adds a fresh `random(frame0_rate)` instead of one whole frame,
+    /// so the first frame dwells. Cleared for hurt flips, which GML runs at
+    /// the flat `+0.4`.
+    pub frame0_rate: f32,
+    pub frame0_phase: f32,
 }
 
 impl SpriteAnim {
@@ -84,6 +91,8 @@ impl SpriteAnim {
             timer: GTimer::from_seconds(1.0 / fps.max(0.1), TimerMode::Repeating),
             oneshot,
             finished: false,
+            frame0_rate: 0.0,
+            frame0_phase: 0.0,
         }
     }
 
@@ -94,6 +103,7 @@ impl SpriteAnim {
         self.frame = 0;
         self.oneshot = oneshot;
         self.finished = false;
+        self.frame0_phase = 0.0;
         self.timer = GTimer::from_seconds(1.0 / def.fps.max(0.1), TimerMode::Repeating);
     }
 
@@ -112,6 +122,7 @@ impl SpriteAnim {
         self.frame = 0;
         self.oneshot = oneshot;
         self.finished = false;
+        self.frame0_phase = 0.0;
         self.timer = GTimer::from_seconds(1.0 / fps.max(0.1), TimerMode::Repeating);
     }
 }
@@ -119,8 +130,18 @@ impl SpriteAnim {
 /// Advance every live animation one fixed step (bevy `animate_sprites`
 /// parity: loop wraps, oneshot clamps on the last frame and parks).
 pub fn animate_sprites(time: Res<SimTime>, mut q: Query<&mut SpriteAnim>) {
+    let mut rng = rand::rng();
     for mut anim in &mut q {
         if anim.finished {
+            continue;
+        }
+        if anim.frame0_rate > 0.0 && !anim.oneshot && anim.frame == 0 {
+            anim.frame0_phase += anim.frame0_rate * rng.random_range(0.0..1.0);
+            if anim.frame0_phase >= 1.0 {
+                anim.frame0_phase = 0.0;
+                anim.frame = (anim.frame + 1) % anim.frames.max(1);
+                anim.timer.reset();
+            }
             continue;
         }
         anim.timer.tick(time.delta_secs);
