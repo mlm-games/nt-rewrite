@@ -10,14 +10,14 @@ use repame_sim::SimTime;
 
 use crate::audio::{AudioCue, GameAudio};
 use crate::comps_a::{
-    AbilityHazard, AimDir, DamageSource, FloorMask, GameCleanup, Health, HitId, Inventory,
-    LevelCleanup, Player, Projectile, RaceState, Team, Velocity,
+    AimDir, DamageSource, FloorMask, GameCleanup, Health, HitId, Inventory, LevelCleanup, Player,
+    Projectile, RaceState, Team, Velocity,
 };
 use crate::comps_b::{
-    Ally, Dash, Enemy, EnemyBrain, FrogCharge, HazardCloud, HorrorCharge, Portal, PortalState,
-    PortalSucking, Prop, Shield, Telekinesis, WeaponVisual, WeaponVisualOwner,
+    Ally, Dash, Enemy, EnemyBrain, FrogCharge, HorrorCharge, Portal, PortalState, PortalSucking,
+    Prop, Shield, Telekinesis, WeaponVisual, WeaponVisualOwner,
 };
-use crate::data::{AbilityKind, EnemyKind, HazardKind, RaceId, WeaponId};
+use crate::data::{AbilityKind, EnemyKind, RaceId, WeaponId};
 use crate::input::NtInput;
 use crate::msg::Queue;
 use crate::spatial::{Pos, clamp_to_arena, resolve_mask_circle, resolve_prop_collision};
@@ -705,7 +705,16 @@ pub fn tick_hold_abilities(
     }
 
     if player.ability == AbilityKind::ToxicPuke {
+        let intimacy = player.ultra == Some(crate::data::UltraMutationId::FrogToxicLord);
+        // GML `:639` runs before the hold branch, so the drip is unconditional.
+        if intimacy && rand::rng().random_range(0.0..1.0) < 0.5 {
+            spawn_frog_gas(&mut commands, pos, true);
+        }
         if held {
+            // GML `:661-668` repeats the roll inside the hold.
+            if intimacy && rand::rng().random_range(0.0..1.0) < 0.5 {
+                spawn_frog_gas(&mut commands, pos, true);
+            }
             let mut gas = if let Ok(c) = frog_q.get(player_e) {
                 c.gas
             } else {
@@ -733,24 +742,11 @@ pub fn tick_hold_abilities(
             commands.entity(player_e).remove::<FrogCharge>();
             let n = gas.round() as usize;
             if n > 0 {
+                // GML `Player/Step_0.gml:676-682`: `repeat (froggas)` real
+                // `ToxicGas` instances, each created on the player's origin and
+                // drifting outward on its own random heading.
                 for _ in 0..n.min(30) {
-                    let off = Vec2::new(
-                        rand::rng().random_range(-10.0..10.0),
-                        rand::rng().random_range(-10.0..10.0),
-                    );
-                    commands.spawn((
-                        GameCleanup,
-                        LevelCleanup,
-                        AbilityHazard,
-                        HazardCloud {
-                            kind: HazardKind::Toxic,
-                            radius: 26.0,
-                            damage: 3,
-                            timer: GTimer::from_seconds(4.0, TimerMode::Once),
-                            tick: GTimer::from_seconds(0.3, TimerMode::Repeating),
-                        },
-                        Pos(pos + off),
-                    ));
+                    spawn_frog_gas(&mut commands, pos, intimacy);
                 }
                 if gas >= 25.0 {
                     cues.push(AudioCue {
@@ -773,6 +769,24 @@ pub fn tick_hold_abilities(
     } else if frog_q.get(player_e).is_ok() {
         commands.entity(player_e).remove::<FrogCharge>();
     }
+}
+
+/// GML `ToxicGas/Create_0.gml:3-13`: one drifting, growing cloud on the
+/// player's origin. `Intimacy` adds the `speed ++`.
+fn spawn_frog_gas(commands: &mut Commands, at: Vec2, intimacy: bool) {
+    let mut rng = rand::rng();
+    let heading = rng.random_range(0.0..std::f32::consts::TAU);
+    let speed = rng.random_range(0.2..1.7);
+    let mut state = crate::comps_b::ToxicGasState::new();
+    if intimacy {
+        state.speed_bonus = 1.0;
+    }
+    crate::enemies::spawn_toxic_gas(
+        commands,
+        at,
+        glam::Vec2::new(heading.cos(), heading.sin()) * speed * 30.0,
+        state,
+    );
 }
 
 /// Looping one-shots in headless cue form (GML `snd_play_loop` / `snd_stop`):

@@ -6254,7 +6254,8 @@ pub fn tick_toxic_gas(
         if target_team == Team::Player {
             target_health.invuln = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
         }
-        target_health.hp -= 1;
+        // GML `ToxicGas/Create_0.gml` inherits `damagesource/Create_0.gml:4`.
+        target_health.hp -= 3;
         if target_team == Team::Enemy
             && let Some(next) = next_hurt.as_deref_mut()
         {
