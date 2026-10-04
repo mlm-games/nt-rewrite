@@ -2916,7 +2916,7 @@ pub fn player_ability(
         mut cooldown,
         race_state,
         shield,
-        telek,
+        _telek,
         dash,
         horror_charge,
     )) = player_q.single_mut()
@@ -3137,14 +3137,9 @@ pub fn player_ability(
                 0.0,
             );
         }
-        AbilityKind::Telekinesis => {
-            let timer = GTimer::from_seconds(1.4, TimerMode::Once);
-            if let Some(mut t) = telek {
-                t.timer = timer;
-            } else {
-                commands.entity(player_e).insert(Telekinesis { timer });
-            }
-        }
+        // GML `scrPowers.gml:41-67`: the Eyes branch lives entirely inside
+        // `if _hold`, so there is no press effect to arm.
+        AbilityKind::Telekinesis => {}
         AbilityKind::Detonate => {
             // GML `scrPowers.gml:88`: the press is inert unless something is
             // left to blow up (a live enemy, or an open exit Portal).

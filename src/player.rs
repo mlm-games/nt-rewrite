@@ -551,12 +551,12 @@ pub fn tick_hold_abilities(
         (With<Enemy>, Without<Player>, Without<Projectile>),
     >,
     mut projectiles: Query<
-        (&Pos, &mut Velocity, &Team, Option<&Projectile>),
+        (&mut Pos, &mut Velocity, &Team, Option<&Projectile>),
         (With<Projectile>, Without<Player>, Without<Enemy>),
     >,
     mut horror_q: Query<&mut HorrorCharge>,
     mut frog_q: Query<&mut FrogCharge>,
-    mut telek_q: Query<&mut Telekinesis>,
+    telek_q: Query<&Telekinesis>,
     floor: Option<Res<FloorMask>>,
 ) {
     let Ok((player_e, ppos, mut player, mut health, mut pvel, aim)) = player_q.single_mut() else {
@@ -573,38 +573,43 @@ pub fn tick_hold_abilities(
         // (macros fixed 320/240, so 160 x 120). GML sets POSITION behind
         // `place_free` per axis; the port drives velocity, so the walkable mask
         // gates each axis the same way.
-        let strength = if player.throne_butt { 60.0 } else { 30.0 };
-        if let Ok(mut t) = telek_q.single_mut() {
-            t.timer = GTimer::from_seconds(0.25, TimerMode::Once);
-        } else {
+        // GML `scrEyesTelekinesis.gml:14`: `_strength = 1 +
+        // scr_skill_get(mut_throne_butt)`, in px/step. GML writes straight to
+        // `x`/`y`, not to a velocity, and each axis is gated on `place_free`.
+        let step = if player.throne_butt { 2.0 } else { 1.0 };
+        if telek_q.single().is_err() {
             commands.entity(player_e).insert(Telekinesis {
                 timer: GTimer::from_seconds(0.25, TimerMode::Once),
             });
         }
         let free_x = |p: glam::Vec2| floor.as_ref().is_none_or(|m| m.is_walkable(p));
-        for (epos, mut evel) in &mut enemies {
-            let epos_v = epos.0;
-            if (epos_v.x - pos.x).abs() > 160.0 || (epos_v.y - pos.y).abs() > 120.0 {
+        let in_box = |at: glam::Vec2| (at.x - pos.x).abs() < 160.0 && (at.y - pos.y).abs() < 120.0;
+        // GML `:35` - `with enemy mcr_eyes_telekenesis`, strictly inside the
+        // half-view box.
+        for (mut epos, _) in &mut enemies {
+            let at = epos.0;
+            if !in_box(at) {
                 continue;
             }
-            let to_player = (pos - epos_v).normalize_or_zero();
-            if free_x(glam::Vec2::new(epos_v.x + to_player.x, epos_v.y)) {
-                evel.0.x += to_player.x * strength * dt;
+            let to_player = (pos - at).normalize_or_zero() * step;
+            if free_x(glam::Vec2::new(at.x + to_player.x, at.y)) {
+                epos.0.x += to_player.x;
             }
-            if free_x(glam::Vec2::new(epos_v.x, epos_v.y + to_player.y)) {
-                evel.0.y += to_player.y * strength * dt;
+            if free_x(glam::Vec2::new(epos.0.x, epos.0.y + to_player.y)) {
+                epos.0.y += to_player.y;
             }
         }
-        for (ppos_proj, mut v, team, _) in &mut projectiles {
-            if *team != Team::Enemy {
-                continue;
+        // GML `:26-32` - `with projectile` shoves *every* projectile instance,
+        // with no team test and no distance test, away from the player.
+        for (mut ppos_proj, _, _, _) in &mut projectiles {
+            let at = ppos_proj.0;
+            let away = (at - pos).normalize_or_zero() * step;
+            if free_x(glam::Vec2::new(at.x + away.x, at.y)) {
+                ppos_proj.0.x += away.x;
             }
-            let ppos = ppos_proj.0;
-            if (ppos.x - pos.x).abs() > 160.0 || (ppos.y - pos.y).abs() > 120.0 {
-                continue;
+            if free_x(glam::Vec2::new(ppos_proj.0.x, ppos_proj.0.y + away.y)) {
+                ppos_proj.0.y += away.y;
             }
-            let out = (ppos - pos).normalize_or_zero();
-            v.0 += out * strength * dt;
         }
         // GML `ProjectileStyle`: held telekinesis also reels the
         // player's own shots into an 8 px orbit (non-laser/lightning).

@@ -798,6 +798,7 @@ pub fn random_offset() -> glam::Vec2 {
 /// the held weapon as a flung pickup - speed 16 px/step toward
 /// `angle_rad` (gunangle±2), team/creator set, Determination ultra arming
 /// the 60-tick `alarm[1]` return.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_flung_weapon_pickup(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
@@ -1472,7 +1473,10 @@ pub fn collect_pickups(
     // nothing here consumes it, so `tick_throne_sit` can peek it too.
     let _ = input.peek_interact_pressed();
 
-    let telek_active = telek.is_some_and(|t| !t.timer.is_finished());
+    // GML `scrPowers.gml:44` runs the attract only inside `if _hold`, so the
+    // magnet is gated on the key itself rather than a decaying timer.
+    let telek_active = input.spec_held && player.ability == crate::data::AbilityKind::Telekinesis;
+    let _ = telek;
     // GML `scrEyesTelekinesis.gml:2-3`: the attract box is the SCREEN box,
     // `game_screen_width div 2 x game_screen_height div 2`, and
     // `game_screen_width/height` are compile-time macros (320/240), so the
@@ -1565,10 +1569,16 @@ pub fn collect_pickups(
             // are renderer-owned (skipped); expiry above is the sim law.
         }
 
+        // GML `scrEyesTelekinesis.gml:36-41`: `chestprop` (every chest),
+        // `AmmoPickup`, `HPPickup`, `WepPickup`, `RadChest`, `Rad`.
         let is_chest = matches!(pickup.kind, PickupKind::Chest(_));
         let is_weapon = matches!(pickup.kind, PickupKind::Weapon(_));
         let is_rad = matches!(pickup.kind, PickupKind::Rad(_));
-        if is_weapon || is_chest || is_rad {
+        let is_supply = matches!(
+            pickup.kind,
+            PickupKind::Ammo(..) | PickupKind::CursedAmmo | PickupKind::Medkit(_)
+        );
+        if is_weapon || is_chest || is_rad || is_supply {
             telek_drag(&mut pickup_pos, pickup_pos_value);
         }
         if is_rad {
