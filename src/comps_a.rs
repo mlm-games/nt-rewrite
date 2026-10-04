@@ -338,11 +338,6 @@ pub struct WallTile;
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WallCell(pub i32, pub i32);
 
-#[derive(Component, Clone, Debug, Default)]
-pub struct WallVisuals {
-    pub parts: Vec<Entity>,
-}
-
 #[derive(Component, Clone, Copy, Debug)]
 pub struct PendingWallBreak {
     pub cell: (i32, i32),

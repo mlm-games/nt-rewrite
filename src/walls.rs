@@ -8,9 +8,8 @@
 //! sites one-for-one.
 //! Pipeline note: the *only* drain of the [`PendingWallBreak`] queue (hammerhead
 //! chewing, boss charges, portal clears, delayed boss spawns). Wall entities are
-//! `(WallTile, WallCell, Pos)` plus an optional [`WallVisuals`] parts list; the
-//! flush matches by cell *or* by proximity (`WALL_PX * 0.75`), byte-identical to
-//! bevy.
+//! `(WallTile, WallCell, Pos)`; the flush matches by cell *or* by proximity
+//! (`WALL_PX * 0.75`), byte-identical to bevy.
 
 use bevy_ecs::prelude::*;
 use repame_fx::Trauma;
@@ -18,7 +17,7 @@ use repame_fx::Trauma;
 use crate::combat::queue_enemy_spawn;
 use crate::comps_a::{
     ARENA_H, ARENA_W, FloorMask, FloorStarted, GameCleanup, HammerheadBudget, Health, LevelCleanup,
-    PendingWallBreak, Player, Run, Toast, TopSmalls, WallCell, WallTile, WallVisuals,
+    PendingWallBreak, Player, Run, Toast, TopSmalls, WallCell, WallTile,
 };
 use crate::comps_b::{
     BigGenerator, BossBrain, Enemy, Prop, PropSprites, ThroneCarpet, ThroneRoomState,
@@ -48,7 +47,7 @@ pub fn apply_pending_wall_breaks(
     mut tops: ResMut<TopSmalls>,
     mut trauma: ResMut<Trauma>,
     pending: Query<(Entity, &PendingWallBreak)>,
-    walls: Query<(Entity, &WallCell, &Pos, Option<&WallVisuals>), With<WallTile>>,
+    walls: Query<(Entity, &WallCell, &Pos), With<WallTile>>,
 ) {
     // `queue_wall_breaks_along_segment` stamps a marker every `WALL_PX * 0.5`
     // along a charge, so the same wall is named many times per boss swing. Bevy
@@ -61,14 +60,14 @@ pub fn apply_pending_wall_breaks(
     // rather than the deferred entity view.
     let mut live_walls: std::collections::HashSet<(i32, i32)> = walls
         .iter()
-        .map(|(_, cell, _, _)| (cell.0, cell.1))
+        .map(|(_, cell, _)| (cell.0, cell.1))
         .collect();
 
     for (marker_e, brk) in &pending {
         commands.entity(marker_e).despawn();
 
         let mut broken: Vec<((i32, i32), glam::Vec2)> = Vec::new();
-        for (wall_e, cell, wpos, visuals) in &walls {
+        for (wall_e, cell, wpos) in &walls {
             let wpos = wpos.0;
             if (cell.0, cell.1) != brk.cell && wpos.distance(brk.pos) > WALL_PX * 0.75 {
                 continue;
@@ -77,11 +76,6 @@ pub fn apply_pending_wall_breaks(
                 continue;
             }
 
-            if let Some(visuals) = visuals {
-                for part in &visuals.parts {
-                    commands.entity(*part).despawn();
-                }
-            }
             commands.entity(wall_e).despawn();
             live_walls.remove(&(cell.0, cell.1));
 
