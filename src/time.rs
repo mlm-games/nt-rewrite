@@ -6,16 +6,17 @@
 //! exactly like bevy, because dozens of systems branch on it.
 
 use bevy_ecs::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// Once (clamp at duration) vs repeating (wrap elapsed) expiry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TimerMode {
     Once,
     Repeating,
 }
 
 /// Countdown/up timer with bevy `Timer::tick` semantics.
-#[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GTimer {
     elapsed: f32,
     dur: f32,

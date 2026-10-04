@@ -122,6 +122,7 @@ pub mod player_fire;
 pub mod progression;
 pub mod projectile_math;
 pub mod render;
+pub mod run_save;
 pub mod savedata_part;
 pub mod schedule;
 pub mod secrets;
@@ -548,10 +549,110 @@ impl App {
         self.sim.world.init_resource::<InputMapState>();
         self.sim.world.resource_mut::<InputMapState>().session.map = map;
         self.save_path = Some(path.to_path_buf());
+        self.init_load_prompt();
         self.sim
             .world
             .resource::<crate::savedata_part::SaveData>()
             .clone()
+    }
+
+    /// GML `MakeGame/Create_0:37` `loading = (!global.safemode && file_exists(savegame_file))`:
+    /// a run save on disk makes the intro open on the "CONTINUE THIS SAVED RUN?"
+    /// prompt instead of the logo room (`Vlambeer/Create_0` never reaches its
+    /// `else` branch on that path).
+    fn init_load_prompt(&mut self) {
+        self.sim.world.init_resource::<crate::state::BootFlags>();
+        let exists = crate::run_save::run_save_exists();
+        self.sim
+            .world
+            .resource_mut::<crate::state::BootFlags>()
+            .has_save_file = exists;
+        let mut splash = crate::state::SplashState::default();
+        if exists {
+            splash.mode = crate::state::SPLASH_MODE_LOAD;
+        }
+        self.sim.world.insert_resource(splash);
+    }
+
+    /// GML `MakeGame/Draw_0:74-169`. Parses the save on the first frame (the
+    /// prompt needs `GameCont.waypoints` for the roadmap reveal), then ticks
+    /// the reveal, the hover sting and the YES/NO commit. Returns true when the
+    /// prompt resolved and the caller should leave the splash.
+    fn tick_load_prompt(&mut self, staging_clicks: &[repame_input::StagedClick]) -> bool {
+        if self
+            .sim
+            .world
+            .get_resource::<crate::state::SplashState>()
+            .is_none_or(|s| s.mode != crate::state::SPLASH_MODE_LOAD)
+        {
+            return false;
+        }
+        if self
+            .sim
+            .world
+            .get_resource::<crate::run_save::PendingRunSave>()
+            .is_none()
+        {
+            // GML `MakeGame/Draw_0:171-175`: a parse failure is caught, logged
+            // and routed to `Other_10`, which quarantines the file and restarts.
+            match crate::run_save::load_run() {
+                Ok(save) => {
+                    crate::run_save::spawn_saved_player(&mut self.sim.world, &save);
+                    self.sim
+                        .world
+                        .insert_resource(crate::run_save::PendingRunSave(save));
+                }
+                Err(e) => {
+                    log::warn!("nt: {e}");
+                    crate::run_save::quarantine_run_save();
+                    crate::state::discard_saved_run(&mut self.sim.world);
+                    self.init_load_prompt();
+                    return true;
+                }
+            }
+        }
+        let waypoints = self
+            .sim
+            .world
+            .get_resource::<crate::run_save::PendingRunSave>()
+            .map_or(0, |p| p.0.waypoint_count());
+        let mouse = self.menu_gui_point();
+        let clicked = !staging_clicks.is_empty();
+        let (pad_yes, pad_no) = {
+            let mut input = self.sim.world.resource_mut::<NtInput>();
+            (
+                input.take_interact_pressed(),
+                input.take_pad_face2_pressed(),
+            )
+        };
+        let pad = self.pad_live;
+        let mut splash = self.sim.world.resource_mut::<crate::state::SplashState>();
+        let (choice, sting) = crate::state::tick_load_prompt(
+            &mut splash.load,
+            mouse,
+            pad,
+            waypoints,
+            clicked,
+            pad_yes,
+            pad_no,
+        );
+        if sting {
+            crate::state::menus::emit_hover(&mut self.sim.world);
+        }
+        match choice {
+            crate::state::LoadChoice::Pending => false,
+            crate::state::LoadChoice::Continue => true,
+            crate::state::LoadChoice::Discard => {
+                crate::state::discard_saved_run(&mut self.sim.world);
+                self.sim
+                    .world
+                    .remove_resource::<crate::run_save::PendingRunSave>();
+                // GML `game_restart()` rebuilds the world; the prompt's
+                // restored player must not follow it into the menu room.
+                crate::setup::teardown_session_entities(&mut self.sim.world);
+                true
+            }
+        }
     }
 
     /// Flush the live save to disk when dirty (GML `scrSave` on every
@@ -2266,6 +2367,24 @@ impl App {
         // screen-anchored buttons by dp position (independent of the repose
         // hit-test); a stray click stages nothing, so it can never fire the gun
         // or resume through a MENU press.
+        //
+        // GML `MakeGame/Draw_0:71-169`: a run save turns the boot into the
+        // "CONTINUE THIS SAVED RUN?" prompt. It owns the whole screen, so it
+        // runs before the live-play and menu routing below.
+        if state == AppState::Splash && self.tick_load_prompt(&staging_clicks) {
+            if self
+                .sim
+                .world
+                .get_resource::<crate::run_save::PendingRunSave>()
+                .is_some()
+            {
+                crate::state::goto_state(&mut self.sim.world, AppState::Loading);
+            } else {
+                self.sim.world.init_resource::<crate::state::BootFlags>();
+                crate::state::goto_state(&mut self.sim.world, AppState::MainMenu);
+            }
+            return;
+        }
         if live_play {
             let player_pos = self
                 .sim
@@ -3884,13 +4003,28 @@ impl App {
         // Loading and floor-transition covers; `LevCont/Draw_64` explicitly
         // keeps it on for mutation offers. The canvas text layer rides ABOVE
         // the opaque vortex pass, so the remaining cover gates prevent
-        // HP/level/ammo/FLOOR from painting over the spiral.
-        let hud_rows = if state == AppState::InGame
-            && !cover_chrome_off
-            && matches!(
-                menu_kind,
-                None | Some(MenuOverlay::Mutation) | Some(MenuOverlay::Pause)
-            ) {
+        // HP/level/ammo/FLOOR from painting over the spiral. GML
+        // `MakeGame/Draw_0:95` `with (TopCont) scrDrawPlayerHUD(...)` is the
+        // one non-gameplay caller: the continue prompt shows the restored
+        // run's HUD over the restored player.
+        let load_prompt = state == AppState::Splash
+            && self
+                .sim
+                .world
+                .get_resource::<crate::state::SplashState>()
+                .is_some_and(|s| s.mode == crate::state::SPLASH_MODE_LOAD)
+            && self
+                .sim
+                .world
+                .get_resource::<crate::run_save::PendingRunSave>()
+                .is_some();
+        let hud_rows = if load_prompt
+            || (state == AppState::InGame
+                && !cover_chrome_off
+                && matches!(
+                    menu_kind,
+                    None | Some(MenuOverlay::Mutation) | Some(MenuOverlay::Pause)
+                )) {
             hud_overlay_lines(&mut self.sim.world, viewport_dp)
         } else {
             Vec::new()
@@ -4437,6 +4571,26 @@ impl App {
         }
         if let Some(letterbox) = letterbox_view.take() {
             layers.push(letterbox);
+        }
+        // GML `MakeGame/Draw_0:143-151`: the continue prompt fades up from
+        // black over 15 steps (`draw_set_alpha(1 - loading / 15)`), drawn last
+        // so it covers the roadmap, HUD and rows.
+        if load_prompt
+            && let Some(load) = self
+                .sim
+                .world
+                .get_resource::<crate::state::SplashState>()
+                .map(|s| s.load.loading)
+            && load < crate::state::LOAD_FADE_FRAMES
+        {
+            let alpha =
+                (255.0 * (1.0 - load as f32 / crate::state::LOAD_FADE_FRAMES as f32)).round() as u8;
+            layers.push(UiBox(
+                Modifier::new()
+                    .fill_max_size()
+                    .background(Color::from_rgba(0, 0, 0, alpha))
+                    .hit_passthrough(),
+            ));
         }
         if let Some(front_chrome) = front_chrome_view {
             layers.push(front_chrome);

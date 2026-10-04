@@ -5577,6 +5577,54 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
                     bold: false,
                 })
                 .collect(),
+                // GML `MakeGame/Draw_0:99,130-131`: the prompt text and the
+                // YES/NO rows. Hover rows carry the `@w` tag and a 1px bump
+                // (`_point_left` subtracted from the draw y).
+                crate::state::SPLASH_MODE_LOAD => {
+                    let load = world
+                        .get_resource::<SplashState>()
+                        .map(|s| s.load)
+                        .unwrap_or_default();
+                    let rows = crate::state::load_prompt_rows(vw, load.posy);
+                    let (left, right) = (rows[0], rows[1]);
+                    let point_left = load.pointed_item == 1;
+                    let point_right = load.pointed_item == 2;
+                    vec![
+                        MenuGuiText {
+                            text: "@sCONTINUE THIS SAVED RUN?".to_string(),
+                            gx: vw * 0.5,
+                            gy: 120.0 + 4.0 - 54.0,
+                            color: GUI_WHITE,
+                            px: 7.0,
+                            centered: true,
+                            middle_y: true,
+                            right: false,
+                            bold: false,
+                        },
+                        MenuGuiText {
+                            text: if point_left { "@wYES" } else { "@sYES" }.to_string(),
+                            gx: left.0,
+                            gy: left.1 - if point_left { 1.0 } else { 0.0 },
+                            color: GUI_WHITE,
+                            px: 7.0,
+                            centered: true,
+                            middle_y: true,
+                            right: false,
+                            bold: false,
+                        },
+                        MenuGuiText {
+                            text: if point_right { "@wNO@w" } else { "@sNO@w" }.to_string(),
+                            gx: right.0,
+                            gy: right.1 - if point_right { 1.0 } else { 0.0 },
+                            color: GUI_WHITE,
+                            px: 7.0,
+                            centered: true,
+                            middle_y: true,
+                            right: false,
+                            bold: false,
+                        },
+                    ]
+                }
                 _ => Vec::new(),
             }
         }
@@ -6542,6 +6590,38 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
     };
     if confirm {
         push_confirm_text(&mut out, world, vw);
+        // GML `UberCont/Draw_64:124-135`: the saving tip's two-line tooltip
+        // under the QUIT confirm, once `appear <= 1`.
+        if !confirm
+            && world
+                .get_resource::<crate::savedata_part::SaveData>()
+                .is_some_and(|s| s.saving_tip == 0)
+            && world
+                .get_resource::<crate::state::menus::MenuState>()
+                .and_then(|m| m.pause_appear.get(1).copied())
+                .unwrap_or(0.0)
+                <= 1.0
+        {
+            for (i, line) in [
+                "YOU CAN SAVE AND CONTINUE THIS RUN LATER",
+                "IF YOU EXIT WITHOUT QUITTING TO MAIN MENU",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                out.push(MenuGuiText {
+                    text: line.to_string(),
+                    gx: vw * 0.5,
+                    gy: 240.0 - 36.0 - 30.0 + 7.0 + i as f32 * 10.0,
+                    color: GUI_WHITE,
+                    px: 7.0,
+                    centered: true,
+                    middle_y: true,
+                    right: false,
+                    bold: false,
+                });
+            }
+        }
     }
     out
 }
@@ -10090,7 +10170,27 @@ pub fn menu_sprites(
     let vw = view[2];
     let gui_to_world = |x: f32, y: f32| hud_gui_to_world(gm, view, x, y);
     match kind {
-        crate::MenuOverlay::Splash => {}
+        crate::MenuOverlay::Splash => {
+            // GML `MakeGame/Draw_0:94` `scrDrawRoadmap(_cx, _cy, pos)`: the
+            // prompt reveals one node per frame from the saved run's log.
+            if let Some(save) = world.get_resource::<crate::run_save::PendingRunSave>() {
+                let (waypoints, pos) = (
+                    save.0.session.run.waypoints.clone(),
+                    world
+                        .get_resource::<SplashState>()
+                        .map(|s| s.load.pos)
+                        .unwrap_or(0),
+                );
+                out.extend(roadmap_sprites(
+                    assets,
+                    &gui_to_world,
+                    vw * 0.5,
+                    120.0,
+                    &waypoints,
+                    pos as usize,
+                ));
+            }
+        }
         crate::MenuOverlay::MainMenu => {
             let vw = view[2];
             let cx = vw * 0.5;
@@ -10993,6 +11093,53 @@ pub fn pause_button_sprites(
     };
     let hover = menu.as_ref().map(|m| m.hover_label.as_str()).unwrap_or("");
     let mut out = Vec::new();
+    // GML `UberCont/Draw_64:113-137`: the one-shot `sprContinuedRunIcon` hint
+    // over the QUIT confirm button while `etc.saving_tip` still reads 0. Four
+    // black offset copies then the white icon, gated on `appear <= 2` (and the
+    // white pass on `appear <= 1`).
+    if confirm == Some(0)
+        && world
+            .get_resource::<crate::savedata_part::SaveData>()
+            .is_some_and(|s| s.saving_tip == 0)
+    {
+        let icon_x = vw * 0.5;
+        let icon_y = 240.0 - 36.0 - 30.0;
+        let appear = menu
+            .as_ref()
+            .and_then(|m| m.pause_appear.get(1).copied())
+            .unwrap_or(0.0);
+        let icon_y = icon_y + (appear - 1.0).max(0.0) + 1.0;
+        if appear <= 2.0 {
+            for (ox, oy) in [(-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)] {
+                push_shadowed_sprite(
+                    &mut out,
+                    assets,
+                    "images/sprContinuedRunIcon.png",
+                    0,
+                    icon_x + ox,
+                    icon_y + oy,
+                    view,
+                    gm,
+                    false,
+                    [0.0, 0.0, 0.0, 1.0],
+                );
+            }
+        }
+        if appear <= 1.0 {
+            push_shadowed_sprite(
+                &mut out,
+                assets,
+                "images/sprContinuedRunIcon.png",
+                0,
+                icon_x,
+                icon_y,
+                view,
+                gm,
+                false,
+                [1.0; 4],
+            );
+        }
+    }
     for (i, (label, (x, y, frame))) in labels.iter().zip(positions.iter()).enumerate() {
         let appear = menu
             .as_ref()
@@ -11774,7 +11921,10 @@ mod wall_break_floor_tests {
         let south = (wx, wy + 1);
         let south_tile = floor_cell_for_wall(south.0, south.1);
         mask.cells.insert((0, 0));
-        assert!(!mask.cells.contains(&south_tile), "south tile starts as wall");
+        assert!(
+            !mask.cells.contains(&south_tile),
+            "south tile starts as wall"
+        );
 
         // Bare wall ring: no floor south, no opened cell -> hidden.
         assert!(!mask.opened.contains(&south));

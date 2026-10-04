@@ -347,7 +347,7 @@ pub fn ammo_pickup_amount_for(kind: AmmoKind, fish_players: u32, haste: u32) -> 
 }
 
 /// Crown kinds. Discriminants are save identity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum CrownKind {
     None = 0,
@@ -402,7 +402,7 @@ impl CrownKind {
 }
 
 /// Skin letter picks (A-D).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum SkinLetter {
     A = 0,
@@ -424,7 +424,7 @@ impl SkinLetter {
 }
 
 /// Character ability kinds.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum AbilityKind {
     Flip,
     Shield,

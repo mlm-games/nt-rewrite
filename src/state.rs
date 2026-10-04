@@ -214,6 +214,10 @@ pub struct SplashState {
     pub mode: u8,
     pub t: f32,
     pub guns: u8,
+    /// GML `MakeGame/Create_0:37` `loading`: a run save on disk replaces the
+    /// logo room with the "CONTINUE THIS SAVED RUN?" prompt, so the splash
+    /// boots straight into [`SPLASH_MODE_LOAD`].
+    pub load: LoadPromptState,
 }
 
 impl Default for SplashState {
@@ -222,7 +226,105 @@ impl Default for SplashState {
             mode: 0,
             t: 0.0,
             guns: 0,
+            load: LoadPromptState::default(),
         }
+    }
+}
+
+/// GML `MakeGame/Draw_0:71-176`: the mid-run save prompt. `loading` counts the
+/// 15-frame black fade-in, `pos` reveals one roadmap node per frame, `posy`
+/// slides the crown in, `pointed_item` is 1 for YES / 2 for NO / -1 for
+/// neither and drives the hover sting.
+#[derive(Debug, Clone, Copy, Default, Resource)]
+pub struct LoadPromptState {
+    pub loading: u32,
+    pub pos: u32,
+    pub posy: i32,
+    pub pointed_item: i32,
+}
+
+/// Splash mode for the load prompt (`Vlambeer/Create_0`'s `else` branch is the
+/// logo room; the `file_exists(savegame_file)` branch never reaches it).
+pub const SPLASH_MODE_LOAD: u8 = 5;
+
+/// GML `MakeGame/Draw_0:143` `if (loading < 15)`.
+pub const LOAD_FADE_FRAMES: u32 = 15;
+
+/// GML `MakeGame/Draw_0:86-87`: YES/NO sit `gui_w/2 - 64` and `gui_w/2 + 48`,
+/// `gui_h/2 + 40 + posy` down, each inside a 16px `point_in_circle`.
+pub fn load_prompt_rows(vw: f32, posy: i32) -> [(f32, f32); 2] {
+    let cx = vw * 0.5;
+    let options_y = 120.0 + 40.0 + posy as f32;
+    [(cx - 64.0, options_y), (cx + 48.0, options_y)]
+}
+
+pub const LOAD_PROMPT_RADIUS: f32 = 16.0;
+
+/// GML `MakeGame/Draw_0:156-168`: the prompt's commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadChoice {
+    Pending,
+    Continue,
+    Discard,
+}
+
+/// GML `MakeGame/Draw_0:71-169` per-draw law. `mouse` is the GUI-space cursor
+/// (`None` on a pad), `pad_yes`/`pad_no` are the raw `gp_face1`/`gp_face2`
+/// edges. Returns the choice plus the hover sting.
+pub fn tick_load_prompt(
+    state: &mut LoadPromptState,
+    mouse: Option<[f32; 2]>,
+    pad: bool,
+    waypoints: usize,
+    clicked: bool,
+    pad_yes: bool,
+    pad_no: bool,
+) -> (LoadChoice, bool) {
+    let rows = load_prompt_rows(320.0, state.posy);
+    let (mut point_left, mut point_right) = (false, false);
+    if let Some([mx, my]) = mouse {
+        for (i, (x, y)) in rows.iter().enumerate() {
+            let hit = (mx - x).powi(2) + (my - y).powi(2) <= LOAD_PROMPT_RADIUS.powi(2);
+            if i == 0 {
+                point_left = hit;
+            } else {
+                point_right = hit;
+            }
+        }
+    }
+    if pad {
+        point_left = true;
+        point_right = true;
+    }
+
+    let previous = state.pointed_item;
+    if point_left && state.pointed_item != 1 {
+        state.pointed_item = 1;
+    } else if point_right && state.pointed_item != 2 {
+        state.pointed_item = 2;
+    } else if !point_left && !point_right {
+        state.pointed_item = -1;
+    }
+    let sting = previous != state.pointed_item && state.pointed_item != -1;
+
+    if (state.pos as usize) >= waypoints {
+        state.posy = (state.posy - 8).max(0);
+    } else {
+        state.pos += 1;
+    }
+    if state.loading < LOAD_FADE_FRAMES {
+        state.loading += 1;
+    }
+
+    if !clicked && !pad_yes && !pad_no {
+        return (LoadChoice::Pending, sting);
+    }
+    if point_left || pad_yes {
+        (LoadChoice::Continue, sting)
+    } else if point_right || pad_no {
+        (LoadChoice::Discard, sting)
+    } else {
+        (LoadChoice::Pending, sting)
     }
 }
 
@@ -397,6 +499,41 @@ pub fn choose_level_entry(
 /// recontinuations the save is deleted instead of loaded.
 pub fn recontinue_deletes_save(recontinued_times: u32) -> bool {
     recontinued_times > 2
+}
+
+/// GML `Vlambeer/Create_0:10-40`, the `file_exists(savegame_file)` boot branch:
+/// load, drop the save once the recontinue cap trips, bump the counter and
+/// write it straight back (`scrSavegameSave` on line 39) so the next crash
+/// resumes from the bumped count. Fed by the intro prompt's parsed save, which
+/// the prompt parks in [`crate::run_save::PendingRunSave`].
+pub fn begin_continued_run(world: &mut World) -> Result<(), String> {
+    let save = world
+        .remove_resource::<crate::run_save::PendingRunSave>()
+        .map(|pending| pending.0)
+        .ok_or_else(|| "no pending run save".to_string())?;
+    crate::setup::setup_continued_run(world, &save);
+    world.init_resource::<BootFlags>();
+    {
+        let mut flags = world.resource_mut::<BootFlags>();
+        if flags.recontinued_times > 2 {
+            crate::run_save::delete_run_save();
+        }
+        flags.recontinued_times += 1;
+        flags.continued_run = true;
+    }
+    let _ = crate::run_save::save_run(world);
+    Ok(())
+}
+
+/// GML `MakeGame/Draw_0:165-168`: the prompt's NO path - the save is dropped
+/// and the boot restarts, so the run never comes back.
+pub fn discard_saved_run(world: &mut World) {
+    crate::run_save::delete_run_save();
+    world.init_resource::<BootFlags>();
+    let mut flags = world.resource_mut::<BootFlags>();
+    flags.has_save_file = false;
+    flags.continued_run = false;
+    flags.recontinued_times = 0;
 }
 
 /// Headless quit signal (bevy `AppExit::Success`; no window service
@@ -597,6 +734,11 @@ pub fn tick_splash(world: &mut World, dt: f32, pressed: bool) {
     }
     let fresh = world.get_resource::<SplashState>().is_none();
     world.init_resource::<SplashState>();
+    // GML `MakeGame/Draw_0:71` `if (loading)`: a run save replaces the logo
+    // room entirely, so none of the mode timers below run.
+    if world.resource::<SplashState>().mode == SPLASH_MODE_LOAD {
+        return;
+    }
     let auto = world
         .get_resource::<SplashAutoAdvance>()
         .is_some_and(|a| a.0);
@@ -689,7 +831,32 @@ pub fn tick_loading(world: &mut World, dt: f32) {
         loading.t >= LOADING_MIN_SECS
     };
     if ready {
-        crate::setup::setup_run(world);
+        // GML `MakeGame/Draw_0:161` `room_goto(romGame)` re-enters
+        // `Vlambeer/Create_0`, which sees the save on disk and takes the
+        // continue branch instead of building a fresh run.
+        let resumed = world
+            .get_resource::<crate::run_save::PendingRunSave>()
+            .is_some();
+        if resumed {
+            let _ = begin_continued_run(world);
+        } else {
+            crate::setup::setup_run(world);
+        }
+        // GML `Vlambeer/Create_0:111-117`: entering the game room with a live
+        // `GameCont` saves the run, except right after a continue-load (that
+        // branch wrote the bumped counter already) and inside the credits or
+        // a cinematic (the throne sit), which delete the save instead.
+        let cinematic = world
+            .get_resource::<crate::comps_a::Run>()
+            .is_some_and(|r| r.won);
+        if resumed {
+            world.init_resource::<crate::state::BootFlags>();
+            world
+                .resource_mut::<crate::state::BootFlags>()
+                .continued_run = false;
+        } else if !cinematic {
+            let _ = crate::run_save::save_run(world);
+        }
         reset_pause_state(world);
     }
 }

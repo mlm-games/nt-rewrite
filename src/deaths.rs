@@ -224,6 +224,8 @@ pub fn resolve_player_gameover(
     }
 
     run.game_over = true;
+    // GML `GameOver/Create_0:55`: the run save is dropped when the run ends.
+    crate::run_save::delete_run_save();
 
     if let (Some(pa), Some(anim)) = (pa_opt, anim_opt.as_deref_mut()) {
         let dead = crate::dead_path_part::derive_dead_path(pa.idle);

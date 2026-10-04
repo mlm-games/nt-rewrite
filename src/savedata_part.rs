@@ -123,6 +123,13 @@ pub struct SaveData {
     /// run N+1. Defaults to `wep_rusty_revolver` (56).
     #[serde(default = "default_protowep")]
     pub protowep: WeaponId,
+    /// GML `etc.saving_tip`: 0 = the quit-confirm has never shown the
+    /// `sprContinuedRunIcon` hint, -1 = shown and pending disarm, 1 = done.
+    /// `PauseButton/Other_10:33-35` writes -1 the first time the quit
+    /// confirm opens; `GameCont/Create_0:100-102` flips -1 to 1 on the next
+    /// run start; `UberCont/Draw_64:115` draws the icon while it reads 0.
+    #[serde(default)]
+    pub saving_tip: i32,
     #[serde(default)]
     pub unlocked_characters: Vec<String>,
     #[serde(default)]
@@ -647,6 +654,7 @@ impl Default for SaveData {
             unlocked_cheats: false,
             hardmode_unlocked: false,
             protowep: default_protowep(),
+            saving_tip: 0,
             tutorial_done: false,
             settings: SettingsData::default(),
             key_bindings: KeyBindings::default(),

@@ -1070,6 +1070,11 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             crate::vortex::rewarm_view_spiral(world, crate::vortex::GUI_W);
         }
         UiAction::QuitApp => {
+            // GML `MainMenuButton/Other_10:101-103`: QUIT runs
+            // `game_restart()` before `game_end()`, and `scrGameRestart:23`
+            // drops the run save. No live run exists at the main menu, so
+            // this only clears a stale file.
+            crate::run_save::delete_run_save();
             world.init_resource::<QuitRequested>();
             world.resource_mut::<QuitRequested>().0 = true;
             emit_cue(world, &UiAction::QuitApp);
@@ -1199,6 +1204,16 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             }
         }
         UiAction::ShowPauseConfirm(kind) => {
+            if kind == 0 {
+                // GML `PauseButton/Other_10:33-35`: opening the quit confirm
+                // the first time arms the one-shot `sprContinuedRunIcon` tip.
+                world.init_resource::<SaveData>();
+                let arm = world.resource::<SaveData>().saving_tip == 0;
+                if arm {
+                    world.resource_mut::<SaveData>().saving_tip = -1;
+                    mark_dirty(world);
+                }
+            }
             if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
                 menu.pause_confirm = Some(kind);
                 menu.pause_cursor = 0;
@@ -1215,6 +1230,17 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             emit_cue(world, &UiAction::CancelPauseConfirm);
         }
         UiAction::ConfirmPause(kind) => {
+            // GML `scrGameRestart:22-23`: both the quit-to-menu and the
+            // retry arm clear `continued_run` and delete the run save, so a
+            // deliberate exit never leaves a resumable run behind.
+            crate::run_save::delete_run_save();
+            world.init_resource::<crate::state::BootFlags>();
+            {
+                let mut flags = world.resource_mut::<crate::state::BootFlags>();
+                flags.has_save_file = false;
+                flags.continued_run = false;
+                flags.recontinued_times = 0;
+            }
             if kind == 0 {
                 crate::setup::setup_logo_room(world);
                 world.init_resource::<crate::state::Paused>();
@@ -1467,6 +1493,9 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 world.init_resource::<MutationChoice>();
                 world.resource_mut::<MutationChoice>().0 = Some(idx);
                 reset_mutation_offer(world);
+                // GML `scrLevelUpScreenSubmit:23`: the level-up commit saves
+                // the run, so closing the app from the offer resumes after it.
+                let _ = crate::run_save::save_run(world);
             } else {
                 set_mutation_selection(world, idx);
                 emit_sfx(world, hover_sfx());
@@ -2338,6 +2367,9 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
                     .entity_mut(e)
                     .remove::<crate::state::TutorialRestart>();
             }
+            // GML `TutCont/Other_5:2-3`: the tutorial exit drops the run save
+            // and stops the audio bed before the restart.
+            crate::run_save::delete_run_save();
             goto_state(world, AppState::Loading);
             return;
         }

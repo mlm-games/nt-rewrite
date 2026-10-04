@@ -668,6 +668,13 @@ pub fn tick_crown_pedestal(
         }
         apply_crown_to_spawn(ped.kind, &mut player, &mut health, &mut inv);
         *state = CrownState::new(ped.kind);
+        // GML `scrCrowns:126,131`: equipping Destiny grants the free mutation
+        // pick and saves the run on both of its branches.
+        if ped.kind == CrownKind::Destiny {
+            commands.queue(|world: &mut World| {
+                let _ = crate::run_save::save_run(world);
+            });
+        }
         // GML `CrownPickup/Collision_Player:12-16`: taking a crown uncurses.
         inv.cursed = [false, false, false];
 

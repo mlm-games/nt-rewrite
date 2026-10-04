@@ -406,14 +406,15 @@ pub struct SaveDirty(pub bool);
 
 /// GML `GameCont` waypoint entry verbatim (`waypnt/waysub/waylps`):
 /// gml area id, subarea, loop count at each entered floor.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Waypoint {
     pub area: i32,
     pub sub: u32,
     pub lp: u32,
 }
 
-#[derive(Resource)]
+#[derive(Resource, Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Run {
     pub floor: u32,
     /// GML `GameCont.hard`: starts at 0 (13 in hardmode) and gains
@@ -583,7 +584,8 @@ pub struct GameCleanup;
 #[derive(Component)]
 pub struct LevelCleanup;
 
-#[derive(Component)]
+#[derive(Component, Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Player {
     pub speed: f32,
     pub accel: f32,
@@ -779,7 +781,7 @@ pub struct AimDir(pub Vec2);
 #[derive(Component)]
 pub struct Velocity(pub Vec2);
 
-#[derive(Component)]
+#[derive(Component, Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Health {
     pub hp: i32,
     pub max: i32,
@@ -832,7 +834,7 @@ pub struct FireCooldown {
 pub const MAX_WEAPON_SLOTS: usize = 3;
 pub const MAX_AMMO_TYPES: usize = 6;
 
-#[derive(Component, Clone, Debug)]
+#[derive(Component, Clone, Debug, Serialize, Deserialize)]
 pub struct Inventory {
     pub weapons: [WeaponId; MAX_WEAPON_SLOTS],
     /// GML per-slot `curse` (cursed guns cannot be swapped away).
@@ -874,13 +876,13 @@ impl Inventory {
     }
 }
 
-#[derive(Component, Clone, Debug)]
+#[derive(Component, Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct RaceState {
     pub race: RaceId,
     pub skin: SkinLetter,
 }
 
-#[derive(Component)]
+#[derive(Component, Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct CrownState {
     pub crown: CrownKind,
     pub life_timer: Timer,

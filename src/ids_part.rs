@@ -1,5 +1,7 @@
 //! nt id enums: byte-exact port of the GML weapon/enemy tables via `weapons_data.rs` / `enemy_data.rs`.
 
+use serde::{Deserialize, Serialize};
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u16)]
 pub enum EnemyKind {
@@ -197,7 +199,7 @@ impl EnemyKind {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
 pub enum UltraMutationId {
     FishGunWarrant,
     FishConfiscate,
@@ -236,7 +238,7 @@ pub enum UltraMutationId {
     CuzEmotional,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
 pub enum MutationId {
     RhinoSkin,
     PlutoniumHunger,

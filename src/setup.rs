@@ -462,6 +462,19 @@ pub fn setup_run(world: &mut World) {
 
 /// Deterministic `setup_run` (tests pin the floor seed).
 pub fn setup_run_with_seed(world: &mut World, seed: u64) {
+    setup_run_inner(world, seed, None);
+}
+
+/// GML `Vlambeer/Create_0:10-40`: the `file_exists(savegame_file)` boot path.
+/// `scrSavegameLoad` restores `GameCont` and the `Player` instance BEFORE
+/// `GenCont` builds, so the floor is generated from the restored run and the
+/// restored player is written over the loadout-built one afterwards.
+pub fn setup_continued_run(world: &mut World, save: &crate::run_save::RunSave) {
+    let seed = save.session.run.gen_seed;
+    setup_run_inner(world, seed, Some(save));
+}
+
+fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save::RunSave>) {
     teardown_session_entities(world);
 
     world.init_resource::<Score>();
@@ -520,6 +533,13 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
     {
         world.resource_mut::<Score>().0 = 0;
         world.resource_mut::<SaveDirty>().0 = false;
+        // GML `GameCont/Create_0:100-102`: the armed saving tip disarms on the
+        // next run start. `GameCont` is created before `scrSavegameLoad`, so
+        // this fires on the continue path too.
+        if world.resource::<SaveData>().saving_tip == -1 {
+            world.resource_mut::<SaveData>().saving_tip = 1;
+            world.resource_mut::<SaveDirty>().0 = true;
+        }
         // GML run start with hardmode (`hard = 13`, `loops++`).
         // `UberCont.hardmode` persists once set (PlayButton image 3);
         // `scrGameRestart` never clears it, so retries keep it. The
@@ -544,35 +564,43 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
         // one run carries into the next. `protocurse` is not persisted.
         let protowep = world.resource::<crate::savedata_part::SaveData>().protowep;
         let mut run = world.resource_mut::<Run>();
-        run.protowep = protowep;
-        run.protocurse = false;
-        run.floor = 1;
-        run.world = 1;
-        run.area = area_for_floor(1, 0);
-        run.loop_count = u32::from(hardmode);
-        run.hardmode = hardmode;
-        // GML `GameCont/Create_0.gml:84-88`: `if scrGameIsHardmode() {
-        // hard = 13; loops++ }`.
-        run.hard = if hardmode { 13 } else { 0 };
-        run.floor_in_area = 1;
-        run.gen_seed = seed;
-        run.portal_open = false;
-        run.game_over = false;
-        run.total_kills = 0;
-        run.blackswords = 0;
-        run.tottimer = 0;
-        run.popolevel = 0;
-        run.nochest = 0;
-        run.noradch = 0;
-        run.same_weapons_for = 0;
-        run.horror = false;
-        run.shots_fired = 0;
-        run.weapons_picked = 0;
-        run.won = false;
-        run.tutorial = tutorial;
-        run.blood_crown = false;
-        run.waypoints.clear();
-        run.push_waypoint();
+        if let Some(restored) = resume {
+            // GML `scrSavegameSession:72-83`: `variable_struct_set` restores
+            // every `GameCont` member, so the fresh-run identity block below
+            // is skipped wholesale and the floor is generated from the
+            // restored run (`GenCont` reads `GameCont` the same way).
+            *run = restored.session.run.clone();
+        } else {
+            run.protowep = protowep;
+            run.protocurse = false;
+            run.floor = 1;
+            run.world = 1;
+            run.area = area_for_floor(1, 0);
+            run.loop_count = u32::from(hardmode);
+            run.hardmode = hardmode;
+            // GML `GameCont/Create_0.gml:84-88`: `if scrGameIsHardmode() {
+            // hard = 13; loops++ }`.
+            run.hard = if hardmode { 13 } else { 0 };
+            run.floor_in_area = 1;
+            run.gen_seed = seed;
+            run.portal_open = false;
+            run.game_over = false;
+            run.total_kills = 0;
+            run.blackswords = 0;
+            run.tottimer = 0;
+            run.popolevel = 0;
+            run.nochest = 0;
+            run.noradch = 0;
+            run.same_weapons_for = 0;
+            run.horror = false;
+            run.shots_fired = 0;
+            run.weapons_picked = 0;
+            run.won = false;
+            run.tutorial = tutorial;
+            run.blood_crown = false;
+            run.waypoints.clear();
+            run.push_waypoint();
+        }
         world.resource_mut::<crate::state::Paused>().0 = false;
         *world.resource_mut::<Toast>() = Toast::default();
         *world.resource_mut::<crate::state::AppState>() = crate::state::AppState::InGame;
@@ -612,7 +640,13 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
         ));
     }
 
-    let picked = world.resource::<SelectedCharacter>().0;
+    let picked = match resume {
+        // GML `scrSavegamePlayers:219-230` recreates the `Player` instances
+        // with their own `index`, so a continued run keeps its race/skin
+        // instead of re-rolling `SelectedCharacter`.
+        Some(restored) => restored.player.race,
+        None => world.resource::<SelectedCharacter>().0,
+    };
     let save = world.resource::<SaveData>().clone();
     // GML `scrCreatePlayers` Random roll on its own split stream (level
     // generation keeps its own `gen_seed` stream either way).
@@ -620,12 +654,17 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
     let race = roll_random_race(&save, picked, &mut roll_rng);
     // GML `scrRunStart.gml:39`: the run-start confirm sting.
     world.init_resource::<Queue<crate::audio::AudioCue>>();
-    world
-        .resource_mut::<Queue<crate::audio::AudioCue>>()
-        .push(crate::audio::race_confirm_sfx(race));
+    if resume.is_none() {
+        world
+            .resource_mut::<Queue<crate::audio::AudioCue>>()
+            .push(crate::audio::race_confirm_sfx(race));
+    }
     let loadout = resolve_run_loadout(&save, race);
-    // GML `scrPopulate` Blood-crown extra pass reads the run-start crown.
-    world.resource_mut::<Run>().blood_crown = loadout.crown == CrownKind::Blood;
+    // GML `scrPopulate` Blood-crown extra pass and `scrPopChests`' crown
+    // checks read the LIVE player's crown (`scrCrownCheck`), so a continued
+    // run uses the restored one rather than the loadout's.
+    let live_crown = resume.map_or(loadout.crown, |s| s.player.crown.crown);
+    world.resource_mut::<Run>().blood_crown = live_crown == CrownKind::Blood;
     let bundle = build_player_bundle(race, &loadout);
 
     // The idle `SpriteAnim` seed needs the catalog, which only exists
@@ -674,8 +713,8 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
             (
                 half,
                 rogue,
-                loadout.crown == CrownKind::Life,
-                loadout.crown == CrownKind::Love,
+                live_crown == CrownKind::Life,
+                live_crown == CrownKind::Love,
                 r.hardmode,
                 r.area,
                 r.floor_in_area,
@@ -749,14 +788,52 @@ pub fn setup_run_with_seed(world: &mut World, seed: u64) {
     // leaking a live spiral into settled play.
     world.remove_resource::<crate::vortex::SpiralCtl>();
 
+    let (run_floor, run_area) = {
+        let run = world.resource::<Run>();
+        (run.floor, run.area)
+    };
     world
         .resource_mut::<Queue<FloorStarted>>()
         .push(FloorStarted {
-            floor: 1,
-            area: area_for_floor(1, 0),
+            floor: run_floor,
+            area: run_area,
         });
 
-    if loadout.crown != CrownKind::None {
+    // GML `scrSavegamePlayers:219-230`: the restored `Player` instance is
+    // written over the loadout-built one, field for field, once the floor
+    // entities exist.
+    if let Some(restore) = resume {
+        crate::run_save::apply_run(world, restore);
+        // GML `GenCont/Create_0:52-61` re-spawns the carried guns at
+        // generation. A continued run enters through `setup_run` rather
+        // than `tick_floor_transition`, so nothing else drains the
+        // resource; without this the restored guns never reach the floor.
+        let carried = std::mem::take(
+            &mut world
+                .resource_mut::<crate::comps_b::PortalCarriedWeapons>()
+                .0,
+        );
+        if !carried.is_empty() {
+            let base = glam::Vec2::new(crate::comps_a::TILE * 0.5, crate::comps_a::TILE * 0.5);
+            world.resource_scope(|world, catalog: Mut<AnimCatalog>| {
+                let mut commands = world.commands();
+                for (i, w) in carried.into_iter().enumerate() {
+                    let ang = (i as f32) * std::f32::consts::TAU / 4.0;
+                    crate::pickups::spawn_pickup(
+                        &mut commands,
+                        &catalog,
+                        crate::comps_b::PickupKind::Weapon(w),
+                        base + glam::Vec2::new(ang.cos(), ang.sin()) * 24.0,
+                        0,
+                        false,
+                    );
+                }
+            });
+            world.flush();
+        }
+    }
+
+    if resume.is_none() && loadout.crown != CrownKind::None {
         world
             .resource_mut::<Toast>()
             .show(&format!("{} equipped", crown_name_for_toast(loadout.crown)));

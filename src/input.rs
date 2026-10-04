@@ -30,6 +30,9 @@ pub struct NtInput {
     fire_released: bool,
     ability_pressed: bool,
     interact_pressed: bool,
+    /// Raw `gp_face2` (East) edge. GML `MakeGame/Draw_0:154` binds it to the
+    /// intro "NO" row; no `NtAction` maps East, so the sampler stages it raw.
+    pad_face2_pressed: bool,
 
     pub spec_held: bool,
     spec_pressed: bool,
@@ -155,6 +158,7 @@ impl Default for NtInput {
             fire_released: false,
             ability_pressed: false,
             interact_pressed: false,
+            pad_face2_pressed: false,
             spec_held: false,
             spec_pressed: false,
             weapon_slot: None,
@@ -265,6 +269,11 @@ impl NtInput {
     /// Drain the peek-only interact pulse (Cleanup tail, live play).
     pub(crate) fn clear_interact_pulse(&mut self) {
         self.interact_pressed = false;
+    }
+
+    /// Take the raw `gp_face2` edge (GML `MakeGame/Draw_0:154` `_pad_no`).
+    pub fn take_pad_face2_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.pad_face2_pressed)
     }
 
     pub fn rehome_sticks(&mut self, width: f32) {
@@ -856,6 +865,7 @@ pub fn sample_gamepad_mapped(
     spec_held_now |= pad.left_trigger_held;
     spec_pressed_now |= pad.left_trigger_pressed;
     interact_pressed |= pad.south_pressed;
+    output.pad_face2_pressed |= pad.east_pressed;
 
     if let Some(state) = keymap {
         use crate::keymap::NtAction;

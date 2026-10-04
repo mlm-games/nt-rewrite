@@ -980,7 +980,7 @@ pub struct PortalClosing {
     pub timer: Timer,
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PortalCarriedWeapons(pub Vec<WeaponId>);
 
 #[derive(Component)]

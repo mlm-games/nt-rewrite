@@ -1412,6 +1412,9 @@ pub fn resolve_death_drops(
                     );
                 } else {
                     run.game_over = true;
+                    // GML `Credits/Create_0:36`: reaching the credits ends the
+                    // run, so the mid-run save is dropped.
+                    crate::run_save::delete_run_save();
                     toast.show("THE NUCLEAR THRONE");
                     flash_white(&mut flash, 0.2);
                     trauma.add(0.5);

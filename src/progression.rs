@@ -2763,6 +2763,9 @@ pub fn tick_throne_sit(
             commands.entity(player_e).remove::<ThroneSit>();
             run.game_over = true;
             run.won = true;
+            // GML `GameOver/Create_0:55` drops the run save the moment the
+            // run ends, so a finished run never comes back.
+            crate::run_save::delete_run_save();
             if save.best_floor < run.floor {
                 save.best_floor = run.floor;
             }
@@ -2811,6 +2814,8 @@ pub fn tick_throne_sit(
             timer: GTimer::from_seconds(345.0 / 30.0, TimerMode::Once),
         });
         run.won = true;
+        // GML `Cinematic/Create_0:30`: the throne cinematic drops the run save.
+        crate::run_save::delete_run_save();
         toast.show("YOU SIT ON THE THRONE");
         // GML `SitDown/Other_7:22`: the win unlocks run as it starts.
         unlock_held_crown(
