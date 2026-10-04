@@ -1328,6 +1328,11 @@ fn generate_hq_last(run: &Run) -> LevelPlan {
     }
     let floors = plan.floor_cells.clone();
     build_walls(run, &floors, &mut plan);
+    // GML `FloorMaker/Create_0.gml:83-84` hangs `LastIntro` + `BigTV` off the
+    // arena, and `LastIntro/Destroy_0.gml:4` turns that into the `Last`
+    // boss. The Captain is placed by the room builder, never by
+    // `scrPopulate`, which is why HQ has no entry in `boss_for_run`.
+    plan.boss = Some(EnemyKind::Captain);
     plan
 }
 
@@ -2491,17 +2496,17 @@ fn boss_for_run(run: &Run, area: i32, is_last: bool) -> Option<EnemyKind> {
     if !is_last {
         return None;
     }
-    if is_secret_area(run.area) {
-        return match area {
-            2 if run.loop_count > 0 => Some(EnemyKind::FrogQueen),
-            4 | 104 if run.loop_count > 0 => Some(EnemyKind::Hyper),
-            6 if run.loop_count > 0 => Some(EnemyKind::Technomancer),
-            _ => None,
-        };
-    }
+    // GML `scrPopulate.gml:325-372`, keyed on the `area_*` macros
+    // (`scripts/macros_general.gml:538-553`): scrapyards 3, city 5,
+    // sewers 2, caves 4 / cursed_caves 104, labs 6 -- the last three all
+    // gated on `_loops > 0`. Palace (7) and HQ (106) get no `scrPopulate`
+    // boss; their arenas are built by `FloorMaker` instead.
     match area {
         3 => Some(big_dog_kind(run.loop_count)),
         5 => Some(lil_hunter_kind(run.loop_count)),
+        2 if run.loop_count > 0 => Some(EnemyKind::FrogQueen),
+        4 | 104 if run.loop_count > 0 => Some(EnemyKind::Hyper),
+        6 if run.loop_count > 0 => Some(EnemyKind::Technomancer),
         7 => Some(EnemyKind::Throne),
         _ => None,
     }
