@@ -2359,11 +2359,11 @@ pub struct Tangle {
     pub team: Team,
 }
 
-/// `sprTangle` collision box is 47x33; the overlap test is a circle at
-/// half the shorter side. GML gives `Tangle` a real mask (its sprite has
-/// no `spriteMaskId`), so `TrapFire/Collision_Tangle` can see it - the
-/// port carries the same circle as a [`Hitbox`].
-pub const TANGLE_RADIUS: f32 = 16.0;
+/// GML `sprTangle` has bbox 0..46 x 7..39 (`sprites/sprTangle/sprTangle.yy`)
+/// on a 48x48 sprite, and `objects/Tangle/Tangle.yy` sets
+/// `spriteMaskId: null`, so the snare is a 46x32 AABB centred on its origin:
+/// +-23 horizontally, +-16 vertically.
+pub const TANGLE_HALF_EXTENTS: Vec2 = Vec2::new(23.0, 16.0);
 
 /// GML `scripts/scrPowers/scrPowers.gml:116-131` (Race.Plant) plus
 /// `scripts/scrControlAutoSnare/scrControlAutoSnare.gml`. The seed flies
@@ -2430,7 +2430,9 @@ fn plant_tangle(
             // GML `Tangle` inherits `Player`, so it carries a body: the
             // mask `TrapFire/Collision_Tangle.gml` collides against.
             Hitbox {
-                radius: TANGLE_RADIUS,
+                // Single-radius stand-in for the 46x32 mask: the wider
+                // half-extent, so horizontal reach stays honest.
+                radius: TANGLE_HALF_EXTENTS.x,
             },
             GmlImage::new("images/sprTangle.png", 6, 0.4),
             NativeFlip(rng.random_bool(0.5)),
@@ -2462,6 +2464,17 @@ pub fn tick_snare_zones(
     // query above, which holds `&mut Pos`; a seed is despawned as it
     // plants, so no entity is ever both.
     tangles: Query<&Pos, (With<Tangle>, Without<Player>, Without<SnareSeed>)>,
+    // GML `TangleSeed/Collision_hitme.gml:1` runs `scr_can_hit`, and `prop`
+    // inherits `hitme`, so a barrel or crate catches the seed too.
+    props: Query<
+        (&Pos, &Prop),
+        (
+            With<Prop>,
+            Without<Player>,
+            Without<Enemy>,
+            Without<SnareSeed>,
+        ),
+    >,
     mut enemies: Query<
         (
             Entity,
@@ -2493,7 +2506,12 @@ pub fn tick_snare_zones(
         let hit_wall = !walkable(spos.0);
         let hit_body = enemies
             .iter()
-            .any(|(_, epos, hitbox, _, _)| epos.0.distance(spos.0) <= hitbox.radius);
+            .any(|(_, epos, hitbox, _, _)| epos.0.distance(spos.0) <= hitbox.radius)
+            || props.iter().any(|(ppos, prop)| {
+                prop.hp > 0
+                    && (spos.0.x - ppos.0.x).abs() <= prop.size.x * 0.5
+                    && (spos.0.y - ppos.0.y).abs() <= prop.size.y * 0.5
+            });
         if hit_wall || hit_body {
             plant_tangle(
                 &mut commands,
@@ -2513,7 +2531,9 @@ pub fn tick_snare_zones(
     for tangle_pos in &tangles {
         let tpos = tangle_pos.0;
         for (_, mut epos, hitbox, mut health, mut vel) in &mut enemies {
-            if epos.0.distance(tpos) > hitbox.radius + TANGLE_RADIUS {
+            if (epos.0.x - tpos.x).abs() > hitbox.radius + TANGLE_HALF_EXTENTS.x
+                || (epos.0.y - tpos.y).abs() > hitbox.radius + TANGLE_HALF_EXTENTS.y
+            {
                 continue;
             }
             if let Some(vel) = vel.as_mut() {
@@ -2880,7 +2900,7 @@ pub fn player_ability(
         Query<(Entity, &WallCell, &Pos), With<WallTile>>,
         Query<Entity, With<Ally>>,
         Query<&SnareSeed>,
-        Query<Entity, (With<Tangle>, Without<Player>)>,
+        Query<(Entity, &Pos), (With<Tangle>, Without<Player>)>,
         Query<&mut WeaponVisual>,
     )>,
     mut enemies: Query<(Entity, &Pos, &mut Health, &Enemy), (With<Enemy>, Without<Player>)>,
@@ -2933,15 +2953,16 @@ pub fn player_ability(
         {
             let from = ppos.0;
             let dir = aim.0;
+            // GML `scrControlAutoSnare.gml:8-11`: `collision_line` from the
+            // player out to `(213cos, 120sin)` along the aim, keeping the
+            // FIRST enemy whose own mask the segment touches.
+            let reach = AUTO_SNARE_REACH * dir;
             let mut victim: Option<(glam::Vec2, f32)> = None;
             for (_, epos, _, _) in &enemies {
-                let to = epos.0 - from;
-                let along = to.dot(dir);
-                if along < 0.0 || along > 213.0 {
-                    continue;
-                }
-                let side = (to - dir * along).length();
-                if side > 12.0 {
+                // No `Hitbox` on this query, so use the same reach the manual
+                // snare ray uses and let the wall test do the narrowing.
+                let along = snare_ray_distance(from, reach, epos.0);
+                if along > AUTO_SNARE_HIT_RADIUS {
                     continue;
                 }
                 if victim.is_none_or(|(_, bd)| along < bd) {
@@ -2949,11 +2970,16 @@ pub fn player_ability(
                 }
             }
             if let Some((vpos, _)) = victim
+                && !gml_overlaps_tangle(&walls_and_allies.p3(), vpos, 23.0)
                 && !walls_block_snare(walls_and_allies.p0(), from, vpos)
             {
                 let snapped = (vpos - from).normalize_or_zero();
                 aim.0 = snapped;
-                let live_tangles: Vec<Entity> = walls_and_allies.p3().iter().collect();
+                let live_tangles: Vec<(Entity, Vec2)> = walls_and_allies
+                    .p3()
+                    .iter()
+                    .map(|(e, p)| (e, p.0))
+                    .collect();
                 plant_snare(
                     &mut commands,
                     &mut cues,
@@ -2998,7 +3024,7 @@ pub fn player_ability(
         aim_v: glam::Vec2,
         player_e: Entity,
         player: &Player,
-        live_tangles: &[Entity],
+        live_tangles: &[(Entity, Vec2)],
     ) {
         let trapper = matches!(player.ultra, Some(UltraMutationId::PlantTrapper));
         spawn_snare_seed(
@@ -3010,9 +3036,45 @@ pub fn player_ability(
             player.throne_butt,
             trapper,
         );
-        for tangle in live_tangles {
+        // GML `Tangle/Destroy_0.gml:1` puffs four dust motes per removed snare.
+        for (tangle, tpos) in live_tangles {
+            crate::effects::spawn_burst(
+                commands,
+                &mut rand::rng(),
+                *tpos,
+                4,
+                [0.6, 0.55, 0.5, 1.0],
+                (20.0, 60.0),
+            );
             commands.entity(*tangle).despawn();
         }
+    }
+
+    /// GML `scrControlAutoSnare.gml:8` probes `426 / 2` px along the aim.
+    const AUTO_SNARE_REACH: f32 = 213.0;
+
+    /// Stand-in for the enemy mask `collision_line` tests against on the shared
+    /// `(Entity, &Pos, &mut Health, &Enemy)` query.
+    const AUTO_SNARE_HIT_RADIUS: f32 = 8.0;
+
+    /// GML `scrControlAutoSnare.gml:17-19`: `place_meeting(x, y, Tangle)`, an
+    /// AABB overlap against the snare's 46x32 mask half-extents.
+    pub fn gml_overlaps_tangle(
+        tangles: &Query<(Entity, &Pos), (With<Tangle>, Without<Player>)>,
+        at: Vec2,
+        half_x: f32,
+    ) -> bool {
+        tangles
+            .iter()
+            .any(|(_, p)| (at.x - p.0.x).abs() <= half_x && (at.y - p.0.y).abs() <= 16.0)
+    }
+
+    /// Perpendicular distance from `point` to the `from`..`from + reach` segment,
+    /// i.e. what `collision_line` measures against the target's own mask.
+    pub fn snare_ray_distance(from: Vec2, reach: Vec2, point: Vec2) -> f32 {
+        let len2 = reach.length_squared().max(1e-6);
+        let t = ((point - from).dot(reach) / len2).clamp(0.0, 1.0);
+        (point - (from + reach * t)).length()
     }
 
     /// GML wall segment test for the auto-snare ray (`collision_line`
@@ -3143,7 +3205,11 @@ pub fn player_ability(
             if seed_in_flight {
                 return;
             }
-            let live_tangles: Vec<Entity> = walls_and_allies.p3().iter().collect();
+            let live_tangles: Vec<(Entity, Vec2)> = walls_and_allies
+                .p3()
+                .iter()
+                .map(|(e, p)| (e, p.0))
+                .collect();
             plant_snare(
                 &mut commands,
                 &mut cues,
