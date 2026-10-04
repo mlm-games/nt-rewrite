@@ -619,8 +619,6 @@ pub struct Player {
     pub last_wish_used: bool,
     pub mutation_picks_owed: u32,
     pub ultra_pick_owed: bool,
-    pub chain_explosions: bool,
-    pub shield_on_hit: bool,
     pub ability: AbilityKind,
     pub ability_cooldown: Timer,
     pub rogue_ammo: u8,
@@ -699,8 +697,6 @@ impl Default for Player {
             last_wish_used: false,
             mutation_picks_owed: 0,
             ultra_pick_owed: false,
-            chain_explosions: false,
-            shield_on_hit: false,
             ability: AbilityKind::Flip,
             ability_cooldown: Timer::from_seconds(0.0, TimerMode::Once),
             rogue_ammo: 1,
@@ -887,7 +883,6 @@ pub struct CrownState {
     pub crown: CrownKind,
     pub life_timer: Timer,
     pub love_timer: Timer,
-    pub protection_ready: bool,
     pub destiny_ready: bool,
     pub curses_timer: Timer,
 }
@@ -907,7 +902,6 @@ impl CrownState {
             crown,
             life_timer,
             love_timer,
-            protection_ready: true,
             destiny_ready: true,
             curses_timer,
         }

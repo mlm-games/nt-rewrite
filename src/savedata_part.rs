@@ -887,11 +887,7 @@ pub fn try_unlock_skeleton(save: &mut SaveData) -> bool {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PassiveKind {
     None,
-    ShieldOnHit,
-    ChainExplosions,
-    FastReload,
     Headless,
-    FreeAmmo,
 }
 
 pub struct CharacterDef {
@@ -978,7 +974,7 @@ pub fn character_def(id: crate::data::RaceId) -> CharacterDef {
             speed_mult: 1.0,
             pickup_range: 95.0,
             ability: crate::data::AbilityKind::Shield,
-            passive: PassiveKind::ShieldOnHit,
+            passive: PassiveKind::None,
             sprite: "images/sprMutant2Idle.png",
             walk_sprite: "images/sprMutant2Walk.png",
         },
@@ -1000,7 +996,7 @@ pub fn character_def(id: crate::data::RaceId) -> CharacterDef {
             speed_mult: 1.0,
             pickup_range: 95.0,
             ability: crate::data::AbilityKind::Detonate,
-            passive: PassiveKind::ChainExplosions,
+            passive: PassiveKind::None,
             sprite: "images/sprMutant4Idle.png",
             walk_sprite: "images/sprMutant4Walk.png",
         },
@@ -1033,7 +1029,7 @@ pub fn character_def(id: crate::data::RaceId) -> CharacterDef {
             speed_mult: 1.0,
             pickup_range: 95.0,
             ability: crate::data::AbilityKind::GetLoaded,
-            passive: PassiveKind::FastReload,
+            passive: PassiveKind::None,
             sprite: "images/sprMutant7Idle.png",
             walk_sprite: "images/sprMutant7Walk.png",
         },
@@ -1045,7 +1041,7 @@ pub fn character_def(id: crate::data::RaceId) -> CharacterDef {
             speed_mult: 1.0,
             pickup_range: 95.0,
             ability: crate::data::AbilityKind::EatWeapon,
-            passive: PassiveKind::FreeAmmo,
+            passive: PassiveKind::None,
             sprite: "images/sprMutant8Idle.png",
             walk_sprite: "images/sprMutant8Walk.png",
         },

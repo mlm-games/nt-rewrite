@@ -113,8 +113,6 @@ pub fn resolve_player_revives(
                 let sk = crate::savedata_part::character_def(RaceId::Skeleton);
                 race_state.race = RaceId::Skeleton;
                 player.ability = sk.ability;
-                player.chain_explosions = false;
-                player.shield_on_hit = false;
                 player.headless_ready = false;
 
                 phealth.max = sk.max_hp.max(2);

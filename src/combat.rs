@@ -26,8 +26,8 @@ use crate::comps_b::{
     Beam, BigDogMissileState, ChestKind, Corpse, CorpseCollision, CustomExplosion, DeploysSentry,
     Dying, Enemy, EnemyBrain, ExplosionVisual, GmlImage, HazardCloud, HurtAnim, LoopTransition,
     NativeAngle, NativeDepth, NativeExplosionKind, Pickup, PickupLifetime, PlasmaBurst, Portal,
-    PortalPhase, PortalShock, PortalState, Prop, PropNestMarkers, PropSprites,
-    SecretEntrance, SentryTurret, Shield, SpawnsWeaponPickup, StaticFx, ThroneRoomState, TrapFire,
+    PortalPhase, PortalShock, PortalState, Prop, PropNestMarkers, PropSprites, SecretEntrance,
+    SentryTurret, Shield, SpawnsWeaponPickup, StaticFx, ThroneRoomState, TrapFire,
 };
 use crate::data::{AreaId, CrownKind, EnemyKind, HazardKind, MutationId, RaceId, WeaponId};
 use crate::effects::{
@@ -279,11 +279,6 @@ pub fn contact_damage(
             (80.0, 220.0),
         );
 
-        if player.shield_on_hit {
-            commands.entity(player_e).insert(Shield {
-                timer: GTimer::from_seconds(0.7, TimerMode::Once),
-            });
-        }
         break;
     }
 
@@ -1585,22 +1580,6 @@ pub fn resolve_death_drops(
                 );
             }
         } else {
-            if player.chain_explosions {
-                commands.spawn((
-                    GameCleanup,
-                    LevelCleanup,
-                    Explosion {
-                        timer: GTimer::from_seconds(0.05, TimerMode::Once),
-                        radius: 100.0,
-                        damage: 3,
-                        team: Team::Player,
-                        hits_player: false,
-                        source: None,
-                    },
-                    Pos(pos),
-                ));
-            }
-
             let melting_bonus = if race_state.race == RaceId::Melting {
                 1
             } else {
@@ -4484,15 +4463,8 @@ pub fn apply_explosions(
                 }
             }
 
-            for (
-                prop_e,
-                center,
-                legacy_explosive,
-                death_effect,
-                sprites,
-                entrance,
-                is_snowman,
-            ) in destroyed_props
+            for (prop_e, center, legacy_explosive, death_effect, sprites, entrance, is_snowman) in
+                destroyed_props
             {
                 if let Some(ps) = sprites {
                     spawn_prop_corpse(&mut commands, &catalog, center, &ps);

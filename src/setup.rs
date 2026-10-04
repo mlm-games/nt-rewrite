@@ -314,17 +314,10 @@ pub struct PlayerBundle {
 pub fn build_player_bundle(race: RaceId, loadout: &RunLoadout) -> PlayerBundle {
     let def = character_def(race);
 
-    let fire_rate_mult = if def.passive == PassiveKind::FastReload {
-        0.8
-    } else {
-        1.0
-    };
-
     let mut player = Player {
         speed: PLAYER_BASE_SPEED,
         speed_mult: def.speed_mult,
         pickup_range: def.pickup_range,
-        fire_rate_mult,
 
         // GML `scrPlayerRaceChange`: Steroids `accuracy = 1.8`, Skeleton
         // `accuracy = 1.5` (spread_mult is the port's accuracy axis).
@@ -335,11 +328,8 @@ pub fn build_player_bundle(race: RaceId, loadout: &RunLoadout) -> PlayerBundle {
         } else {
             1.0
         },
-        chain_explosions: def.passive == PassiveKind::ChainExplosions,
-        shield_on_hit: def.passive == PassiveKind::ShieldOnHit,
         ability: def.ability,
         headless_ready: def.passive == PassiveKind::Headless,
-        free_ammo: def.passive == PassiveKind::FreeAmmo,
         crown: loadout.crown,
         ..Default::default()
     };

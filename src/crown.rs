@@ -17,7 +17,7 @@ use crate::comps_a::{
 };
 use crate::comps_b::{
     Ally, ChestKind, CrownObject, CrownPedestal, Enemy, Pickup, PickupKind, Prop, PropHpTracker,
-    PropSprites, PropTier, RadChestContainer, Shield,
+    PropSprites, PropTier, RadChestContainer,
 };
 use crate::data::{AmmoKind, CrownKind, WeaponId, ammo_pickup_amount};
 use crate::enemy_data::enemy_def;
@@ -204,9 +204,7 @@ pub fn apply_crown_to_spawn(
             player.drop_mult += 0.4;
         }
 
-        CrownKind::Protection => {
-            player.shield_on_hit = true;
-        }
+        CrownKind::Protection => {}
     }
 }
 
@@ -226,39 +224,6 @@ pub fn tick_crown_life(
         if state.life_timer.just_finished() && health.hp < health.max {
             health.hp = (health.hp + 1).min(health.max);
         }
-    }
-}
-
-/// Crown of Protection: dropping to half HP or below grants a brief
-/// shield (re-arms once healed above half).
-pub fn tick_crown_protection(
-    mut commands: Commands,
-    mut q: Query<(Entity, &mut CrownState, &mut Health, Option<&Shield>), With<Player>>,
-) {
-    for (entity, mut state, mut health, shield) in &mut q {
-        if state.crown != CrownKind::Protection {
-            continue;
-        }
-
-        if health.hp > health.max / 2 {
-            state.protection_ready = true;
-            continue;
-        }
-
-        if !state.protection_ready {
-            continue;
-        }
-
-        if shield.is_some() {
-            continue;
-        }
-
-        state.protection_ready = false;
-        health.invuln = GTimer::from_seconds(0.75, TimerMode::Once);
-
-        commands.entity(entity).insert(Shield {
-            timer: GTimer::from_seconds(1.25, TimerMode::Once),
-        });
     }
 }
 

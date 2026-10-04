@@ -432,7 +432,7 @@ pub fn tick_player_timers(
     )>,
 ) {
     let dt = time.delta_secs;
-    for (mut player, mut health, mut inv, race, shield, telek) in &mut q {
+    for (mut player, mut health, mut inv, _race, shield, telek) in &mut q {
         player.ability_cooldown.tick(dt);
         health.invuln.tick(dt);
         // GML `Step_0:19` + `:605-609`: `swapanim` and
@@ -443,15 +443,7 @@ pub fn tick_player_timers(
         if player.warrant > 0.0 {
             player.warrant = (player.warrant - dt * 30.0).max(0.0);
             if player.warrant <= 0.0 {
-                let base = race.is_some_and(|r| r.race == crate::data::RaceId::Robot)
-                    || matches!(
-                        player.ultra,
-                        Some(
-                            crate::data::UltraMutationId::RobotRefinedTaste
-                                | crate::data::UltraMutationId::RobotRegurgitate
-                        )
-                    );
-                player.free_ammo = base;
+                player.free_ammo = false;
             }
         }
         if let Some(mut s) = shield {

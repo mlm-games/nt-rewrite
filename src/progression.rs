@@ -975,7 +975,7 @@ pub fn apply_mutation(
     cues: &mut Queue<AudioCue>,
     id: MutationId,
 ) {
-    let Ok((mut player, mut health, mut inv, race_state)) = player_q.single_mut() else {
+    let Ok((mut player, mut health, mut inv, _race_state)) = player_q.single_mut() else {
         return;
     };
 
@@ -1097,7 +1097,6 @@ pub fn apply_mutation(
         }
         MutationId::ThroneButt => {
             player.throne_butt = true;
-            apply_throne_butt_immediate_bonus(&mut player, &mut health, &mut inv, race_state.race);
         }
         MutationId::Patience => {
             player.patience_used = true;
@@ -1117,76 +1116,6 @@ pub fn apply_mutation(
         volume: 1.0,
         variance: 0.0,
     });
-}
-
-/// Throne Butt's immediate per-race bonus (bevy verbatim).
-pub fn apply_throne_butt_immediate_bonus(
-    player: &mut Player,
-    health: &mut Health,
-    inv: &mut Inventory,
-    race: RaceId,
-) {
-    player.ultra_ability_mult *= 1.15;
-
-    match race {
-        RaceId::Fish => {
-            player.speed_mult *= 1.05;
-        }
-        RaceId::Crystal => {
-            health.max += 2;
-            health.hp += 2;
-        }
-        RaceId::Eyes => {
-            player.pickup_range += 45.0;
-        }
-        RaceId::Melting => {
-            player.chain_explosions = true;
-        }
-        RaceId::Plant => {
-            player.speed_mult *= 1.08;
-        }
-        RaceId::Venuz => {
-            player.fire_rate_mult *= 0.92;
-        }
-        RaceId::Steroids => {
-            for kind in [
-                AmmoKind::Bullets,
-                AmmoKind::Shells,
-                AmmoKind::Bolts,
-                AmmoKind::Explosives,
-                AmmoKind::Energy,
-            ] {
-                *inv.ammo_mut(kind) += ammo_pickup_amount(kind);
-            }
-        }
-        RaceId::Robot => {
-            player.free_ammo = true;
-        }
-        RaceId::Chicken => {
-            player.headless_ready = true;
-        }
-        RaceId::Rebel => {
-            health.hp = (health.hp + 1).min(health.max);
-        }
-        RaceId::Horror => {
-            player.lucky_shot = true;
-        }
-        RaceId::Rogue => {
-            player.boiling_veins = true;
-        }
-        RaceId::BigDog => {
-            player.ultra_damage_mult *= 1.1;
-        }
-        RaceId::Skeleton => {
-            player.bloodlust = true;
-        }
-        RaceId::Frog => {
-            player.gamma_guts = true;
-        }
-        RaceId::Cuz | RaceId::Random => {
-            player.fire_rate_mult *= 0.95;
-        }
-    }
 }
 
 /// Apply an ultra mutation's stat effects (bevy verbatim; same
@@ -1238,120 +1167,48 @@ pub fn apply_ultra_mutation(
         UltraMutationId::CrystalFortress => {
             health.max += 6;
             health.hp += 6;
-            player.ultra_ability_mult *= 1.4;
         }
-        UltraMutationId::CrystalJuggernaut => {
-            health.max += 3;
-            health.hp += 3;
-            player.speed_mult *= 1.18;
-        }
+        UltraMutationId::CrystalJuggernaut => {}
 
-        UltraMutationId::EyesMonsterStyle => {
-            player.pickup_range += 160.0;
-            player.ultra_ability_mult *= 1.45;
-        }
-        UltraMutationId::EyesProjectileStyle => {
-            player.ultra_ability_mult *= 1.2;
-            player.euphoria = true;
-        }
+        UltraMutationId::EyesMonsterStyle => {}
+        UltraMutationId::EyesProjectileStyle => {}
 
-        UltraMutationId::MeltingBrainCapacity => {
-            player.chain_explosions = true;
-            player.ultra_ability_mult *= 1.6;
-        }
+        UltraMutationId::MeltingBrainCapacity => {}
         UltraMutationId::MeltingDetachment => {
-            health.max += 2;
-            health.hp += 2;
-            player.strong_spirit_ready = true;
+            health.max = (health.max + 1) / 2;
+            health.hp = health.max.max(1);
+            player.mutation_picks_owed += 2;
         }
 
-        UltraMutationId::PlantTrapper => {
-            player.ultra_ability_mult *= 1.6;
-            player.speed_mult *= 1.06;
-        }
-        UltraMutationId::PlantKiller => {
-            player.speed_mult *= 1.18;
-            player.fire_rate_mult *= 0.85;
-        }
+        UltraMutationId::PlantTrapper => {}
+        UltraMutationId::PlantKiller => {}
 
-        UltraMutationId::VenuzBack2Bizniz => {
-            player.ultra_ability_mult *= 1.5;
-            player.fire_rate_mult *= 0.9;
-        }
+        UltraMutationId::VenuzBack2Bizniz => {}
         UltraMutationId::VenuzGunGod => {
-            player.fire_rate_mult *= 0.72;
-            player.spread_mult *= 0.7;
+            player.fire_rate_mult *= 5.0 / 7.0;
         }
 
-        UltraMutationId::SteroidsAmbidextrous => {
-            player.fire_rate_mult *= 0.7;
-            player.knockback_mult *= 0.85;
-        }
-        UltraMutationId::SteroidsGetArmed => {
-            player.ultra_ability_mult *= 1.6;
-            for kind in [
-                AmmoKind::Bullets,
-                AmmoKind::Shells,
-                AmmoKind::Bolts,
-                AmmoKind::Explosives,
-                AmmoKind::Energy,
-            ] {
-                *inv.ammo_mut(kind) = player.ammo_cap(kind);
-            }
-        }
+        UltraMutationId::SteroidsAmbidextrous => {}
+        UltraMutationId::SteroidsGetArmed => {}
 
-        UltraMutationId::RobotRefinedTaste => {
-            player.free_ammo = true;
-            player.medkit_mult *= 1.5;
-        }
-        UltraMutationId::RobotRegurgitate => {
-            player.free_ammo = true;
-            player.drop_mult += 0.5;
-            player.ultra_ability_mult *= 1.35;
-        }
+        UltraMutationId::RobotRefinedTaste => {}
+        UltraMutationId::RobotRegurgitate => {}
 
-        UltraMutationId::ChickenHarderToKill => {
-            player.headless_ready = true;
-            health.max += 2;
-            health.hp += 2;
-        }
-        UltraMutationId::ChickenDetermination => {
-            player.ultra_damage_mult *= 1.25;
-            player.speed_mult *= 1.1;
-        }
+        UltraMutationId::ChickenHarderToKill => {}
+        UltraMutationId::ChickenDetermination => {}
 
-        UltraMutationId::RebelPersonalGuard => {
-            player.ultra_ability_mult *= 1.45;
-            health.max += 2;
-            health.hp += 2;
-        }
-        UltraMutationId::RebelRiot => {
-            player.ultra_ability_mult *= 1.8;
-            player.fire_rate_mult *= 0.9;
-        }
+        UltraMutationId::RebelPersonalGuard => {}
+        UltraMutationId::RebelRiot => {}
 
-        UltraMutationId::HorrorStalker => {
-            player.ultra_ability_mult *= 1.6;
-            player.laser_brain = true;
-        }
-        UltraMutationId::HorrorAnomaly => {
-            player.pickup_range += 80.0;
-            player.lucky_shot = true;
-            player.laser_brain = true;
-        }
+        UltraMutationId::HorrorStalker => {}
+        UltraMutationId::HorrorAnomaly => {}
         UltraMutationId::HorrorMeltdown => {
             player.next_level_rads = player.next_level_rads.saturating_mul(2);
         }
 
-        UltraMutationId::RogueSuperBlastArmor => {
-            player.boiling_veins = true;
-            player.veins_threshold = 6;
-            health.max += 2;
-            health.hp += 2;
-        }
+        UltraMutationId::RogueSuperBlastArmor => {}
         UltraMutationId::RoguePortalStrike => {
-            player.ultra_ability_mult *= 1.7;
-            player.fire_rate_mult *= 0.9;
+            player.rogue_ammo_max += 3;
         }
 
         UltraMutationId::BigDogHeavyArtillery => {
@@ -1993,13 +1850,7 @@ pub fn tick_portal_shock(
                 continue;
             }
             prop.hp = 0;
-            killed.push((
-                prop_e,
-                ppos,
-                prop.explosive,
-                death.copied(),
-                ps.copied(),
-            ));
+            killed.push((prop_e, ppos, prop.explosive, death.copied(), ps.copied()));
         }
         for (prop_e, ppos, explosive, death, ps) in killed {
             if let Some(sprites) = ps {
