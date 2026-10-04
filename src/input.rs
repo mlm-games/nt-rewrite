@@ -1061,9 +1061,8 @@ pub fn sample_touch_full(
         best_pressed.or(best_held).map(|(i, _)| i)
     };
 
-    // Fixed buttons first (they steal touches from sticks):
-    // ability outer corner, cycle inner corner, act, swap, active,
-    // attack button in splitfire.
+    // Fixed buttons first (they steal touches from sticks): act, swap,
+    // active, attack button in splitfire.
     let mut held: Vec<i64> = Vec::new();
     if move_stick.touch >= 0 {
         held.push(move_stick.touch);
@@ -1078,19 +1077,6 @@ pub fn sample_touch_full(
     let lifted: Vec<i64> = std::mem::take(&mut output.touch_lifted);
     let gone = |id: i64| lifted.contains(&id);
 
-    // Ability corner (outer top-right): press edge only. The in-run pause button
-    // owns its own circle at `(vw - 24, 16)`, checked by the shell, so exclude
-    // it here - in GML the two never overlap (`ButtonActive` claims within 25 of
-    // `(vw - 64, 72)`, 7 px clear of the pause disc) and a pause tap must not
-    // double as an ability.
-    let on_pause_button = |c: &TouchContact| pause_button_hit(c.start.x, c.start.y, width);
-    if contacts.iter().any(|c| {
-        c.just_pressed && c.start.y < 96.0 && c.start.x >= width - 96.0 && !on_pause_button(c)
-    }) {
-        output.ability_pressed = true;
-    }
-    // Cycle corner (inner top-right) folds into the swap-button
-    // claim below (same GML gesture).
     // Act button (`ButtonAct/Other_10`): press_pick on press edge.
     let act_idx = nearest_free(act_home, btn_capture, &held);
     if let Some(i) = act_idx {
@@ -1102,14 +1088,9 @@ pub fn sample_touch_full(
     // Swap button (`ButtonSwap/Other_10`): press edge only. GML swaps on
     // `press_swap` (`Player/Step_0:22`); `release_swap` feeds the disabled
     // wepstick handoff, never the swap - so the lift latch must NOT cycle here
-    // (one tap = one swap). The top-right cycle corner counts as a
-    // swap-button tap (same `get_nearest_touch(rad)` claim in GML: corner tap
-    // and button claim are one gesture).
-    let swap_idx = nearest_free(swap_home, btn_capture, &held).or_else(|| {
-        contacts.iter().position(|c| {
-            c.just_pressed && c.start.y < 96.0 && c.start.x >= width - 192.0 && !on_pause_button(c)
-        })
-    });
+    // (one tap = one swap). `get_nearest_touch` claims only touches within
+    // `rad` of `(64, 72)`, so there is no corner region for swap.
+    let swap_idx = nearest_free(swap_home, btn_capture, &held);
     if let Some(i) = swap_idx {
         held.push(contacts[i].id as i64);
         if contacts[i].just_pressed {
