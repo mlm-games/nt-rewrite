@@ -2054,7 +2054,7 @@ pub fn spawn_level(
     }
     if let Some(kind) = plan.boss {
         match kind {
-            EnemyKind::BigBandit | EnemyKind::BigBanditLoop => {
+            EnemyKind::BigBandit => {
                 // GML `WantBoss/Step_0:9-24`: treshhold = subarea == maxsubarea
                 // ? 0.9 : 0.98; if (surviving - radMaggot) > enemies * treshhold
                 // then alarm[0] = 120 at maxsubarea, else if !losthope &&
@@ -2086,18 +2086,46 @@ pub fn spawn_level(
                     ));
                 }
             }
-            EnemyKind::BigDog | EnemyKind::BigDogLoop => {
-                spawn_enemy_at(
-                    commands,
-                    catalog,
-                    kind,
-                    glam::Vec2::new(-280.0, 180.0),
-                    difficulty,
-                    false,
-                    false,
-                    run.loop_count,
-                    spawn_context,
-                );
+            EnemyKind::BigDog => {
+                // GML `scrPopulate.gml:325-340` plants a `BecomeScrapBoss`
+                // sleeper rather than the boss; it only stands up once the
+                // player has stared at it and closed in.
+                let cell = crate::worldgen::scrap_boss_sleeper_cell(&plan.floor_cells);
+                let at = cell
+                    .map(|c| mask.cell_center(c))
+                    .unwrap_or(glam::Vec2::new(-280.0, 180.0));
+                let mut ec = commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    Prop {
+                        // GML `BecomeScrapBoss/Create_0.gml:4-6` `size = 3`,
+                        // `max_hp = 30`.
+                        size: glam::Vec2::new(96.0, 96.0),
+                        hp: 30,
+                        destructible: true,
+                        explosive: false,
+                    },
+                    PropTier(3),
+                    PropHpTracker { last_hp: 30 },
+                    NextHurt::default(),
+                    crate::comps_b::PropSprites {
+                        idle: "images/sprScrapBossSleep.png",
+                        hurt: "images/sprScrapBossSleepHurt.png",
+                        dead: "images/sprScrapBossDead.png",
+                        flip_x: false,
+                    },
+                    crate::comps_b::SpecialPropDeath::BecomeScrapBoss,
+                    crate::comps_b::DormantScrapBoss::default(),
+                    Pos(at),
+                ));
+                // GML `Create_0.gml:7` `image_speed = 0.4`.
+                if let Some(def) = catalog.def("images/sprScrapBossSleep.png") {
+                    ec.insert(SpriteAnim::with_image_speed(
+                        "images/sprScrapBossSleep.png",
+                        def,
+                        0.4,
+                    ));
+                }
             }
             other => {
                 let pos = match other {

@@ -203,11 +203,7 @@ fn boss_wall_law(
     let busy = loops <= 3;
     match kind {
         // Handled inside the handler (its own `Collision_Wall.gml`).
-        EnemyKind::BigBandit
-        | EnemyKind::BigBanditLoop
-        | EnemyKind::BigDog
-        | EnemyKind::BigDogLoop
-        | EnemyKind::Captain => (),
+        EnemyKind::BigBandit | EnemyKind::BigDog | EnemyKind::Captain => (),
         // `Nothing/Collision_Wall.gml:4-5` and `TechnoMancer/Collision_Wall.gml:1`.
         EnemyKind::Throne | EnemyKind::Technomancer => {
             crate::walls::queue_wall_breaks_in_radius(commands, walls, *pos, radius + 8.0);
@@ -216,10 +212,7 @@ fn boss_wall_law(
             }
         }
         // Inherits `enemy/Collision_Wall.gml`: bounce plus the friction slide.
-        EnemyKind::ThroneII
-        | EnemyKind::LilHunter
-        | EnemyKind::LilHunterLoop
-        | EnemyKind::YvBoss => {
+        EnemyKind::ThroneII | EnemyKind::LilHunter | EnemyKind::YvBoss => {
             if boss_bounce_solid(pos, vel, radius, props, mask) && busy {
                 boss_friction_slide(*pos, vel, radius, props, mask, 0.4);
             }
@@ -586,7 +579,7 @@ pub fn boss_ai(
         brain.melee.tick(dt);
 
         let fired = match kind {
-            EnemyKind::BigBandit | EnemyKind::BigBanditLoop => big_bandit_ai(
+            EnemyKind::BigBandit => big_bandit_ai(
                 &mut commands,
                 &mut trauma,
                 entity,
@@ -607,7 +600,7 @@ pub fn boss_ai(
                 &mask,
                 run.loop_count,
             ),
-            EnemyKind::BigDog | EnemyKind::BigDogLoop => big_dog_ai(
+            EnemyKind::BigDog => big_dog_ai(
                 &mut commands,
                 &mut trauma,
                 entity,
@@ -626,7 +619,7 @@ pub fn boss_ai(
                 run.loop_count,
                 missile_count,
             ),
-            EnemyKind::LilHunter | EnemyKind::LilHunterLoop => lil_hunter_ai(
+            EnemyKind::LilHunter => lil_hunter_ai(
                 &mut commands,
                 &mut trauma,
                 &mut toast,
@@ -1085,8 +1078,15 @@ fn big_dog_ai(
 
     let to_player = player_pos - epos;
 
+    // GML only ever loads `alarm[1]` from the spin branch of `Alarm_0`, so
+    // the decide tick has to disarm it explicitly; `BossBrain` starts it as a
+    // free-running repeat.
+    if boss.attack_timer.just_finished() {
+        boss.special_timer = GTimer::disarmed();
+    }
+
     // GML `Alarm_1` (spin fire).
-    if boss.special_timer.just_finished() {
+    if boss.special_timer.is_finished() && boss.special_timer.just_finished() {
         if brain.ammo > 0 {
             brain.ammo -= 1;
             // Drift toward the target fanned by the spin direction.
@@ -1126,8 +1126,10 @@ fn big_dog_ai(
         if rng.random::<f32>() < 1.0 / 3.0 {
             // Spin attack.
             boss.special_timer = GTimer::from_seconds(15.0 / 30.0, TimerMode::Once);
+            // GML keeps `ammo` real: `10 + 10 * (1 - hp / max_hp)` spent one
+            // per `Alarm_1`, so the volley is the ceiling of that value.
             let frac = (health.hp as f32 / health.max.max(1) as f32).clamp(0.0, 1.0);
-            brain.ammo = (10.0 + 10.0 * (1.0 - frac)).round() as u8;
+            brain.ammo = (10.0 + 10.0 * (1.0 - frac)).ceil() as u8;
             boss.aux = if rng.random_bool(0.5) { 1.0 } else { -1.0 };
             brain.walk = 0.0;
             vel.0 = glam::Vec2::ZERO;
@@ -1145,7 +1147,7 @@ fn big_dog_ai(
                 }
                 boss.attack_timer = GTimer::from_seconds(10.0 / 30.0, TimerMode::Once);
             } else {
-                brain.walk = rng.random_range(20.0..=30.0);
+                brain.walk = rng.random_range(20.0..30.0);
                 let head = glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU));
                 gml_motion_add_clamp(&mut vel.0, head, 1.0, 3.0, dt);
                 boss.target = head;
@@ -1170,8 +1172,9 @@ fn big_dog_ai(
             brain.walk = 0.0;
         }
     }
-    if brain.ammo > 0 && vel.0.length_squared() > 0.001 {
-        vel.0 = vel.0.normalize() * 30.0;
+    // GML `Other_10:32`: `speed = 1` overwrites whatever the walk law built.
+    if brain.ammo > 0 {
+        vel.0 = vel.0.normalize_or_zero() * 30.0;
     }
     move_bounce_solid(
         &mut pos.0,
@@ -1488,10 +1491,10 @@ pub fn lil_hunter_fire_ring(commands: &mut Commands, at: glam::Vec2) {
 /// without a GML taunt return `None`.
 pub fn taunt_cue_name(kind: EnemyKind) -> Option<&'static str> {
     match kind {
-        EnemyKind::BigBandit | EnemyKind::BigBanditLoop => Some("sndBigBanditTaunt"),
-        EnemyKind::BigDog | EnemyKind::BigDogLoop => Some("sndBigDogTaunt"),
+        EnemyKind::BigBandit => Some("sndBigBanditTaunt"),
+        EnemyKind::BigDog => Some("sndBigDogTaunt"),
         EnemyKind::Hyper => Some("sndHyperCrystalTaunt"),
-        EnemyKind::LilHunter | EnemyKind::LilHunterLoop => Some("sndLilHunterTaunt"),
+        EnemyKind::LilHunter => Some("sndLilHunterTaunt"),
         EnemyKind::Technomancer => Some("sndLastTaunt"),
         EnemyKind::YvBoss => Some("sndGunGodTaunt"),
         EnemyKind::Throne => Some("sndNothingTaunt"),

@@ -892,13 +892,13 @@ pub fn enemy_projectile_path(kind: EnemyKind) -> &'static str {
 fn enemy_gun_art(kind: EnemyKind) -> Option<&'static str> {
     match kind {
         EnemyKind::Bandit | EnemyKind::SnowBandit => Some("images/sprBanditGun.png"),
-        EnemyKind::BigBandit | EnemyKind::BigBanditLoop => Some("images/sprBanditBossGun.png"),
+        EnemyKind::BigBandit => Some("images/sprBanditBossGun.png"),
         EnemyKind::IdpdGrunt => Some("images/sprPopoGun.png"),
         EnemyKind::IdpdElite => Some("images/sprElitePopoGun.png"),
         EnemyKind::JungleBandit => Some("images/sprJungleBanditGun.png"),
         EnemyKind::Sniper => Some("images/sprSniperGun.png"),
         EnemyKind::MeleeBandit => Some("images/sprPipe.png"),
-        EnemyKind::LilHunter | EnemyKind::LilHunterLoop => Some("images/sprLilHunterGun.png"),
+        EnemyKind::LilHunter => Some("images/sprLilHunterGun.png"),
         EnemyKind::Molefish => Some("images/sprMolefishGun.png"),
         EnemyKind::Molesarge => Some("images/sprMolesargeGun.png"),
         EnemyKind::Raven => Some("images/sprRavenGun.png"),
@@ -8233,10 +8233,10 @@ fn enemy_shadow(kind: EnemyKind) -> Option<ShadowSpec> {
         EnemyKind::Maggot | EnemyKind::RadMaggot => ShadowSpec::new("images/shd16.png", 0.0, 0.0),
         EnemyKind::BigMaggot => ShadowSpec::new("images/shd32.png", 0.0, 0.0),
         EnemyKind::FiredMaggot => return None,
-        EnemyKind::BigBandit | EnemyKind::BigBanditLoop => {
+        EnemyKind::BigBandit => {
             ShadowSpec::new("images/shd32.png", 0.0, 4.0)
         }
-        EnemyKind::BigDog | EnemyKind::BigDogLoop => ShadowSpec::new("images/shd96.png", 0.0, 0.0),
+        EnemyKind::BigDog => ShadowSpec::new("images/shd96.png", 0.0, 0.0),
         EnemyKind::Hyper => ShadowSpec::new("images/shd64.png", 0.0, 16.0),
         EnemyKind::IdpdVan => ShadowSpec::new("images/shd96.png", 0.0, -8.0),
         EnemyKind::ProtoStatue => ShadowSpec::new("images/shd64.png", 0.0, 9.0),

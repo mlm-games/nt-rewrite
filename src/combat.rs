@@ -747,26 +747,38 @@ pub fn resolve_enemy_deaths(
                     );
                 }
             }
-            EnemyKind::BigDog | EnemyKind::BigDogLoop => {
-                // GML `ScrapBoss/Destroy_0`: `sleep(50)` plus
-                // `BigDogExplo` (scattered explosions + ground flames).
-                hitstop.trigger(0.05, 0.05);
+            EnemyKind::ScrapBossMissile => {
+                // GML `ScrapBossMissile/Destroy_0:2-4`.
                 commands.spawn((
                     GameCleanup,
                     LevelCleanup,
                     Explosion {
                         timer: GTimer::from_seconds(0.05, TimerMode::Once),
-                        radius: 120.0,
-                        damage: 8,
+                        radius: 24.0,
+                        damage: 5,
                         team: Team::Enemy,
                         hits_player: true,
                         source: Some(DamageSource::enemy(e, enemy.kind)),
                     },
                     Pos(pos),
                 ));
+            }
+            EnemyKind::BigDog => {
+                // GML `ScrapBoss/Destroy_0:5-9`: `sleep(50)` and
+                // `instance_create(x, y, BigDogExplo)`, whose own `alarm[0]
+                // = 50` seeds a fifty-step explosion storm over the wreck.
+                hitstop.trigger(0.05, 0.05);
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    crate::comps_b::BigDogExplo {
+                        timer: GTimer::from_seconds(50.0 / 30.0, TimerMode::Once),
+                    },
+                    Pos(pos),
+                ));
                 trauma.add(0.3);
             }
-            EnemyKind::LilHunter | EnemyKind::LilHunterLoop => {
+            EnemyKind::LilHunter => {
                 // GML `LilHunter/Destroy_0`: `PortalClear`, an explosion,
                 // and the 80-flame ring.
                 commands.spawn((
@@ -1204,7 +1216,7 @@ pub fn resolve_enemy_deaths(
             kind: enemy.kind,
             rad_drop: enemy.rad_drop,
             // GML `LilHunter/Destroy_0`: `scrDrop(200, 0)`.
-            drop_chance: if matches!(enemy.kind, EnemyKind::LilHunter | EnemyKind::LilHunterLoop) {
+            drop_chance: if matches!(enemy.kind, EnemyKind::LilHunter) {
                 200
             } else {
                 enemy.drop_chance

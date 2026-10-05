@@ -53,13 +53,13 @@ use crate::time::{GTimer, TimerMode};
 fn scarier_spawn_hp(kind: EnemyKind, base_hp: i32, loops: u32) -> i32 {
     let l = loops as f32;
     let hp = match kind {
-        EnemyKind::BigBandit | EnemyKind::BigBanditLoop => 100.0 * (1.0 + l / 3.0),
-        EnemyKind::BigDog | EnemyKind::BigDogLoop => 300.0 * (1.0 + l / 1.2),
+        EnemyKind::BigBandit => 100.0 * (1.0 + l / 3.0),
+        EnemyKind::BigDog => 300.0 * (1.0 + l / 1.2),
         EnemyKind::Throne => 1500.0 * (1.0 + l / 3.0),
         EnemyKind::ThroneII => 600.0 * (1.0 + l / 3.0),
         EnemyKind::Hyper => 550.0 * (1.0 + l / 3.0),
         EnemyKind::Technomancer => 350.0 * (1.0 + l / 3.0),
-        EnemyKind::LilHunter | EnemyKind::LilHunterLoop => 140.0 * (1.0 + l / 3.0),
+        EnemyKind::LilHunter => 140.0 * (1.0 + l / 3.0),
         EnemyKind::FrogQueen => 490.0 * (1.0 + l / 3.0),
         EnemyKind::Captain => 1100.0 * (1.0 + l / 3.0),
         EnemyKind::ProtoStatue => 120.0,
@@ -92,15 +92,15 @@ pub fn spawn_hp(kind: EnemyKind, base_hp: i32, loops: u32) -> i32 {
     // `ceil` only where the object's own `Create_0` line uses it; GML keeps
     // `hp` a real otherwise.
     let (hp, ceil) = match kind {
-        EnemyKind::BigBandit | EnemyKind::BigBanditLoop => (100.0 * (1.0 + l / 3.0), true),
-        EnemyKind::BigDog | EnemyKind::BigDogLoop => (300.0 * (1.0 + l / 1.2), true),
+        EnemyKind::BigBandit => (100.0 * (1.0 + l / 3.0), true),
+        EnemyKind::BigDog => (300.0 * (1.0 + l / 1.2), true),
         EnemyKind::Throne => (1500.0 * (1.0 + l / 3.0), false),
         EnemyKind::ThroneII => (600.0 * (1.0 + l / 3.0), false),
         // `HyperCrystal`: `550 * ((player_count / 2) + 0.5)` -> 550 solo.
         EnemyKind::Hyper => (550.0 * (1.0 + l / 3.0), false),
         // `TechnoMancer`: `350 * ((player_count / 2) + 0.5)` -> 350 solo.
         EnemyKind::Technomancer => (350.0 * (1.0 + l / 3.0), false),
-        EnemyKind::LilHunter | EnemyKind::LilHunterLoop => (140.0 * (1.0 + l / 3.0), false),
+        EnemyKind::LilHunter => (140.0 * (1.0 + l / 3.0), false),
         EnemyKind::FrogQueen => (490.0 * (1.0 + l / 3.0), true),
         // `Last`: `1100 * (1 + loops / 3)`.
         EnemyKind::Captain => (1100.0 * (1.0 + l / 3.0), false),
@@ -265,6 +265,12 @@ fn spawn_enemy_impl(
     ec.insert(velocity);
     if kind == EnemyKind::ScrapBossMissile {
         ec.insert(ScrapBossMissileState::new(loops));
+        // GML `ScrapBossMissile/Other_10:5` pins `spr_hurt` on the first step
+        // and never lets go, so the missile spends its whole life on the hurt
+        // strip.
+        if let Some(hurt) = catalog.def("images/sprScrapBossMissileHurt.png") {
+            ec.insert(SpriteAnim::new("images/sprScrapBossMissileHurt.png", hurt));
+        }
     }
     if kind == EnemyKind::DogGuardian {
         ec.insert(DogGuardianLeap {
@@ -885,7 +891,7 @@ fn gml_speed_cap(kind: EnemyKind) -> f32 {
         // 4 and `RadMaggot/Other_10:5` at 2.5. Without these three the
         // `separate` push could drive them to its 16 px/frame clamp.
         EnemyKind::BigRat => 4.0,
-        EnemyKind::LilHunter | EnemyKind::LilHunterLoop => 4.0,
+        EnemyKind::LilHunter => 4.0,
         EnemyKind::RadMaggot => 2.5,
         // `PopoFreak/Other_10:9` caps at 4.5, not the 4 its siblings use.
         EnemyKind::PopoFreak | EnemyKind::FastRat => 4.5,
@@ -917,7 +923,7 @@ fn gml_speed_cap(kind: EnemyKind) -> f32 {
 fn gml_speed_floor(kind: EnemyKind) -> f32 {
     match kind {
         // `LilHunter/Other_10:9`, `JungleFly/Other_10:8`
-        EnemyKind::LilHunter | EnemyKind::LilHunterLoop | EnemyKind::JungleFly => 1.0,
+        EnemyKind::LilHunter | EnemyKind::JungleFly => 1.0,
         _ => 0.0,
     }
 }
@@ -949,7 +955,6 @@ fn gml_walk_law(kind: EnemyKind) -> (f32, f32) {
         // `LilHunter/Other_10:4` and `HostileHorror/Other_10:4` push at 0.8
         // as well; both used to fall to the 0.4 default arm below.
         | EnemyKind::LilHunter
-        | EnemyKind::LilHunterLoop
         | EnemyKind::HostileHorror => (0.8, gml_speed_cap_frames(kind)),
         EnemyKind::FastRat => (0.8, 4.5),
         EnemyKind::Ratking => (0.5, 2.0),
@@ -5966,17 +5971,85 @@ pub fn tick_lil_hunter_die(
     }
 }
 
-/// Verbatim `objects/ScrapBossMissile` law (`Other_10` + `Alarm_0`):
-/// homing drift 0.1 px/tick toward the target at forced speed 2 px/tick,
-/// and on loops > 0 a trail bullet (`EnemyBullet1` stats: damage 3 at own
-/// speed + 2 px/tick) every `max(1, 12 - loops)` ticks.
+/// GML `objects/BigDogExplo` (`Step_0` + `Alarm_0`): a 50-step emitter.
+/// Each step it drops an `Explosion` in a +-24 box with probability 1/8 and a
+/// `SmallExplosion` in a +-12 box with probability 1/4, both `damage = 5`;
+/// at step 50 it fires 32 `SmallExplosion`s in a +-32 box and 32
+/// `Explosion`s in a +-48 box, then despawns. The `GroundFlame`s and corpse
+/// chunks of `Alarm_0` are decoration with no damage and are not simulated.
+pub fn tick_big_dog_explo(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mut q: Query<(Entity, &Pos, &mut crate::comps_b::BigDogExplo)>,
+) {
+    let dt = time.delta_secs;
+    for (entity, pos, mut explo) in &mut q {
+        explo.timer.tick(dt);
+        let mut rng = rand::rng();
+        if !explo.timer.just_finished() {
+            if rng.random_range(0..8) == 0 {
+                spawn_scrap_explosion(&mut commands, pos.0, 24.0, 24.0, &mut rng);
+            }
+            if rng.random_range(0..4) == 0 {
+                spawn_scrap_explosion(&mut commands, pos.0, 12.0, 12.0, &mut rng);
+            }
+            continue;
+        }
+        for _ in 0..32 {
+            spawn_scrap_explosion(&mut commands, pos.0, 32.0, 12.0, &mut rng);
+        }
+        for _ in 0..32 {
+            spawn_scrap_explosion(&mut commands, pos.0, 48.0, 24.0, &mut rng);
+        }
+        commands.entity(entity).despawn();
+    }
+}
+
+/// GML `Explosion` is a 48px sprite and `SmallExplosion` a 24px one, so
+/// `Collision_hitme` covers those bboxes with `damage = 5`.
+fn spawn_scrap_explosion(
+    commands: &mut Commands,
+    at: glam::Vec2,
+    spread: f32,
+    radius: f32,
+    rng: &mut rand::rngs::ThreadRng,
+) {
+    let off = glam::Vec2::new(
+        rng.random_range(-spread..spread),
+        rng.random_range(-spread..spread),
+    );
+    commands.spawn((
+        GameCleanup,
+        LevelCleanup,
+        crate::combat::Explosion {
+            timer: GTimer::from_seconds(0.05, TimerMode::Once),
+            radius,
+            damage: 5,
+            team: Team::Enemy,
+            hits_player: true,
+            source: Some(DamageSource::enemy(Entity::PLACEHOLDER, EnemyKind::BigDog)),
+        },
+        Pos(at + off),
+    ));
+}
+
+/// GML `objects/ScrapBossMissile` (`Other_10` + `Alarm_0` + `Destroy_0`).
+///
+/// `Other_10:5` reads `if (sprite_index = spr_hurt) alarm[1] = 50`, and this
+/// tree uses `=` for assignment - see `BigDogMissile/Other_10:7`, which
+/// spells the same test `sprite_index == spr_hurt`. So the missile pins its
+/// own hurt sprite every step, which both blocks the homing impulse on
+/// `Other_10:3` and reloads `alarm[1]` to 50 every step, so `Alarm_1` never
+/// runs. It therefore flies dead straight at the 2 px/step it was spawned
+/// with, bounces off walls at 3 hp a bounce, and only dies once the player
+/// has put 22 hp into it or it has bounced eight times. On loops > 0 it
+/// spends `alarm[0]` once, at `max(1, 12 - loops)`, on an `EnemyBullet1`
+/// shell.
 pub fn tick_scrap_missiles(
     time: Res<SimTime>,
     mut commands: Commands,
     run: Res<Run>,
     mask: Res<FloorMask>,
-    catalog: Res<repame_anim::AnimCatalog>,
-    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
     props: Query<(Entity, &Prop, &Pos), With<Prop>>,
     mut q: Query<
         (
@@ -5985,7 +6058,6 @@ pub fn tick_scrap_missiles(
             &mut Health,
             &mut Velocity,
             &mut Pos,
-            Option<&mut SpriteAnim>,
         ),
         (
             With<ScrapBossMissileState>,
@@ -5996,10 +6068,8 @@ pub fn tick_scrap_missiles(
     >,
 ) {
     let dt = time.delta_secs;
-    let player_pos = player_q.single().ok().map(|p| p.0);
     let solids = prop_shapes(&props);
-    for (entity, mut state, mut health, mut vel, mut pos, mut anim) in &mut q {
-        state.fuse.tick(dt);
+    for (entity, mut state, mut health, mut vel, mut pos) in &mut q {
         if state.hurt {
             state.hurt_timer.tick(dt);
             if state.hurt_timer.just_finished() {
@@ -6007,25 +6077,13 @@ pub fn tick_scrap_missiles(
                 commands.entity(entity).remove::<HurtAnim>();
             }
         }
-        if state.fuse.just_finished() {
-            health.hp = 0;
-            continue;
-        }
         if health.hp <= 0 {
             continue;
         }
 
-        if !state.hurt
-            && let Some(target) = player_pos
-        {
-            let to_player = target - pos.0;
-            gml_motion_add_clamp(&mut vel.0, to_player.normalize_or_zero(), 0.1, 2.0, dt);
-        }
-        if vel.0.length_squared() > 0.001 {
-            vel.0 = vel.0.normalize() * 60.0;
-        } else if let Some(target) = player_pos {
-            vel.0 = (target - pos.0).normalize_or_zero() * 60.0;
-        }
+        // GML `Other_10:7`: `speed = 2`, direction untouched.
+        let heading = vel.0.normalize_or_zero();
+        vel.0 = heading * 60.0;
         apply_gml_friction(&mut vel.0, 0.4, dt);
 
         let wall = move_bounce_solid(
@@ -6041,20 +6099,6 @@ pub fn tick_scrap_missiles(
             health.hp -= 3;
             state.hurt = true;
             state.hurt_timer = GTimer::from_seconds(50.0 / 30.0, TimerMode::Once);
-            state.fuse = GTimer::from_seconds(50.0 / 30.0, TimerMode::Once);
-            if let Some(anim) = anim.as_deref_mut()
-                && let Some(def) = catalog.def("images/sprScrapBossMissileHurt.png")
-            {
-                anim.set_path("images/sprScrapBossMissileHurt.png", def, true);
-            }
-            commands.entity(entity).insert(HurtAnim {
-                idle: "images/sprScrapBossMissileIdle.png",
-                walk: Some("images/sprScrapBossMissileIdle.png"),
-                hurt: "images/sprScrapBossMissileHurt.png",
-                timer: GTimer::from_seconds(50.0 / 30.0, TimerMode::Once),
-                was_moving: false,
-                rate: anim.as_deref().map(|a| a.fps).unwrap_or(1.0).max(1.0),
-            });
         }
 
         if run.loop_count > 0 {
@@ -6064,15 +6108,10 @@ pub fn tick_scrap_missiles(
                     (12u32.saturating_sub(run.loop_count).max(1)) as f32 / 30.0,
                     TimerMode::Once,
                 );
-                let heading = vel.0.normalize_or_zero();
                 let source = state
                     .creator
-                    .map(|creator| DamageSource::enemy(creator, EnemyKind::BigDog))
-                    .or(Some(DamageSource::enemy(
-                        entity,
-                        EnemyKind::ScrapBossMissile,
-                    )));
-                let trail = commands.spawn((
+                    .map(|creator| DamageSource::enemy(creator, EnemyKind::BigDog));
+                commands.spawn((
                     GameCleanup,
                     LevelCleanup,
                     Team::Enemy,
@@ -6088,7 +6127,6 @@ pub fn tick_scrap_missiles(
                     Velocity(heading * 120.0),
                     Pos(pos.0),
                 ));
-                let _ = trail;
             }
         }
     }
@@ -6997,8 +7035,53 @@ pub fn tick_special_props(
                     dirty.0 = true;
                 }
             }
+            // GML `BecomeScrapBoss/Destroy_0.gml:1`: the sleeper hands its
+            // place - and its `dropseed` - to a real `ScrapBoss`.
+            SpecialPropDeath::BecomeScrapBoss => {
+                queue_enemy_spawn(&mut commands, EnemyKind::BigDog, at, 1.0, run.loop_count);
+            }
         }
         commands.entity(entity).despawn();
+    }
+}
+
+/// GML `objects/BecomeScrapBoss/Step_0.gml`: the sleeper counts steps of
+/// unbroken line of sight to the player and, once it has 150 of them with
+/// the player inside 160 px and no `Portal` alive, destroys itself - which
+/// raises the Scrap Boss through `Destroy_0`.
+pub fn tick_dormant_scrap_boss(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    run: Res<Run>,
+    mask: Res<FloorMask>,
+    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
+    portals: Query<Entity, With<crate::comps_b::Portal>>,
+    mut sleepers: Query<
+        (Entity, &Pos, &mut crate::comps_b::DormantScrapBoss),
+        (With<crate::comps_b::DormantScrapBoss>, Without<Prop>),
+    >,
+) {
+    if sleepers.is_empty() {
+        return;
+    }
+    let dt = time.delta_secs;
+    let Some(player_pos) = player_q.single().ok().map(|p| p.0) else {
+        return;
+    };
+    let portal_open = !portals.is_empty();
+    let mut wake: Vec<(Entity, glam::Vec2)> = Vec::new();
+    for (entity, pos, mut dormant) in &mut sleepers {
+        if line_of_sight_public(pos.0, player_pos, &mask) {
+            dormant.timer += dt * crate::SIM_HZ as f32;
+        }
+        // GML `Step_0.gml:12`: `distance < 160 && !Portal && timer > 150`.
+        if !portal_open && dormant.timer > 150.0 && pos.0.distance(player_pos) < 160.0 {
+            wake.push((entity, pos.0));
+        }
+    }
+    for (entity, at) in wake {
+        commands.entity(entity).despawn();
+        queue_enemy_spawn(&mut commands, EnemyKind::BigDog, at, 1.0, run.loop_count);
     }
 }
 

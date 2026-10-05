@@ -190,12 +190,9 @@ pub fn tick_oasis_bandit_window(
         return;
     }
 
-    let bandit_alive = enemies_q.iter().any(|e| {
-        matches!(
-            e.kind,
-            crate::data::EnemyKind::BigBandit | crate::data::EnemyKind::BigBanditLoop
-        )
-    });
+    let bandit_alive = enemies_q
+        .iter()
+        .any(|e| e.kind == crate::data::EnemyKind::BigBandit);
 
     if bandit_alive && !triggers.oasis_bandit_alive {
         triggers.oasis_bandit_alive = true;

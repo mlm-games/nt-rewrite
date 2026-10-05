@@ -635,7 +635,6 @@ pub const BIG_DOG_MISSILE_DAMAGE: i32 = 5;
 #[derive(Component, Clone, Copy, Debug)]
 pub struct ScrapBossMissileState {
     pub creator: Option<Entity>,
-    pub fuse: Timer,
     pub hurt_timer: Timer,
     pub trail_timer: Timer,
     pub hurt: bool,
@@ -653,7 +652,6 @@ impl ScrapBossMissileState {
         };
         Self {
             creator: None,
-            fuse: Timer::disarmed(),
             hurt_timer: Timer::disarmed(),
             trail_timer: trail,
             hurt: false,
@@ -764,27 +762,9 @@ pub struct BossBrain {
 impl BossBrain {
     pub fn new(kind: EnemyKind, spawn: Vec2) -> Self {
         let (attack, special) = match kind {
-            EnemyKind::BigBandit | EnemyKind::BigBanditLoop => {
-                if kind == EnemyKind::BigBanditLoop {
-                    (0.95, 2.25)
-                } else {
-                    (1.15, 2.8)
-                }
-            }
-            EnemyKind::BigDog | EnemyKind::BigDogLoop => {
-                if kind == EnemyKind::BigDogLoop {
-                    (0.62, 1.8)
-                } else {
-                    (0.8, 2.2)
-                }
-            }
-            EnemyKind::LilHunter | EnemyKind::LilHunterLoop => {
-                if kind == EnemyKind::LilHunterLoop {
-                    (0.42, 1.35)
-                } else {
-                    (0.55, 1.7)
-                }
-            }
+            EnemyKind::BigBandit => (1.15, 2.8),
+            EnemyKind::BigDog => (0.8, 2.2),
+            EnemyKind::LilHunter => (0.55, 1.7),
             EnemyKind::Throne => (0.7, 2.5),
             EnemyKind::ThroneII => (0.85, 3.4),
             EnemyKind::Hyper => (1.1, 4.0),
@@ -1404,6 +1384,7 @@ pub struct Prop {
 pub enum SpecialPropDeath {
     VaultStatue,
     VenuzTv,
+    BecomeScrapBoss,
 }
 
 #[derive(Component, Clone, Copy)]
@@ -1699,6 +1680,15 @@ pub struct ThroneSit {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct InvisiWall;
 
+/// GML `objects/BecomeScrapBoss`: a 30 hp `prop` that stands in for the
+/// Scrap Boss until the player has had it in clear view for 150 steps and
+/// closed to 160 px, at which point `Destroy_0` raises the real boss.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct DormantScrapBoss {
+    /// GML `BecomeScrapBoss.timer`: steps of unbroken line of sight.
+    pub timer: f32,
+}
+
 /// GML `ProtoStatue` foe: vault guardian state. `rad` snapshots the
 /// run's crown rads on placement; `charged`/`phased` latch the IDPD
 /// waves. (The prop-side `ProtoStatue` marker below flags secret
@@ -1751,6 +1741,13 @@ pub struct PropNestMarkers {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct ThroneCarpet {
     pub half_extents: Vec2,
+}
+
+/// GML `objects/BigDogExplo`: for 50 steps it keeps dropping `Explosion`s
+/// and `SmallExplosion`s around the wreck, then fires a 32 + 32 salvo.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct BigDogExplo {
+    pub timer: Timer,
 }
 
 #[derive(Component, Debug)]

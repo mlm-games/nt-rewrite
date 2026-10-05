@@ -2455,7 +2455,7 @@ fn populate(
     // GML :319-376.
     plan.boss = boss_for_run(run, area, is_last);
     if let Some(kind) = plan.boss {
-        if matches!(kind, EnemyKind::BigBandit | EnemyKind::BigBanditLoop) {
+        if matches!(kind, EnemyKind::BigBandit) {
             plan.boss_count = big_bandit_count(run.loop_count);
         }
     }
@@ -2491,7 +2491,7 @@ fn boss_for_run(run: &Run, area: i32, is_last: bool) -> Option<EnemyKind> {
     // GML :319-321 -- `WantBoss` sits outside the `_has_boss` gate, so the
     // Big Bandit guards every desert subarea.
     if area == 1 && !run.tutorial {
-        return Some(big_bandit_kind(run.loop_count));
+        return Some(EnemyKind::BigBandit);
     }
     if !is_last {
         return None;
@@ -2502,8 +2502,8 @@ fn boss_for_run(run: &Run, area: i32, is_last: bool) -> Option<EnemyKind> {
     // gated on `_loops > 0`. Palace (7) and HQ (106) get no `scrPopulate`
     // boss; their arenas are built by `FloorMaker` instead.
     match area {
-        3 => Some(big_dog_kind(run.loop_count)),
-        5 => Some(lil_hunter_kind(run.loop_count)),
+        3 => Some(EnemyKind::BigDog),
+        5 => Some(EnemyKind::LilHunter),
         2 if run.loop_count > 0 => Some(EnemyKind::FrogQueen),
         4 | 104 if run.loop_count > 0 => Some(EnemyKind::Hyper),
         6 if run.loop_count > 0 => Some(EnemyKind::Technomancer),
@@ -2512,28 +2512,30 @@ fn boss_for_run(run: &Run, area: i32, is_last: bool) -> Option<EnemyKind> {
     }
 }
 
-fn big_bandit_kind(loop_count: u32) -> EnemyKind {
-    if loop_count > 0 {
-        EnemyKind::BigBanditLoop
-    } else {
-        EnemyKind::BigBandit
-    }
-}
-
-fn big_dog_kind(loop_count: u32) -> EnemyKind {
-    if loop_count > 0 {
-        EnemyKind::BigDogLoop
-    } else {
-        EnemyKind::BigDog
-    }
-}
-
-fn lil_hunter_kind(loop_count: u32) -> EnemyKind {
-    if loop_count > 0 {
-        EnemyKind::LilHunterLoop
-    } else {
-        EnemyKind::LilHunter
-    }
+/// GML `scrPopulate.gml:325-340`: the Scrap Boss sleeper is planted on the
+/// `Floor` nearest the point three quarters of the way from the `(10016,
+/// 10016)` sentinel (the port's `(TILE / 2, TILE / 2)`) out to the floor
+/// tile furthest from it.
+pub fn scrap_boss_sleeper_cell(floor_cells: &[(i32, i32)]) -> Option<(i32, i32)> {
+    let sentinel = glam::Vec2::new(TILE * 0.5, TILE * 0.5);
+    let centre = |c: (i32, i32)| -> glam::Vec2 {
+        glam::Vec2::new(
+            c.0 as f32 * TILE + TILE * 0.5,
+            c.1 as f32 * TILE + TILE * 0.5,
+        )
+    };
+    let furthest = floor_cells.iter().copied().max_by(|a, b| {
+        centre(*a)
+            .distance_squared(sentinel)
+            .total_cmp(&centre(*b).distance_squared(sentinel))
+    })?;
+    let to = centre(furthest) - sentinel;
+    let probe = sentinel + to * 0.75;
+    floor_cells.iter().copied().min_by(|a, b| {
+        centre(*a)
+            .distance_squared(probe)
+            .total_cmp(&centre(*b).distance_squared(probe))
+    })
 }
 
 pub fn floor_in_world(floor: u32) -> u32 {

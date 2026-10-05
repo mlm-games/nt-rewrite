@@ -373,9 +373,9 @@ pub fn achievement_for_skin(race: crate::data::RaceId, skin: usize) -> Option<u8
 pub fn achievement_for_boss(kind: crate::data::EnemyKind) -> Option<u8> {
     use crate::data::EnemyKind;
     Some(match kind {
-        EnemyKind::BigBandit | EnemyKind::BigBanditLoop => 31,
-        EnemyKind::BigDog | EnemyKind::BigDogLoop => 32,
-        EnemyKind::LilHunter | EnemyKind::LilHunterLoop => 33,
+        EnemyKind::BigBandit => 31,
+        EnemyKind::BigDog => 32,
+        EnemyKind::LilHunter => 33,
         EnemyKind::Throne => 34,
         EnemyKind::ThroneII => 35,
         EnemyKind::FrogQueen => 36,
@@ -744,7 +744,7 @@ pub fn check_kill_unlocks(
     let mut menu = menu;
 
     match kind {
-        EnemyKind::BigDog | EnemyKind::BigDogLoop => {
+        EnemyKind::BigDog => {
             award(save, &mut menu, crate::data::RaceId::BigDog);
         }
         EnemyKind::FrogQueen => {
@@ -780,7 +780,7 @@ pub fn check_kill_unlocks(
         EnemyKind::Bandit if race == crate::data::RaceId::Rebel => {
             award_skin(save, &mut menu, crate::data::RaceId::Rebel, 2);
         }
-        EnemyKind::LilHunter | EnemyKind::LilHunterLoop if race == crate::data::RaceId::Rogue => {
+        EnemyKind::LilHunter if race == crate::data::RaceId::Rogue => {
             award_skin(save, &mut menu, crate::data::RaceId::Rogue, 2);
         }
         EnemyKind::Throne | EnemyKind::ThroneII => {

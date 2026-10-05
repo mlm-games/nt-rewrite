@@ -639,7 +639,7 @@ pub fn tick_idpd_raids(
     let player_pos = player.0;
     let lil_hunter_alive = enemies_q
         .iter()
-        .any(|e| matches!(e.kind, EnemyKind::LilHunter | EnemyKind::LilHunterLoop));
+        .any(|e| matches!(e.kind, EnemyKind::LilHunter));
     let enemies_alive = enemies_q.iter().count();
     let kills_since_checkpoint = run.total_kills.saturating_sub(raid.kills_checkpoint);
 
