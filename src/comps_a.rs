@@ -443,6 +443,8 @@ pub struct Run {
     /// Set while a GML `CanOasis` window is live: a Big Bandit death inside
     /// it opens the Oasis portal and reroutes the run.
     pub can_oasis: bool,
+    /// GML `GameCont.triedhq`: the HQ van is a one-way ride per run.
+    pub tried_hq: bool,
     /// A secret-area reroute requested by a death the death resolver cannot
     /// reach `SecretTriggers` from; `apply_secret_transition` drains it after
     /// the trigger queue.
@@ -505,6 +507,7 @@ impl Default for Run {
             blackswords: 0,
             swordbosskill: [false; 8],
             can_oasis: false,
+            tried_hq: false,
             queued_secret: None,
             tottimer: 0,
             popolevel: 0.0,

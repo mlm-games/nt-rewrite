@@ -492,6 +492,23 @@ fn apply_secret_transition(
 
     let previous_secret = target_for_secret_area(run.area);
 
+    // GML `Player/Collision_CarVenusFixed.gml:10-13`: the crib's parked car
+    // drops the run one subarea further back than the crib's own exit does.
+    if triggers.car_out_of_crib {
+        triggers.car_out_of_crib = false;
+        if crib.last_area.is_some() {
+            run.floor += 1;
+            run.loop_count = (run.floor - 1) / 15;
+            let (world, floor_in_area) = route_coordinates(run.floor);
+            run.world = world;
+            run.floor_in_area = floor_in_area;
+            run.area = area_for_floor(run.floor, run.loop_count);
+            run.portal_open = false;
+        }
+        triggers.reset_floor_flags();
+        return None;
+    }
+
     // GML `GameCont/Other_5.gml:58-62`: leaving the crib restores the area
     // it was entered from, one subarea in.
     if run.area == AreaId::Crib {

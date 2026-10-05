@@ -125,7 +125,7 @@ pub fn build_sim_schedule() -> Schedule {
                 secrets::observe_oasis_floor_start.in_set(NtSimSet::Always),
                 secrets::detect_oasis_eligibility.in_set(NtSimSet::Always),
                 secrets::detect_cursed_caves.in_set(NtSimSet::Always),
-                secrets::detect_hq.in_set(NtSimSet::Always),
+                secrets::tick_van_hq.in_set(NtSimSet::Always),
                 secrets::secret_debug_toast.in_set(NtSimSet::Always),
                 state::drive_tutorial.in_set(NtSimSet::Always),
                 crown::tick_crown_life.in_set(NtSimSet::Always),
@@ -452,6 +452,9 @@ pub fn build_sim_schedule() -> Schedule {
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
                 secrets::tick_pizza_entrances
+                    .in_set(NtSimSet::Combat)
+                    .run_if(gameplay_active),
+                secrets::tick_car_venus_fixed
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
             )

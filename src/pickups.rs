@@ -222,6 +222,41 @@ pub fn nearest_ground_weapon(
     best.map(|(entity, _)| entity)
 }
 
+/// The nearest `CarVenusFixed` whose GML prompt window the player is inside,
+/// i.e. the one `Player/Collision_CarVenusFixed` fires on. `flipped` is the
+/// prop's `image_xscale = choose(1, -1)`.
+/// GML `objects/Van` `mskVan` 27..100 x 42..85 at origin (64,64).
+pub const VAN_PROMPT: MaskSpan = VAN_PROMPT_SPAN;
+
+/// GML `nearest_prompt_hit`, exposed for the interact handlers that resolve
+/// the same window the prompt draws.
+pub fn nearest_prompt_span(
+    player: glam::Vec2,
+    candidates: impl Iterator<Item = (Entity, glam::Vec2, MaskSpan)>,
+) -> Option<Entity> {
+    nearest_prompt_hit(player, candidates)
+}
+
+pub fn nearest_car_venus(
+    player: glam::Vec2,
+    cars: impl Iterator<Item = (Entity, glam::Vec2, bool)>,
+) -> Option<Entity> {
+    nearest_prompt_hit(
+        player,
+        cars.map(|(entity, pos, flipped)| {
+            (
+                entity,
+                pos,
+                if flipped {
+                    CAR_PROMPT_SPAN_FLIPPED
+                } else {
+                    CAR_PROMPT_SPAN
+                },
+            )
+        }),
+    )
+}
+
 fn nearest_prompt_hit(
     player: glam::Vec2,
     candidates: impl Iterator<Item = (Entity, glam::Vec2, MaskSpan)>,

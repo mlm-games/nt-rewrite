@@ -11,9 +11,9 @@ use repame_sim::SimTime;
 
 use crate::time::{GTimer, TimerMode};
 
-use crate::comps_a::{Inventory, Player, RaceState, Run, Toast};
+use crate::comps_a::{Inventory, Player, Run, Toast};
 use crate::comps_b::{BossBrain, Enemy, Pickup, PickupKind};
-use crate::data::{AreaId, RaceId, SecretTarget};
+use crate::data::{AreaId, SecretTarget};
 use crate::enemy_data::enemy_def;
 use crate::spatial::Pos;
 
@@ -37,6 +37,11 @@ pub struct SecretTriggers {
     pub oasis_snapshot_done: bool,
 
     pub vaults_entered: u8,
+
+    /// GML `Player/Collision_CarVenusFixed.gml:10-13`: driving the crib's
+    /// parked car out drops the run one subarea further back than the crib's
+    /// own exit portal does.
+    pub car_out_of_crib: bool,
 }
 
 impl Default for SecretTriggers {
@@ -51,6 +56,7 @@ impl Default for SecretTriggers {
             oasis_floor_enemies_initial: 1,
             oasis_snapshot_done: false,
             vaults_entered: 0,
+            car_out_of_crib: false,
         }
     }
 }
@@ -237,6 +243,65 @@ pub fn tick_pizza_entrances(
     }
 }
 
+/// GML `Player/Collision_CarVenusFixed.gml`: an interact press on the
+/// crib's parked car opens a plain `type = 1` portal, empties the floor and
+/// routes the run either into `area_mansion` or - in the crib, or anywhere
+/// the Cuz has followed you - back to `lastarea` / `lastsubarea - 1`, one
+/// subarea further back than the crib's own exit portal.
+pub fn tick_car_venus_fixed(
+    mut commands: Commands,
+    catalog: Res<repame_anim::AnimCatalog>,
+    input: Res<crate::input::NtInput>,
+    mut run: ResMut<Run>,
+    mut triggers: ResMut<SecretTriggers>,
+    mut cues: ResMut<crate::msg::Queue<crate::audio::AudioCue>>,
+    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
+    cuz_q: Query<(), With<crate::comps_b::YungCuz>>,
+    cars: Query<(Entity, &Pos, &crate::comps_b::PropSprites), Without<Player>>,
+    mut shots: Query<(Entity, &crate::comps_a::Team), With<crate::Projectile>>,
+    mut enemies: Query<(Entity, &mut crate::comps_a::Health), With<Enemy>>,
+) {
+    if cars.is_empty() || !input.peek_interact_pressed() {
+        return;
+    }
+    let Ok(ppos) = player_q.single().map(|p| p.0) else {
+        return;
+    };
+    let Some(car) = crate::pickups::nearest_car_venus(
+        ppos,
+        cars.iter()
+            .filter(|(_, _, sprites)| {
+                matches!(
+                    sprites.idle,
+                    "images/sprVenusCarFixed.png" | "images/sprVenuzCar2.png"
+                )
+            })
+            .map(|(entity, pos, sprites)| (entity, pos.0, sprites.flip_x)),
+    ) else {
+        return;
+    };
+    // GML `Player/Collision_CarVenusFixed.gml:23` `instance_destroy(other.id,
+    // false)`, which skips `Destroy_0` - no explosion, no replacement car.
+    commands.entity(car).despawn();
+
+    if run.area == AreaId::Crib || !cuz_q.is_empty() {
+        triggers.car_out_of_crib = true;
+    } else {
+        triggers.queue(crate::data::SecretTarget::YvMansion);
+    }
+    let at = ppos;
+    crate::progression::spawn_portal(&mut commands, &catalog, &mut shots, at, 1);
+    for (_, mut health) in enemies.iter_mut() {
+        health.hp = 0;
+    }
+    cues.push(crate::audio::AudioCue {
+        name: "sndUseCar",
+        volume: 1.0,
+        variance: 0.0,
+    });
+    run.portal_open = false;
+}
+
 /// GML `CanOasis/Create_0.gml:2-4`: the moment the desert floor's chest
 /// condition holds, a `CanOasis` opens the 300-step (10 s) window in which a
 /// Big Bandit death reroutes the run to the Oasis. It closes itself again
@@ -295,30 +360,69 @@ pub fn detect_cursed_caves(
     }
 }
 
-/// Queue the IDPD HQ for Rogues past loop 1 (Labs/Palace), plus the
-/// small deterministic Labs loop-2+ roll (bevy `detect_hq` parity).
-pub fn detect_hq(
-    run: Res<Run>,
+/// GML `Player/Collision_Van.gml`: driving a parked IDPD van takes the run
+/// to the HQ, once. The van offers the ride only while `drawspr` is
+/// `sprVanDeactivate` - from `Alarm_1` until `Alarm_3` clears `can_hq` 35
+/// steps later - and a freak van never offers it at all. A second press on
+/// any later van just kills it.
+pub fn tick_van_hq(
+    mut commands: Commands,
+    catalog: Res<repame_anim::AnimCatalog>,
+    input: Res<crate::input::NtInput>,
+    mut run: ResMut<Run>,
     mut triggers: ResMut<SecretTriggers>,
-    player_q: Query<&RaceState, With<Player>>,
+    mut cues: ResMut<crate::msg::Queue<crate::audio::AudioCue>>,
+    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
+    mut vans: Query<
+        (
+            Entity,
+            &Pos,
+            &mut crate::comps_a::Health,
+            &crate::idpd::IdpdVanDeploy,
+        ),
+        (With<Enemy>, Without<Player>),
+    >,
+    mut shots: Query<(Entity, &crate::comps_a::Team), With<crate::Projectile>>,
+    mut enemies: Query<(Entity, &mut crate::comps_a::Health), With<Enemy>>,
 ) {
-    let is_rogue = player_q
-        .single()
-        .map(|r| r.race == RaceId::Rogue)
-        .unwrap_or(false);
-
-    if is_rogue && run.loop_count >= 1 && matches!(run.area, AreaId::Labs | AreaId::Palace) {
-        triggers.queue(SecretTarget::Hq);
+    if vans.is_empty() || !input.peek_interact_pressed() {
         return;
     }
+    let Ok(ppos) = player_q.single().map(|p| p.0) else {
+        return;
+    };
+    let Some(entity) = crate::pickups::nearest_prompt_span(
+        ppos,
+        vans.iter()
+            .filter(|(_, _, _, deploy)| !deploy.freak && deploy.inert > 0.0)
+            .map(|(entity, pos, _, _)| (entity, pos.0, crate::pickups::VAN_PROMPT)),
+    ) else {
+        return;
+    };
 
-    if run.area == AreaId::Labs && run.loop_count >= 2 {
-        let roll =
-            ((run.gen_seed ^ run.floor as u64).wrapping_mul(6364136223846793005) >> 56) as u8;
-        if roll < 12 {
-            triggers.queue(SecretTarget::Hq);
+    if run.tried_hq {
+        // GML `Player/Collision_Van.gml:5-8`: `with (other) hp = 0` and out.
+        if let Ok((_, _, mut hp, _)) = vans.get_mut(entity) {
+            hp.hp = 0;
         }
+        return;
     }
+    // GML `:12-22`: the self-assigning `hqarea = hqarea` means re-entering
+    // from inside the HQ is a no-op, so only the first ride reroutes.
+    if run.area != AreaId::HQ {
+        triggers.queue(SecretTarget::Hq);
+    }
+    run.tried_hq = true;
+    cues.push(crate::audio::AudioCue {
+        name: "sndUseVan",
+        volume: 1.0,
+        variance: 0.0,
+    });
+    for (_, mut hp) in enemies.iter_mut() {
+        hp.hp = 0;
+    }
+    commands.entity(entity).despawn();
+    crate::progression::spawn_portal(&mut commands, &catalog, &mut shots, ppos, 2);
 }
 
 /// Announce a queued secret route while the toast is idle (bevy
