@@ -1685,6 +1685,16 @@ pub struct InvisiWall;
 #[derive(Component, Clone, Copy, Debug)]
 pub struct LastBall;
 
+/// GML `objects/BigGuardianBullet`: the Crown Guardian's shell. Its spawn
+/// strip (`Other_7`, 8 frames at `image_speed = 0.5`) pins it in place and
+/// keeps it slash-proof; on release it flies at 8 px/step, and on death it
+/// throws four rings of `7 + loops` `GuardianBullet`s.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct BigGuardianBullet {
+    pub hold: f32,
+    pub released: bool,
+}
+
 /// GML `objects/WantLH`: the city boss marker. `alarm[0]` waits
 /// `210 / (1 + loops * 0.5)` steps and then drops a `LilHunter` on the
 /// `Floor` tile furthest from a random player.

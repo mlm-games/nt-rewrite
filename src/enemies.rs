@@ -34,9 +34,9 @@ use crate::comps_a::{
     Velocity, WallCell, WallTile, apply_gml_friction, gml_motion_add_clamp,
 };
 use crate::comps_b::{
-    BossBrain, Corpse, CorpseCollision, CrownPedestal, EliteBlocker, Enemy, EnemyBrain, FxAngle,
-    GmlImage, HitWarning, HurtAnim, IdpdShieldUnit, IdpdVanBrain, LastBall, LilHunterDie,
-    MaggotSpawnCharge, MaggotSpawnInternalDrain, MomShot, NativeAngle, NativeDepth,
+    BigGuardianBullet, BossBrain, Corpse, CorpseCollision, CrownPedestal, EliteBlocker, Enemy,
+    EnemyBrain, FxAngle, GmlImage, HitWarning, HurtAnim, IdpdShieldUnit, IdpdVanBrain, LastBall,
+    LilHunterDie, MaggotSpawnCharge, MaggotSpawnInternalDrain, MomShot, NativeAngle, NativeDepth,
     NecroReviveArea, PendingDelayedBoss, Pickup, PickupLifetime, PopoNadeM, PopoShieldM,
     PortalClear, Prop, PropSprites, ProtoGuardian, SCRAP_BOSS_MISSILE_RADIUS,
     ScrapBossMissileState, ShieldFollower, SpecialPropDeath, StaticFx, ThroneBall, ToxicGasState,
@@ -2171,10 +2171,53 @@ fn guardian_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
         if ((d.dist > 96.0 && gml_roll(rng, 3.0, 2.0)) || gml_roll(rng, 3.0, 1.0)) && !justfired {
             d.aim(d.toward().to_degrees());
             d.arm(12.0);
+            d.brain.fire = 0;
         } else if gml_chance(rng, 2.0) {
             d.arm_add(60.0);
+            d.brain.fire = 1;
+        }
+    } else if gml_roll(rng, 20.0, 1.0) {
+        // GML `Guardian/Alarm_1:44-49` and `CrownGuardian/Alarm_1:37-42`.
+        d.arm_add(60.0);
+        d.brain.fire = 1;
+    } else {
+        d.impulse(gml_random_angle(rng), 0.5);
+    }
+}
+
+/// GML `Guardian/Other_7.gml:6-21` (and the `CrownGuardian` copy): vanish,
+/// then reappear on a floor tile `64 + random(120)` from the target that is
+/// still far enough from both the target and the old spot, and slide
+/// `100 + random(60)` px along bearing `200 + random(140)`.
+fn guardian_reappear(
+    rng: &mut rand::rngs::ThreadRng,
+    from: glam::Vec2,
+    target: glam::Vec2,
+    mask: &FloorMask,
+) -> glam::Vec2 {
+    let reach = 64.0 + rng.random_range(0.0..120.0);
+    let mut spot = target;
+    for _ in 0..64 {
+        let angle = rng.random_range(0.0..std::f32::consts::TAU);
+        spot = mask.cell_center(
+            mask.world_to_cell(target + glam::Vec2::new(angle.cos(), angle.sin()) * reach),
+        );
+        if spot.distance(target) > reach * 0.7
+            && spot.distance(from) > 32.0
+            && mask.is_walkable(spot)
+        {
+            break;
         }
     }
+    crate::spatial::move_contact_solid(
+        &mut spot,
+        glam::Vec2::from_angle(rng.random_range(200.0f32..=340.0).to_radians())
+            * rng.random_range(100.0..=160.0),
+        14.0,
+        &[],
+        Some(mask),
+    );
+    spot
 }
 
 /// GML `DogGuardian`'s leap registers (`leap`, `z`, `zspeed`, `jumpdir`,
@@ -2705,6 +2748,20 @@ pub fn enemy_ai(
                 }
             }
 
+            if matches!(enemy.kind, EnemyKind::Guardian | EnemyKind::CrownGuardian)
+                && brain.fire == 1
+            {
+                // `Other_7` fires the step after the vanish.
+                brain.fire = 0;
+                enemy.touch_damage = if enemy.kind == EnemyKind::Guardian {
+                    2
+                } else {
+                    0
+                };
+                pos.0 = guardian_reappear(&mut rng, epos, player_pos, &mask);
+                vel.0 = glam::Vec2::ZERO;
+            }
+
             if enemy.kind == EnemyKind::DogGuardian
                 && let Some(pose_state) = dog_pose.as_deref_mut()
                 && let Some(leap) = dog_leaps.get(&entity)
@@ -2871,7 +2928,10 @@ pub fn enemy_ai(
                     EnemyKind::LightningCrystal => (20.0, 0.0, 96.0, 1.0),
                     EnemyKind::SnowTank => (40.0, 64.0, 240.0, 1.0 / 6.0),
                     EnemyKind::GoldSnowtank => (10.0, 64.0, 160.0, 0.5),
-                    EnemyKind::Guardian => (12.0, 0.0, 999.0, 1.0),
+                    // `Guardian/Alarm_1:14-22` spawns the volley in the same
+                    // alarm that sets `sprite_index = spr_fire`; the 12-frame
+                    // window is only the `justfired` cooldown.
+                    EnemyKind::Guardian => (0.0, 0.0, 999.0, 1.0),
                     EnemyKind::ExploGuardian => (60.0, 0.0, 90.0, 1.0),
                     _ => (30.0, 0.0, 999.0, 1.0),
                 };
@@ -2922,10 +2982,10 @@ pub fn enemy_ai(
                         hurt.is_some(),
                     );
                     if enemy.kind == EnemyKind::Guardian {
-                        brain.attack = GTimer::from_seconds(
-                            (20.0 + rng.random_range(0.0..40.0)) / 30.0,
-                            TimerMode::Once,
-                        );
+                        // `Alarm_1:15` `alarm[1] = 12`, consumed by the
+                        // `sprite_index == spr_fire` branch on line 4-8.
+                        brain.fire = 2;
+                        brain.attack = GTimer::from_seconds(12.0 / 30.0, TimerMode::Once);
                     }
                     if enemy.kind == EnemyKind::GoldSnowtank {
                         let gdir = glam::Vec2::new(brain.gunangle.cos(), brain.gunangle.sin());
@@ -2947,9 +3007,44 @@ pub fn enemy_ai(
                 if brain.attack.just_finished() {
                     let los = has_line_of_sight(epos, player_pos, &mask);
                     let in_range = dist >= min_range && dist <= max_range;
+                    // GML `ExploGuardian/Alarm_1:3,6-8`: every decide spends
+                    // `walk` on `alarm[1] - 1` and leans at the target, so
+                    // the guardian actually closes.
+                    if enemy.kind == EnemyKind::ExploGuardian {
+                        let frames = 6.0 + rng.random_range(0.0..5.0);
+                        brain.walk = frames - 1.0;
+                        if los {
+                            gml_motion_add_clamp(
+                                &mut vel.0,
+                                glam::Vec2::from_angle(
+                                    dir.y.atan2(dir.x)
+                                        + rng.random_range(-20.0..=20.0_f32).to_radians(),
+                                ),
+                                1.5,
+                                2.5,
+                                dt,
+                            );
+                        } else {
+                            gml_motion_add_clamp(
+                                &mut vel.0,
+                                glam::Vec2::from_angle(
+                                    rng.random_range(0.0..std::f32::consts::TAU),
+                                ),
+                                0.5,
+                                2.5,
+                                dt,
+                            );
+                        }
+                        brain.attack = GTimer::from_seconds(frames / 30.0, TimerMode::Once);
+                    }
+                    // GML `Guardian/Alarm_1:1-8`: `justfired` blocks the tick
+                    // straight after a volley and adds 10 to the re-arm.
+                    let guardian_justfired = enemy.kind == EnemyKind::Guardian && brain.fire == 2;
+                    brain.fire = 0;
                     let guardian_ok = if enemy.kind == EnemyKind::Guardian {
-                        los && ((dist > 96.0 && rng.random::<f32>() < 0.67)
-                            || rng.random::<f32>() < 0.33)
+                        los && !guardian_justfired
+                            && ((dist > 96.0 && rng.random::<f32>() < 0.67)
+                                || rng.random::<f32>() < 0.33)
                     } else {
                         los && in_range && rng.random::<f32>() < aim_chance
                     };
@@ -2998,12 +3093,29 @@ pub fn enemy_ai(
                                 TimerMode::Once,
                             )
                         };
-                    } else {
+                    } else if enemy.kind != EnemyKind::ExploGuardian {
+                        if enemy.kind == EnemyKind::Guardian && los && rng.random::<f32>() < 0.5 {
+                            // GML `Guardian/Alarm_1:35-40`: a coin flip to
+                            // vanish instead of firing.
+                            brain.fire = 1;
+                            brain.attack = GTimer::from_seconds(
+                                (10.0 + rng.random_range(0.0..40.0) + 60.0) / 30.0,
+                                TimerMode::Once,
+                            );
+                            continue;
+                        }
                         let cd_secs = match enemy.kind {
                             EnemyKind::SnowTank => (40.0 + rng.random_range(0.0..30.0)) / 30.0,
                             EnemyKind::GoldSnowtank => (15.0 + rng.random_range(0.0..5.0)) / 30.0,
-                            EnemyKind::Guardian => (10.0 + rng.random_range(0.0..40.0)) / 30.0,
-                            EnemyKind::ExploGuardian => (6.0 + rng.random_range(0.0..5.0)) / 30.0,
+                            // `Guardian/Alarm_1:3,7`: a volley re-arms at 12 and
+                            // the tick that consumes it adds 10 more.
+                            EnemyKind::Guardian => {
+                                if guardian_justfired {
+                                    (20.0 + rng.random_range(0.0..40.0)) / 30.0
+                                } else {
+                                    (10.0 + rng.random_range(0.0..40.0)) / 30.0
+                                }
+                            }
                             EnemyKind::LaserCrystal | EnemyKind::InvLaserCrystal => {
                                 (30.0 + rng.random_range(0.0..10.0)) / 30.0
                             }
@@ -5427,6 +5539,21 @@ pub fn fire_enemy_bullet(
     let angle = base + rng.random_range(-def.projectile_spread..def.projectile_spread);
     let shot_dir = glam::Vec2::new(angle.cos(), angle.sin());
     let speed = def.projectile_speed * if euphoria { 0.8 } else { 1.0 };
+    if enemy.kind == EnemyKind::CrownGuardian {
+        // GML `CrownGuardian/Alarm_1:22-27` throws a `BigGuardianBullet`,
+        // which owns its own flight and death burst.
+        commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            BigGuardianBullet {
+                hold: 8.0,
+                released: false,
+            },
+            Velocity(shot_dir * speed),
+            Pos(pos),
+        ));
+        return;
+    }
     let e = spawn_enemy_projectile(
         commands,
         owner,
@@ -5494,7 +5621,10 @@ fn fire_guardian_volley(
 pub fn finish_enemy_bullet(ec: &mut EntityCommands, kind: EnemyKind) {
     let typ = match kind {
         EnemyKind::Scorpion | EnemyKind::GoldScorpion => 2,
-        EnemyKind::Guardian | EnemyKind::Turtle => 0,
+        EnemyKind::Turtle => 0,
+        // `GuardianBullet/Other_7.gml:5` promotes `typ` to 2 once the spawn
+        // strip ends, so only the first frames ignore slashes.
+        EnemyKind::Guardian => 2,
         EnemyKind::ExploGuardian | EnemyKind::Jock => 2,
         _ => 1,
     };
@@ -5642,6 +5772,112 @@ pub fn tick_lil_hunter_escapes(
             dirty.0 = true;
         }
         commands.entity(entity).despawn();
+    }
+}
+
+/// GML `objects/BigGuardianBullet` (`Step_0` + `Destroy_0`). The spawn strip
+/// (`Other_7`: 8 frames at `image_speed = 0.5`) pins the shell in place with
+/// `typ = 0`; released, it flies at 8 px/step with `typ = 2`. Death opens a
+/// `PortalClear`, pays `scrDrop(50, 0)` when it died over floor, and throws
+/// four `7 + loops` rings whose `_ang` runs across the whole salvo while
+/// `_spd` climbs 0.5 a ring.
+pub fn tick_big_guardian_bullets(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    catalog: Res<repame_anim::AnimCatalog>,
+    mask: Res<FloorMask>,
+    run: Res<Run>,
+    player_q: Query<
+        (&Pos, &Player, &crate::comps_a::Inventory, &Health),
+        (With<Player>, Without<Enemy>),
+    >,
+    props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+    mut balls: Query<
+        (Entity, &mut Pos, &mut Velocity, &mut BigGuardianBullet),
+        (
+            With<BigGuardianBullet>,
+            Without<Player>,
+            Without<Enemy>,
+            Without<Prop>,
+        ),
+    >,
+) {
+    let solids = prop_shapes(&props);
+    let Ok((player_pos, player, inv, health)) = player_q.single() else {
+        return;
+    };
+    let dt = time.delta_secs;
+    let step = dt * crate::SIM_HZ as f32;
+    let mut rng = rand::rng();
+    let count = 7 + run.loop_count as usize;
+    let ring = std::f32::consts::TAU / count as f32;
+    for (entity, mut pos, mut vel, mut ball) in &mut balls {
+        if ball.hold > 0.0 {
+            // GML `Step_0:4-7`: `x -= hspeed` cancels the launch impulse.
+            ball.hold -= step;
+            if ball.hold > 0.0 {
+                continue;
+            }
+            ball.released = true;
+        }
+        let mut at = pos.0;
+        let hit =
+            crate::spatial::move_contact_solid(&mut at, vel.0 * dt, 8.0, &solids, Some(&mask))
+                .is_some()
+                || at.distance(player_pos.0) < 8.0 + crate::comps_a::PLAYER_RADIUS;
+        pos.0 = at;
+        if !hit {
+            continue;
+        }
+        commands.entity(entity).despawn();
+        commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            crate::comps_b::PortalClear {
+                timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
+                scale: 1.0,
+            },
+            Pos(at),
+        ));
+        if mask.is_walkable(at) {
+            crate::pickups::maybe_spawn_drop(
+                &mut commands,
+                &catalog,
+                at,
+                50,
+                0,
+                player,
+                inv,
+                health,
+                run.loop_count,
+                None,
+            );
+        }
+        let mut ang = rng.random_range(0.0..std::f32::consts::TAU);
+        let mut speed = 2.0;
+        for _ in 0..4 {
+            for _ in 0..count {
+                let dir = glam::Vec2::from_angle(ang);
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    Team::Enemy,
+                    Projectile {
+                        damage: 5,
+                        life: GTimer::from_seconds(3.0, TimerMode::Once),
+                        radius: 4.0,
+                        knockback: 120.0,
+                        explosive: false,
+                        source: Some(DamageSource::enemy(entity, EnemyKind::CrownGuardian)),
+                    },
+                    ProjectileTyp(2),
+                    Velocity(dir * (speed * 30.0)),
+                    Pos(at),
+                ));
+                ang += ring;
+            }
+            speed += 0.5;
+        }
     }
 }
 
