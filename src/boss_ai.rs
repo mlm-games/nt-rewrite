@@ -2740,6 +2740,7 @@ fn captain_ai(
         boss.special_timer = gml_alarm_off();
         brain.gunangle = rng.random_range(0.0..std::f32::consts::TAU);
         enemy.touch_damage = 10;
+        captain_popo_explosion(commands, epos, owner, kind);
     }
 
     // GML `Step_0:5-16`: the dash sets `speed = 14` along `gunangle`, the
@@ -2878,6 +2879,7 @@ fn captain_ai(
         BossPhase::Telegraph if boss.phase_timer.just_finished() => {
             boss.phase = BossPhase::Charging;
             boss.phase_timer = gml_alarm(10.0);
+            captain_popo_explosion(commands, pos.0, owner, kind);
             brain.gunangle = aim + rng.random_range(-15.0f32..=15.0).to_radians();
             vel.0 += glam::Vec2::from_angle(brain.gunangle) * (10.0 * 30.0) * frames;
             trauma.add(0.14);
@@ -2896,21 +2898,13 @@ fn captain_ai(
     ) && boss.phase_timer.just_finished()
     {
         if boss.phase == BossPhase::Landing {
+            // GML `Alarm_5:7-11` `LastBall` at 6 px/tick straight at the
+            // target; `tick_last_balls` owns its eight-ring death burst.
             let sdir = (player_pos - pos.0).normalize_or_zero();
             commands.spawn((
                 GameCleanup,
                 LevelCleanup,
-                Team::Enemy,
-                Projectile {
-                    damage: 12,
-                    life: GTimer::from_seconds(3.0, TimerMode::Once),
-                    radius: 14.0,
-                    knockback: 120.0,
-                    explosive: false,
-                    source: Some(DamageSource::enemy(owner, kind)),
-                },
-                ProjectileTyp(1),
-                ProjectileFade("images/sprEnemyBulletHit.png"),
+                crate::comps_b::LastBall,
                 Velocity(sdir * (6.0 * 30.0)),
                 Pos(pos.0),
             ));
@@ -2953,6 +2947,24 @@ fn captain_ai(
     }
     resolve_prop_collision(&mut pos.0, def.radius, props.iter().copied());
     fired
+}
+
+/// GML `objects/PopoExplosion`: a 64x64 `damage = 8` blast on the `team_popo`
+/// side. The port has no third team, so only the damage and the shake land.
+fn captain_popo_explosion(commands: &mut Commands, at: glam::Vec2, owner: Entity, kind: EnemyKind) {
+    commands.spawn((
+        GameCleanup,
+        LevelCleanup,
+        crate::combat::Explosion {
+            timer: GTimer::from_seconds(0.05, TimerMode::Once),
+            radius: 32.0,
+            damage: 8,
+            team: Team::Enemy,
+            hits_player: true,
+            source: Some(DamageSource::enemy(owner, kind)),
+        },
+        Pos(at),
+    ));
 }
 
 /// GML `Last/Alarm_2` `IDPDBullet`: an `EnemyBullet1` (`damage = 3`,

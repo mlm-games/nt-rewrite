@@ -1680,6 +1680,11 @@ pub struct ThroneSit {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct InvisiWall;
 
+/// GML `objects/LastBall`: the Captain's heavy shell. It never homes and it
+/// only exists to burst: `Destroy_0` opens eight ten-bullet rings.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct LastBall;
+
 /// GML `objects/WantLH`: the city boss marker. `alarm[0]` waits
 /// `210 / (1 + loops * 0.5)` steps and then drops a `LilHunter` on the
 /// `Floor` tile furthest from a random player.

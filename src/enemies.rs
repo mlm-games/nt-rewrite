@@ -35,11 +35,12 @@ use crate::comps_a::{
 };
 use crate::comps_b::{
     BossBrain, Corpse, CorpseCollision, CrownPedestal, EliteBlocker, Enemy, EnemyBrain, FxAngle,
-    GmlImage, HitWarning, HurtAnim, IdpdShieldUnit, IdpdVanBrain, LilHunterDie, MaggotSpawnCharge,
-    MaggotSpawnInternalDrain, MomShot, NativeAngle, NativeDepth, NecroReviveArea,
-    PendingDelayedBoss, Pickup, PickupLifetime, PopoNadeM, PopoShieldM, PortalClear, Prop,
-    PropSprites, ProtoGuardian, SCRAP_BOSS_MISSILE_RADIUS, ScrapBossMissileState, ShieldFollower,
-    SpecialPropDeath, StaticFx, ThroneBall, ToxicGasState, YvCouch,
+    GmlImage, HitWarning, HurtAnim, IdpdShieldUnit, IdpdVanBrain, LastBall, LilHunterDie,
+    MaggotSpawnCharge, MaggotSpawnInternalDrain, MomShot, NativeAngle, NativeDepth,
+    NecroReviveArea, PendingDelayedBoss, Pickup, PickupLifetime, PopoNadeM, PopoShieldM,
+    PortalClear, Prop, PropSprites, ProtoGuardian, SCRAP_BOSS_MISSILE_RADIUS,
+    ScrapBossMissileState, ShieldFollower, SpecialPropDeath, StaticFx, ThroneBall, ToxicGasState,
+    YvCouch,
 };
 use crate::data::{AreaId, EnemyKind, SplitDef};
 use crate::effects::{HitStop, spawn_burst};
@@ -5641,6 +5642,106 @@ pub fn tick_lil_hunter_escapes(
             dirty.0 = true;
         }
         commands.entity(entity).despawn();
+    }
+}
+
+/// GML `objects/LastBall` (`Create_0` + `Destroy_0`): a 12-damage shell
+/// lobbed straight at the player at 6 px/step, whose only purpose is the
+/// eight ten-bullet rings it throws on death (`_ang` starting at a random
+/// angle and stepping 36 degrees across the whole salvo, `_spd` from 4 up by
+/// 0.6 a ring). `Destroy_0` also opens a `PortalClear` and, if it died over
+/// floor, pays out `scrDrop(100, 0)`.
+pub fn tick_last_balls(
+    mut commands: Commands,
+    catalog: Res<repame_anim::AnimCatalog>,
+    mask: Res<FloorMask>,
+    player_q: Query<
+        (&Pos, &Player, &crate::comps_a::Inventory, &Health),
+        (With<Player>, Without<Enemy>),
+    >,
+    props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+    run: Res<Run>,
+    mut balls: Query<
+        (Entity, &mut Pos, &mut Velocity, &LastBall),
+        (
+            With<LastBall>,
+            Without<Player>,
+            Without<Enemy>,
+            Without<Prop>,
+        ),
+    >,
+) {
+    let solids = prop_shapes(&props);
+    let Ok((player_pos, player, inv, health)) = player_q.single() else {
+        return;
+    };
+    let mut rng = rand::rng();
+    for (entity, mut pos, vel, _) in &mut balls {
+        let mut at = pos.0;
+        let hit = crate::spatial::move_contact_solid(
+            &mut at,
+            vel.0 * (1.0 / crate::SIM_HZ as f32),
+            14.0,
+            &solids,
+            Some(&mask),
+        )
+        .is_some()
+            || at.distance(player_pos.0) < 14.0 + crate::comps_a::PLAYER_RADIUS;
+        pos.0 = at;
+        if !hit {
+            continue;
+        }
+        commands.entity(entity).despawn();
+        commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            crate::comps_b::PortalClear {
+                timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
+                scale: 1.0,
+            },
+            Pos(at),
+        ));
+        if mask.is_walkable(at) {
+            crate::pickups::maybe_spawn_drop(
+                &mut commands,
+                &catalog,
+                at,
+                100,
+                0,
+                player,
+                inv,
+                health,
+                run.loop_count,
+                None,
+            );
+        }
+        // GML `Destroy_0:7-19`: `_ang` runs across the whole salvo, so each
+        // ring is the previous one turned 36 degrees.
+        let mut ang = rng.random_range(0.0..std::f32::consts::TAU);
+        let mut speed = 4.0;
+        for _ in 0..8 {
+            for _ in 0..10 {
+                let dir = glam::Vec2::from_angle(ang);
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    Team::Enemy,
+                    Projectile {
+                        damage: 3,
+                        life: GTimer::from_seconds(2.0, TimerMode::Once),
+                        radius: 4.0,
+                        knockback: 120.0,
+                        explosive: false,
+                        source: Some(DamageSource::enemy(entity, EnemyKind::Captain)),
+                    },
+                    ProjectileTyp(1),
+                    Velocity(dir * (speed * 30.0)),
+                    Pos(at),
+                ));
+                ang += 36.0_f32.to_radians();
+            }
+            speed += 0.6;
+        }
     }
 }
 
