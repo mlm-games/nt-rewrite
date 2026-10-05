@@ -436,6 +436,9 @@ fn spawn_enemy_impl(
         ec.insert(BossBrain::new(kind, pos));
     }
     match kind {
+        EnemyKind::Hyper => {
+            ec.insert(crate::comps_b::HyperState::default());
+        }
         EnemyKind::Technomancer => {
             ec.insert(crate::comps_b::TechnomancerState::default());
         }

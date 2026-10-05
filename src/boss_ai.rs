@@ -35,7 +35,7 @@ use repame_sim::SimTime;
 
 use crate::anim::SpriteAnim;
 use crate::audio::{AudioCue, GameAudio};
-use crate::combat::{Explosion, queue_enemy_spawn, queue_enemy_spawn_no_kill};
+use crate::combat::{queue_enemy_spawn, queue_enemy_spawn_no_kill};
 use crate::comps_a::{
     BossIntro, BouncesLeft, DamageSource, FloorMask, GameCleanup, Health, Hitbox, LevelCleanup,
     NextHurt, PendingWallBreak, Player, Projectile, ProjectileAccel, ProjectileFade,
@@ -44,9 +44,9 @@ use crate::comps_a::{
 };
 use crate::comps_b::{
     Beam, BigGenerator, BossBrain, BossPhase, CustomExplosion, Enemy, EnemyBrain, HitWarning,
-    HurtAnim, HyperOrbitCrystal, InvisiWall, MomShot, NecroReviveArea, Portal, PortalClear, Prop,
-    PropNestMarkers, PropSprites, SecretEntrance, TechnoVisual, TechnomancerState, ThroneBall,
-    ThroneStatueProp,
+    HurtAnim, HyperCrystalArm, HyperOrbitCrystal, HyperState, InvisiWall, MomShot, NecroReviveArea,
+    Portal, PortalClear, Prop, PropNestMarkers, PropSprites, SecretEntrance, TechnoVisual,
+    TechnomancerState, ThroneBall, ThroneStatueProp,
 };
 use crate::data::{AreaId, EnemyKind};
 use crate::enemies::show_enemy_fire;
@@ -263,31 +263,6 @@ fn queue_wall_breaks_along_segment(
             }
         }
     }
-}
-
-/// Timed enemy explosion at a point (bevy `Explosion` spawn parity).
-fn spawn_explosion(
-    commands: &mut Commands,
-    owner: Entity,
-    kind: EnemyKind,
-    pos: glam::Vec2,
-    radius: f32,
-    damage: i32,
-    fuse: f32,
-) {
-    commands.spawn((
-        GameCleanup,
-        LevelCleanup,
-        Explosion {
-            timer: GTimer::from_seconds(fuse, TimerMode::Once),
-            radius,
-            damage,
-            team: Team::Enemy,
-            hits_player: true,
-            source: Some(DamageSource::enemy(owner, kind)),
-        },
-        Pos(pos),
-    ));
 }
 
 /// Single boss projectile (bevy `fire_projectile` parity: team +
@@ -509,6 +484,7 @@ pub fn boss_ai(
             Option<&mut SpriteAnim>,
             Option<&HurtAnim>,
             Option<&mut TechnomancerState>,
+            Option<&mut HyperState>,
         ),
         (With<Enemy>, With<BossBrain>, Without<Prop>),
     >,
@@ -560,6 +536,19 @@ pub fn boss_ai(
     // GML `TechnoMancer/Alarm_1.gml:28` gates emplacing on the live Turret
     // count, and `Alarm_1:13-19` / `Alarm_2` need the nearest Corpse.
     let corpse_list: Vec<glam::Vec2> = corpses.iter().map(|c| c.0).collect();
+    // GML holds the shell in `HyperCrystal.crystal[]`; here the crystals are
+    // ordinary enemies without a `BossBrain`, so `children` already lists them.
+    let crystal_list: Vec<(Entity, glam::Vec2)> = children
+        .iter()
+        .filter(|(_, e, _)| {
+            matches!(
+                e.kind,
+                EnemyKind::LaserCrystal | EnemyKind::LightningCrystal | EnemyKind::InvLaserCrystal
+            )
+        })
+        .map(|(e, _, pp)| (e, pp.0))
+        .collect();
+    let live_crystals = crystal_list.len();
     let turret_count = children
         .iter()
         .filter(|(_, e, _)| e.kind == EnemyKind::Turret)
@@ -576,6 +565,7 @@ pub fn boss_ai(
         mut anim,
         hurt,
         mut tech,
+        mut hyper,
     ) in &mut bosses
     {
         let kind = enemy.kind;
@@ -703,20 +693,26 @@ pub fn boss_ai(
                     &wall_list,
                 )
             }
-            EnemyKind::Hyper => hyper_ai(
-                &mut commands,
-                &mut trauma,
-                entity,
-                &mut boss,
-                &mut vel,
-                &mut pos,
-                def,
-                epos,
-                player_pos,
-                dt,
-                run.loop_count,
-                &mut run,
-            ),
+            EnemyKind::Hyper => {
+                if let Some(h) = hyper.as_deref_mut() {
+                    hyper_ai(
+                        &mut commands,
+                        &mut toast,
+                        entity,
+                        &mut vel,
+                        &mut pos,
+                        h,
+                        epos,
+                        player_pos,
+                        crate::enemies::line_of_sight_public(epos, player_pos, &mask),
+                        &crystal_list,
+                        live_crystals,
+                        run.loop_count,
+                        &mut run,
+                    );
+                }
+                false
+            }
             EnemyKind::FrogQueen => frog_queen_ai(
                 &mut commands,
                 &mut trauma,
@@ -2108,75 +2104,150 @@ fn throne_ii_ai(
 
 // Hyper Crystal.
 
-/// Slow drifter seeding orbit crystals + seeker detonations (bevy
-/// `hyper_ai` parity).
+/// Verbatim `objects/HyperCrystal` law.
+///
+/// `Alarm_1` (50 ticks) either re-seeds the whole crystal shell when
+/// `crystals == 0`, releases it once at most half survive, or widens the
+/// shell and freezes the core while the player is out of sight. `Alarm_2`
+/// (armed only by that last branch) is the signature "shoot the crystal next
+/// to you": it arms `alarm[4]` on whichever crystal is nearest the player when
+/// that crystal is inside 140px. `Other_10` eases `dist` toward `wantdist`
+/// at 5/step and holds still for `nospin` frames.
 #[allow(clippy::too_many_arguments)]
 fn hyper_ai(
     commands: &mut Commands,
-    trauma: &mut Trauma,
+    toast: &mut Toast,
     owner: Entity,
-    boss: &mut BossBrain,
     vel: &mut Velocity,
     pos: &mut Pos,
-    def: EnemyDef,
+    state: &mut HyperState,
     epos: glam::Vec2,
     player_pos: glam::Vec2,
-    dt: f32,
+    los: bool,
+    crystals: &[(Entity, glam::Vec2)],
+    live_crystals: usize,
     loop_count: u32,
     run: &mut Run,
 ) -> bool {
-    let desired = (boss.home - epos) * 0.4 + (player_pos - epos) * 0.1;
-    if desired.length_squared() > 1.0 {
-        vel.0 += desired.normalize_or_zero() * def.accel * 0.12 * dt;
+    let dt = 1.0 / crate::SIM_HZ as f32;
+    state.alarm1.tick(dt);
+    state.alarm2.tick(dt);
+
+    // GML `Other_10:4-5`: the shell radius eases toward `wantdist` at 5/step.
+    if state.dist < state.wantdist {
+        state.dist += 5.0;
+    } else if state.dist > state.wantdist {
+        state.dist -= 5.0;
     }
-    limit_velocity(vel, def.speed.max(35.0));
+    // GML `Other_10:6-17`: `nospin` freezes the core, otherwise it drifts
+    // along `direction` capped at 1.5 px/step, with a 50-frame `fastspin`
+    // burst right after a respawn.
+    if state.nospin > 0.0 {
+        state.nospin -= 1.0;
+        vel.0 = glam::Vec2::ZERO;
+    } else {
+        let mut step = 1.0;
+        if state.fastspin > 0.0 {
+            state.fastspin -= 1.0;
+            step += 20.0;
+        }
+        state.angle += step;
+        vel.0 = glam::Vec2::from_angle(state.angle.to_radians()) * 0.5 * 30.0;
+        limit_velocity(vel, 1.5 * 30.0);
+    }
     pos.0 += vel.0 * dt;
 
-    if boss.attack_timer.just_finished() && boss.pattern_index == 0 {
-        boss.pattern_index += 1;
-        hyper_ensure_orbit(commands, owner, epos, loop_count, boss.enraged, run);
-    } else if boss.attack_timer.just_finished() {
-        boss.pattern_index += 1;
+    if state.alarm1.just_finished() {
+        if !state.crystals {
+            // GML `Alarm_1:11-26`: a released shell is re-seeded in full, so
+            // the fight keeps regenerating adds.
+            hyper_ensure_orbit(commands, owner, epos, loop_count, false, run);
+            state.crystals = true;
+            state.fastspin = 50.0;
+            state.dist = 0.0;
+            state.wantdist = 25.0;
+            state.alarm1 = gml_alarm(50.0);
+        } else {
+            // GML `Alarm_1:34-36`: at most half alive releases the shell.
+            let total = hyper_orbit_count(loop_count);
+            if live_crystals <= total / 2 {
+                state.crystals = false;
+                state.alarm1 = gml_alarm(50.0);
+            } else {
+                state.wantdist = 80.0;
+                // GML `Alarm_1:40-46`: player out of sight.
+                if !los && state.intro {
+                    state.wantdist = 120.0;
+                    state.nospin = 50.0;
+                    state.alarm2 = gml_alarm(50.0);
+                    state.alarm1 = gml_alarm(80.0);
+                }
+            }
+        }
     }
 
-    if boss.special_timer.just_finished() && epos.distance(player_pos) > 220.0 {
-        hyper_search_detonate(
-            commands,
-            trauma,
-            owner,
-            player_pos,
-            loop_count,
-            boss.enraged,
-        );
-        boss.set_phase(BossPhase::Cooldown, 0.8);
+    // GML `HyperCrystal/Alarm_2.gml`: the crystal nearest the player is
+    // flagged `explode = 1` and has its `alarm[4]` loaded with 40.
+    if state.alarm2.just_finished() {
+        let victim = crystals
+            .iter()
+            .min_by(|a, b| {
+                a.1.distance_squared(player_pos)
+                    .total_cmp(&b.1.distance_squared(player_pos))
+            })
+            .filter(|(_, c)| c.distance(player_pos) < 140.0);
+        match victim {
+            Some((at, _)) if state.intro => {
+                commands.entity(*at).insert(HyperCrystalArm {
+                    timer: gml_alarm(40.0),
+                });
+            }
+            // GML `Alarm_2:11` - nothing in reach, so retry almost at once.
+            _ => state.alarm1 = gml_alarm(5.0),
+        }
     }
+
+    // GML `Alarm_1:4-10`: the intro card, once, on a clear line.
+    if !state.intro && los {
+        state.intro = true;
+        state.alarm3 = gml_alarm(2.0);
+    }
+    if state.alarm3.just_finished() {
+        toast.show("HYPER CRYSTAL");
+        commands.spawn((
+            GameCleanup,
+            BossIntro {
+                timer: GTimer::from_seconds(1.1, TimerMode::Once),
+            },
+        ));
+        state.alarm3 = gml_alarm_off();
+    }
+
     false
 }
 
-/// Seeker detonation on the player: contact blast + beam ring (bevy
-/// `hyper_search_detonate` parity).
-pub fn hyper_search_detonate(
-    commands: &mut Commands,
-    trauma: &mut Trauma,
-    owner: Entity,
-    player_pos: glam::Vec2,
-    loop_count: u32,
-    enraged: bool,
-) {
-    trauma.add(0.3);
-    let lasers = 7 + loop_count as usize * 2 + usize::from(enraged);
-    spawn_explosion(commands, owner, EnemyKind::Hyper, player_pos, 90.0, 6, 0.03);
+/// GML `LaserCrystal/Alarm_4.gml:1-16`: `hp = 0`, four 48px wall holes, and a
+/// `5 + loops * 2` beam radial.
+fn hyper_detonate_crystal(commands: &mut Commands, at: glam::Vec2, loop_count: u32) {
+    let lasers = 5 + loop_count as usize * 2;
     for angle in ring_angles(lasers, 0.0) {
-        let dir = dir_from_angle(angle);
-        spawn_enemy_beam(
-            commands,
-            player_pos + dir * 210.0,
-            dir,
-            420.0,
-            12.0,
-            2,
-            0.28,
-        );
+        spawn_enemy_beam(commands, at, dir_from_angle(angle), 420.0, 12.0, 2, 0.28);
+    }
+    for off in [
+        glam::Vec2::new(-48.0, 0.0),
+        glam::Vec2::new(48.0, 0.0),
+        glam::Vec2::new(0.0, -48.0),
+        glam::Vec2::new(0.0, 48.0),
+    ] {
+        commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            PortalClear {
+                timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
+                scale: 1.0,
+            },
+            Pos(at + off),
+        ));
     }
 }
 
@@ -2191,11 +2262,8 @@ pub fn hyper_ensure_orbit(
     enraged: bool,
     run: &mut Run,
 ) {
-    let wanted = (hyper_orbit_count(loop_count) + usize::from(enraged)).min(12);
-    let n = wanted;
+    let n = (hyper_orbit_count(loop_count) + usize::from(enraged)).min(12);
     for i in 0..n {
-        let angle = i as f32 / n as f32 * std::f32::consts::TAU;
-        let radius = 70.0 + (i % 3) as f32 * 12.0;
         // GML type law: LaserCrystal, or area-104 triple-inv + lightning.
         let kind = if run.area == AreaId::CursedCaves {
             match rand::rng().random_range(0..4) {
@@ -2229,66 +2297,75 @@ pub fn hyper_ensure_orbit(
             NextHurt::default(),
             Hitbox { radius: def.radius },
             Velocity(glam::Vec2::ZERO),
-            Pos(pos + dir_from_angle(angle) * radius),
-            HyperOrbitCrystal {
-                owner,
-                angle,
-                radius,
-                angular_speed: 1.15 + (i as f32) * 0.04,
-                fire_timer: GTimer::from_seconds(1.4 + (i % 3) as f32 * 0.35, TimerMode::Repeating),
-            },
+            // GML `HyperCrystal/Alarm_1:22` creates every crystal on the core.
+            Pos(pos),
+            HyperOrbitCrystal { owner, slot: i },
         ));
     }
 }
 
-/// Orbit crystals around their core, firing beams; orphaned crystals
-/// drift and pop (bevy `tick_hyper_orbit_crystals` parity, `Pos`-based).
+/// GML `HyperCrystal/Other_10.gml:18-33`: while the shell is up, every live
+/// crystal is parked on the core and pushed out along `angle` by `dist` -
+/// except any already under a third of its health, which the core lets go of
+/// and which then drifts on its own `direction`. The armed crystal's
+/// `alarm[4]` is resolved here too, since only the crystal knows where it
+/// ended up.
 pub fn tick_hyper_orbit_crystals(
     time: Res<SimTime>,
     mut commands: Commands,
-    mut q: Query<(Entity, &mut Pos, &mut Velocity, &mut HyperOrbitCrystal)>,
-    cores: Query<&Pos, (With<Enemy>, Without<HyperOrbitCrystal>)>,
+    run: Res<Run>,
+    mut q: Query<
+        (
+            &mut Pos,
+            &mut Health,
+            &HyperOrbitCrystal,
+            Option<&mut HyperCrystalArm>,
+        ),
+        (With<HyperOrbitCrystal>, Without<Enemy>),
+    >,
+    cores: Query<(&Pos, &HyperState), (With<Enemy>, With<HyperState>)>,
 ) {
     let dt = time.delta_secs;
-    for (entity, mut pos, mut vel, mut crystal) in q.iter_mut() {
-        let Ok(core_pos) = cores.get(crystal.owner) else {
-            vel.0 *= 0.92;
-            if vel.0.length() < 5.0 {
-                commands.entity(entity).despawn();
-            }
-            continue;
-        };
-
-        crystal.angle += crystal.angular_speed * dt;
-        let center = core_pos.0;
-        pos.0 = center + dir_from_angle(crystal.angle) * crystal.radius;
-        vel.0 = glam::Vec2::ZERO;
-
-        crystal.fire_timer.tick(dt);
-        if !crystal.fire_timer.just_finished() {
+    for (mut pos, mut health, crystal, mut arm) in &mut q {
+        // GML `Other_10:23` - a crystal under a third of its health is let go.
+        if health.hp <= health.max / 3 {
             continue;
         }
+        let Ok((core_pos, state)) = cores.get(crystal.owner) else {
+            continue;
+        };
+        pos.0 = core_pos.0 + dir_from_angle(state.angle.to_radians()) * state.dist;
 
-        let origin = pos.0;
-        let aim = dir_from_angle(crystal.angle + std::f32::consts::FRAC_PI_2);
-        spawn_enemy_beam(
-            &mut commands,
-            origin + aim * 210.0,
-            aim,
-            420.0,
-            12.0,
-            2,
-            0.28,
-        );
+        let Some(arm) = arm.as_deref_mut() else {
+            continue;
+        };
+        arm.timer.tick(dt);
+        if arm.timer.just_finished() {
+            hyper_detonate_crystal(&mut commands, pos.0, run.loop_count);
+            // GML `Alarm_4:1` is `hp = 0`, so the crystal still goes through
+            // the normal death path and pays out its `scrDrop`.
+            health.hp = 0;
+        }
     }
 }
 
-// Mom.
+// Captain.
 
-/// Kiting spore ring + egg spawns (bevy `mom_ai` parity).
+/// Verbatim `objects/Last` law: decide (`Alarm_1`), two 30-round spin
+/// patterns (`Alarm_2`), 17-step warp-out (`Alarm_3`), two-stage dash
+/// (`Alarm_4`), shared reset + `LastBall` (`Alarm_5`), intro chain
+/// (`Alarm_6`/`Alarm_7`), capped dash/walk (`Step_0`), destroy-or-bounce
+/// wall law (`Collision_Wall`).
+///
+/// register map: `attack_timer`/`special_timer`/`phase_timer` =
+/// `alarm[1]`/`alarm[2]`/`alarm[5]`; `pattern_index` = `attacktype`;
+/// `brain.ammo`/`walk`/`gunangle` = `ammo`/`walk`/`gunangle` (radians);
+/// `boss.target` = `direction`; `boss.aux` = `intro`; `brain.fire` =
+/// `introcharge`; `brain.burst_timer` = `alarm[6]`/`alarm[7]`; `phase` =
+/// `charge` + `drawspr` (Telegraph = `alarm[3]` warp-out, Charging =
+/// `charge == 1`, Cooldown = `charge == -1`, Radial = `sprLastSpin`,
+/// Landing = `sprLastWarpIn`).
 #[allow(clippy::too_many_arguments)]
-// Frog Queen.
-
 /// Verbatim `objects/FrogQueen` law: aim-drift brain (`Alarm_1`), hatch
 /// stream into a single gas mortar (`Alarm_2`), capped waddle (`Other_10`).
 ///
@@ -2424,18 +2501,15 @@ fn frog_queen_ai(
     fired
 }
 
-// Technomancer.
-
 /// Verbatim `objects/TechnoMancer` law: a six-alarm machine over
 /// `main`/`intro`/`drawspr` that never moves (`Other_10`: `speed = 0`,
 /// `x = xstart`). The live instance alternates between reviving corpses and
 /// emplacing turrets; the others stay dormant.
 ///
 /// `alarm[1]` is the 90-tick decide. While `main` and mid-appearance it
-/// finishes appearing and hands off; while awake it revives three corpses
+/// finishes appearing and stands down; while awake it revives three corpses
 /// when one is visible, else emplaces `1 + loops` turrets while fewer than
-/// `4 * loops` exist; otherwise it disowns the fight (`drawspr` becomes
-/// `sprTechnoMancerDisappear`).
+/// `4 * loops` exist; otherwise it disowns the fight.
 #[allow(clippy::too_many_arguments)]
 fn technomancer_ai(
     commands: &mut Commands,
@@ -2460,8 +2534,7 @@ fn technomancer_ai(
         a.tick(dt);
     }
 
-    // GML `Alarm_4`: whichever instance is nearest the player takes the fight
-    // and starts appearing.
+    // GML `Alarm_4`: the fight passes to whichever instance is nearest.
     if state.alarm4.just_finished() {
         state.visual = TechnoVisual::Inactive;
         state.main = true;
@@ -2469,8 +2542,7 @@ fn technomancer_ai(
         state.alarm5 = gml_alarm(17.0);
     }
 
-    // GML `Alarm_3` (`scrBossIntro(7)`), fired off `alarm[5]` once the
-    // instance is awake with a clear line to the player.
+    // GML `Alarm_3` (`scrBossIntro(7)`), once the instance is awake.
     if state.alarm5.just_finished() && !state.intro && state.visual == TechnoVisual::Active {
         state.intro = true;
         toast.show("TECHNOMANCER");
@@ -2487,7 +2559,7 @@ fn technomancer_ai(
         spawn_techno_turrets(commands, catalog, epos, 1 + loops, mask);
     }
 
-    // GML `Alarm_2`: three corpses, at the player-facing bearing and +-80deg.
+    // GML `Alarm_2`: three corpses at the player-facing bearing and +-80deg.
     if state.alarm2.just_finished() {
         revive_techno_corpses(commands, epos, player_pos, corpses, mask);
     }
@@ -2502,8 +2574,7 @@ fn technomancer_ai(
     }
 
     match state.visual {
-        // GML `Alarm_1:4-9`: finish appearing, then stand down as `main` so
-        // the next tick's `Alarm_4` can re-elect whoever is nearest.
+        // GML `Alarm_1:4-9`: finish appearing, then stand down as `main`.
         TechnoVisual::Appear => {
             state.visual = TechnoVisual::Active;
             state.main = false;
@@ -2513,8 +2584,7 @@ fn technomancer_ai(
         _ => {
             // GML `Alarm_1:13-27`. The revive gate is `random(5) < 6`, always
             // true in GML, so any visible corpse outranks emplacing turrets.
-            let sees_corpse = nearest_walkable(corpses, epos, mask).is_some();
-            if sees_corpse {
+            if nearest_walkable(corpses, epos, mask).is_some() {
                 state.alarm5 = gml_alarm(70.0);
                 state.alarm2 = gml_alarm(55.0);
             } else if (turrets as u32) < 4 * loops {
@@ -2543,15 +2613,20 @@ fn spawn_techno_turrets(
     for _ in 0..count {
         let ang = rng.random_range(0.0..std::f32::consts::TAU);
         let d = 60.0 + rng.random_range(0.0..100.0);
-        let spot = snap_to_floor(at + glam::Vec2::new(ang.cos(), ang.sin()) * d, mask);
-        queue_enemy_spawn(commands, EnemyKind::Turret, spot, 1.0, 0);
+        queue_enemy_spawn(
+            commands,
+            EnemyKind::Turret,
+            snap_to_floor(at + glam::Vec2::new(ang.cos(), ang.sin()) * d, mask),
+            1.0,
+            0,
+        );
     }
     let _ = catalog;
 }
 
 /// GML `TechnoMancer/Alarm_2.gml:1-21`: revive the nearest corpse to each of
-/// three bearings around the player-facing one, each offset 80px out plus a
-/// fresh +-40 jitter, and only when the line is clear.
+/// three bearings around the player-facing one, each 80px out plus a fresh
+/// +-40 jitter, and only when the line is clear.
 fn revive_techno_corpses(
     commands: &mut Commands,
     at: glam::Vec2,
@@ -2584,7 +2659,7 @@ fn revive_techno_corpses(
     }
 }
 
-/// Nearest point to `from` that is not inside geometry, if any.
+/// Nearest point to `from` with a clear line, if any.
 fn nearest_walkable(
     points: &[glam::Vec2],
     from: glam::Vec2,
@@ -2609,23 +2684,6 @@ fn snap_to_floor(at: glam::Vec2, mask: &FloorMask) -> glam::Vec2 {
         .unwrap_or(at)
 }
 
-// Captain.
-
-/// Verbatim `objects/Last` law: decide (`Alarm_1`), two 30-round spin
-/// patterns (`Alarm_2`), 17-step warp-out (`Alarm_3`), two-stage dash
-/// (`Alarm_4`), shared reset + `LastBall` (`Alarm_5`), intro chain
-/// (`Alarm_6`/`Alarm_7`), capped dash/walk (`Step_0`), destroy-or-bounce
-/// wall law (`Collision_Wall`).
-///
-/// register map: `attack_timer`/`special_timer`/`phase_timer` =
-/// `alarm[1]`/`alarm[2]`/`alarm[5]`; `pattern_index` = `attacktype`;
-/// `brain.ammo`/`walk`/`gunangle` = `ammo`/`walk`/`gunangle` (radians);
-/// `boss.target` = `direction`; `boss.aux` = `intro`; `brain.fire` =
-/// `introcharge`; `brain.burst_timer` = `alarm[6]`/`alarm[7]`; `phase` =
-/// `charge` + `drawspr` (Telegraph = `alarm[3]` warp-out, Charging =
-/// `charge == 1`, Cooldown = `charge == -1`, Radial = `sprLastSpin`,
-/// Landing = `sprLastWarpIn`).
-#[allow(clippy::too_many_arguments)]
 fn captain_ai(
     commands: &mut Commands,
     trauma: &mut Trauma,

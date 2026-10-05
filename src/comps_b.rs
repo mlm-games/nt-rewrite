@@ -414,10 +414,62 @@ impl PendingDelayedBoss {
 #[derive(Component)]
 pub struct HyperOrbitCrystal {
     pub owner: Entity,
+    /// Slot in the shell; GML keeps the crystal list indexed 0..`cnumber`
+    /// and steps `angle += 360 / cnumber` per live slot.
+    pub slot: usize,
+}
+
+/// GML `LaserCrystal/Alarm_4` is armed by `HyperCrystal/Alarm_2` through the
+/// crystal's own `explode`/`alarm[4]` pair; 40 ticks later the crystal blows a
+/// `5 + loops * 2` radial and punches four holes in the walls.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct HyperCrystalArm {
+    pub timer: Timer,
+}
+
+/// GML `HyperCrystal` registers: `crystals`, `wantdist`, `dist`, `nospin`,
+/// `fastspin`, `intro` plus three alarms. `BossBrain` has no room for the
+/// distance/spin pair, so the core carries its own.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct HyperState {
+    /// `crystals`: 0 when the shell is released (and so due a respawn),
+    /// 1 while it is up.
+    pub crystals: bool,
+    /// `alarm[1]`: the decide cadence, 50 at create.
+    pub alarm1: Timer,
+    /// `alarm[2]`: the "shoot the crystal next to you" search.
+    pub alarm2: Timer,
+    /// `alarm[3]`: intro card, 2 ticks.
+    pub alarm3: Timer,
+    /// `wantdist`, eased toward by `dist` at 5 per step.
+    pub wantdist: f32,
+    pub dist: f32,
+    /// `nospin`: frames during which the core holds position.
+    pub nospin: f32,
+    /// `fastspin`: extra +20 degrees per step right after a respawn.
+    pub fastspin: f32,
+    /// GML `angle`, in degrees.
     pub angle: f32,
-    pub radius: f32,
-    pub angular_speed: f32,
-    pub fire_timer: Timer,
+    /// GML `intro`.
+    pub intro: bool,
+}
+
+impl Default for HyperState {
+    fn default() -> Self {
+        Self {
+            crystals: false,
+            // GML `HyperCrystal/Alarm_1.gml:1` `alarm[1] = 50`.
+            alarm1: Timer::from_seconds(50.0 / 30.0, TimerMode::Once),
+            alarm2: Timer::disarmed(),
+            alarm3: Timer::disarmed(),
+            wantdist: 0.0,
+            dist: 0.0,
+            nospin: 0.0,
+            fastspin: 0.0,
+            angle: 0.0,
+            intro: false,
+        }
+    }
 }
 
 #[derive(Component, Clone, Debug)]
