@@ -338,10 +338,16 @@ pub fn build_sim_schedule() -> Schedule {
                     enemies::tick_want_popo
                         .in_set(NtSimSet::Combat)
                         .run_if(gameplay_active),
+                    enemies::tick_want_van
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
                     enemies::tick_last_die
                         .in_set(NtSimSet::Combat)
                         .run_if(gameplay_active),
                     enemies::tick_want_revive_popo_freak
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    crate::idpd::tick_pending_rogue_portals
                         .in_set(NtSimSet::Combat)
                         .run_if(gameplay_active),
                     enemies::tick_last_balls
@@ -436,13 +442,10 @@ pub fn build_sim_schedule() -> Schedule {
                 walls::apply_pending_wall_breaks
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
-                idpd::tick_idpd_raids
+                idpd::tick_idpd_spawn_world
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
                 idpd::tick_idpd_vans
-                    .in_set(NtSimSet::Combat)
-                    .run_if(gameplay_active),
-                idpd::hq_pressure
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
                 secrets::tick_oasis_bandit_window

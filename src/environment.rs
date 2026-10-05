@@ -772,8 +772,8 @@ pub fn spawn_prop_death_effect(
             let speed = rng.random_range(0.2..1.7) * 30.0;
             let mut gas = crate::comps_b::ToxicGasState::new();
             gas.grow_speed = 0.003 + rng.random_range(0.0..0.002);
-            gas.rot = (1.0 + rng.random_range(0.0..=3.0))
-                * if rng.random_bool(0.5) { 1.0 } else { -1.0 };
+            gas.rot =
+                (1.0 + rng.random_range(0.0..=3.0)) * if rng.random_bool(0.5) { 1.0 } else { -1.0 };
             crate::enemies::spawn_toxic_gas(
                 commands,
                 pos,

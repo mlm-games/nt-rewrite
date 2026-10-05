@@ -58,10 +58,8 @@ pub fn apply_pending_wall_breaks(
     // GML `FloorExplo/Create_0:19-27` runs before its `Top` spawns, so the new
     // `TopSmall`s test the re-sealed ring: track the post-break wall set here
     // rather than the deferred entity view.
-    let mut live_walls: std::collections::HashSet<(i32, i32)> = walls
-        .iter()
-        .map(|(_, cell, _)| (cell.0, cell.1))
-        .collect();
+    let mut live_walls: std::collections::HashSet<(i32, i32)> =
+        walls.iter().map(|(_, cell, _)| (cell.0, cell.1)).collect();
 
     for (marker_e, brk) in &pending {
         commands.entity(marker_e).despawn();

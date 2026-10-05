@@ -4623,9 +4623,7 @@ fn init_schedule_resources(world: &mut World) {
         HeavyHeart, LastDamageTaken, MutationChoice, OpenMind, Run, SaveDirty, ScarierFace, Score,
         SelectedCharacter, Toast,
     };
-    use crate::comps_b::{
-        FloorTransition, IdpdRaidState, LoopTransition, PortalCarriedWeapons, ThroneRoomState,
-    };
+    use crate::comps_b::{FloorTransition, LoopTransition, PortalCarriedWeapons, ThroneRoomState};
     use crate::effects::{ChromaticAberration, FlashWhite, HitStop, RumbleRequest, SlowMotion};
     use crate::msg::Queue;
     use crate::progression::DeferredFloorGen;
@@ -4648,7 +4646,6 @@ fn init_schedule_resources(world: &mut World) {
     world.insert_resource(Queue::<RumbleRequest>::default());
     world.insert_resource(DeathEvents::default());
     world.insert_resource(crate::secrets::SecretTriggers::default());
-    world.insert_resource(IdpdRaidState::default());
     world.insert_resource(ThroneRoomState::default());
     world.insert_resource(HammerheadBudget::default());
     world.insert_resource(LastDamageTaken::default());

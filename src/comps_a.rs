@@ -1324,7 +1324,12 @@ mod gml_top_small_tests {
         tops.seed(&floor, &ring_walls());
         assert!(!tops.cells.contains(&(0, -1)), "standing wall has no tile");
 
-        tops.spawn_around_break((-1, 0), &floor, &ring_walls(), &std::collections::HashSet::new());
+        tops.spawn_around_break(
+            (-1, 0),
+            &floor,
+            &ring_walls(),
+            &std::collections::HashSet::new(),
+        );
         assert!(
             !tops.cells.contains(&(0, -1)),
             "still a wall after the break"

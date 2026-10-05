@@ -6085,6 +6085,60 @@ pub fn tick_last_die(
     }
 }
 
+/// GML `objects/WantVan` (`Create_0` + `Step_0`): the marker only fires once
+/// a popo kill has set `canspawn`, and only when the floor's enemy count
+/// drops under `spawnmoment` of the starting total (or to nothing).
+pub fn tick_want_van(
+    mut commands: Commands,
+    catalog: Res<repame_anim::AnimCatalog>,
+    run: Res<Run>,
+    scarier: Res<ScarierFace>,
+    heavy_heart: Res<HeavyHeart>,
+    mask: Res<FloorMask>,
+    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
+    enemies: Query<(), With<Enemy>>,
+    mut markers: Query<(Entity, &mut crate::comps_b::WantVan)>,
+) {
+    if markers.is_empty() {
+        return;
+    }
+    let Ok(player_pos) = player_q.single().map(|p| p.0) else {
+        return;
+    };
+    let live = enemies.iter().count();
+    let mut rng = rand::rng();
+    let mut raised = 0u32;
+    for (entity, mut marker) in &mut markers {
+        if !marker.canspawn {
+            continue;
+        }
+        if live != 0 && !((live as f32) < (marker.enemies as f32) * marker.spawnmoment) {
+            continue;
+        }
+        marker.canspawn = false;
+        let at = crate::idpd::van_spawn_site(&mut rng, player_pos, &mask);
+        crate::idpd::spawn_van(
+            &mut commands,
+            &catalog,
+            at,
+            player_pos,
+            run.loop_count,
+            run.area,
+            1.0,
+            run.loop_count,
+            EnemySpawnContext {
+                subarea: run.floor_in_area,
+                blood_crown: run.blood_crown,
+                scarier_face: scarier.0,
+                heavy_heart: heavy_heart.0,
+            },
+        );
+        raised += 1;
+        commands.entity(entity).despawn();
+    }
+    let _ = raised;
+}
+
 /// GML `objects/WantPopo` (`Create_0` + `Step_0`). Each marker spends
 /// half a `GameCont.popolevel` on its first tick, then watches the floor's
 /// live enemy count: once it drops under `spawnmoment` of the starting total

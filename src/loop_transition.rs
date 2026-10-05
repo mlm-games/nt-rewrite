@@ -12,8 +12,7 @@ use crate::audio::AudioCue;
 use crate::combat::queue_enemy_spawn;
 use crate::comps_a::{GameCleanup, LevelCleanup, Player, Run, Toast};
 use crate::comps_b::{
-    CampfirePhase, CampfireProp, CampfireState, CuzStrip, Enemy, IdpdRaidState, LoopTransition,
-    YungCuz, YvCouch,
+    CampfirePhase, CampfireProp, CampfireState, CuzStrip, Enemy, LoopTransition, YungCuz, YvCouch,
 };
 use crate::data::EnemyKind;
 use crate::idpd::is_idpd_kind;
@@ -66,8 +65,8 @@ pub fn mark_throne_ii_defeated(toast: &mut Toast, trauma: &mut Trauma) {
 
 /// The campfire waits while IDPD are alive or a raid warning is
 /// pending (bevy `campfire_needs_idpd_clear` parity).
-pub fn campfire_needs_idpd_clear(idpd_alive: usize, raid_pending: bool) -> bool {
-    idpd_alive > 0 || raid_pending
+pub fn campfire_needs_idpd_clear(idpd_alive: usize) -> bool {
+    idpd_alive > 0
 }
 
 fn start_campfire_rising(campfire: &mut CampfireState, toast: &mut Toast, trauma: &mut Trauma) {
@@ -85,7 +84,6 @@ pub fn tick_campfire(
     time: Res<SimTime>,
     mut commands: Commands,
     mut transition: ResMut<LoopTransition>,
-    raid: Res<IdpdRaidState>,
     run: Res<Run>,
     mut trauma: ResMut<Trauma>,
     mut toast: ResMut<Toast>,
@@ -99,8 +97,7 @@ pub fn tick_campfire(
         .filter(|enemy| is_idpd_kind(enemy.kind))
         .count();
 
-    let raid_pending = raid.pending_wave.is_some();
-    let needs_idpd_clear = campfire_needs_idpd_clear(idpd_alive, raid_pending);
+    let needs_idpd_clear = campfire_needs_idpd_clear(idpd_alive);
 
     for (entity, camp_pos, mut campfire) in campfires.iter_mut() {
         let anchor = camp_pos.0;

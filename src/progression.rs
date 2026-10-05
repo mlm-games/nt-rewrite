@@ -1325,6 +1325,9 @@ pub fn spawn_portal(
             def,
         ));
     }
+    // GML `Portal/Create_0.gml:16-20`.
+    let at = pos;
+    commands.queue(move |world: &mut World| crate::idpd::rogue_portal_paidown(world, at));
 
     commands.spawn((
         GameCleanup,

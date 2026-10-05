@@ -9,7 +9,7 @@ use bevy_ecs::prelude::*;
 use crate::comps_a::{
     Health, Inventory, PendingMutation, PendingUltra, Player, Run, Score, SelectedCharacter, Toast,
 };
-use crate::comps_b::{BossBrain, Enemy, IdpdRaidState, Revive};
+use crate::comps_b::{BossBrain, Enemy, Revive};
 use crate::data::{AbilityKind, CrownKind};
 use crate::enemy_data::enemy_def;
 use crate::savedata_part::{SaveData, character_def};
@@ -81,7 +81,6 @@ pub struct HudState {
     /// An IDPD raid wave is queued (warning toast pending/flying). The bevy
     /// build surfaced this only as the "IDPD INCOMING" toast; headless gets
     /// the explicit bit so the canvas can draw the warning badge.
-    pub idpd_warning: bool,
     pub toast: String,
     pub toast_timer: f32,
     /// GML run clock `M:SS.CC` (from `Run.tottimer` steps).
@@ -132,7 +131,6 @@ impl Default for HudState {
             boss_hp: 0,
             boss_max: 0,
             boss_name: String::new(),
-            idpd_warning: false,
             toast: String::new(),
             toast_timer: 0.0,
             timer_string: String::new(),
@@ -426,10 +424,6 @@ pub fn sync_hud_state(world: &World) -> HudState {
     // GML clock + map name (`scrDrawMiscHUD` bottom-right rows).
     hud.timer_string = run_timer_string(run.tottimer);
     hud.area_string = run_area_string(run);
-
-    if let Some(raid) = world.get_resource::<IdpdRaidState>() {
-        hud.idpd_warning = raid.pending_wave.is_some();
-    }
 
     let (choices, ids) = if let Some(ultra) = world.get_resource::<PendingUltra>() {
         (

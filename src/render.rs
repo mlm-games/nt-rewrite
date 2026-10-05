@@ -4595,19 +4595,6 @@ pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
             bold: false,
         });
     }
-    if hud.idpd_warning {
-        items.push(MenuGuiText {
-            text: "!! IDPD INCOMING !!".to_string(),
-            gx: cx,
-            gy: 32.0,
-            color: [255, 64, 64, 255],
-            px: 7.0,
-            centered: true,
-            middle_y: false,
-            right: false,
-            bold: false,
-        });
-    }
     gui_texts_dp(canvas_dp, items)
 }
 
@@ -8221,9 +8208,7 @@ fn enemy_shadow(kind: EnemyKind) -> Option<ShadowSpec> {
         EnemyKind::Maggot | EnemyKind::RadMaggot => ShadowSpec::new("images/shd16.png", 0.0, 0.0),
         EnemyKind::BigMaggot => ShadowSpec::new("images/shd32.png", 0.0, 0.0),
         EnemyKind::FiredMaggot => return None,
-        EnemyKind::BigBandit => {
-            ShadowSpec::new("images/shd32.png", 0.0, 4.0)
-        }
+        EnemyKind::BigBandit => ShadowSpec::new("images/shd32.png", 0.0, 4.0),
         EnemyKind::BigDog => ShadowSpec::new("images/shd96.png", 0.0, 0.0),
         EnemyKind::Hyper => ShadowSpec::new("images/shd64.png", 0.0, 16.0),
         EnemyKind::IdpdVan => ShadowSpec::new("images/shd96.png", 0.0, -8.0),
@@ -11493,12 +11478,6 @@ pub fn hud_texts(world: &mut World) -> Vec<(String, [f32; 2])> {
         out.push((
             format!("{} {}/{}", hud.boss_name, hud.boss_hp, hud.boss_max),
             [0.0, -ARENA_H / 2.0 + 8.0],
-        ));
-    }
-    if hud.idpd_warning {
-        out.push((
-            "!! IDPD INCOMING !!".to_string(),
-            [0.0, -ARENA_H / 2.0 + 28.0],
         ));
     }
     if hud.game_over {

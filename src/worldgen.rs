@@ -70,6 +70,8 @@ pub enum PopulationEvent {
     WantPopo {
         rogue_only: bool,
     },
+    /// GML `WantVan` marker (`scrPopulate.gml:283-285`).
+    WantVan,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -237,6 +239,17 @@ fn generation_goal_for_run(run: &Run) -> usize {
 pub fn area_can_have_popo(run: &Run, gml_area: i32) -> bool {
     let last = run.floor_in_area >= gml_max_subarea(gml_area);
     !matches!(gml_area, 100 | 107 | 0) && !(gml_area == 106 && last) && !(gml_area == 7 && last)
+}
+
+/// GML `GameCont/Other_4.gml:1-6`: `novans` (no IDPD vans on this floor) is
+/// true on the palace and HQ finales, on loop 0, and in the vault, campfire
+/// and crib.
+pub fn gml_novans(run: &Run) -> bool {
+    let gml_area = gml_area_from_run(run) as i32;
+    let last = run.floor_in_area >= gml_max_subarea(gml_area);
+    ((gml_area == 7 || gml_area == 106) && last)
+        || run.loop_count == 0
+        || matches!(gml_area, 100 | 0 | 107)
 }
 
 pub fn is_secret_area(area: AreaId) -> bool {
@@ -2481,6 +2494,14 @@ fn populate(
             events.push(PopulationEvent::WantPopo { rogue_only: false });
         }
         events.push(PopulationEvent::WantPopo { rogue_only: true });
+        // GML `scrPopulate.gml:283-285`: `_actual_loops = _loops -
+        // scrGameIsHardmode()` vans, unless `GameCont.novans`.
+        if !gml_novans(run) {
+            let actual = run.loop_count.saturating_sub(u32::from(run.hardmode));
+            for _ in 0..actual {
+                events.push(PopulationEvent::WantVan);
+            }
+        }
     }
 
     // GML :319-376.

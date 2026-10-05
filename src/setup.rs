@@ -2028,6 +2028,19 @@ pub fn spawn_level(
                     Pos(pos),
                 ));
             }
+            PopulationEvent::WantVan => {
+                // GML `WantVan/Create_0.gml:8-10`.
+                let mut rng = rand::rng();
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    crate::comps_b::WantVan {
+                        enemies: enemy_count,
+                        spawnmoment: 0.2 + rng.random_range(0.0..0.4),
+                        canspawn: false,
+                    },
+                ));
+            }
             PopulationEvent::WantPopo { rogue_only } => {
                 // GML `WantPopo/Create_0.gml:7-8` snapshots the floor's
                 // enemy count and rolls its spawn moment.

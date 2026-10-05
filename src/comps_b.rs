@@ -93,35 +93,6 @@ impl Default for IdpdVanBrain {
 #[derive(Component)]
 pub struct IdpdShieldUnit;
 
-#[derive(Resource)]
-pub struct IdpdRaidState {
-    pub cooldown: Timer,
-    pub warning: Timer,
-    pub pending_wave: Option<RaidWave>,
-    pub wave_index: u32,
-    pub kills_checkpoint: u32,
-}
-
-impl Default for IdpdRaidState {
-    fn default() -> Self {
-        Self {
-            cooldown: Timer::from_seconds(20.0, TimerMode::Repeating),
-            warning: Timer::from_seconds(1.25, TimerMode::Once),
-            pending_wave: None,
-            wave_index: 0,
-            kills_checkpoint: 0,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RaidWave {
-    Light,
-    Medium,
-    Heavy,
-    VanDrop,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CampfirePhase {
     Sitting,
@@ -1712,6 +1683,17 @@ pub struct RevivePopoFreak;
 #[derive(Component, Clone, Copy, Debug)]
 pub struct LastDie {
     pub timer: Timer,
+}
+
+/// GML `objects/WantVan`: an IDPD van marker. It waits for a popo kill
+/// (`scrOnPopoKill` sets `canspawn`), then raises a `VanSpawn` once the
+/// floor's enemy count falls under `spawnmoment` of its starting total.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct WantVan {
+    pub enemies: usize,
+    /// `Create_0.gml:9` `spawnmoment = 0.2 + random(0.4)`.
+    pub spawnmoment: f32,
+    pub canspawn: bool,
 }
 
 /// GML `objects/WantPopo`: one IDPD reinforcement marker. It counts the

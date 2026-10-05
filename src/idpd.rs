@@ -19,36 +19,20 @@ use rand::RngExt;
 use repame_fx::Trauma;
 use repame_sim::SimTime;
 
-use crate::audio::{AudioCue, GameAudio};
+use crate::audio::AudioCue;
 use crate::combat::{queue_enemy_spawn, queue_enemy_spawn_birth};
 use crate::comps_a::{
-    ARENA_H, ARENA_W, FloorMask, GameCleanup, Health, HeavyHeart, Inventory, LevelCleanup, Player,
-    Run, ScarierFace, Toast,
+    FloorMask, GameCleanup, Health, HeavyHeart, Inventory, LevelCleanup, Player, Run, ScarierFace,
 };
 use crate::comps_b::{
-    Enemy, GmlImage, IdpdRaidState, IdpdShieldUnit, LoopTransition, NativeMotion, NativeWallMotion,
-    PickupLifetime, PortalClear, RaidWave,
+    Enemy, GmlImage, IdpdShieldUnit, NativeMotion, NativeWallMotion, PickupLifetime, PortalClear,
 };
 use crate::data::{AreaId, EnemyKind};
 use crate::decide_wep::WeaponDropsRng;
-use crate::effects::spawn_burst;
 use crate::enemies::{EnemySpawnContext, spawn_enemy_at};
 use crate::msg::Queue;
 use crate::spatial::Pos;
 use crate::time::{GTimer, TimerMode};
-
-/// Areas where raids never trigger (bevy parity).
-fn is_raid_suppressed_area(area: AreaId) -> bool {
-    matches!(
-        area,
-        AreaId::Vault
-            | AreaId::CrownVault
-            | AreaId::Oasis
-            | AreaId::PizzaSewers
-            | AreaId::Campfire
-            | AreaId::HQ
-    )
-}
 
 /// True for the four IDPD kinds (bevy parity).
 pub fn is_idpd_kind(kind: EnemyKind) -> bool {
@@ -56,35 +40,6 @@ pub fn is_idpd_kind(kind: EnemyKind) -> bool {
         kind,
         EnemyKind::IdpdGrunt | EnemyKind::IdpdShield | EnemyKind::IdpdElite | EnemyKind::IdpdVan
     )
-}
-
-/// Raids may queue unless the loop transition blocks them (bevy parity).
-pub fn may_queue_new_raid(transition: &LoopTransition) -> bool {
-    !transition.blocks_new_idpd_raids()
-}
-
-/// Raid trigger gate: looped runs only, unsuppressed areas, a quiet
-/// arena (<= 4 alive), 10+ kills since the last wave, and no wave
-/// already pending (bevy parity).
-pub fn should_trigger_idpd(
-    run: &Run,
-    enemies_alive: usize,
-    kills_since_checkpoint: u32,
-    pending: bool,
-) -> bool {
-    if pending || run.loop_count == 0 || run.game_over {
-        return false;
-    }
-
-    if is_raid_suppressed_area(run.area) {
-        return false;
-    }
-
-    if enemies_alive > 4 {
-        return false;
-    }
-
-    kills_since_checkpoint >= 10
 }
 
 /// GML `IDPDSpawn/Create_0` elite law: 1-in-5 once loops are deep
@@ -307,59 +262,6 @@ pub fn raise_idpd_portals(
     idpd_portals(commands, run, cues, live_portals, pos);
 }
 
-/// Wave picker from loop pressure + floor (bevy parity).
-pub fn choose_wave(loop_count: u32, floor: u32, roll: u8) -> RaidWave {
-    let pressure = loop_count * 10 + floor.min(30);
-    if pressure >= 28 {
-        if roll % 4 == 0 {
-            RaidWave::VanDrop
-        } else if roll % 2 == 0 {
-            RaidWave::Heavy
-        } else {
-            RaidWave::Medium
-        }
-    } else if pressure >= 18 {
-        if roll % 5 == 0 {
-            RaidWave::VanDrop
-        } else {
-            RaidWave::Medium
-        }
-    } else {
-        RaidWave::Light
-    }
-}
-
-/// Four arena-edge points (56 px margin), furthest-from-player first
-/// (bevy parity, including the stable-sort tie order).
-pub fn edge_spawn_points_away_from(player_pos: glam::Vec2) -> [glam::Vec2; 4] {
-    let margin = 56.0;
-
-    let left = glam::Vec2::new(
-        -ARENA_W * 0.5 + margin,
-        player_pos.y.clamp(-ARENA_H * 0.4, ARENA_H * 0.4),
-    );
-    let right = glam::Vec2::new(
-        ARENA_W * 0.5 - margin,
-        player_pos.y.clamp(-ARENA_H * 0.4, ARENA_H * 0.4),
-    );
-    let top = glam::Vec2::new(
-        player_pos.x.clamp(-ARENA_W * 0.4, ARENA_W * 0.4),
-        ARENA_H * 0.5 - margin,
-    );
-    let bottom = glam::Vec2::new(
-        player_pos.x.clamp(-ARENA_W * 0.4, ARENA_W * 0.4),
-        -ARENA_H * 0.5 + margin,
-    );
-
-    let mut pts = [left, right, top, bottom];
-    pts.sort_by(|a, b| {
-        b.distance_squared(player_pos)
-            .partial_cmp(&a.distance_squared(player_pos))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    pts
-}
-
 /// GML `IDPDSpawn/Create_0.gml:6-22` (the `do..until` relocation)
 /// verbatim: draw an angle and a `96 + rng(96)` radius off
 /// `RNGStates.Popo`, snap the result onto the nearest `Floor` tile, and
@@ -440,7 +342,7 @@ pub fn tick_idpd_spawns(
     mask: &FloorMask,
     player_pos: glam::Vec2,
     lil_hunter_alive: bool,
-    mut portals: Query<
+    portals: &mut Query<
         (Entity, &mut Pos, &mut IdpdSpawnPortal),
         (With<IdpdSpawnPortal>, Without<Player>, Without<Enemy>),
     >,
@@ -451,7 +353,7 @@ pub fn tick_idpd_spawns(
     // one local `Popo` stream per tick, seeded off the run.
     let mut popo = WeaponDropsRng::new((run.gen_seed as i32) ^ 0x50_50);
     let mut fired: Vec<(glam::Vec2, bool)> = Vec::new();
-    for (entity, mut pos, mut portal) in &mut portals {
+    for (entity, mut pos, mut portal) in portals.iter_mut() {
         if !portal.placed {
             // `Create_0.gml:5-24`
             pos.0 = idpd_spawn_site(&mut popo, player_pos, mask);
@@ -608,235 +510,12 @@ pub fn tick_idpd_spawns(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn tick_idpd_raids(
-    time: Res<SimTime>,
-    mut commands: Commands,
-    catalog: Res<repame_anim::AnimCatalog>,
-    audio: Res<GameAudio>,
-    mut trauma: ResMut<Trauma>,
-    mut raid: ResMut<IdpdRaidState>,
-    mut run: ResMut<Run>,
-    scarier: Res<ScarierFace>,
-    heavy_heart: Res<HeavyHeart>,
-    transition: Res<LoopTransition>,
-    mask: Res<FloorMask>,
-    player_q: Query<&Pos, With<Player>>,
-    enemies_q: Query<&Enemy, With<Enemy>>,
-    spawn_q: Query<
-        (Entity, &mut Pos, &mut IdpdSpawnPortal),
-        (With<IdpdSpawnPortal>, Without<Player>, Without<Enemy>),
-    >,
-    mut toast: ResMut<Toast>,
-    mut cues: ResMut<Queue<AudioCue>>,
-) {
-    let dt = time.delta_secs;
-    raid.cooldown.tick(dt);
-
-    let Ok(player) = player_q.single() else {
-        return;
-    };
-    let player_pos = player.0;
-    let lil_hunter_alive = enemies_q
-        .iter()
-        .any(|e| matches!(e.kind, EnemyKind::LilHunter));
-    let enemies_alive = enemies_q.iter().count();
-    let kills_since_checkpoint = run.total_kills.saturating_sub(raid.kills_checkpoint);
-
-    tick_idpd_spawns(
-        &mut commands,
-        dt,
-        &run,
-        &mask,
-        player_pos,
-        lil_hunter_alive,
-        spawn_q,
-    );
-
-    if transition.throne_ii_alive || transition.loop_ready {
-        raid.pending_wave = None;
-        return;
-    }
-
-    let may_queue = may_queue_new_raid(&transition);
-
-    if may_queue
-        && should_trigger_idpd(
-            &run,
-            enemies_alive,
-            kills_since_checkpoint,
-            raid.pending_wave.is_some(),
-        )
-        && raid.cooldown.just_finished()
-    {
-        let roll = ((run.gen_seed ^ run.total_kills as u64 ^ run.floor as u64) & 0xFF) as u8;
-        let wave = choose_wave(run.loop_count, run.floor, roll);
-        raid.pending_wave = Some(wave);
-        raid.warning = GTimer::from_seconds(1.25, TimerMode::Once);
-        toast.show("IDPD INCOMING");
-        // GML `VanSpawn/Create_0:41`: `underwater` swaps in the oasis sting.
-        cues.push(AudioCue {
-            name: if run.area == AreaId::Oasis {
-                "sndOasisPopo"
-            } else {
-                "sndVanWarning"
-            },
-            volume: 1.0,
-            variance: 0.0,
-        });
-        trauma.add(0.12);
-        return;
-    }
-
-    if transition.campfire_active && raid.pending_wave.is_none() {
-        return;
-    }
-
-    let Some(wave) = raid.pending_wave else {
-        return;
-    };
-
-    raid.warning.tick(dt);
-    if !raid.warning.just_finished() {
-        return;
-    }
-
-    let portals = spawn_raid_wave(
-        &mut commands,
-        &catalog,
-        player_pos,
-        run.loop_count,
-        run.area,
-        wave,
-        EnemySpawnContext {
-            subarea: run.floor_in_area,
-            blood_crown: run.blood_crown,
-            scarier_face: scarier.0,
-            heavy_heart: heavy_heart.0,
-        },
-    );
-    run.popolevel += portals as f32;
-
-    raid.pending_wave = None;
-    raid.wave_index += 1;
-    raid.kills_checkpoint = run.total_kills;
-    raid.cooldown = GTimer::from_seconds(
-        (18.0 - (run.loop_count as f32 * 1.5)).max(8.0),
-        TimerMode::Once,
-    );
-
-    audio.play_portal(&mut cues);
-    let mut rng = rand::rng();
-    spawn_burst(
-        &mut commands,
-        &mut rng,
-        player_pos,
-        16,
-        [0.45, 0.7, 1.0, 1.0],
-        (120.0, 260.0),
-    );
-}
-
 fn enemy_spawn_context(run: &Run, scarier_face: bool, heavy_heart: bool) -> EnemySpawnContext {
     EnemySpawnContext {
         subarea: run.floor_in_area,
         blood_crown: run.blood_crown,
         scarier_face,
         heavy_heart,
-    }
-}
-
-/// Wave composition at `1.0 + loop * 0.18` difficulty (bevy parity,
-/// including the Heavy midpoint offsets and the VanDrop bumps).
-/// Returns the portal count for `Run.popolevel` (GML counts one portal
-/// per spawn site; bevy waves spawn directly, so each wave counts its
-/// sites). Shield sites roll the GML elite upgrade.
-pub fn spawn_raid_wave(
-    commands: &mut Commands,
-    catalog: &repame_anim::AnimCatalog,
-    player_pos: glam::Vec2,
-    loop_count: u32,
-    area: AreaId,
-    wave: RaidWave,
-    context: EnemySpawnContext,
-) -> usize {
-    let points = edge_spawn_points_away_from(player_pos);
-    let difficulty = 1.0 + loop_count as f32 * 0.18;
-
-    match wave {
-        RaidWave::Light => {
-            spawn_grunt(
-                commands, catalog, points[0], difficulty, loop_count, context,
-            );
-            spawn_grunt(
-                commands, catalog, points[1], difficulty, loop_count, context,
-            );
-            spawn_shield(
-                commands, catalog, points[2], difficulty, loop_count, area, context,
-            );
-            3
-        }
-
-        RaidWave::Medium => {
-            spawn_grunt(
-                commands, catalog, points[0], difficulty, loop_count, context,
-            );
-            spawn_grunt(
-                commands, catalog, points[1], difficulty, loop_count, context,
-            );
-            spawn_shield(
-                commands, catalog, points[2], difficulty, loop_count, area, context,
-            );
-            spawn_elite(
-                commands, catalog, points[3], difficulty, loop_count, context,
-            );
-            4
-        }
-
-        RaidWave::Heavy => {
-            for &p in &points {
-                spawn_grunt(commands, catalog, p, difficulty, loop_count, context);
-            }
-            spawn_elite(
-                commands,
-                catalog,
-                (points[0] + points[1]) * 0.5,
-                difficulty + 0.15,
-                loop_count,
-                context,
-            );
-            spawn_shield(
-                commands,
-                catalog,
-                (points[2] + points[3]) * 0.5,
-                difficulty + 0.15,
-                loop_count,
-                area,
-                context,
-            );
-            6
-        }
-
-        RaidWave::VanDrop => {
-            spawn_van(
-                commands,
-                catalog,
-                points[0],
-                player_pos,
-                loop_count,
-                area,
-                difficulty + 0.25,
-                loop_count,
-                context,
-            );
-            spawn_shield(
-                commands, catalog, points[1], difficulty, loop_count, area, context,
-            );
-            spawn_elite(
-                commands, catalog, points[2], difficulty, loop_count, context,
-            );
-            3
-        }
     }
 }
 
@@ -854,63 +533,66 @@ fn spawn_at(
     )
 }
 
-fn spawn_grunt(
-    commands: &mut Commands,
-    catalog: &repame_anim::AnimCatalog,
-    pos: glam::Vec2,
-    difficulty: f32,
-    loops: u32,
-    context: EnemySpawnContext,
+/// The `tick_idpd_spawns` wrapper the schedule uses. GML runs every
+/// `IDPDSpawn`'s step inside the room's own step order; the port keeps it as
+/// its own system next to the van tick.
+pub fn tick_idpd_spawn_world(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    run: Res<Run>,
+    mask: Res<FloorMask>,
+    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
+    enemies_q: Query<&Enemy, With<Enemy>>,
+    mut spawn_q: Query<
+        (Entity, &mut Pos, &mut IdpdSpawnPortal),
+        (With<IdpdSpawnPortal>, Without<Player>, Without<Enemy>),
+    >,
 ) {
-    spawn_at(
-        commands,
-        catalog,
-        EnemyKind::IdpdGrunt,
-        pos,
-        difficulty,
-        loops,
-        context,
-    );
-}
-
-fn spawn_shield(
-    commands: &mut Commands,
-    catalog: &repame_anim::AnimCatalog,
-    pos: glam::Vec2,
-    difficulty: f32,
-    loops: u32,
-    area: AreaId,
-    context: EnemySpawnContext,
-) {
-    // GML `IDPDSpawn` dir-2 elite swap.
-    let kind = if idpd_elite_roll(loops, area) {
-        EnemyKind::EliteShielder
-    } else {
-        EnemyKind::IdpdShield
+    let Ok(player_pos) = player_q.single().map(|p| p.0) else {
+        return;
     };
-    spawn_at(commands, catalog, kind, pos, difficulty, loops, context);
-}
-
-fn spawn_elite(
-    commands: &mut Commands,
-    catalog: &repame_anim::AnimCatalog,
-    pos: glam::Vec2,
-    difficulty: f32,
-    loops: u32,
-    context: EnemySpawnContext,
-) {
-    spawn_at(
-        commands,
-        catalog,
-        EnemyKind::IdpdElite,
-        pos,
-        difficulty,
-        loops,
-        context,
+    let lil_hunter_alive = enemies_q
+        .iter()
+        .any(|e| matches!(e.kind, EnemyKind::LilHunter));
+    tick_idpd_spawns(
+        &mut commands,
+        time.delta_secs,
+        &run,
+        &mask,
+        player_pos,
+        lil_hunter_alive,
+        &mut spawn_q,
     );
 }
 
-fn spawn_van(
+/// GML `objects/VanSpawn/Create_0.gml:8-34`: a floor tile `96 + random(24)`
+/// to one side of a random player (sign per attempt), +-60 vertically,
+/// rejected while it is off floor or within 8 px of another spawn site.
+pub fn van_spawn_site(
+    rng: &mut rand::rngs::ThreadRng,
+    player_pos: glam::Vec2,
+    mask: &FloorMask,
+) -> glam::Vec2 {
+    let mut site = player_pos;
+    for _ in 0..250 {
+        let flip = if rng.random_bool(0.5) { 1.0 } else { -1.0 };
+        let spot = player_pos
+            + glam::Vec2::new(
+                rng.random_range(96.0..120.0) * flip,
+                rng.random_range(-60.0..60.0),
+            );
+        site = mask.cell_center(mask.world_to_cell(spot));
+        if !mask.is_walkable(site) {
+            continue;
+        }
+        if site.distance(player_pos) > 96.0 {
+            break;
+        }
+    }
+    site
+}
+
+pub(crate) fn spawn_van(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
     pos: glam::Vec2,
@@ -944,6 +626,52 @@ fn spawn_van(
     e
 }
 
+/// GML `objects/Portal/Create_0.gml:16-20`: a Rogue in the run makes every
+/// exit portal raise two `IDPDSpawn`s and spend 1.5 `popolevel`, so a Rogue
+/// pays for the reinforcements it just triggered.
+pub fn rogue_portal_paidown(world: &mut World, pos: glam::Vec2) {
+    let mut race_q =
+        world.query_filtered::<&crate::comps_a::RaceState, With<crate::comps_a::Player>>();
+    if !race_q
+        .iter(world)
+        .any(|r| r.race == crate::data::RaceId::Rogue)
+    {
+        return;
+    }
+    world.resource_mut::<Run>().popolevel -= 1.5;
+    let mut portal_q = world.query_filtered::<Entity, With<IdpdSpawnPortal>>();
+    let mut live = portal_q.iter(world).count() as u32;
+    for _ in 0..2 {
+        let stagger = live;
+        live += 1;
+        world.spawn((
+            GameCleanup,
+            LevelCleanup,
+            PendingRoguePortal { at: pos, stagger },
+        ));
+    }
+}
+
+/// One `Portal/Create_0:18` `IDPDSpawn`, deferred a frame so the two Rogue
+/// portals share a single `&mut Run` borrow.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct PendingRoguePortal {
+    pub at: glam::Vec2,
+    pub stagger: u32,
+}
+
+/// Settles the deferred Rogue portal halves from `Portal/Create_0`.
+pub fn tick_pending_rogue_portals(
+    mut commands: Commands,
+    mut run: ResMut<Run>,
+    mut q: Query<(Entity, &PendingRoguePortal)>,
+) {
+    for (entity, pending) in &mut q {
+        spawn_idpd_spawn(&mut commands, &mut run, pending.stagger, pending.at);
+        commands.entity(entity).despawn();
+    }
+}
+
 /// GML `scripts/scrOnPopoKill/scrOnPopoKill.gml`: killing any popo unit (or
 /// the Captain / Lil Hunter) freezes every popo unit on the floor for 100
 /// steps, which is what stops a whole wave from firing during a boss kill.
@@ -963,6 +691,11 @@ pub fn freeze_idpd_wave(world: &mut World) {
         ) {
             brain.freeze += 100.0;
         }
+    }
+    // GML `scrOnPopoKill.gml:14` `with (WantVan) canspawn = true`.
+    let mut vans = world.query::<&mut crate::comps_b::WantVan>();
+    for mut van in vans.iter_mut(world) {
+        van.canspawn = true;
     }
 }
 
@@ -1145,86 +878,4 @@ fn van_destroy(
         volume: 1.0,
         variance: 0.1,
     });
-}
-
-/// HQ pressure spawner: off-HQ areas return early; otherwise, while
-/// fewer than 8 enemies live and the cooldown just finished, drop a
-/// grunt/shield/elite trio (1.3/1.35/1.4) plus a van (1.45) on even
-/// waves, then re-arm at 9.5 s (bevy parity).
-pub fn hq_pressure(
-    time: Res<SimTime>,
-    mut commands: Commands,
-    catalog: Res<repame_anim::AnimCatalog>,
-    run: Res<Run>,
-    scarier: Res<ScarierFace>,
-    heavy_heart: Res<HeavyHeart>,
-    player_q: Query<&Pos, With<Player>>,
-    enemies_q: Query<(), With<Enemy>>,
-    mut raid: ResMut<IdpdRaidState>,
-) {
-    if run.area != AreaId::HQ {
-        return;
-    }
-
-    let Ok(player) = player_q.single() else {
-        return;
-    };
-
-    raid.cooldown.tick(time.delta_secs);
-
-    let enemies_alive = enemies_q.iter().count();
-    if enemies_alive >= 8 {
-        return;
-    }
-
-    if !raid.cooldown.just_finished() {
-        return;
-    }
-
-    let player_pos = player.0;
-    let points = edge_spawn_points_away_from(player_pos);
-    let context = enemy_spawn_context(&run, scarier.0, heavy_heart.0);
-
-    spawn_grunt(
-        &mut commands,
-        &catalog,
-        points[0],
-        1.3,
-        run.loop_count,
-        context,
-    );
-    spawn_shield(
-        &mut commands,
-        &catalog,
-        points[1],
-        1.35,
-        run.loop_count,
-        run.area,
-        context,
-    );
-    spawn_elite(
-        &mut commands,
-        &catalog,
-        points[2],
-        1.4,
-        run.loop_count,
-        context,
-    );
-
-    if raid.wave_index % 2 == 0 {
-        spawn_van(
-            &mut commands,
-            &catalog,
-            points[3],
-            player_pos,
-            run.loop_count,
-            run.area,
-            1.45,
-            run.loop_count,
-            context,
-        );
-    }
-
-    raid.wave_index += 1;
-    raid.cooldown = GTimer::from_seconds(9.5, TimerMode::Once);
 }
