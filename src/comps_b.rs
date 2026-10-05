@@ -360,19 +360,10 @@ impl LoopTransition {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct PendingDelayedBoss {
     pub kind: EnemyKind,
-    pub initial_trash: u32,
-    /// Fraction of `initial_trash` that must be dead.
-    pub kill_fraction: f32,
-    /// GML `WantBoss/Step_0:20-23`: off the last subarea the bandit only arms
-    /// once every chest is open (`!instance_exists(chestprop)` and a
-    /// `ChestOpen` exists), which is what turns 1-1/1-2 into the CanOasis
-    /// secret instead of a routine boss.
-    pub require_open_chests: bool,
-    /// GML `WantBoss/Step_0:16-17`: `alarm[0] = 120` (4 s) once the threshold
-    /// clears on the last subarea. Zero everywhere else - there the chest
-    /// condition sets `alarm[0] = 1` instead.
+    /// GML `WantBoss/Step_0:16-17`: `alarm[0] = 120` on the area's last
+    /// subarea, zero everywhere else. Counted once, then the marker breeds
+    /// one bandit per step.
     pub arm_delay: f32,
-
     pub from_wall: bool,
     /// GML `WantBoss/Create_0.gml:3` `number = max(loops * 2, 1)`;
     /// `Alarm_0` spends one per step, so a stacked desert puts `2 * loops`
@@ -380,10 +371,11 @@ pub struct PendingDelayedBoss {
     pub number: u32,
 }
 
-impl PendingDelayedBoss {
-    pub fn kills_needed(&self) -> u32 {
-        (self.initial_trash as f32 * self.kill_fraction).ceil() as u32
-    }
+/// GML `objects/CanOasis`: the 300-step window a Big Bandit death has to
+/// fall inside for its portal to send the run to the Oasis.
+#[derive(Component)]
+pub struct CanOasis {
+    pub timer: Timer,
 }
 
 #[derive(Component)]

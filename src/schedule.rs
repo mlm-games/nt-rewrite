@@ -448,7 +448,7 @@ pub fn build_sim_schedule() -> Schedule {
                 idpd::tick_idpd_vans
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
-                secrets::tick_oasis_bandit_window
+                secrets::tick_can_oasis
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
             )

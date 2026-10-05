@@ -440,6 +440,13 @@ pub struct Run {
     /// GML `GameCont.swordbosskill`: bosses felled while a Black Sword is in
     /// the run, in GML object-name order. All eight earn Chicken skin C.
     pub swordbosskill: [bool; 8],
+    /// Set while a GML `CanOasis` window is live: a Big Bandit death inside
+    /// it opens the Oasis portal and reroutes the run.
+    pub can_oasis: bool,
+    /// A secret-area reroute requested by a death the death resolver cannot
+    /// reach `SecretTriggers` from; `apply_secret_transition` drains it after
+    /// the trigger queue.
+    pub queued_secret: Option<crate::data::SecretTarget>,
     /// Run-time in sim steps (GML `GameCont.tottimer`: HUD clock and
     /// Plant/B throne-skin gate).
     pub tottimer: u32,
@@ -497,6 +504,8 @@ impl Default for Run {
             total_kills: 0,
             blackswords: 0,
             swordbosskill: [false; 8],
+            can_oasis: false,
+            queued_secret: None,
             tottimer: 0,
             popolevel: 0.0,
             nochest: 0,

@@ -445,7 +445,7 @@ pub enum AbilityKind {
 }
 
 /// Secret-area targets (area + HUD coordinates).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SecretTarget {
     Oasis,
     PizzaSewers,

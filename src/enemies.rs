@@ -6249,7 +6249,6 @@ pub fn tick_delayed_boss_spawns(
     mut trauma: ResMut<Trauma>,
     mut hitstop: ResMut<HitStop>,
     mut toast: ResMut<Toast>,
-    triggers: Res<crate::secrets::SecretTriggers>,
     mut pending: Query<(Entity, &mut PendingDelayedBoss)>,
     enemies: Query<&Enemy, With<Enemy>>,
     player_q: Query<&Pos, With<Player>>,
@@ -6263,13 +6262,12 @@ pub fn tick_delayed_boss_spawns(
         With<crate::comps_a::WallTile>,
     >,
 ) {
-    // GML `WantBoss/Step_0:4-7,39-41`: the marker gives up on a floor with no
-    // trash left, and on a non-final subarea once the floor is cleared.
+    // GML `WantBoss/Step_0:4-7`: the marker gives up on a floor with nothing
+    // left to kill. Nothing else in `Step_0` gates the breach - the 0.98 /
+    // 0.9 threshold only plants `CanOasis` and delays the first spawn by
+    // 120 steps on the area's last subarea - so `alarm[0]`, which starts at
+    // 0, fires on the very first step and then every step after.
     let living = enemies.iter().filter(|e| !enemy_def(e.kind).boss).count() as u32;
-    let rad_maggots = enemies
-        .iter()
-        .filter(|e| e.kind == EnemyKind::RadMaggot)
-        .count() as u32;
 
     for (marker_e, mut pending_boss) in &mut pending {
         if living == 0 {
@@ -6277,23 +6275,6 @@ pub fn tick_delayed_boss_spawns(
             continue;
         }
 
-        // GML `WantBoss/Step_0:15`: `instance_number(enemy) -
-        // instance_number(RadMaggot) > enemies * treshhold`. Unhatched rad
-        // maggots are excluded from the count.
-        let surviving = living.saturating_sub(rad_maggots);
-        let killed = pending_boss.initial_trash.saturating_sub(surviving);
-        if killed < pending_boss.kills_needed() {
-            continue;
-        }
-
-        // GML `WantBoss/Step_0:20-23`. `detect_oasis_eligibility` already
-        // evaluates exactly this: every chest open, none of the special chests
-        // left, and at most 2% of the floor's trash dead.
-        if pending_boss.require_open_chests && !triggers.oasis_chests_ready {
-            continue;
-        }
-
-        // GML `WantBoss/Step_0:16-17`: a 4 s beat before the breach.
         if pending_boss.arm_delay > 0.0 {
             pending_boss.arm_delay -= time.delta_secs;
             continue;
@@ -6338,22 +6319,21 @@ pub fn tick_delayed_boss_spawns(
             }
         }
 
+        // GML `WantBoss/Alarm_0.gml:32-45`: with no qualifying wall nothing
+        // happens this step and `number` is left alone; the marker keeps
+        // trying on the next one.
         let kind = pending_boss.kind;
-        pending_boss.number = pending_boss.number.saturating_sub(1);
-
-        let spawn_pos = candidates
+        let Some(spawn_pos) = candidates
             .iter()
             .min_by(|a, b| {
                 a.1.distance_squared(probe)
                     .total_cmp(&b.1.distance_squared(probe))
             })
-            .map(|(_, p)| *p);
-        let Some(spawn_pos) = spawn_pos else {
-            if pending_boss.number == 0 {
-                commands.entity(marker_e).despawn();
-            }
-            return;
+            .map(|(_, p)| *p)
+        else {
+            continue;
         };
+        pending_boss.number -= 1;
         if pending_boss.number == 0 {
             commands.entity(marker_e).despawn();
         }

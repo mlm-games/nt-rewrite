@@ -2141,22 +2141,18 @@ pub fn spawn_level(
                 // condition held the bandit back on 1-3 and fired it early elsewhere.
                 let is_last = run.floor_in_area
                     >= crate::worldgen::gml_max_subarea(crate::worldgen::gml_area_from_run(run));
-                let n = plan.boss_count.max(1);
-                for _ in 0..n {
-                    commands.spawn((
-                        GameCleanup,
-                        LevelCleanup,
-                        PendingDelayedBoss {
-                            kind,
-                            initial_trash: enemy_count as u32,
-                            kill_fraction: 0.0,
-                            require_open_chests: !is_last,
-                            arm_delay: if is_last { 120.0 / 30.0 } else { 0.0 },
-                            from_wall: true,
-                            number: crate::worldgen::big_bandit_count(run.loop_count),
-                        },
-                    ));
-                }
+                // GML plants a single `WantBoss` marker; `number` inside it
+                // is what decides how many bandits come through.
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    PendingDelayedBoss {
+                        kind,
+                        arm_delay: if is_last { 120.0 / 30.0 } else { 0.0 },
+                        from_wall: true,
+                        number: crate::worldgen::big_bandit_count(run.loop_count),
+                    },
+                ));
             }
             EnemyKind::BigDog => {
                 // GML `scrPopulate.gml:325-340` plants a `BecomeScrapBoss`

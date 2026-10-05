@@ -402,12 +402,19 @@ fn secret_name(target: SecretTarget) -> &'static str {
 /// `GameCont/Other_5:64-82` verbatim: the room-end secret exits, and the stale
 /// `_is_secret` taken before the reassignment skips the normal advance, so the
 /// player lands exactly on that area's last subarea.
+/// GML `GameCont/Other_5.gml:56-80`: leaving a secret area re-routes the
+/// roadmap to a fixed subarea of a fixed area, all of them inside the loop
+/// the player is already in - pizza sewers and cursed caves to the first
+/// subarea of the scrapyards and the city, the oasis and the mansion to the
+/// scrapyards' last, the jungle to the city's last. The constants are route
+/// floors, so they need the loop's base added back.
 fn secret_return_floor(target: SecretTarget, current_floor: u32) -> u32 {
+    let loop_base = (current_floor.max(1) - 1) / 15 * 15;
     match target {
-        SecretTarget::PizzaSewers => 5,
-        SecretTarget::Oasis | SecretTarget::YvMansion => 7,
-        SecretTarget::CursedCaves => 9,
-        SecretTarget::Jungle => 11,
+        SecretTarget::PizzaSewers => loop_base + 5,
+        SecretTarget::Oasis | SecretTarget::YvMansion => loop_base + 7,
+        SecretTarget::CursedCaves => loop_base + 9,
+        SecretTarget::Jungle => loop_base + 11,
         SecretTarget::Vault | SecretTarget::CrownVault | SecretTarget::Hq => {
             current_floor.saturating_add(1)
         }
@@ -467,7 +474,7 @@ fn apply_secret_transition(
     // GML `GameCont/Other_5:136` (Room End): `hard += hardmode ? 2 : 1`.
     run.hard += if run.hardmode { 2 } else { 1 };
 
-    if let Some(target) = triggers.take_queued() {
+    if let Some(target) = triggers.take_queued().or_else(|| run.queued_secret.take()) {
         if matches!(target, SecretTarget::Vault | SecretTarget::CrownVault) {
             triggers.vaults_entered = triggers.vaults_entered.saturating_add(1);
         }
@@ -1300,11 +1307,17 @@ pub fn spawn_portal(
             commands.entity(e).despawn();
         }
     }
+    spawn_portal_at(commands, catalog, pos, kind);
+}
 
-    // Bevy rides the `sprPortalSpawn` oneshot strip for the Spawn
-    // gate (and swaps it to the idle strip on finish); the renderer
-    // draws the live strip (portal visuals batch). No strip in the
-    // catalog → no anim, gate opens immediately (bevy `unwrap_or`).
+/// The same `Portal/Create_0` law for callers that reach it through a
+/// `&mut World` (an `enemy` death that has to test a marker first).
+pub fn spawn_portal_at(
+    commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
+    pos: glam::Vec2,
+    kind: u8,
+) {
     let mut pe = commands.spawn((
         GameCleanup,
         LevelCleanup,
@@ -1328,7 +1341,6 @@ pub fn spawn_portal(
     // GML `Portal/Create_0.gml:16-20`.
     let at = pos;
     commands.queue(move |world: &mut World| crate::idpd::rogue_portal_paidown(world, at));
-
     commands.spawn((
         GameCleanup,
         LevelCleanup,
@@ -1347,7 +1359,6 @@ pub fn spawn_portal(
         },
         Pos(pos),
     ));
-
     let mut rng = rand::rng();
     spawn_burst(
         commands,

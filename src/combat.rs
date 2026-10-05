@@ -748,6 +748,24 @@ pub fn resolve_enemy_deaths(
             | EnemyKind::EliteShielder => {
                 commands.queue(|world: &mut World| crate::idpd::freeze_idpd_wave(world));
             }
+            EnemyKind::BigBandit if run.can_oasis => {
+                // GML `BanditBoss/Destroy_0.gml:13-22`: inside a live
+                // `CanOasis` window the kill opens a portal at the wreck,
+                // wipes the floor and reroutes the run to the Oasis. The
+                // room-end transition is what reads the queued target, so
+                // this one dies with the oasis rather than leaving the
+                // corpses (as every other boss does).
+                let shots = &mut shots_and_floor.p0();
+                crate::progression::spawn_portal(&mut commands, &catalog, shots, pos, 1);
+                commands.queue(|world: &mut World| {
+                    let mut health = world.query_filtered::<&mut Health, With<Enemy>>();
+                    for mut hp in health.iter_mut(world) {
+                        hp.hp = 0;
+                    }
+                    world.resource_mut::<Run>().queued_secret =
+                        Some(crate::data::SecretTarget::Oasis);
+                });
+            }
             EnemyKind::YvBoss => {
                 // GML `YVBoss/Destroy_0`: 3 golden-weapon pickups.
                 let mut rng = rand::rng();

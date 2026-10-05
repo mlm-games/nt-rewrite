@@ -9,6 +9,8 @@
 use bevy_ecs::prelude::*;
 use repame_sim::SimTime;
 
+use crate::time::{GTimer, TimerMode};
+
 use crate::comps_a::{Inventory, Player, RaceState, Run, Toast};
 use crate::comps_b::{BossBrain, Enemy, Pickup, PickupKind};
 use crate::data::{AreaId, RaceId, SecretTarget};
@@ -29,9 +31,6 @@ pub struct SecretTriggers {
 
     pub oasis_chests_ready: bool,
 
-    pub oasis_bandit_timer: f32,
-    pub oasis_bandit_alive: bool,
-
     pub oasis_floor_chests_initial: u32,
     pub oasis_floor_enemies_initial: u32,
     pub oasis_snapshot_done: bool,
@@ -47,8 +46,6 @@ impl Default for SecretTriggers {
             oasis_eligible: true,
             damage_taken_this_floor: false,
             oasis_chests_ready: false,
-            oasis_bandit_timer: 0.0,
-            oasis_bandit_alive: false,
             oasis_floor_chests_initial: 0,
             oasis_floor_enemies_initial: 1,
             oasis_snapshot_done: false,
@@ -96,8 +93,6 @@ impl SecretTriggers {
         self.oasis_eligible = true;
         self.damage_taken_this_floor = false;
         self.oasis_chests_ready = false;
-        self.oasis_bandit_timer = 0.0;
-        self.oasis_bandit_alive = false;
         self.oasis_snapshot_done = false;
         self.oasis_floor_chests_initial = 0;
         self.oasis_floor_enemies_initial = 1;
@@ -173,45 +168,39 @@ pub fn detect_oasis_eligibility(
     }
 }
 
-/// Arm the 10 s bandit window once Big Bandit spawns on a ready floor;
-/// killing him in time queues the Oasis. GML: the window is
-/// `CanOasis/Alarm_0` (300 ticks) and the trigger is
-/// `BanditBoss/Destroy_0:13-21` - no damage condition.
-pub fn tick_oasis_bandit_window(
+/// GML `CanOasis/Create_0.gml:2-4`: the moment the desert floor's chest
+/// condition holds, a `CanOasis` opens the 300-step (10 s) window in which a
+/// Big Bandit death reroutes the run to the Oasis. It closes itself again
+/// when the window lapses.
+pub fn tick_can_oasis(
     time: Res<SimTime>,
+    mut commands: Commands,
     mut triggers: ResMut<SecretTriggers>,
-    enemies_q: Query<&Enemy>,
+    mut run: ResMut<Run>,
+    mut open: Query<(Entity, &mut crate::comps_b::CanOasis)>,
 ) {
-    if !triggers.oasis_chests_ready {
-        return;
-    }
-    if !triggers.oasis_eligible {
+    if triggers.oasis_chests_ready && triggers.oasis_eligible {
         triggers.oasis_chests_ready = false;
-        return;
+        run.can_oasis = true;
+        commands.spawn((
+            crate::comps_a::GameCleanup,
+            crate::comps_a::LevelCleanup,
+            crate::comps_b::CanOasis {
+                timer: GTimer::from_seconds(300.0 / 30.0, TimerMode::Once),
+            },
+        ));
     }
-
-    let bandit_alive = enemies_q
-        .iter()
-        .any(|e| e.kind == crate::data::EnemyKind::BigBandit);
-
-    if bandit_alive && !triggers.oasis_bandit_alive {
-        triggers.oasis_bandit_alive = true;
-        triggers.oasis_bandit_timer = 10.0;
+    let dt = time.delta_secs;
+    let mut live = 0;
+    for (entity, mut window) in &mut open {
+        window.timer.tick(dt);
+        if window.timer.just_finished() {
+            commands.entity(entity).despawn();
+        } else {
+            live += 1;
+        }
     }
-
-    if !triggers.oasis_bandit_alive {
-        return;
-    }
-
-    triggers.oasis_bandit_timer -= time.delta_secs;
-    if !bandit_alive && triggers.oasis_bandit_timer > 0.0 {
-        triggers.queue(SecretTarget::Oasis);
-        triggers.oasis_chests_ready = false;
-        triggers.oasis_bandit_alive = false;
-    } else if triggers.oasis_bandit_timer <= 0.0 {
-        triggers.oasis_chests_ready = false;
-        triggers.oasis_bandit_alive = false;
-    }
+    run.can_oasis = live > 0;
 }
 
 /// Carrying a cursed weapon through Crystal Caves queues the Cursed
