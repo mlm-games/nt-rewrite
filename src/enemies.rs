@@ -2456,6 +2456,7 @@ pub fn enemy_ai(
         let owns_motion = has_dedicated_tick(enemy.kind);
         // `DogGuardian/Other_10:18-24` puts `speed = 8` outside both caps
         // while the leap is up.
+        let owns_egg_fuse = enemy.kind == EnemyKind::FrogEgg;
         let mut dog_airborne = false;
         let solids = prop_shapes(&props);
 
@@ -2464,7 +2465,9 @@ pub fn enemy_ai(
             // GML steps every alarm on every instance each step, so each ticks
             // exactly once per frame here; every block below only reads
             // `just_finished()`.
-            brain.attack.tick(dt);
+            if !owns_egg_fuse {
+                brain.attack.tick(dt);
+            }
             brain.fire_alarm.tick(dt);
             brain.burst_timer.tick(dt);
             if enemy.kind == EnemyKind::DogGuardian && brain.burst_timer.just_finished() {
@@ -2713,7 +2716,10 @@ pub fn enemy_ai(
             // generic decide, or its re-arm starves their own.
             let owns_decide = matches!(
                 enemy.kind,
-                EnemyKind::Gator
+                // GML `FrogEgg` has no `Alarm_1`; `tick_frog_eggs` owns its
+                // `alarm[1] = 120` fuse, so `enemy_ai` must not also step it.
+                EnemyKind::FrogEgg
+                    | EnemyKind::Gator
                     | EnemyKind::BuffGator
                     | EnemyKind::Jock
                     | EnemyKind::Necromancer
@@ -6373,6 +6379,7 @@ pub fn tick_frog_eggs(
     run: Res<Run>,
     mut q: Query<(Entity, &Enemy, &mut EnemyBrain, &Pos), With<Enemy>>,
 ) {
+    let mut rng = rand::rng();
     for (e, enemy, mut brain, pos) in &mut q {
         if enemy.kind != EnemyKind::FrogEgg {
             continue;
@@ -6392,20 +6399,17 @@ pub fn tick_frog_eggs(
             run.loop_count,
         );
 
+        // GML `FrogEgg/Alarm_1.gml:1-10`: eight `AcidStreak`s from
+        // `random_angle` in 45-degree steps. `AcidStreak` carries no damage
+        // and no team - it lives 7 frames and is pure art.
+        let base = rng.random_range(0.0..std::f32::consts::TAU);
         for i in 0..8 {
-            let ang = (i as f32) * std::f32::consts::TAU / 8.0;
-            let d = glam::Vec2::new(ang.cos(), ang.sin());
-            spawn_enemy_projectile(
+            crate::environment::spawn_native_streak(
                 &mut commands,
-                e,
-                enemy.kind,
-                hatch,
-                d * 240.0,
-                3,
-                1.1,
-                4.0,
-                100.0,
                 false,
+                hatch,
+                base + (i as f32) * 45.0_f32.to_radians(),
+                8.0 * 30.0,
             );
         }
     }

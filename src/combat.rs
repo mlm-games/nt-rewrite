@@ -1006,21 +1006,6 @@ pub fn resolve_enemy_deaths(
                     if let Some(anim) = anim.clone() {
                         bullet.insert(anim);
                     }
-                    commands.spawn((
-                        GameCleanup,
-                        LevelCleanup,
-                        Team::Enemy,
-                        Projectile {
-                            damage: 2,
-                            life: GTimer::from_seconds(1.1, TimerMode::Once),
-                            radius: 4.0,
-                            knockback: 100.0,
-                            explosive: false,
-                            source: Some(DamageSource::enemy(e, enemy.kind)),
-                        },
-                        Velocity(d * 240.0),
-                        Pos(pos),
-                    ));
                     spawn_native_streak(&mut commands, true, pos, angle, 8.0);
                 }
                 for _ in 0..3 {
@@ -1127,21 +1112,6 @@ pub fn resolve_enemy_deaths(
                         Velocity(d * 120.0),
                         Pos(pos),
                     ));
-                    commands.spawn((
-                        GameCleanup,
-                        LevelCleanup,
-                        Team::Enemy,
-                        Projectile {
-                            damage: 2,
-                            life: GTimer::from_seconds(1.1, TimerMode::Once),
-                            radius: 4.0,
-                            knockback: 100.0,
-                            explosive: false,
-                            source: Some(DamageSource::enemy(e, enemy.kind)),
-                        },
-                        Velocity(d * 240.0),
-                        Pos(pos),
-                    ));
                     spawn_native_streak(&mut commands, true, pos, ang, 8.0);
                 }
                 for _ in 0..5 {
@@ -1157,15 +1127,16 @@ pub fn resolve_enemy_deaths(
                 }
                 for _ in 0..40 {
                     let a = rng.random_range(0.0..std::f32::consts::TAU);
-                    let off = glam::Vec2::from_angle(a) * rng.random_range(0.0..=48.0);
                     let speed = rng.random_range(0.2..1.7) * 30.0;
                     let mut gas = crate::comps_b::ToxicGasState::new();
                     gas.grow_speed = 0.003 + rng.random_range(0.0..0.002);
                     gas.rot = (1.0 + rng.random_range(0.0..=3.0))
                         * if rng.random_bool(0.5) { 1.0 } else { -1.0 };
+                    // GML `SuperFrog/Destroy_0.gml:5`: all 40 clouds are
+                    // created at the body's own position.
                     crate::enemies::spawn_toxic_gas(
                         &mut commands,
-                        pos + off,
+                        pos,
                         glam::Vec2::from_angle(a) * speed,
                         gas,
                     );
