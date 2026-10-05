@@ -28,10 +28,9 @@ use crate::comps_a::{
     SelectedCharacter, Team, Toast, Velocity, WallCell, WallTile,
 };
 use crate::comps_b::{
-    BigGenerator, ChestKind, CrownPedestal, Enemy, FloorTransition, GoldCar, GroundDetail,
-    LoopTransition, ManholeCover, PendingDelayedBoss, PortalClear, Prop, PropHpTracker,
-    PropNestMarkers, PropSprites, PropTier, ProtoStatue, RadChestContainer, SecretEntrance,
-    ThroneCarpet, ThroneStatueProp, UnbreakableProp,
+    BigGenerator, ChestKind, CrownPedestal, Enemy, FloorTransition, GroundDetail, LoopTransition,
+    PendingDelayedBoss, PortalClear, Prop, PropHpTracker, PropNestMarkers, PropSprites, PropTier,
+    ProtoStatue, RadChestContainer, ThroneCarpet, ThroneStatueProp, UnbreakableProp,
 };
 use crate::crown::{apply_crown_to_spawn, crown_name_for_toast};
 use crate::data::{
@@ -1541,109 +1540,144 @@ pub fn spawn_rad_container(
     ec.id()
 }
 
-/// Secret entrances for the run's area slot (bevy
-/// `spawn_secret_entrances` sim half: `SecretEntrance` + `Prop` +
-/// vault-guard spawns; art stays renderer-owned).
+/// GML `objects/GenCont/Alarm_2.gml:11-26`: the one and only secret
+/// entrance in the reference tree, a `ProtoStatue`.
+///
+/// It appears only when the run has been to the vault fewer than three
+/// times, no statue already stands, and the subarea is
+/// `min(max_subarea - 1, ceil(max_subarea / 2))` but not the last one - in
+/// the desert or palace past loop 0, or in the scrapyards or the city. The
+/// site is the `Floor` nearest
+/// `((furthest.x * 2 + 10016) * 0.33 + orandom(64))`, i.e. a third of the way
+/// back from the room's furthest tile toward its origin.
 pub fn spawn_secret_entrances(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
     run: &Run,
     scarier_face: bool,
     heavy_heart: bool,
+    crownvisits: u8,
+    plan: &LevelPlan,
 ) {
-    let slot: Option<(SecretTarget, glam::Vec2, f32)> = match (run.area, run.floor_in_area) {
-        (AreaId::Sewers, _) => Some((
-            SecretTarget::PizzaSewers,
-            glam::Vec2::new(220.0, -120.0),
-            28.0,
-        )),
-        (AreaId::Desert, 2) | (AreaId::Scrapyards, 2) | (AreaId::FrozenCity, 2) => Some((
-            SecretTarget::CrownVault,
-            glam::Vec2::new(-240.0, 160.0),
-            34.0,
-        )),
-        (AreaId::Scrapyards, 1) => {
-            Some((SecretTarget::YvMansion, glam::Vec2::new(260.0, 140.0), 36.0))
-        }
-        (AreaId::FrozenCity, 1) => {
-            Some((SecretTarget::Jungle, glam::Vec2::new(-260.0, -140.0), 30.0))
-        }
-        _ => None,
+    if crownvisits >= 3 || plan.floor_cells.is_empty() {
+        return;
+    }
+    let gml_area = crate::worldgen::gml_area_from_run(run) as i32;
+    let max_subarea = crate::worldgen::gml_max_subarea(gml_area);
+    let middle = (max_subarea - 1).min((max_subarea as f32 / 2.0).ceil() as u32);
+    if run.floor_in_area != middle || run.floor_in_area >= max_subarea {
+        return;
+    }
+    let desert_or_palace = matches!(gml_area, 1 | 7);
+    let allowed = (run.loop_count > 0 && desert_or_palace) || matches!(gml_area, 3 | 5);
+    if !allowed {
+        return;
+    }
+
+    let centre = |c: (i32, i32)| -> glam::Vec2 {
+        glam::Vec2::new(
+            c.0 as f32 * crate::worldgen::TILE + crate::worldgen::TILE * 0.5,
+            c.1 as f32 * crate::worldgen::TILE + crate::worldgen::TILE * 0.5,
+        )
     };
-    let Some((target, pos, size)) = slot else {
+    let origin = glam::Vec2::new(crate::worldgen::TILE * 0.5, crate::worldgen::TILE * 0.5);
+    let furthest = plan.floor_cells.iter().copied().max_by(|a, b| {
+        centre(*a)
+            .distance_squared(origin)
+            .total_cmp(&centre(*b).distance_squared(origin))
+    });
+    let Some(furthest) = furthest else {
         return;
     };
-    let hp = if matches!(target, SecretTarget::CrownVault | SecretTarget::Vault) {
-        120 + run.loop_count as i32 * 12
-    } else {
-        6
+    let mut rng = rand::rng();
+    let probe = centre(furthest) * 2.0 * 0.33 + glam::Vec2::splat(0.0);
+    let jittered =
+        probe + glam::Vec2::new(rng.random_range(-64.0..64.0), rng.random_range(-64.0..64.0));
+    let Some(cell) = plan.floor_cells.iter().copied().min_by(|a, b| {
+        centre(*a)
+            .distance_squared(jittered)
+            .total_cmp(&centre(*b).distance_squared(jittered))
+    }) else {
+        return;
     };
-    let idle: &'static str = match target {
-        SecretTarget::PizzaSewers => "images/sprPipe.png",
-        SecretTarget::CrownVault | SecretTarget::Vault => "images/sprOldGuardianStatue.png",
-        SecretTarget::YvMansion => "images/sprCarIdle.png",
-        SecretTarget::Jungle => "images/sprBushIdle.png",
-        _ => "images/sprDetail0.png",
-    };
+    let pos = centre(cell);
+
+    // GML `ProtoStatue/Create_0.gml:28-30` blows away every `Wall` it
+    // overlaps, so the statue gets a pocket. Its own `Create_0:19-26` Floor
+    // ring is redundant here: the site is already a floor tile.
+    for wall in &plan.wall_cells {
+        let centre = glam::Vec2::new(
+            wall.0 as f32 * crate::worldgen::TILE + crate::worldgen::TILE * 0.5,
+            wall.1 as f32 * crate::worldgen::TILE + crate::worldgen::TILE * 0.5,
+        );
+        if centre.distance(pos) <= 32.0 + crate::worldgen::WALL_PX {
+            commands.spawn((
+                GameCleanup,
+                LevelCleanup,
+                crate::comps_a::PendingWallBreak {
+                    cell: *wall,
+                    pos: centre,
+                    spawn_floor: true,
+                },
+            ));
+        }
+    }
+    // `Create_0.gml:38-42`: a `PortalClear` and four `Bandit`s.
+    commands.spawn((
+        GameCleanup,
+        LevelCleanup,
+        PortalClear {
+            timer: GTimer::from_seconds(5.0 / 30.0, crate::time::TimerMode::Once),
+            scale: 1.0,
+        },
+        Pos(pos),
+    ));
+
+    let hp = 120 + run.loop_count as i32 * 12;
     let mut ec = commands.spawn((
         GameCleanup,
         LevelCleanup,
-        SecretEntrance { target },
+        crate::comps_b::SecretEntrance {
+            target: SecretTarget::Vault,
+        },
+        ProtoStatue,
         Prop {
-            size: glam::Vec2::splat(size),
+            size: glam::Vec2::new(96.0, 96.0),
             hp,
             destructible: true,
             explosive: false,
         },
         PropHpTracker { last_hp: hp },
         NextHurt::default(),
-        PropSprites {
-            idle,
-            hurt: idle,
-            dead: idle,
+        crate::comps_b::PropSprites {
+            idle: "images/sprPStat1Idle.png",
+            hurt: "images/sprPStat1Hurt.png",
+            dead: "images/sprPStatDead.png",
             flip_x: false,
         },
         Pos(pos),
     ));
-    match target {
-        SecretTarget::PizzaSewers => {
-            ec.insert(ManholeCover);
-        }
-        SecretTarget::CrownVault | SecretTarget::Vault => {
-            ec.insert(ProtoStatue);
-            // GML has no SnowBandit kind (Bandit xmas sprite-swap only);
-            // vault guards are plain Bandits.
-            let guard = EnemyKind::Bandit;
-            for i in 0..4 {
-                let ang = i as f32 * std::f32::consts::FRAC_PI_2;
-                let p = pos + glam::Vec2::from_angle(ang) * 36.0;
-                spawn_enemy_at(
-                    commands,
-                    catalog,
-                    guard,
-                    p,
-                    difficulty_multiplier(run.floor),
-                    false,
-                    false,
-                    run.loop_count,
-                    EnemySpawnContext {
-                        subarea: run.floor_in_area,
-                        blood_crown: run.blood_crown,
-                        scarier_face,
-                        heavy_heart,
-                    },
-                );
-            }
-        }
-        SecretTarget::YvMansion => {
-            ec.insert(GoldCar);
-        }
-        // GML has no `BloodFlower` object. The only route into
-        // `area_jungle` is the `IceFlower` enemy, spawned on FrozenCity
-        // subarea 1 while LAST WISH is held
-        // (`GenCont/Destroy_0.gml:112-123`), so no entrance marker goes
-        // here.
-        _ => {}
+    if let Some(def) = catalog.def("images/sprPStat1Idle.png") {
+        ec.insert(SpriteAnim::new("images/sprPStat1Idle.png", def));
+    }
+    for _ in 0..4 {
+        let off = glam::Vec2::new(rng.random_range(-6.0..6.0), rng.random_range(-6.0..6.0));
+        spawn_enemy_at(
+            commands,
+            catalog,
+            EnemyKind::Bandit,
+            pos + off,
+            difficulty_multiplier(run.floor),
+            false,
+            false,
+            run.loop_count,
+            EnemySpawnContext {
+                subarea: run.floor_in_area,
+                blood_crown: run.blood_crown,
+                scarier_face,
+                heavy_heart,
+            },
+        );
     }
 }
 
@@ -1788,7 +1822,15 @@ pub fn spawn_level(
     tops.seed(&floor_set, &wall_set);
     spawn_wall_tiles(&mut *commands, wall_set.into_iter().collect(), &floor_set);
 
-    spawn_secret_entrances(commands, catalog, run, scarier_face, heavy_heart);
+    spawn_secret_entrances(
+        commands,
+        catalog,
+        run,
+        scarier_face,
+        heavy_heart,
+        crownvisits,
+        plan,
+    );
 
     spawn_ground_details(commands, catalog, run, plan);
 
