@@ -514,7 +514,7 @@ pub fn boss_ai(
         .filter(|(_, e, _)| e.kind == EnemyKind::ScrapBossMissile)
         .count();
     let other_enemies = children.iter().count();
-    let foe_list: Vec<Entity> = children.iter().map(|(e, _, _)| e).collect();
+    let foe_list: Vec<(Entity, EnemyKind)> = children.iter().map(|(e, k, _)| (e, k.kind)).collect();
     // GML `Nothing/Other_10`: the Throne destroys Portals every step.
     let portal_list: Vec<Entity> = portals.iter().collect();
     // GML `Nothing2/Other_10`: every step turns walls invisible.
@@ -662,6 +662,7 @@ pub fn boss_ai(
                 &statue_list,
                 &portal_list,
                 &wall_shapes,
+                &mask,
                 def.radius,
             ),
             EnemyKind::ThroneII => {
@@ -1693,10 +1694,11 @@ fn throne_ai(
     player_pos: glam::Vec2,
     loop_count: u32,
     dt: f32,
-    foes: &[Entity],
+    foes: &[(Entity, EnemyKind)],
     statues: &[(Entity, glam::Vec2)],
     portals: &[Entity],
     walls: &[(glam::Vec2, (i32, i32))],
+    mask: &FloorMask,
     radius: f32,
 ) -> bool {
     let mut rng = rand::rng();
@@ -1710,10 +1712,13 @@ fn throne_ai(
         boss.attack_timer = GTimer::from_seconds(1.0 /* 30 ticks */, TimerMode::Once);
     }
 
-    // `with enemy { destroy }` (everything but fellow bosses) and
-    // `with Portal { destroy }`.
-    for foe in foes {
-        commands.entity(*foe).despawn();
+    // `with enemy { if id != other.id && object_index != Guardian { destroy } }`
+    // and `with Portal { destroy }`. Guardians are the throne's own and are
+    // explicitly spared.
+    for (foe, kind) in foes {
+        if *kind != EnemyKind::Guardian {
+            commands.entity(*foe).despawn();
+        }
     }
     for portal in portals {
         commands.entity(*portal).despawn();
@@ -1723,17 +1728,52 @@ fn throne_ai(
     let dist = to_player.length();
     let frac = (health.hp as f32 / health.max.max(1) as f32).clamp(0.0, 1.0);
 
-    // Delayed `NothingBeam` after the 30-tick charge telegraph.
+    // GML `NothingBeam`: `Create_0` charges for `alarm[0] = 90`, and
+    // `Step_0:26-33` runs `image_yscale` down until it meets a wall (capped
+    // at 1024), so the lance shoots up out of the throne and hangs there for
+    // the 20 frames its stop animation takes.
     if boss.phase == BossPhase::Telegraph && boss.phase_timer.just_finished() {
-        spawn_enemy_beam(
-            commands,
-            epos + glam::Vec2::new(0.0, 48.0),
-            glam::Vec2::new(0.0, 1.0),
-            520.0,
-            28.0,
-            5,
-            2.0,
-        );
+        let origin = epos + glam::Vec2::new(0.0, 48.0);
+        let reach = (0..1024)
+            .map(|step| step as f32)
+            .find(|step| {
+                crate::walls::segment_hits_wall(
+                    origin,
+                    origin + glam::Vec2::new(0.0, -(*step + 1.0)),
+                    mask,
+                )
+            })
+            .unwrap_or(1023.0);
+        commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            crate::combat::Explosion {
+                timer: GTimer::from_seconds(20.0 / 30.0, TimerMode::Once),
+                radius: 24.0,
+                damage: 5,
+                team: Team::Enemy,
+                hits_player: true,
+                source: Some(DamageSource::enemy(owner, EnemyKind::Throne)),
+            },
+            Pos(origin),
+        ));
+        commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            Beam {
+                team: Team::Enemy,
+                dir: glam::Vec2::new(0.0, -1.0),
+                length: reach.max(1.0),
+                width: 28.0,
+                damage: 5,
+                knockback: 360.0,
+                color: [0.65, 0.35, 0.85, 0.9],
+                timer: GTimer::from_seconds(20.0 / 30.0, TimerMode::Once),
+                tick: GTimer::from_seconds(0.06, TimerMode::Repeating),
+                source: Some(DamageSource::enemy(owner, EnemyKind::Throne)),
+            },
+            Pos(origin),
+        ));
         trauma.add(0.2);
         fired = true;
         boss.phase = BossPhase::Idle;
@@ -1833,8 +1873,8 @@ fn throne_ai(
                     && player_pos.x > epos.x - 32.0
                     && rng.random::<f32>() < 2.0 / 3.0
                 {
-                    // Centered: beam with a 30-tick charge.
-                    boss.set_phase(BossPhase::Telegraph, 1.0);
+                    // Centered: `NothingBeam` with its 90-step charge.
+                    boss.set_phase(BossPhase::Telegraph, 90.0 / 30.0);
                 } else if frac <= 0.4 {
                     boss.attack_timer = GTimer::from_seconds(20.0 / 30.0, TimerMode::Once);
                     brain.gunangle = [-30.0_f32, -20.0, -10.0, 0.0, 10.0, 20.0, 30.0]
@@ -1852,24 +1892,23 @@ fn throne_ai(
             }
         }
         if boss.aux == 1.0 {
-            // Twin `BigGuardianBullet` from the flanks.
+            // GML `Nothing/Alarm_1.gml:57-72`: a `BigGuardianBullet` from
+            // each flank at the target's bearing +-25 deg, 7 + random(1)
+            // px/step.
             for sx in [-70.0_f32, 70.0] {
                 let jitter = rng.random_range(-25.0..=25.0_f32).to_radians();
                 let ang = to_player.y.atan2(to_player.x) + jitter;
                 let sdir = glam::Vec2::from_angle(ang);
-                fire_projectile(
-                    commands,
-                    owner,
-                    epos + glam::Vec2::new(sx, 10.0),
-                    sdir,
-                    Team::Enemy,
-                    rng.random_range(210.0..=240.0),
-                    12,
-                    3.0,
-                    7.0,
-                    200.0,
-                    EnemyKind::Throne,
-                );
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    crate::comps_b::BigGuardianBullet {
+                        hold: 8.0,
+                        released: false,
+                    },
+                    Velocity(sdir * rng.random_range(210.0..=240.0)),
+                    Pos(epos + glam::Vec2::new(sx, 10.0)),
+                ));
             }
             fired = true;
         }
