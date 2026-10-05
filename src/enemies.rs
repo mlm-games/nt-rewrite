@@ -9173,7 +9173,7 @@ pub fn tick_elite_blockers(
         let dir = rng.random_range(0.0..std::f32::consts::TAU);
         opos.0 = mask
             .cell_center(mask.world_to_cell(opos.0 + glam::Vec2::new(dir.cos(), dir.sin()) * len));
-        brain.attack = GTimer::from_seconds(30.0 / 30.0, TimerMode::Once);
+        brain.attack = GTimer::from_seconds(1.0, TimerMode::Once);
     }
 }
 

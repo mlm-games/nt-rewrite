@@ -313,9 +313,10 @@ pub fn tick_can_oasis(
     mut run: ResMut<Run>,
     mut open: Query<(Entity, &mut crate::comps_b::CanOasis)>,
 ) {
+    let mut opened = false;
     if triggers.oasis_chests_ready && triggers.oasis_eligible {
         triggers.oasis_chests_ready = false;
-        run.can_oasis = true;
+        opened = true;
         commands.spawn((
             crate::comps_a::GameCleanup,
             crate::comps_a::LevelCleanup,
@@ -334,7 +335,9 @@ pub fn tick_can_oasis(
             live += 1;
         }
     }
-    run.can_oasis = live > 0;
+    // A freshly raised marker is not in the query until the deferred spawns
+    // land, so the window counts itself.
+    run.can_oasis = live > 0 || opened;
 }
 
 /// Carrying a cursed weapon through Crystal Caves queues the Cursed
