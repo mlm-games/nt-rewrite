@@ -780,9 +780,6 @@ pub fn check_kill_unlocks(
         EnemyKind::Bandit if race == crate::data::RaceId::Rebel => {
             award_skin(save, &mut menu, crate::data::RaceId::Rebel, 2);
         }
-        EnemyKind::LilHunter if race == crate::data::RaceId::Rogue => {
-            award_skin(save, &mut menu, crate::data::RaceId::Rogue, 2);
-        }
         EnemyKind::Throne | EnemyKind::ThroneII => {
             if race == crate::data::RaceId::Melting {
                 award_skin(save, &mut menu, crate::data::RaceId::Melting, 1);
@@ -816,6 +813,12 @@ pub struct CheckKillUnlocks {
 
 fn try_unlock_skin(save: &mut SaveData, race: crate::data::RaceId, skin: usize) -> bool {
     try_unlock_skin_with_menu(save, race, skin, None)
+}
+
+/// GML `LilHunterFly/Step_0:15-17` `scrRaceUnlockSkin(Race.Rogue,
+/// SkinLetter.C)` - earned by letting the boss leave rather than killing it.
+pub fn unlock_rogue_skin_c(save: &mut SaveData) -> bool {
+    try_unlock_skin(save, crate::data::RaceId::Rogue, 2)
 }
 
 fn try_unlock_skin_with_menu(

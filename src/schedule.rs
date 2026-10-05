@@ -332,6 +332,12 @@ pub fn build_sim_schedule() -> Schedule {
                     enemies::tick_dormant_scrap_boss
                         .in_set(NtSimSet::Combat)
                         .run_if(gameplay_active),
+                    enemies::tick_want_lil_hunter
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    enemies::tick_lil_hunter_escapes
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
                     enemies::tick_big_dog_explo
                         .in_set(NtSimSet::Combat)
                         .run_if(gameplay_active),

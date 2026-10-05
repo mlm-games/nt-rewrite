@@ -1680,6 +1680,14 @@ pub struct ThroneSit {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct InvisiWall;
 
+/// GML `objects/WantLH`: the city boss marker. `alarm[0]` waits
+/// `210 / (1 + loops * 0.5)` steps and then drops a `LilHunter` on the
+/// `Floor` tile furthest from a random player.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct WantLh {
+    pub steps: f32,
+}
+
 /// GML `objects/BecomeScrapBoss`: a 30 hp `prop` that stands in for the
 /// Scrap Boss until the player has had it in clear view for 150 steps and
 /// closed to 160 px, at which point `Destroy_0` raises the real boss.
@@ -1748,6 +1756,14 @@ pub struct ThroneCarpet {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct BigDogExplo {
     pub timer: Timer,
+}
+
+/// GML `LilHunterFly/Step_0:6-31`: the boss flies off the top of the screen
+/// and, if it was the last of its kind, leaves an `IDPDSpawn` behind and
+/// (for a Rogue in the run) unlocks skin C.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct LilHunterEscape {
+    pub at: Vec2,
 }
 
 #[derive(Component, Debug)]

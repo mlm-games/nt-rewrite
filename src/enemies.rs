@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use bevy_ecs::prelude::*;
 use bevy_ecs::system::EntityCommands;
 use rand::RngExt;
+use rand::seq::IteratorRandom;
 use repame_fx::Trauma;
 use repame_sim::SimTime;
 
@@ -5605,6 +5606,90 @@ pub fn fire_enemy_shot(
             explosive_kind(enemy.kind),
         );
         finish_enemy_bullet(&mut commands.entity(e), enemy.kind);
+    }
+}
+
+/// GML `LilHunterFly/Step_0:5-31`: a fleeing boss drops an `IDPDSpawn` on
+/// the `Floor` tile it is nearest, and a Rogue in the run picks up skin C.
+pub fn tick_lil_hunter_escapes(
+    mut commands: Commands,
+    mut run: ResMut<Run>,
+    mut save: ResMut<crate::savedata_part::SaveData>,
+    mut dirty: ResMut<crate::comps_a::SaveDirty>,
+    mask: Res<FloorMask>,
+    player_q: Query<&crate::comps_a::RaceState, (With<Player>, Without<Enemy>)>,
+    mut escapes: Query<(Entity, &crate::comps_b::LilHunterEscape)>,
+) {
+    for (entity, escape) in &mut escapes {
+        let at = mask
+            .cells
+            .iter()
+            .copied()
+            .min_by(|a, b| {
+                mask.cell_center(*a)
+                    .distance_squared(escape.at)
+                    .total_cmp(&mask.cell_center(*b).distance_squared(escape.at))
+            })
+            .map(|c| mask.cell_center(c))
+            .unwrap_or(escape.at);
+        crate::idpd::spawn_idpd_spawn(&mut commands, &mut run, 0, at);
+        if player_q
+            .iter()
+            .any(|r| r.race == crate::data::RaceId::Rogue)
+        {
+            crate::savedata_part::unlock_rogue_skin_c(&mut save);
+            dirty.0 = true;
+        }
+        commands.entity(entity).despawn();
+    }
+}
+
+/// GML `objects/WantLH` (`Create_0` + `Alarm_0`): after
+/// `210 / (1 + loops * 0.5)` steps the Lil Hunter drops in on the `Floor`
+/// tile furthest from a randomly chosen player.
+pub fn tick_want_lil_hunter(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    catalog: Res<repame_anim::AnimCatalog>,
+    run: Res<Run>,
+    mask: Res<FloorMask>,
+    mut markers: Query<(Entity, &mut crate::comps_b::WantLh)>,
+    players: Query<&Pos, (With<Player>, Without<Enemy>)>,
+) {
+    let dt = time.delta_secs * crate::SIM_HZ as f32;
+    let mut rng = rand::rng();
+    for (marker_e, mut marker) in &mut markers {
+        marker.steps -= dt;
+        if marker.steps > 0.0 {
+            continue;
+        }
+        let Some(player_pos) = players.iter().choose(&mut rng).map(|p| p.0) else {
+            continue;
+        };
+        let spot = mask
+            .cells
+            .iter()
+            .copied()
+            .max_by(|a, b| {
+                mask.cell_center(*a)
+                    .distance_squared(player_pos)
+                    .total_cmp(&mask.cell_center(*b).distance_squared(player_pos))
+            })
+            .map(|c| mask.cell_center(c));
+        if let Some(at) = spot {
+            crate::enemies::spawn_enemy_at(
+                &mut commands,
+                &catalog,
+                EnemyKind::LilHunter,
+                at,
+                1.0,
+                false,
+                false,
+                run.loop_count,
+                EnemySpawnContext::default(),
+            );
+        }
+        commands.entity(marker_e).despawn();
     }
 }
 

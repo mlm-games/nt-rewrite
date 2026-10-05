@@ -2127,6 +2127,12 @@ pub fn spawn_level(
                     ));
                 }
             }
+            EnemyKind::LilHunter => {
+                // GML `scrPopulate.gml:344` plants a `WantLH` marker; the
+                // boss itself only arrives once `alarm[0]` runs out.
+                let steps = 210.0 / (1.0 + run.loop_count as f32 * 0.5);
+                commands.spawn((GameCleanup, LevelCleanup, crate::comps_b::WantLh { steps }));
+            }
             other => {
                 let pos = match other {
                     EnemyKind::Throne => glam::Vec2::new(0.0, 200.0),

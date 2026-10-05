@@ -641,6 +641,7 @@ pub fn boss_ai(
                 run.loop_count,
                 other_enemies,
                 rogue_present,
+                &mask,
                 &mut run,
             ),
             EnemyKind::Throne => throne_ai(
@@ -1225,6 +1226,7 @@ fn lil_hunter_ai(
     loop_count: u32,
     others: usize,
     rogue_present: bool,
+    mask: &FloorMask,
     run: &mut Run,
 ) -> bool {
     let mut rng = rand::rng();
@@ -1249,8 +1251,14 @@ fn lil_hunter_ai(
             boss.aux -= 240.0 * dt;
             if boss.aux <= -160.0 {
                 if others == 0 {
-                    // Nobody left: drop an `IDPDSpawn` and leave.
-                    queue_enemy_spawn(&mut *commands, EnemyKind::IdpdGrunt, epos, 1.0, loop_count);
+                    // GML `LilHunterFly/Step_0:5-31`: the last boss of its
+                    // kind leaves an `IDPDSpawn` on the way out.
+                    commands.spawn((
+                        GameCleanup,
+                        LevelCleanup,
+                        crate::comps_b::LilHunterEscape { at: epos },
+                        Pos(epos),
+                    ));
                     commands.entity(owner).despawn();
                     return false;
                 }
@@ -1276,7 +1284,7 @@ fn lil_hunter_ai(
                     },
                     Pos(pos.0),
                 ));
-                lil_hunter_fire_ring(commands, pos.0);
+                lil_hunter_fire_ring(commands, pos.0, props, Some(mask));
                 fired = true;
                 boss.attack_timer =
                     GTimer::from_seconds(rng.random_range(20.0..=30.0) / 30.0, TimerMode::Once);
@@ -1400,11 +1408,14 @@ fn lil_hunter_ai(
             && brain.ammo > 0
             && (health.hp as f32) < (health.max as f32) * (brain.ammo as f32) / 6.0
         {
-            // IDPD summon through converging portal charges: one portal
-            // per wave, each rolling the GML spawn table.
+            // GML `Alarm_1:70-87`: 30 `IDPDPortalCharge` motes, then
+            // `1 + max(0, loops - 1)` `IDPDSpawn`s. Every portal bumps
+            // `GameCont.popolevel` in `Create_0` before any of their
+            // `Alarm_1`s roll, so the whole batch shares the final level.
             brain.walk = 0.0;
-            for _ in 0..1 + (loop_count.saturating_sub(1)) as usize {
-                run.popolevel += 1;
+            let waves = 1 + loop_count.saturating_sub(1) as usize;
+            run.popolevel += waves as u32;
+            for _ in 0..waves {
                 for kind in crate::idpd::roll_idpd_table(loop_count, run.area, run.popolevel, true)
                 {
                     queue_enemy_spawn(&mut *commands, kind, epos, 1.0, loop_count);
@@ -1463,19 +1474,26 @@ fn lil_hunter_ai(
     fired
 }
 
-/// The 80-flame landing/death ring (`sprFireLilHunter` `TrapFire` at
-/// 2 px/tick stepping 4.5 degrees): short-lived fire clouds fanning out
-/// from the impact.
-pub fn lil_hunter_fire_ring(commands: &mut Commands, at: glam::Vec2) {
+/// GML `LilHunterFly/Step_0:63-77` and `LilHunter/Destroy_0:23-36`: 80
+/// `sprFireLilHunter` `TrapFire`s at 2 + random(0.2) px/step, stepping 4.5
+/// degrees, each nudged up to 12px clear of geometry along its own heading.
+pub fn lil_hunter_fire_ring(
+    commands: &mut Commands,
+    at: glam::Vec2,
+    props: &[(glam::Vec2, glam::Vec2)],
+    mask: Option<&FloorMask>,
+) {
     let mut rng = rand::rng();
     let mut ang = rng.random_range(0.0..std::f32::consts::TAU);
     for _ in 0..80 {
         ang += 4.5_f32.to_radians();
         let d = glam::Vec2::from_angle(ang);
         let speed = (2.0 + rng.random_range(0.0..0.2)) * 30.0;
+        let mut origin = at;
+        crate::spatial::move_contact_solid(&mut origin, d * 12.0, 0.0, props, mask);
         crate::environment::spawn_trap_fire_with_image(
             commands,
-            at + d * 36.0,
+            origin,
             d,
             speed,
             Team::Enemy,

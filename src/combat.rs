@@ -803,7 +803,12 @@ pub fn resolve_enemy_deaths(
                     },
                     Pos(pos),
                 ));
-                crate::boss_ai::lil_hunter_fire_ring(&mut commands, pos);
+                crate::boss_ai::lil_hunter_fire_ring(
+                    &mut commands,
+                    pos,
+                    &[],
+                    shots_and_floor.p1().as_deref(),
+                );
                 // GML `LilHunter/Destroy_0:13-21`: the head skitters on
                 // (`LilHunterDie` inherits team) plus the 80-`TrapFire`
                 // ring. `scrOnPopoKill` has no port equivalent - skipped
