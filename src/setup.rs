@@ -904,6 +904,7 @@ fn prop_candidates(kind: PropKind, styleb: bool) -> &'static [&'static str] {
         PropKind::Pipe => &["images/sprSewerPipe.png"],
         PropKind::Tires => &["images/sprTires.png"],
         PropKind::ToxicBarrel => &["images/sprToxicBarrel.png"],
+        PropKind::PizzaEntrance => &["images/sprPizzaEntrance.png"],
         PropKind::Car => &["images/sprCarIdle.png"],
         PropKind::Cocoon => &["images/sprCocoon.png"],
         PropKind::Snowman => &["images/sprSnowMan.png"],
@@ -1004,6 +1005,7 @@ fn prop_stats(kind: PropKind, styleb: bool, loop_count: u32) -> PropStats {
         PropKind::Pipe => s(24.0, 24.0, 1, 1, None),
         PropKind::Tires => s(24.0, 24.0, 1, 6, None),
         PropKind::ToxicBarrel => s(24.0, 24.0, 1, 1, Some(PropDeathEffect::toxic_barrel())),
+        PropKind::PizzaEntrance => s(24.0, 24.0, 1, 1, None),
         PropKind::Car => s(32.0, 32.0, 1, 20, Some(PropDeathEffect::car())),
         PropKind::Cocoon => s(24.0, 24.0, 1, 8, None),
         PropKind::Snowman => s(30.0, 30.0, 1, 10, None),
@@ -1279,6 +1281,27 @@ pub fn spawn_prop_sim(
                         flip_x: false,
                     },
                     crate::comps_b::GroundDecalTint,
+                    Pos(pos),
+                ))
+                .id(),
+        );
+    }
+
+    if kind == PropKind::PizzaEntrance {
+        // GML `PizzaEntrance` declares no parent: not solid, no hp, art plus
+        // an `Explosion` collision. `image_speed = 0` holds frame 0 shut and
+        // frame 1 is what `Collision_Explosion` flips it to.
+        return Some(
+            commands
+                .spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    crate::comps_b::PizzaEntrance { opened: false },
+                    crate::comps_b::GroundDetail {
+                        path: "images/sprPizzaEntrance.png",
+                        frame: 0,
+                        flip_x: false,
+                    },
                     Pos(pos),
                 ))
                 .id(),

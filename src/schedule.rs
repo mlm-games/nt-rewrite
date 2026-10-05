@@ -451,6 +451,9 @@ pub fn build_sim_schedule() -> Schedule {
                 secrets::tick_can_oasis
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
+                secrets::tick_pizza_entrances
+                    .in_set(NtSimSet::Combat)
+                    .run_if(gameplay_active),
             )
                 .chain(),
             (

@@ -1418,6 +1418,14 @@ pub struct SecretEntrance {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct ManholeCover;
 
+/// GML `objects/PizzaEntrance`: the sewers 1-1 manhole. It wipes the props
+/// around it on creation and, the first time an `Explosion` touches it while
+/// no `FrogQueen` lives, empties the floor and opens the pizza sewers.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct PizzaEntrance {
+    pub opened: bool,
+}
+
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct ProtoStatue;
 

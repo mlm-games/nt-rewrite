@@ -87,6 +87,8 @@ pub enum PropKind {
     Tires,
 
     ToxicBarrel,
+    /// GML `objects/PizzaEntrance` (sewers 1-1 only).
+    PizzaEntrance,
     Car,
     Cocoon,
     Snowman,
@@ -239,6 +241,13 @@ fn generation_goal_for_run(run: &Run) -> usize {
 pub fn area_can_have_popo(run: &Run, gml_area: i32) -> bool {
     let last = run.floor_in_area >= gml_max_subarea(gml_area);
     !matches!(gml_area, 100 | 107 | 0) && !(gml_area == 106 && last) && !(gml_area == 7 && last)
+}
+
+fn pick_floor_cell<'a>(cells: &'a [(i32, i32)], rng: &mut StdRng) -> Option<&'a (i32, i32)> {
+    if cells.is_empty() {
+        return None;
+    }
+    Some(&cells[rng.random_range(0..cells.len())])
 }
 
 /// GML `GameCont/Other_4.gml:1-6`: `novans` (no IDPD vans on this floor) is
@@ -2485,6 +2494,22 @@ fn populate(
                 pos,
             });
         }
+    }
+
+    // GML `scrPopulate.gml:239-253`: sewers subarea 1 hides a single
+    // `PizzaEntrance` on a floor tile, and `PizzaEntrance/Create_0:3-5`
+    // clears every `prop` within 64 px of it. The tile predicate GML uses
+    // (`sprFloor2` frame 1 or 5) is a `Floor` sprite choice the port's floor
+    // mask does not carry, so any floor tile stands in for it - only one
+    // entrance ever existed either way.
+    if area == 2
+        && run.floor_in_area == 1
+        && let Some(&(fx, fy)) = pick_floor_cell(&plan.floor_cells, &mut rng)
+    {
+        let at = Vec2::new(fx as f32 * TILE + TILE * 0.5, fy as f32 * TILE + TILE * 0.5);
+        plan.props
+            .retain(|(kind, pos)| *kind != PropKind::None && pos.distance(at) >= 64.0);
+        plan.props.push((PropKind::PizzaEntrance, at));
     }
 
     // GML `scrPopulate.gml:274-282`: one `WantPopo` per loop plus one more

@@ -15,6 +15,7 @@ use crate::comps_a::{Inventory, Player, RaceState, Run, Toast};
 use crate::comps_b::{BossBrain, Enemy, Pickup, PickupKind};
 use crate::data::{AreaId, RaceId, SecretTarget};
 use crate::enemy_data::enemy_def;
+use crate::spatial::Pos;
 
 /// Tracks secret eligibility across a floor run.
 #[derive(Resource, Clone, Debug)]
@@ -165,6 +166,74 @@ pub fn detect_oasis_eligibility(
     let max_kill = if run.floor_in_area == 3 { 0.10 } else { 0.02 };
     if kill_frac <= max_kill {
         triggers.oasis_chests_ready = true;
+    }
+}
+
+/// GML `PizzaEntrance/Collision_Explosion.gml`: the first `Explosion` that
+/// touches the sewers manhole empties the floor and opens a portal to
+/// `area_pizza_sewers` - but only while no `FrogQueen` is standing, and only
+/// once (`image_index = 1` gates every later blast).
+pub fn tick_pizza_entrances(
+    mut commands: Commands,
+    catalog: Res<repame_anim::AnimCatalog>,
+    mut run: ResMut<Run>,
+    mut gates: Query<
+        (Entity, &Pos, &mut crate::comps_b::PizzaEntrance),
+        (
+            With<crate::comps_b::PizzaEntrance>,
+            Without<crate::comps_a::Player>,
+        ),
+    >,
+    blasts: Query<
+        (&Pos, &crate::combat::Explosion),
+        (
+            With<crate::combat::Explosion>,
+            Without<crate::comps_a::Player>,
+        ),
+    >,
+    mut enemies: Query<
+        (Entity, &crate::comps_b::Enemy, &mut crate::comps_a::Health),
+        (With<crate::comps_b::Enemy>, Without<crate::comps_a::Player>),
+    >,
+    mut shots: Query<(Entity, &crate::comps_a::Team), With<crate::Projectile>>,
+) {
+    if gates.is_empty() {
+        return;
+    }
+    if enemies
+        .iter()
+        .any(|(_, enemy, _)| enemy.kind == crate::data::EnemyKind::FrogQueen)
+    {
+        return;
+    }
+    let fired: Vec<(Entity, glam::Vec2)> = gates
+        .iter_mut()
+        .filter(|(_, pos, gate)| {
+            !gate.opened
+                && blasts
+                    .iter()
+                    .any(|(bp, b)| bp.0.distance(pos.0) <= b.radius)
+        })
+        .map(|(entity, pos, _)| (entity, pos.0))
+        .collect();
+    for (entity, pos) in fired {
+        commands.entity(entity).despawn();
+        commands.spawn((
+            crate::comps_a::GameCleanup,
+            crate::comps_a::LevelCleanup,
+            crate::comps_b::GroundDetail {
+                path: "images/sprPizzaEntrance.png",
+                frame: 1,
+                flip_x: false,
+            },
+            Pos(pos),
+        ));
+        for (_, _, mut hp) in enemies.iter_mut() {
+            hp.hp = 0;
+        }
+        let mut enemy_shots = &mut shots;
+        crate::progression::spawn_portal(&mut commands, &catalog, &mut enemy_shots, pos, 1);
+        run.queued_secret = Some(crate::data::SecretTarget::PizzaSewers);
     }
 }
 
