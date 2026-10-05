@@ -219,7 +219,6 @@ fn boss_wall_law(
         EnemyKind::ThroneII
         | EnemyKind::LilHunter
         | EnemyKind::LilHunterLoop
-        | EnemyKind::Mom
         | EnemyKind::YvBoss => {
             if boss_bounce_solid(pos, vel, radius, props, mask) && busy {
                 boss_friction_slide(*pos, vel, radius, props, mask, 0.4);
@@ -718,21 +717,6 @@ pub fn boss_ai(
                 run.loop_count,
                 &mut run,
             ),
-            EnemyKind::Mom => mom_ai(
-                &mut commands,
-                &mut trauma,
-                entity,
-                &mut boss,
-                &mut vel,
-                &mut pos,
-                def,
-                epos,
-                player_pos,
-                dir,
-                dt,
-                &prop_shapes,
-                run.loop_count,
-            ),
             EnemyKind::FrogQueen => frog_queen_ai(
                 &mut commands,
                 &mut trauma,
@@ -789,20 +773,6 @@ pub fn boss_ai(
                 &prop_shapes,
                 &wall_shapes,
                 &mask,
-            ),
-            EnemyKind::OldGuardian => old_guardian_ai(
-                &mut commands,
-                &mut trauma,
-                entity,
-                &mut boss,
-                &mut vel,
-                &mut pos,
-                def,
-                epos,
-                player_pos,
-                dir,
-                dt,
-                &prop_shapes,
             ),
             EnemyKind::YvBoss => yv_boss_ai(
                 &mut commands,
@@ -1524,7 +1494,6 @@ pub fn taunt_cue_name(kind: EnemyKind) -> Option<&'static str> {
     match kind {
         EnemyKind::BigBandit | EnemyKind::BigBanditLoop => Some("sndBigBanditTaunt"),
         EnemyKind::BigDog | EnemyKind::BigDogLoop => Some("sndBigDogTaunt"),
-        EnemyKind::Mom => Some("sndBallMamaTaunt"),
         EnemyKind::Hyper => Some("sndHyperCrystalTaunt"),
         EnemyKind::LilHunter | EnemyKind::LilHunterLoop => Some("sndLilHunterTaunt"),
         EnemyKind::Technomancer => Some("sndLastTaunt"),
@@ -2318,73 +2287,6 @@ pub fn tick_hyper_orbit_crystals(
 
 /// Kiting spore ring + egg spawns (bevy `mom_ai` parity).
 #[allow(clippy::too_many_arguments)]
-fn mom_ai(
-    commands: &mut Commands,
-    trauma: &mut Trauma,
-    owner: Entity,
-    boss: &mut BossBrain,
-    vel: &mut Velocity,
-    pos: &mut Pos,
-    def: EnemyDef,
-    epos: glam::Vec2,
-    player_pos: glam::Vec2,
-    dir: glam::Vec2,
-    dt: f32,
-    props: &[(glam::Vec2, glam::Vec2)],
-    loops: u32,
-) -> bool {
-    let mut fired = false;
-
-    let desired = if epos.distance(player_pos) < 120.0 {
-        -dir
-    } else {
-        dir
-    };
-    vel.0 += desired * def.accel * 0.5 * dt;
-    limit_velocity(vel, def.speed.max(50.0));
-    pos.0 += vel.0 * dt;
-    resolve_prop_collision(&mut pos.0, def.radius, props.iter().copied());
-
-    if boss.attack_timer.just_finished() {
-        fire_ring_with_kind(
-            commands,
-            owner,
-            epos,
-            Team::Enemy,
-            10 + usize::from(boss.enraged) * 4,
-            boss.pattern_index as f32 * 0.11,
-            90.0,
-            2,
-            2.5,
-            5.0,
-            EnemyKind::Mom,
-        );
-        fired = true;
-        boss.pattern_index += 1;
-        trauma.add(0.12);
-    }
-
-    if boss.special_timer.just_finished() {
-        boss.set_phase(BossPhase::Spawning, 0.4);
-        for i in 0..3 {
-            let a = i as f32 * std::f32::consts::TAU / 3.0 + boss.pattern_index as f32 * 0.4;
-            queue_enemy_spawn(
-                &mut *commands,
-                EnemyKind::FrogEgg,
-                epos + glam::Vec2::new(a.cos(), a.sin()) * 48.0,
-                difficulty_for_loop(boss.enraged),
-                loops,
-            );
-        }
-        trauma.add(0.18);
-    }
-
-    if matches!(boss.phase, BossPhase::Spawning) && boss.phase_timer.just_finished() {
-        boss.set_phase(BossPhase::Idle, 0.1);
-    }
-    fired
-}
-
 // Frog Queen.
 
 /// Verbatim `objects/FrogQueen` law: aim-drift brain (`Alarm_1`), hatch
@@ -3008,71 +2910,6 @@ fn captain_idpd_bullet(
 
 /// Kiting fan + enrage-scaled ring (bevy `old_guardian_ai` parity).
 #[allow(clippy::too_many_arguments)]
-fn old_guardian_ai(
-    commands: &mut Commands,
-    trauma: &mut Trauma,
-    owner: Entity,
-    boss: &mut BossBrain,
-    vel: &mut Velocity,
-    pos: &mut Pos,
-    def: EnemyDef,
-    epos: glam::Vec2,
-    player_pos: glam::Vec2,
-    dir: glam::Vec2,
-    dt: f32,
-    props: &[(glam::Vec2, glam::Vec2)],
-) -> bool {
-    let mut fired = false;
-
-    let desired = if epos.distance(player_pos) < 90.0 {
-        -dir
-    } else {
-        dir
-    };
-    vel.0 += desired * def.accel * 0.55 * dt;
-    limit_velocity(vel, def.speed);
-    pos.0 += vel.0 * dt;
-    resolve_prop_collision(&mut pos.0, def.radius, props.iter().copied());
-
-    if boss.attack_timer.just_finished() {
-        fire_fan_with_kind(
-            commands,
-            owner,
-            epos,
-            dir,
-            Team::Enemy,
-            def.bullets_per_shot.max(4),
-            def.fan_spread,
-            def.projectile_speed,
-            def.projectile_damage,
-            def.projectile_lifetime,
-            def.projectile_radius,
-            EnemyKind::OldGuardian,
-        );
-        fired = true;
-    }
-
-    if boss.special_timer.just_finished() {
-        fire_ring_with_kind(
-            commands,
-            owner,
-            epos,
-            Team::Enemy,
-            10 + usize::from(boss.enraged) * 4,
-            boss.pattern_index as f32 * 0.19,
-            120.0,
-            3,
-            2.2,
-            4.0,
-            EnemyKind::OldGuardian,
-        );
-        fired = true;
-        boss.pattern_index += 1;
-        trauma.add(0.16);
-    }
-    fired
-}
-
 // YV (Gun God).
 
 /// Verbatim `objects/YVBoss` law: weapon-switch brain (`Alarm_1`), per-weapon

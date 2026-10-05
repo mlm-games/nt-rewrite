@@ -30,8 +30,6 @@ pub enum EnemyKind {
     IdpdElite,
     IdpdVan,
 
-    Mom,
-
     FrogQueen,
     Technomancer,
     Captain,
@@ -82,10 +80,6 @@ pub enum EnemyKind {
 
     IdpdInspector,
 
-    OldGuardian,
-
-    PalaceGuardian,
-
     Mimic,
     SuperMimic,
     WepMimic,
@@ -134,7 +128,6 @@ impl EnemyKind {
             EnemyKind::IdpdShield,
             EnemyKind::IdpdElite,
             EnemyKind::IdpdVan,
-            EnemyKind::Mom,
             EnemyKind::FrogQueen,
             EnemyKind::Technomancer,
             EnemyKind::Captain,
@@ -177,8 +170,6 @@ impl EnemyKind {
             EnemyKind::PopoFreak,
             EnemyKind::MaggotSpawn,
             EnemyKind::IdpdInspector,
-            EnemyKind::OldGuardian,
-            EnemyKind::PalaceGuardian,
             EnemyKind::Mimic,
             EnemyKind::SuperMimic,
             EnemyKind::WepMimic,

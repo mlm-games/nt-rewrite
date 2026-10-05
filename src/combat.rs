@@ -40,9 +40,7 @@ use crate::environment::{
     spawn_prop_corpse, spawn_prop_death_effect,
 };
 use crate::msg::Queue;
-use crate::pickups::{
-    give_ammo, maybe_spawn_drop, random_offset, spawn_chest, spawn_rad, spawn_rad_burst,
-};
+use crate::pickups::{give_ammo, maybe_spawn_drop, spawn_rad, spawn_rad_burst};
 use crate::projectile_math::{
     arena_wall_normal, bounce_velocity, circle_aabb_normal, record_hit, should_despawn_after_hit,
 };
@@ -1553,20 +1551,21 @@ pub fn resolve_death_drops(
             } else {
                 0
             };
-            spawn_rad_burst(
-                &mut commands,
-                &catalog,
-                pos,
-                ((enemy.rad_drop as u32).min(24) + melting_bonus).saturating_sub(blood_tax),
-            );
-
-            spawn_chest(
-                &mut commands,
-                &catalog,
-                ChestKind::Weapon,
-                pos + random_offset() * 3.0,
-            );
-            for _ in 0..2 {
+            // GML `enemy/Destroy_0.gml:34` runs `scrRadDrop(x, y, raddrop +
+            // scrPlayerCountRace(Race.Melting))` for every boss that calls
+            // `event_inherited()`; `Nothing` and `Nothing2` comment it out.
+            if crate::enemy_data::boss_drops_rads(enemy.kind) {
+                spawn_rad_burst(
+                    &mut commands,
+                    &catalog,
+                    pos,
+                    ((enemy.rad_drop as u32) + melting_bonus).saturating_sub(blood_tax),
+                );
+            }
+            // GML writes `repeat (n) scrDrop(...)`, i.e. `n` independent
+            // draws, so the roll count is per-kind (`ScrapBoss` 1,
+            // `Nothing2` 2, `HyperCrystal` 3).
+            for _ in 0..def.drop_rolls {
                 maybe_spawn_drop(
                     &mut commands,
                     &catalog,

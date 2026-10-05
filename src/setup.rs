@@ -2102,10 +2102,8 @@ pub fn spawn_level(
             other => {
                 let pos = match other {
                     EnemyKind::Throne => glam::Vec2::new(0.0, 200.0),
-                    EnemyKind::Mom => glam::Vec2::new(0.0, -40.0),
                     EnemyKind::Technomancer => glam::Vec2::new(0.0, 0.0),
                     EnemyKind::Captain => glam::Vec2::new(0.0, 80.0),
-                    EnemyKind::OldGuardian => glam::Vec2::new(0.0, 60.0),
                     EnemyKind::Hyper => glam::Vec2::new(0.0, 0.0),
                     _ => glam::Vec2::new(320.0, -160.0),
                 };

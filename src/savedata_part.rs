@@ -378,7 +378,7 @@ pub fn achievement_for_boss(kind: crate::data::EnemyKind) -> Option<u8> {
         EnemyKind::LilHunter | EnemyKind::LilHunterLoop => 33,
         EnemyKind::Throne => 34,
         EnemyKind::ThroneII => 35,
-        EnemyKind::Mom => 36,
+        EnemyKind::FrogQueen => 36,
         EnemyKind::Hyper => 37,
         EnemyKind::Technomancer => 38,
         EnemyKind::Captain => 42,
@@ -747,7 +747,7 @@ pub fn check_kill_unlocks(
         EnemyKind::BigDog | EnemyKind::BigDogLoop => {
             award(save, &mut menu, crate::data::RaceId::BigDog);
         }
-        EnemyKind::Mom => {
+        EnemyKind::FrogQueen => {
             award(save, &mut menu, crate::data::RaceId::Frog);
         }
         // GML hatches `HostileHorror` from a starved rad chest and

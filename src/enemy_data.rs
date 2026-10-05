@@ -91,11 +91,7 @@ pub fn gml_size(kind: EnemyKind) -> i32 {
         | EnemyKind::JungleFly
         | EnemyKind::InvSpider
         | EnemyKind::MeleeFake
-        | EnemyKind::ScrapBossMissile
-        // `Mom` and `OldGuardian` are port-invented bosses: GML has no
-        // `Mom`/`OldGuardian` object, so there is no `size` to read.
-        | EnemyKind::Mom
-        | EnemyKind::OldGuardian => 1,
+        | EnemyKind::ScrapBossMissile => 1,
         EnemyKind::Scorpion
         | EnemyKind::GoldScorpion
         | EnemyKind::Ratking
@@ -119,8 +115,7 @@ pub fn gml_size(kind: EnemyKind) -> i32 {
         | EnemyKind::Technomancer
         | EnemyKind::Guardian
         | EnemyKind::CrownGuardian
-        | EnemyKind::IceFlower
-        | EnemyKind::PalaceGuardian => 3,
+        | EnemyKind::IceFlower => 3,
         EnemyKind::ProtoStatue | EnemyKind::Hyper => 4,
         EnemyKind::HostileHorror | EnemyKind::DogGuardian | EnemyKind::YvBoss => 5,
         // `Last` (the `Captain`) is the GML `size = 6` boss.
@@ -203,7 +198,7 @@ pub fn gml_snd_hurt(kind: EnemyKind, oasis: bool, hp_frac: f32) -> &'static str 
         ProtoStatue => "sndStatueHurt",
         Crystal => "sndHitRock",
         IceFlower | Maggot | RadMaggot | FiredMaggot | Ballguy | SuperFrog | MaggotSpawn
-        | MeleeFake | Mom | OldGuardian | PalaceGuardian => "sndHitFlesh",
+        | MeleeFake => "sndHitFlesh",
         ScrapBossMissile => "sndHitMetal",
         Mimic | SuperMimic | WepMimic => "sndMimicHurt",
         Bandit | SnowBandit | JungleBandit => "sndBanditHit",
@@ -269,11 +264,19 @@ pub fn gml_snd_hurt(kind: EnemyKind, oasis: bool, hp_frac: f32) -> &'static str 
     }
 }
 
+/// GML bosses that opt out of the inherited rad drop by commenting out
+/// `event_inherited()` in their `Destroy_0`: `Nothing` (the Throne,
+/// `objects/Nothing/Destroy_0.gml`) and `Nothing2` (Throne II,
+/// `objects/Nothing2/Destroy_0.gml:11`). Both still run their own
+/// `scrDrop` rolls.
+pub fn boss_drops_rads(kind: EnemyKind) -> bool {
+    !matches!(kind, EnemyKind::Throne | EnemyKind::ThroneII)
+}
+
 fn gml_dead_stem(kind: EnemyKind, oasis: bool) -> &'static str {
     use EnemyKind::*;
     let base: &'static str = match kind {
-        Maggot | FiredMaggot | Sniper | IdpdVan | ScrapBossMissile | MeleeFake | Mom
-        | OldGuardian | PalaceGuardian => "sndEnemyDie",
+        Maggot | FiredMaggot | Sniper | IdpdVan | ScrapBossMissile | MeleeFake => "sndEnemyDie",
         Mimic | SuperMimic | WepMimic => "sndMimicDead",
         Bandit | SnowBandit | JungleBandit => "sndBanditDie",
         Assassin | MeleeBandit => "sndAssassinDie",
@@ -1211,41 +1214,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             projectile_size: 1.0,
             boss: false,
         },
-        EnemyKind::Mom => EnemyDef {
-            // GML has no `Mom` object. The Ballguy Mama that owns
-            // `sndBallMama*` and `HitId.BallguyMama` is `FrogQueen`
-            // (`scripts/scrDeathCauses:135`); this sewers boss is a
-            // port-invented second copy, so its numbers have no GML source.
-            name: "Mom",
-            hp: 280,
-            speed: 40.0,
-            accel: 700.0,
-            radius: 28.0,
-            size: 56.0,
-            color: [0.55, 0.85, 0.35, 1.0],
-            sprite: "images/sprMomIdle.png",
-            score: 1200,
-            touch_damage: 4,
-            rad_drop: 50,
-            drop_chance: 100,
-            weapon_chance: 18,
-            drop_rolls: 1,
-            preferred_range: 160.0,
-            attack_jitter: 0.0,
-            attack_cooldown: 1.1,
-            bullets_per_shot: 0,
-            burst: false,
-            burst_interval: 0.0,
-            fan_spread: 0.0,
-            projectile_speed: 0.0,
-            projectile_spread: 0.0,
-            projectile_damage: 0,
-            projectile_radius: 0.0,
-            projectile_lifetime: 0.0,
-            projectile_color: [0.45, 1.0, 0.35, 1.0],
-            projectile_size: 10.0,
-            boss: true,
-        },
         EnemyKind::FrogQueen => EnemyDef {
             name: "Frog Queen",
             hp: 490,
@@ -1606,80 +1574,6 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             projectile_lifetime: 2.5,
             projectile_color: [1.0, 0.6, 0.3, 1.0],
             projectile_size: 6.0,
-            boss: false,
-        },
-        EnemyKind::OldGuardian => EnemyDef {
-            // GML has no `OldGuardian` object (`sprOldGuardianStatue` and
-            // `mskOldGuardianDeflect` belong to `GuardianStatue`, which is a
-            // 1 hp prop): this vault boss is port-invented, so its numbers
-            // have no GML source.
-            name: "Old Guardian",
-            hp: 180,
-            speed: 55.0,
-            accel: 900.0,
-            radius: 22.0,
-            size: 44.0,
-            color: [0.75, 0.7, 0.55, 1.0],
-            sprite: "images/sprOldGuardianIdle.png",
-            score: 2000,
-            touch_damage: 5,
-            rad_drop: 40,
-            drop_chance: 100,
-            weapon_chance: 15,
-            drop_rolls: 1,
-            preferred_range: 120.0,
-            attack_jitter: 40.0,
-            attack_cooldown: 0.3333,
-            bullets_per_shot: 4,
-            burst: false,
-            burst_interval: 0.0,
-            fan_spread: 0.14,
-            projectile_speed: 180.0,
-            projectile_spread: 0.05,
-            projectile_damage: 3,
-            projectile_radius: 4.5,
-            projectile_lifetime: 2.5,
-            projectile_color: [0.9, 0.85, 0.5, 1.0],
-            projectile_size: 8.0,
-            boss: true,
-        },
-        EnemyKind::PalaceGuardian => EnemyDef {
-            // GML has no `PalaceGuardian` object. The profile (3-bullet
-            // 40-degree volley, 60 px/frame, `sprGuardianIdle`) is
-            // `Guardian`, spawned by `ThroneStatue/Destroy_0`; GML's
-            // `VaultStatue` instead spawns a `CrownGuardian`.
-            name: "Palace Guardian",
-            hp: 35,
-            speed: 95.0,
-            accel: 2800.0,
-            radius: 14.0,
-            size: 28.0,
-            color: [0.85, 0.75, 0.45, 1.0],
-            sprite: "images/sprGuardianIdle.png",
-            score: 40,
-            touch_damage: 2,
-            rad_drop: 11,
-            drop_chance: 50,
-            weapon_chance: 0,
-            drop_rolls: 1,
-            preferred_range: 80.0,
-            // `Guardian/Alarm_1:3` `alarm[1] = 10 + random(40)`.
-            attack_jitter: 40.0,
-            attack_cooldown: 0.3333,
-
-            bullets_per_shot: 3,
-            burst: false,
-            burst_interval: 0.0,
-            // `Guardian/Alarm_1:19,25,31` +/- 40 degrees.
-            fan_spread: 0.698,
-            projectile_speed: 60.0,
-            projectile_spread: 0.04,
-            // `GuardianBullet/Create_0:4` `damage = 5`.
-            projectile_damage: 5,
-            projectile_radius: 4.0,
-            projectile_lifetime: 2.2,
-            projectile_color: [1.0, 0.85, 0.4, 1.0],
-            projectile_size: 7.0,
             boss: false,
         },
         EnemyKind::Mimic => EnemyDef {

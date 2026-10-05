@@ -736,10 +736,8 @@ impl BossBrain {
             EnemyKind::Throne => (0.7, 2.5),
             EnemyKind::ThroneII => (0.85, 3.4),
             EnemyKind::Hyper => (1.1, 4.0),
-            EnemyKind::Mom => (1.0, 2.4),
             EnemyKind::Technomancer => (2.0, 3.5),
             EnemyKind::Captain => (0.7, 2.0),
-            EnemyKind::OldGuardian => (0.9, 2.2),
             // GML `YVBoss/Create_0`: `alarm[1] = 20`, `alarm[2] = 8`.
             EnemyKind::YvBoss => (20.0 / 30.0, 8.0 / 30.0),
             _ => (1.2, 3.0),

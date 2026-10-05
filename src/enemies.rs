@@ -296,9 +296,7 @@ fn spawn_enemy_impl(
         EnemyKind::GoldSnowtank => 120.0 + rng.random_range(0.0..10.0),
         EnemyKind::LaserCrystal | EnemyKind::LightningCrystal => 50.0 + rng.random_range(0.0..90.0),
         EnemyKind::InvLaserCrystal => 30.0 + rng.random_range(0.0..90.0),
-        EnemyKind::Guardian | EnemyKind::CrownGuardian | EnemyKind::PalaceGuardian => {
-            40.0 + rng.random_range(0.0..10.0)
-        }
+        EnemyKind::Guardian | EnemyKind::CrownGuardian => 40.0 + rng.random_range(0.0..10.0),
         EnemyKind::DogGuardian => 120.0 + rng.random_range(0.0..10.0),
         // `20 + random(10)` for the freaks and the ExploGuardian.
         EnemyKind::Freak
@@ -660,9 +658,7 @@ fn gml_wants_fire(kind: EnemyKind, los: bool, dist: f32, rng: &mut rand::rngs::T
         // GML `FireBaller/Alarm_1:10`, `SuperFireBaller/Alarm_1:10`.
         EnemyKind::FireBaller | EnemyKind::SuperFireBaller => roll(3.0) < 1.0,
         // GML `Guardian/Alarm_1:13`, under `justfired == 0`.
-        EnemyKind::OldGuardian | EnemyKind::PalaceGuardian | EnemyKind::CrownGuardian => {
-            (dist > 96.0 && roll(3.0) < 2.0) || roll(3.0) < 1.0
-        }
+        EnemyKind::CrownGuardian => (dist > 96.0 && roll(3.0) < 2.0) || roll(3.0) < 1.0,
         // GML `HostileHorror/Alarm_1:5-6`.
         EnemyKind::HostileHorror => dist > 48.0 && roll(2.0 + dist / 100.0) < 1.0,
         // GML `SuperFrog/Alarm_1:4` states no fire condition of its own.
@@ -675,9 +671,7 @@ fn gml_fire_rearm_secs(kind: EnemyKind, rng: &mut impl RngExt) -> f32 {
         EnemyKind::FireBaller | EnemyKind::SuperFireBaller => 8.0 / 30.0,
         EnemyKind::Molefish => (20.0 + rnd(rng, 5.0)) / 30.0,
         EnemyKind::Molesarge => (30.0 + rnd(rng, 5.0)) / 30.0,
-        EnemyKind::OldGuardian | EnemyKind::PalaceGuardian | EnemyKind::CrownGuardian => {
-            12.0 / 30.0
-        }
+        EnemyKind::CrownGuardian => 12.0 / 30.0,
         _ => {
             let def = enemy_def(kind);
             def.attack_cooldown + rng.random_range(0.0..def.attack_jitter / 30.0)
@@ -835,8 +829,6 @@ fn wall_law(kind: EnemyKind) -> EnemyWallLaw {
         | EnemyKind::SuperFireBaller
         | EnemyKind::FrogQueen
         | EnemyKind::Guardian
-        | EnemyKind::OldGuardian
-        | EnemyKind::PalaceGuardian
         | EnemyKind::InvLaserCrystal
         | EnemyKind::LaserCrystal
         | EnemyKind::LightningCrystal
@@ -904,8 +896,6 @@ fn gml_speed_cap(kind: EnemyKind) -> f32 {
         EnemyKind::IdpdShield => 3.5,
         // `EliteInspector/Other_10:7`, `EliteShielder/Other_10:8`.
         EnemyKind::EliteInspector | EnemyKind::EliteShielder => 3.5,
-        // The palace statue is GML's `Guardian`, whose `Step_0:10` caps at 0.6.
-        EnemyKind::PalaceGuardian => 0.6,
         // GML caps these conditionally on `spr_fire` / `maxspeed`. `Wolf` is at
         // its resting 3.5 here; the roll raises it to 5 via `Other_10:12-16`.
         EnemyKind::Wolf => 3.5,
@@ -985,10 +975,7 @@ fn gml_walk_law(kind: EnemyKind) -> (f32, f32) {
 fn gml_constant_drift(kind: EnemyKind) -> Option<(f32, f32)> {
     Some(match kind {
         // `Guardian/Step_0:9-10`, `CrownGuardian/Step_0`.
-        EnemyKind::Guardian
-        | EnemyKind::OldGuardian
-        | EnemyKind::PalaceGuardian
-        | EnemyKind::CrownGuardian => (0.6, 0.6),
+        EnemyKind::Guardian | EnemyKind::CrownGuardian => (0.6, 0.6),
         // `LaserCrystal/Other_10:2-3`, `LightningCrystal`, `InvLaserCrystal`.
         EnemyKind::LaserCrystal => (0.5, 1.5),
         EnemyKind::LightningCrystal => (0.5, 1.8),
@@ -1729,7 +1716,7 @@ fn gml_alarm_1_decide<R: RngExt + ?Sized>(
         EnemyKind::Molesarge => molesarge_alarm_1(&mut d, rng),
         EnemyKind::FireBaller => fireballer_alarm_1(&mut d, rng),
         EnemyKind::SuperFireBaller => super_fireballer_alarm_1(&mut d, rng),
-        EnemyKind::PalaceGuardian | EnemyKind::CrownGuardian => guardian_alarm_1(&mut d, rng),
+        EnemyKind::CrownGuardian => guardian_alarm_1(&mut d, rng),
         EnemyKind::DogGuardian => {
             let leap = leaps.entry(entity).or_default();
             dog_guardian_alarm_1(&mut d, leap, rng);
