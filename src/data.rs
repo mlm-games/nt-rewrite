@@ -211,7 +211,10 @@ impl Default for WeaponId {
 pub const WEAPON_NONE: WeaponId = WeaponId(0);
 pub const WEAPON_REVOLVER: WeaponId = WeaponId(1);
 /// GML `scrRaceGetStarterWeapon` ids verbatim (table index = weapon id).
+pub const WEAPON_MINIGUN: WeaponId = WeaponId(9);
 pub const WEAPON_GOLDEN_REVOLVER: WeaponId = WeaponId(39);
+pub const WEAPON_GOLDEN_SHOTGUN: WeaponId = WeaponId(42);
+pub const WEAPON_GOLDEN_BAZOOKA: WeaponId = WeaponId(102);
 pub const WEAPON_CHICKEN_SWORD: WeaponId = WeaponId(46);
 pub const WEAPON_RUSTY_REVOLVER: WeaponId = WeaponId(56);
 pub const WEAPON_ROGUE_RIFLE: WeaponId = WeaponId(81);

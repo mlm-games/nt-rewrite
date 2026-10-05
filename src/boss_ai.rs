@@ -779,6 +779,9 @@ pub fn boss_ai(
                 player_velocity,
                 dt,
                 &wall_shapes,
+                &prop_shapes,
+                &mask,
+                def.radius,
             ),
             _ => false,
         };
@@ -1530,17 +1533,17 @@ pub fn taunt_cue_name(kind: EnemyKind) -> Option<&'static str> {
 pub fn tick_boss_taunts(
     mut cues: ResMut<Queue<AudioCue>>,
     players: Query<Entity, With<Player>>,
-    mut bosses: Query<(&Enemy, &mut BossBrain)>,
+    mut bosses: Query<(&Enemy, &mut BossBrain, &mut EnemyBrain)>,
 ) {
     if players.single().is_ok() {
-        for (enemy, mut brain) in &mut bosses {
+        for (enemy, mut brain, _) in &mut bosses {
             if enemy.kind == EnemyKind::YvBoss {
                 brain.tauntdelay = 0;
             }
         }
         return;
     }
-    for (enemy, mut brain) in &mut bosses {
+    for (enemy, mut brain, mut ibrain) in &mut bosses {
         if brain.taunt {
             continue;
         }
@@ -1555,6 +1558,11 @@ pub fn tick_boss_taunts(
         };
         if brain.tauntdelay > gate {
             brain.taunt = true;
+            // GML `YVBoss/Step_0:24`: the taunt also dumps the magazine, so
+            // YV stops shooting into an empty room.
+            if enemy.kind == EnemyKind::YvBoss {
+                ibrain.ammo = 0;
+            }
             cues.push(AudioCue {
                 name: cue_name,
                 volume: 1.0,
@@ -3052,6 +3060,31 @@ fn captain_idpd_bullet(
 /// `boss.phase` Idle = pre-intro. `attack_timer`/`special_timer`/
 /// `phase_timer` are `alarm[1]`/`alarm[2]`/`alarm[4]` in seconds.
 #[allow(clippy::too_many_arguments)]
+/// `boss_ai` is at Bevy's 16-parameter limit, so the per-boss sound cues ride
+/// the deferred command queue instead of a `Queue<AudioCue>` parameter.
+fn boss_cue(commands: &mut Commands, name: &'static str) {
+    commands.queue(move |world: &mut World| {
+        if let Some(mut cues) = world.get_resource_mut::<Queue<AudioCue>>() {
+            cues.push(AudioCue {
+                name,
+                volume: 1.0,
+                variance: 0.0,
+            });
+        }
+    });
+}
+
+/// GML `YVBoss/Create_0.gml:45-55` `change_weapon`: `wep_swap[_wep]` then
+/// `sndSwapGold`, skipped outright when the weapon is invalid.
+fn yv_change_weapon(commands: &mut Commands, weapon: crate::data::WeaponId) {
+    if weapon == crate::data::WEAPON_NONE {
+        return;
+    }
+    let swap = crate::weapon_runtime::weapon_meta(weapon).wep_swap;
+    boss_cue(commands, swap);
+    boss_cue(commands, "sndSwapGold");
+}
+
 fn yv_boss_ai(
     commands: &mut Commands,
     trauma: &mut Trauma,
@@ -3066,6 +3099,9 @@ fn yv_boss_ai(
     player_velocity: glam::Vec2,
     dt: f32,
     walls: &[(glam::Vec2, (i32, i32))],
+    props: &[(glam::Vec2, glam::Vec2)],
+    mask: &FloorMask,
+    def_radius: f32,
 ) -> bool {
     const REVOLVER: usize = 0;
     const SHOTGUN: usize = 1;
@@ -3087,12 +3123,29 @@ fn yv_boss_ai(
         boss.phase_timer = GTimer::from_seconds(0.01, TimerMode::Once);
     }
 
+    if boss.intro_delay >= 0.0 {
+        boss.intro_delay -= dt * 30.0;
+        if boss.intro_delay <= 0.0 {
+            boss.intro_delay = -1.0;
+            boss.phase = BossPhase::Cooldown;
+            toast.show("Y.V.");
+            boss_cue(commands, "sndGunGodIntro");
+            commands.spawn((
+                GameCleanup,
+                BossIntro {
+                    timer: GTimer::from_seconds(1.1, TimerMode::Once),
+                },
+            ));
+        }
+    }
+
     let to_player = player_pos - epos;
     let dist = to_player.length();
     let aim = to_player.y.atan2(to_player.x);
     let wall_centers: Vec<glam::Vec2> = walls.iter().map(|(c, _)| *c).collect();
-    let los =
-        dist < 512.0 && !crate::walls::segment_hits_wall_legacy(epos, player_pos, &wall_centers);
+    // GML `scrTargetIsVisible(target)` defaults its range to `infinity`, so
+    // visibility is purely "no wall on the line" at any distance.
+    let los = !crate::walls::segment_hits_wall_legacy(epos, player_pos, &wall_centers);
     let can_shoot = boss.phase_timer.finished();
 
     // GML `Alarm_2` (fire tick).
@@ -3120,12 +3173,12 @@ fn yv_boss_ai(
                             fire_projectile(
                                 commands,
                                 owner,
-                                epos + sdir * 20.0,
+                                epos,
                                 sdir,
                                 Team::Enemy,
                                 480.0,
                                 3,
-                                3.0,
+                                600.0,
                                 4.5,
                                 210.0,
                                 EnemyKind::YvBoss,
@@ -3149,18 +3202,20 @@ fn yv_boss_ai(
                         fire_projectile(
                             commands,
                             owner,
-                            epos + sdir * 20.0,
+                            epos,
                             sdir,
                             Team::Enemy,
                             480.0,
                             3,
-                            3.0,
+                            600.0,
                             4.5,
                             210.0,
                             EnemyKind::YvBoss,
                         );
                         fired = true;
+                        boss_cue(commands, "sndPopPop");
                     }
+                    boss_cue(commands, "sndGoldPistol");
                     trauma.add(0.2);
                     boss.special_timer = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
                 }
@@ -3177,7 +3232,7 @@ fn yv_boss_ai(
                             Team::Enemy,
                             Projectile {
                                 damage: 1,
-                                life: GTimer::from_seconds(4.0, TimerMode::Once),
+                                life: GTimer::from_seconds(600.0, TimerMode::Once),
                                 radius: 4.0,
                                 knockback: 120.0,
                                 explosive: false,
@@ -3192,12 +3247,15 @@ fn yv_boss_ai(
                                 decay: 0.9,
                                 rearm: None,
                             },
-                            ProjectileFade("images/sprEBullet3Disappear.png"),
+                            // GML `Alarm_2:39` overrides `spr_fade`.
+                            ProjectileFade("images/sprBullet2Disappear.png"),
                             Velocity(sdir * rng.random_range(12.0..=18.0) * 30.0),
-                            Pos(epos + sdir * 20.0),
+                            Pos(epos),
                         ));
                     }
                     fired = true;
+                    boss_cue(commands, "sndPopPop");
+                    boss_cue(commands, "sndGoldShotgun");
                     trauma.add(0.4);
                 }
                 BAZOOKA => {
@@ -3217,7 +3275,7 @@ fn yv_boss_ai(
                             Team::Enemy,
                             Projectile {
                                 damage: 20,
-                                life: GTimer::from_seconds(4.0, TimerMode::Once),
+                                life: GTimer::from_seconds(600.0, TimerMode::Once),
                                 radius: 6.0,
                                 knockback: 300.0,
                                 explosive: true,
@@ -3231,10 +3289,12 @@ fn yv_boss_ai(
                             },
                             CustomExplosion::default(),
                             Velocity(sdir * 90.0),
-                            Pos(epos + sdir * 20.0),
+                            Pos(epos),
                         ));
                     }
                     fired = true;
+                    boss_cue(commands, "sndPopPopUpg");
+                    boss_cue(commands, "sndGoldRocket");
                     trauma.add(0.4);
                 }
                 _ => {
@@ -3243,18 +3303,19 @@ fn yv_boss_ai(
                     fire_projectile(
                         commands,
                         owner,
-                        epos + sdir * 20.0,
+                        epos,
                         sdir,
                         Team::Enemy,
                         480.0,
                         3,
-                        3.0,
+                        600.0,
                         4.5,
                         210.0,
                         EnemyKind::YvBoss,
                     );
                     brain.gunangle += boss.aux * rng.random_range(0.8..=1.0_f32).to_radians();
                     fired = true;
+                    boss_cue(commands, "sndMinigun");
                     trauma.add(0.12);
                     boss.special_timer = GTimer::from_seconds(1.0 / 30.0, TimerMode::Once);
                 }
@@ -3273,7 +3334,13 @@ fn yv_boss_ai(
             // "any range").
             let head = glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU));
             gml_motion_add_clamp(&mut vel.0, head, 1.0, 4.0, dt);
-            boss.target = head;
+            // GML `Step_0:7` adds along `direction`, the object's *current*
+            // motion heading, not the one `scrWalk` was handed.
+            boss.target = if vel.0.length_squared() > 1e-8 {
+                vel.0.normalize_or_zero()
+            } else {
+                head
+            };
             brain.walk = rng.random_range(10.0..=30.0);
             let heading = if vel.0.length_squared() > 1e-8 {
                 vel.0.normalize_or_zero()
@@ -3286,7 +3353,8 @@ fn yv_boss_ai(
                 heading.y.atan2(heading.x)
             };
             // `alarm[1] = walk + irandom(10) + 10`, halved on cooldown.
-            let wait = (brain.walk + rng.random_range(0.0..=10.0) + 10.0) * 0.5;
+            // GML `Alarm_1:12` stores a float into an integer alarm.
+            let wait = ((brain.walk + rng.random_range(0.0..=10.0) + 10.0) * 0.5).floor();
             boss.attack_timer = gml_alarm(wait);
         } else {
             brain.gunangle = aim;
@@ -3297,6 +3365,7 @@ fn yv_boss_ai(
                     && (player_slow || rng.random::<f32>() < 0.5)
                 {
                     boss.pattern_index = SHOTGUN;
+                    yv_change_weapon(commands, crate::data::WEAPON_GOLDEN_SHOTGUN);
                     brain.ammo = 1;
                     // GML `Alarm_1:33` `instance_create(x, y, HitWarning)`.
                     commands.spawn((
@@ -3313,11 +3382,13 @@ fn yv_boss_ai(
                     && boss.pattern_index != REVOLVER
                 {
                     boss.pattern_index = REVOLVER;
+                    yv_change_weapon(commands, crate::data::WEAPON_GOLDEN_REVOLVER);
                     brain.ammo = 5;
                     boss.phase_timer = gml_alarm(25.0 + rng.random_range(0.0..=15.0));
                     boss.special_timer = gml_alarm(5.0);
                 } else {
                     boss.pattern_index = MINIGUN;
+                    yv_change_weapon(commands, crate::data::WEAPON_MINIGUN);
                     boss.aux = if rng.random_bool(0.5) { 1.0 } else { -1.0 };
                     brain.ammo = 90;
                     brain.gunangle -=
@@ -3336,13 +3407,24 @@ fn yv_boss_ai(
                     t > 0.0 && t < 1.0 && (*w - epos).length() < 64.0
                 });
                 if blocked_close {
-                    pos.0 += to_player.normalize_or_zero() * (4.0 * 30.0) * (dt * 30.0);
+                    // GML `Alarm_1:59-60`: `mp_potential_step_object(target, 4,
+                    // Wall)` is 4 px per STEP that stops at geometry, then
+                    // `scrWalk(direction, 4, 10, 20)`.
+                    crate::spatial::potential_step_solid(
+                        &mut pos.0,
+                        player_pos,
+                        4.0,
+                        def_radius,
+                        props,
+                        Some(mask),
+                    );
                     let heading = vel.0.normalize_or_zero();
                     gml_motion_add_clamp(&mut vel.0, heading, 4.0, 4.0, dt);
                     brain.walk = rng.random_range(10.0..=20.0);
                     brain.gunangle = heading.y.atan2(heading.x);
                 } else {
                     boss.pattern_index = BAZOOKA;
+                    yv_change_weapon(commands, crate::data::WEAPON_GOLDEN_BAZOOKA);
                     brain.ammo = 1;
                 }
                 // GML `Alarm_1:70-71` (no line of sight only).

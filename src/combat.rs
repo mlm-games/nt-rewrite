@@ -776,17 +776,19 @@ pub fn resolve_enemy_deaths(
                         &decide_owned,
                         decide_steroids,
                     );
-                    crate::pickups::spawn_pickup(
+                    let e = crate::pickups::spawn_pickup(
                         &mut commands,
                         &catalog,
                         crate::comps_b::PickupKind::Weapon(weapon),
-                        pos + glam::Vec2::new(
-                            rng.random_range(-16.0..16.0),
-                            rng.random_range(-16.0..16.0),
-                        ),
+                        pos,
                         0,
                         false,
                     );
+                    // GML `YVBoss/Destroy_0:2`
+                    // `scrWeaponPickupCreate(x, y, wep, true)`.
+                    commands
+                        .entity(e)
+                        .insert(crate::comps_b::WepPickupAmmo(true));
                 }
             }
             EnemyKind::PopoFreak => {

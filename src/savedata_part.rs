@@ -795,6 +795,10 @@ pub fn check_kill_unlocks(
                 award_skin(save, &mut menu, crate::data::RaceId::Venuz, 2);
             }
         }
+        // GML `scrOnBossKill.gml:55-59`: the Cuz earns Venuz skin C.
+        EnemyKind::YvBoss if race == crate::data::RaceId::Cuz => {
+            award_skin(save, &mut menu, crate::data::RaceId::Venuz, 2);
+        }
         EnemyKind::Bandit if race == crate::data::RaceId::Rebel => {
             award_skin(save, &mut menu, crate::data::RaceId::Rebel, 2);
         }

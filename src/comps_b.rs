@@ -724,6 +724,10 @@ pub struct BossBrain {
     /// GML `tauntdelay` (ticks without a live Player before taunting;
     /// YV resets it when the player exists).
     pub tauntdelay: u32,
+    /// GML `YVBoss/Alarm_2.gml:23` `alarm[5] = 10` - the frames between the
+    /// first empty revolver and `Alarm_5` raising `intro`, which is what
+    /// `Alarm_1.gml:3` waits on before the brain starts picking weapons.
+    pub intro_delay: f32,
 }
 
 impl BossBrain {
@@ -753,6 +757,7 @@ impl BossBrain {
             enraged: false,
             aux: 0.0,
             taunt: false,
+            intro_delay: -1.0,
             tauntdelay: 0,
         }
     }
