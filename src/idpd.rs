@@ -103,7 +103,7 @@ pub fn idpd_elite_roll(loop_count: u32, area: AreaId) -> bool {
 pub fn roll_idpd_table(
     loop_count: u32,
     area: AreaId,
-    popolevel: u32,
+    popolevel: f32,
     lil_hunter_alive: bool,
 ) -> Vec<EnemyKind> {
     if loop_count.saturating_sub(if area == AreaId::Campfire { 1 } else { 0 }) >= 3 {
@@ -143,7 +143,7 @@ pub fn roll_idpd_table(
 /// parameter so the global stream and the `RNGStates` LCG share this law.
 pub fn roll_idpd_dir(
     next_float: &mut dyn FnMut() -> f32,
-    popolevel: u32,
+    popolevel: f32,
     force_grunts: bool,
 ) -> u8 {
     if force_grunts {
@@ -156,7 +156,7 @@ pub fn roll_idpd_dir(
             x if x < 0.75 => 2,
             _ => 3,
         };
-        if !(d == 3 && popolevel < 3) && !(d == 2 && popolevel < 5) {
+        if !(d == 3 && popolevel < 3.0) && !(d == 2 && popolevel < 5.0) {
             return d;
         }
     }
@@ -202,7 +202,7 @@ pub fn spawn_idpd_spawn(
 ) -> (Entity, bool) {
     let elite = idpd_elite_roll(run.loop_count, run.area);
     // `Create_0.gml:1`
-    run.popolevel += 1;
+    run.popolevel += 1.0;
     let alarm0 = IDPD_SPAWN_OPEN_BASE + (live_portals as f32 + 1.0) * IDPD_SPAWN_OPEN_PER_LIVE;
     let entity = commands
         .spawn((
@@ -715,7 +715,7 @@ pub fn tick_idpd_raids(
             heavy_heart: heavy_heart.0,
         },
     );
-    run.popolevel += portals as u32;
+    run.popolevel += portals as f32;
 
     raid.pending_wave = None;
     raid.wave_index += 1;
@@ -942,6 +942,28 @@ fn spawn_van(
         inert: 0.0,
     });
     e
+}
+
+/// GML `scripts/scrOnPopoKill/scrOnPopoKill.gml`: killing any popo unit (or
+/// the Captain / Lil Hunter) freezes every popo unit on the floor for 100
+/// steps, which is what stops a whole wave from firing during a boss kill.
+/// The `WantVan.canspawn` and `UberCont.ctot_uniq` halves have no counterpart
+/// in the port (vans are raised directly, and `ctot_uniq` is a daily-run stat).
+pub fn freeze_idpd_wave(world: &mut World) {
+    let mut q = world.query::<(&Enemy, &mut crate::comps_b::EnemyBrain)>();
+    for (enemy, mut brain) in q.iter_mut(world) {
+        if matches!(
+            enemy.kind,
+            EnemyKind::IdpdGrunt
+                | EnemyKind::IdpdInspector
+                | EnemyKind::IdpdShield
+                | EnemyKind::IdpdElite
+                | EnemyKind::EliteInspector
+                | EnemyKind::EliteShielder
+        ) {
+            brain.freeze += 100.0;
+        }
+    }
 }
 
 /// GML `objects/Van/Alarm_1.gml` in full: `drive = 0`, the freak self-destruct,

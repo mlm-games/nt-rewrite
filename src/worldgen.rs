@@ -52,10 +52,24 @@ pub struct LevelPlan {
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum PopulationEvent {
-    Enemy { kind: EnemyKind, pos: Vec2 },
-    Prop { kind: PropKind, pos: Vec2 },
+    Enemy {
+        kind: EnemyKind,
+        pos: Vec2,
+    },
+    Prop {
+        kind: PropKind,
+        pos: Vec2,
+    },
     Chest(ChestSpawn),
-    PortalClear { pos: Vec2, scale: f32 },
+    PortalClear {
+        pos: Vec2,
+        scale: f32,
+    },
+    /// GML `WantPopo` marker; `rogue_only` is the extra one
+    /// `scrPopulate.gml:275` plants for a Rogue run.
+    WantPopo {
+        rogue_only: bool,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -217,6 +231,14 @@ fn generation_goal_for_run(run: &Run) -> usize {
 
 /// GML `GameCont/Other_5.gml:54` `_is_secret = (area >= 100)`, so the
 /// crib (107) is a secret area like every other 1xx room.
+/// GML `scrAreaCanHavePopo` plus `WantPopo/Create_0.gml:4-5`: no IDPD
+/// reinforcements in the vault, the crib, the campfire transition, or the
+/// final HQ / palace subarea.
+pub fn area_can_have_popo(run: &Run, gml_area: i32) -> bool {
+    let last = run.floor_in_area >= gml_max_subarea(gml_area);
+    !matches!(gml_area, 100 | 107 | 0) && !(gml_area == 106 && last) && !(gml_area == 7 && last)
+}
+
 pub fn is_secret_area(area: AreaId) -> bool {
     matches!(
         area,
@@ -2450,6 +2472,15 @@ fn populate(
                 pos,
             });
         }
+    }
+
+    // GML `scrPopulate.gml:274-282`: one `WantPopo` per loop plus one more
+    // for a Rogue run, wherever popo reinforcements are allowed.
+    if area_can_have_popo(run, area) {
+        for _ in 0..run.loop_count {
+            events.push(PopulationEvent::WantPopo { rogue_only: false });
+        }
+        events.push(PopulationEvent::WantPopo { rogue_only: true });
     }
 
     // GML :319-376.

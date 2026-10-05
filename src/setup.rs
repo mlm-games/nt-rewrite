@@ -578,7 +578,7 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
             run.total_kills = 0;
             run.blackswords = 0;
             run.tottimer = 0;
-            run.popolevel = 0;
+            run.popolevel = 0.0;
             run.nochest = 0;
             run.noradch = 0;
             run.same_weapons_for = 0;
@@ -2026,6 +2026,21 @@ pub fn spawn_level(
                         scale,
                     },
                     Pos(pos),
+                ));
+            }
+            PopulationEvent::WantPopo { rogue_only } => {
+                // GML `WantPopo/Create_0.gml:7-8` snapshots the floor's
+                // enemy count and rolls its spawn moment.
+                let mut rng = rand::rng();
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    crate::comps_b::WantPopo {
+                        enemies: enemy_count,
+                        spawnmoment: 0.2 + rng.random_range(0.0..0.6),
+                        rogue_only,
+                        counted: false,
+                    },
                 ));
             }
         }

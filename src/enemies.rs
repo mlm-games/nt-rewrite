@@ -38,7 +38,7 @@ use crate::comps_b::{
     EnemyBrain, FxAngle, GmlImage, HitWarning, HurtAnim, IdpdShieldUnit, IdpdVanBrain, LastBall,
     LilHunterDie, MaggotSpawnCharge, MaggotSpawnInternalDrain, MomShot, NativeAngle, NativeDepth,
     NecroReviveArea, PendingDelayedBoss, Pickup, PickupLifetime, PopoNadeM, PopoShieldM,
-    PortalClear, Prop, PropSprites, ProtoGuardian, SCRAP_BOSS_MISSILE_RADIUS,
+    PortalClear, Prop, PropSprites, ProtoGuardian, RevivePopoFreak, SCRAP_BOSS_MISSILE_RADIUS,
     ScrapBossMissileState, ShieldFollower, SpecialPropDeath, StaticFx, ThroneBall, ToxicGasState,
     YvCouch,
 };
@@ -5811,7 +5811,7 @@ pub fn tick_big_guardian_bullets(
     let mut rng = rand::rng();
     let count = 7 + run.loop_count as usize;
     let ring = std::f32::consts::TAU / count as f32;
-    for (entity, mut pos, mut vel, mut ball) in &mut balls {
+    for (entity, mut pos, vel, mut ball) in &mut balls {
         if ball.hold > 0.0 {
             // GML `Step_0:4-7`: `x -= hspeed` cancels the launch impulse.
             ball.hold -= step;
@@ -5978,6 +5978,156 @@ pub fn tick_last_balls(
             }
             speed += 0.6;
         }
+    }
+}
+
+/// GML `objects/WantRevivePopoFreak` + `objects/RevivePopoFreak`. The
+/// 800-step wait gives up if a `Portal` opens or the floor runs out of
+/// corpses; the 15-step revive then needs a bandit-sized (`size == 1`)
+/// corpse on clear floor, and refunds the kill it is about to re-take.
+pub fn tick_want_revive_popo_freak(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mut run: ResMut<Run>,
+    mask: Res<FloorMask>,
+    portals: Query<Entity, With<crate::comps_b::Portal>>,
+    corpses: Query<(Entity, &Pos, &Corpse), (With<Corpse>, Without<Enemy>)>,
+    mut markers: Query<(
+        Entity,
+        &Pos,
+        &mut crate::comps_b::WantRevivePopoFreak,
+        Option<&RevivePopoFreak>,
+    )>,
+) {
+    let dt = time.delta_secs;
+    let portal_open = !portals.is_empty();
+    let mut retire: Vec<Entity> = Vec::new();
+    for (entity, pos, mut want, stage) in &mut markers {
+        want.timer.tick(dt);
+        if !want.timer.just_finished() {
+            continue;
+        }
+        let nearest = corpses
+            .iter()
+            .min_by(|a, b| {
+                a.1.0
+                    .distance_squared(pos.0)
+                    .total_cmp(&b.1.0.distance_squared(pos.0))
+            })
+            .map(|(e, p, c)| (e, p.0, c.size));
+        // GML `WantRevivePopoFreak/Alarm_0.gml:1-2`.
+        if portal_open || nearest.is_none() {
+            retire.push(entity);
+            continue;
+        }
+        let (corpse_e, corpse_pos, corpse) = nearest.unwrap();
+        if stage.is_some() {
+            // GML `RevivePopoFreak/Alarm_0.gml:2-5`: only a bandit-sized
+            // corpse on clear, unoccupied floor will take a freak back.
+            if corpse != 1 || !mask.is_walkable(corpse_pos) {
+                retire.push(entity);
+                continue;
+            }
+            commands.entity(corpse_e).despawn();
+            queue_enemy_spawn(
+                &mut commands,
+                EnemyKind::PopoFreak,
+                corpse_pos,
+                1.0,
+                run.loop_count,
+            );
+            run.total_kills = run.total_kills.saturating_sub(1);
+            retire.push(entity);
+        } else {
+            commands.spawn((
+                GameCleanup,
+                LevelCleanup,
+                RevivePopoFreak,
+                crate::comps_b::WantRevivePopoFreak {
+                    timer: GTimer::from_seconds(15.0 / 30.0, TimerMode::Once),
+                },
+                Pos(corpse_pos),
+            ));
+        }
+    }
+    for entity in retire {
+        commands.entity(entity).despawn();
+    }
+}
+
+/// GML `objects/LastDie` (`Create_0` + `Alarm_0`): 17.5 steps after the
+/// Captain dies a `PopoExplosion` goes off at the wreck. `LastExecute`'s
+/// 400-step collapse is presentation only and is not simulated.
+pub fn tick_last_die(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mut q: Query<(Entity, &Pos, &mut crate::comps_b::LastDie)>,
+) {
+    let dt = time.delta_secs;
+    for (entity, pos, mut die) in &mut q {
+        die.timer.tick(dt);
+        if die.timer.just_finished() {
+            commands.spawn((
+                GameCleanup,
+                LevelCleanup,
+                crate::combat::Explosion {
+                    timer: GTimer::from_seconds(0.05, TimerMode::Once),
+                    radius: 32.0,
+                    damage: 8,
+                    team: Team::Enemy,
+                    hits_player: true,
+                    source: Some(DamageSource::enemy(Entity::PLACEHOLDER, EnemyKind::Captain)),
+                },
+                Pos(pos.0),
+            ));
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+/// GML `objects/WantPopo` (`Create_0` + `Step_0`). Each marker spends
+/// half a `GameCont.popolevel` on its first tick, then watches the floor's
+/// live enemy count: once it drops under `spawnmoment` of the starting total
+/// (or to nothing at all), it opens two `IDPDSpawn` portals and retires.
+pub fn tick_want_popo(
+    mut commands: Commands,
+    mut run: ResMut<Run>,
+    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
+    races: Query<&crate::comps_a::RaceState, (With<Player>, Without<Enemy>)>,
+    enemies: Query<(), With<Enemy>>,
+    mut markers: Query<(Entity, &mut crate::comps_b::WantPopo)>,
+) {
+    if markers.is_empty() {
+        return;
+    }
+    let rogue = races.iter().any(|r| r.race == crate::data::RaceId::Rogue);
+    let Some(player_pos) = player_q.single().ok().map(|p| p.0) else {
+        return;
+    };
+    let live = enemies.iter().count();
+    let mut retire: Vec<Entity> = Vec::new();
+    for (entity, mut marker) in &mut markers {
+        if !marker.counted {
+            if marker.rogue_only && !rogue {
+                retire.push(entity);
+                continue;
+            }
+            // GML `WantPopo/Create_0.gml:1` `GameCont.popolevel -= 0.5`.
+            run.popolevel -= 0.5;
+            marker.counted = true;
+        }
+        if live == 0 || (live as f32) < (marker.enemies as f32) * marker.spawnmoment {
+            retire.push(entity);
+            // GML `WantPopo/Step_0.gml:5-7` `repeat 2 instance_create(x, y,
+            // IDPDSpawn)`; `Create_0` walks the portal to a floor tile near
+            // the player, so the marker position only seeds the roll.
+            for _ in 0..2 {
+                crate::idpd::spawn_idpd_spawn(&mut commands, &mut run, 0, player_pos);
+            }
+        }
+    }
+    for entity in retire {
+        commands.entity(entity).despawn();
     }
 }
 
@@ -7283,13 +7433,24 @@ fn fire_popo_nade(
         Team::Enemy,
         PopoNadeM,
         Projectile {
+            // `PopoNade/Create_0.gml:11` `damage = 0`: the shell only hurts
+            // through its `Destroy_0` `PopoExplosion`.
             damage: 0,
             life: GTimer::from_seconds(90.0 / 30.0, TimerMode::Once),
             radius: 5.0,
             knockback: 300.0,
-            explosive: false,
+            explosive: true,
             source: Some(DamageSource::enemy(owner, kind)),
         },
+        ProjectileTyp(1),
+        crate::comps_b::CustomExplosion {
+            // `PopoExplosion` masks a 64x64 box.
+            radius: 32.0,
+            count: 1,
+            spread: 0.0,
+            visual: Some(crate::comps_b::NativeExplosionKind::Popo),
+        },
+        // `Create_0.gml:3` `friction = 0`.
         ProjectileFriction(0.0),
         Velocity(d * speed * 30.0),
         Pos(at),
@@ -8850,7 +9011,7 @@ pub fn tick_proto_statues(
             waves += 2;
         }
         for _ in 0..waves {
-            run.popolevel += 1;
+            run.popolevel += 1.0;
             for kind in crate::idpd::roll_idpd_table(run.loop_count, run.area, run.popolevel, false)
             {
                 queue_enemy_spawn(&mut commands, kind, pos.0, 1.0, run.loop_count);

@@ -1414,7 +1414,7 @@ fn lil_hunter_ai(
             // `Alarm_1`s roll, so the whole batch shares the final level.
             brain.walk = 0.0;
             let waves = 1 + loop_count.saturating_sub(1) as usize;
-            run.popolevel += waves as u32;
+            run.popolevel += waves as f32;
             for _ in 0..waves {
                 for kind in crate::idpd::roll_idpd_table(loop_count, run.area, run.popolevel, true)
                 {

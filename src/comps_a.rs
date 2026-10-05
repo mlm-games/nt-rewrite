@@ -442,7 +442,7 @@ pub struct Run {
     pub tottimer: u32,
     /// GML `GameCont.popolevel`: counts IDPD portals raised this run and
     /// gates the `IDPDSpawn` dir roll (dir 3 at 3+, dir 2 at 5+).
-    pub popolevel: u32,
+    pub popolevel: f32,
     /// GML chest counters (`GameCont/Other_5` + `scrPopChests`): unopened
     /// weapon chests, unopened rad chests, and levels since a new weapon.
     pub nochest: u32,
@@ -494,7 +494,7 @@ impl Default for Run {
             total_kills: 0,
             blackswords: 0,
             tottimer: 0,
-            popolevel: 0,
+            popolevel: 0.0,
             nochest: 0,
             noradch: 0,
             same_weapons_for: 0,

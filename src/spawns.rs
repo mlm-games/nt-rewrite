@@ -19,8 +19,7 @@ use crate::comps_a::{
 use crate::comps_b::SpecialPropDeath;
 use crate::comps_b::{
     CustomExplosion, DeploysSentry, ExplosionVisual, NativeExplosionKind, PlasmaBurst, PortalClear,
-    Prop, PropNestMarkers, PropSprites, SecretEntrance, SentryTurret,
-    SpawnsWeaponPickup,
+    Prop, PropNestMarkers, PropSprites, SecretEntrance, SentryTurret, SpawnsWeaponPickup,
 };
 use crate::data::{EnemyKind, HazardDef, SplitDef};
 use crate::environment::PropDeathEffect;
@@ -507,7 +506,10 @@ pub fn on_projectile_removed(
         // is 12 (`GreenExplosion/Create_0.gml:3`).
         let blast_damage = match visual {
             Some(NativeExplosionKind::Green) => 12,
-            Some(NativeExplosionKind::Meat) | Some(NativeExplosionKind::Popo) => damage,
+            Some(NativeExplosionKind::Meat) => damage,
+            // GML `PopoExplosion/Create_0.gml:23` `damage = 8`, fixed on the
+            // blast rather than inherited from the projectile.
+            Some(NativeExplosionKind::Popo) => 8,
             _ if team == Team::Player => 5,
             _ => damage,
         };

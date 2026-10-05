@@ -724,6 +724,16 @@ pub fn resolve_enemy_deaths(
         }
 
         match enemy.kind {
+            // GML `Grunt`, `Inspector`, `Shielder` and their three elites all
+            // end `Destroy_0.gml` with `scrOnPopoKill()`.
+            EnemyKind::IdpdGrunt
+            | EnemyKind::IdpdInspector
+            | EnemyKind::IdpdShield
+            | EnemyKind::IdpdElite
+            | EnemyKind::EliteInspector
+            | EnemyKind::EliteShielder => {
+                commands.queue(|world: &mut World| crate::idpd::freeze_idpd_wave(world));
+            }
             EnemyKind::YvBoss => {
                 // GML `YVBoss/Destroy_0`: 3 golden-weapon pickups.
                 let mut rng = rand::rng();
@@ -746,6 +756,65 @@ pub fn resolve_enemy_deaths(
                         false,
                     );
                 }
+            }
+            EnemyKind::PopoFreak => {
+                // GML `PopoFreak/Destroy_0:10-20`: a quarter of deaths split
+                // into three `PopoNade`s thrown along the corpse's heading
+                // plus a random one, each on its own 90-step fuse.
+                if rng.random::<f32>() < 0.25 {
+                    let mut prng = rand::rng();
+                    let base = prng.random_range(0.0..std::f32::consts::TAU);
+                    for _ in 0..3 {
+                        let ang = base + prng.random_range(0.0..std::f32::consts::TAU);
+                        commands.spawn((
+                            GameCleanup,
+                            LevelCleanup,
+                            Team::Enemy,
+                            crate::comps_b::PopoNadeM,
+                            Projectile {
+                                damage: 0,
+                                life: GTimer::from_seconds(90.0 / 30.0, TimerMode::Once),
+                                radius: 5.0,
+                                knockback: 300.0,
+                                explosive: true,
+                                source: Some(DamageSource::enemy(e, enemy.kind)),
+                            },
+                            ProjectileTyp(1),
+                            crate::comps_b::CustomExplosion {
+                                radius: 32.0,
+                                count: 1,
+                                spread: 0.0,
+                                visual: Some(crate::comps_b::NativeExplosionKind::Popo),
+                            },
+                            ProjectileFriction(0.0),
+                            Velocity(glam::Vec2::from_angle(ang) * (4.0 * 30.0)),
+                            Pos(pos),
+                        ));
+                    }
+                    // GML `PopoFreak/Destroy_0:25`.
+                    commands.spawn((
+                        GameCleanup,
+                        LevelCleanup,
+                        crate::comps_b::WantRevivePopoFreak {
+                            timer: GTimer::from_seconds(800.0 / 30.0, TimerMode::Once),
+                        },
+                        Pos(pos),
+                    ));
+                }
+            }
+            EnemyKind::Captain => {
+                // GML `Last/Destroy_0:3-8`: `scrOnPopoKill` (only with a live
+                // Player) and a `LastDie` that pops a `PopoExplosion`
+                // 17.5 steps later. `LastExecute`'s collapse is visual.
+                commands.queue(|world: &mut World| crate::idpd::freeze_idpd_wave(world));
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    crate::comps_b::LastDie {
+                        timer: GTimer::from_seconds(17.5, TimerMode::Once),
+                    },
+                    Pos(pos),
+                ));
             }
             EnemyKind::ScrapBossMissile => {
                 // GML `ScrapBossMissile/Destroy_0:2-4`.
@@ -811,8 +880,7 @@ pub fn resolve_enemy_deaths(
                 );
                 // GML `LilHunter/Destroy_0:13-21`: the head skitters on
                 // (`LilHunterDie` inherits team) plus the 80-`TrapFire`
-                // ring. `scrOnPopoKill` has no port equivalent - skipped
-                // (its music-cue side effects ride the audio layer).
+                // ring, and line 11 runs `scrOnPopoKill`.
                 crate::enemies::spawn_lil_hunter_die(
                     &mut commands,
                     &mut cues,
@@ -822,6 +890,7 @@ pub fn resolve_enemy_deaths(
                     Some(player_pos.0),
                 );
                 crate::enemies::spawn_lil_hunter_trapfire(&mut commands, pos, *team);
+                commands.queue(|world: &mut World| crate::idpd::freeze_idpd_wave(world));
             }
             EnemyKind::ThroneII => {
                 // GML `Nothing2/Destroy_0`: clear enemy projectiles.

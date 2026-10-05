@@ -1695,6 +1695,41 @@ pub struct BigGuardianBullet {
     pub released: bool,
 }
 
+/// GML `objects/WantRevivePopoFreak` (800 steps) then
+/// `objects/RevivePopoFreak` (15 more): a dead `PopoFreak` comes back out of
+/// a bandit-sized corpse on a floor with no `Portal` in the way.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct WantRevivePopoFreak {
+    pub timer: Timer,
+}
+
+/// GML `objects/RevivePopoFreak`: the 15-step second half of the revive.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RevivePopoFreak;
+
+/// GML `objects/LastDie`: the Captain's death marker, which pops a
+/// `PopoExplosion` 17.5 steps in and then hands off to `LastExecute`.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct LastDie {
+    pub timer: Timer,
+}
+
+/// GML `objects/WantPopo`: one IDPD reinforcement marker. It counts the
+/// floor's live enemies down to `spawnmoment` of its starting total (or to
+/// zero) and then opens two `IDPDSpawn` portals.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct WantPopo {
+    /// `Create_0.gml:7` `enemies = instance_number(enemy)` at floor start.
+    pub enemies: usize,
+    /// `Create_0.gml:8` `spawnmoment = 0.2 + random(0.6)`.
+    pub spawnmoment: f32,
+    /// `scrPopulate.gml:275` plants the extra Rogue marker only for a Rogue
+    /// run; without one it retires on its first tick.
+    pub rogue_only: bool,
+    /// Set once `Create_0.gml:1` has spent its half `popolevel`.
+    pub counted: bool,
+}
+
 /// GML `objects/WantLH`: the city boss marker. `alarm[0]` waits
 /// `210 / (1 + loops * 0.5)` steps and then drops a `LilHunter` on the
 /// `Floor` tile furthest from a random player.
