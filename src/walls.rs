@@ -148,10 +148,11 @@ pub fn apply_pending_wall_breaks(
 
         // `FloorExplo/Create_0:43-50`: the explosion's own `Top`s extend the
         // Trans ring one step out, and deliberately leave the hole itself
-        // bare. Runs after the re-seal so `TopSmall/Create_0`'s `Wall` test
-        // sees the new ring, like GML's event order.
+        // bare. Runs after the re-seal so `TopSmall/Create_0`'s `Wall`/`Floor`
+        // tests see the new ring and the holes already opened, like GML's
+        // event order.
         for broken_cell in &broken {
-            tops.spawn_around_break(broken_cell.0, &mask.cells, &live_walls);
+            tops.spawn_around_break(broken_cell.0, &mask.cells, &live_walls, &mask.opened);
         }
     }
 }

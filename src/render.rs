@@ -2164,28 +2164,13 @@ pub fn world_instances_cached(
                     }
                 }
             }
-            // GML's floor is a continuous 32x32 `Floor` plane with the 16x16
-            // `Wall`s laid over it (`mcr_floor_make_walls` only spawns a `Wall`
-            // where no `Floor` meets), so a broken wall uncovers floor that was
-            // always there. The port has no underlying plane - `cells` holds
-            // real floor and `opened` only the destroyed 16x36 cells - so each
-            // opened cell has to draw the 32x32 tile that covers it, or the hole
-            // reads as bare background while `is_walkable` says otherwise.
-            if !opened.is_empty() && has(floor_png) {
-                let mut covered: HashSet<(i32, i32)> = HashSet::new();
-                for &(wx, wy) in &opened {
-                    let tile = floor_cell_for_wall(wx, wy);
-                    if cells.contains(&tile) || !covered.insert(tile) {
-                        continue;
-                    }
-                    push_floor_tile(&mut out, assets, floor_png, tile.0, tile.1);
-                }
-            }
-            // GML `FloorExplo/Create_0:12,15`: the destroyed wall's cell becomes a
-            // 16x16 `sprFloor<area>Explo` (`_area = GameCont.area`),
-            // `image_index = choose(1, 2, 3, 4)`. The port draws floor from
-            // `FloorMask`, so the hole needs its own pass at the wall's 16x16
-            // resolution.
+            // A break uncovers no floor: `mcr_floor_make_walls`
+            // (`macros_general.gml:49-62`) spawns a `Wall` only where
+            // `!position_meeting(..., Floor)`, so a wall cell's 32x32 owner is
+            // never a `Floor` and GML draws bare background around the hole.
+            // GML `FloorExplo/Create_0:12,15`: the destroyed wall's cell becomes
+            // a 16x16 `sprFloor<area>Explo` (`_area = GameCont.area`),
+            // `image_index = choose(1, 2, 3, 4)` - the hole's only floor art.
             let explo_png = match area {
                 AreaId::Oasis => "images/sprFloor101Explo.png",
                 AreaId::PizzaSewers => "images/sprFloor102Explo.png",
@@ -2214,7 +2199,10 @@ pub fn world_instances_cached(
                     .wrapping_add(wy.wrapping_mul(0xd8163841u32 as i32))
                     >> 7) as u32;
                 let frame = ((1 + h % 4) % explo_frames) as i32;
-                let top_left = Vec2::new(wx as f32 * 16.0, wy as f32 * 16.0);
+                // GML `draw_self` pins the sprite origin, and `sprFloor*Explo`
+                // is 18x18 with origin (1,1): the art lands one px up-left of
+                // the cell, not on it.
+                let top_left = Vec2::new(wx as f32 * 16.0 - 1.0, wy as f32 * 16.0 - 1.0);
                 if let Some(mut s) =
                     place_top_left(assets, explo_png, frame, top_left, [1.0; 4], GRID_OVERLAP)
                 {
@@ -11885,28 +11873,6 @@ mod ui_parity_regression {
 #[cfg(test)]
 mod wall_break_floor_tests {
     use super::*;
-
-    /// GML has a continuous 32x32 `Floor` plane with the 16x16 `Wall`s laid over
-    /// it, so breaking a wall uncovers floor that was always underneath. The port
-    /// stores real floor in `cells` and destroyed cells in `opened`, so each
-    /// opened cell must pull the 32x32 tile covering it back into the floor pass
-    /// or the hole renders as bare background while `is_walkable` says otherwise.
-    #[test]
-    fn opened_cell_pulls_back_its_floor_tile() {
-        let mut mask = FloorMask::default();
-        // Two opened 16x16 cells inside ONE 32x32 tile.
-        mask.opened.insert((4, 4));
-        mask.opened.insert((5, 4));
-        assert_eq!(floor_cell_for_wall(4, 4), (2, 2));
-        assert_eq!(floor_cell_for_wall(5, 4), (2, 2));
-        let mut covered: HashSet<(i32, i32)> = HashSet::new();
-        for &(wx, wy) in &mask.opened {
-            covered.insert(floor_cell_for_wall(wx, wy));
-        }
-        // Deduped to the single tile that actually needs drawing.
-        assert_eq!(covered.len(), 1);
-        assert!(covered.contains(&(2, 2)));
-    }
 
     /// GML `Wall/Create_0:34` + `FloorExplo/Create_0:53`: a wall is visible iff
     /// floor (or a freshly opened cell) meets its south point. Without the
