@@ -7851,16 +7851,22 @@ pub fn tick_popo_gunners(
         if !can_shoot {
             brain.freeze += 3.0;
         }
-        // `Inspector/Other_10:20-28`: the control field drags the player one
-        // pixel per step toward the inspector, per axis, only where free.
+        // `Inspector/Other_10:22-36`: the control field drags the player two
+        // pixels per axis toward the inspector, each axis gated on
+        // `place_free`, out to 160 px.
         if !shielder && brain.control {
             let d = epos - player_at;
-            if d.length() < 240.0 {
-                let step = glam::Vec2::from_angle(d.y.atan2(d.x));
-                let cand = player_at + step;
-                if mask.is_walkable(cand) {
-                    ppos.0 = cand;
+            if d.length() < 160.0 {
+                let bearing = d.y.atan2(d.x);
+                let (sx, sy) = (bearing.cos() * 2.0, bearing.sin() * 2.0);
+                let mut moved = ppos.0;
+                if mask.is_walkable(glam::Vec2::new(moved.x + sx, moved.y)) {
+                    moved.x += sx;
                 }
+                if mask.is_walkable(glam::Vec2::new(moved.x, moved.y + sy)) {
+                    moved.y += sy;
+                }
+                ppos.0 = moved;
             }
         }
 
@@ -8822,26 +8828,14 @@ pub fn tick_elite_shielders(
                     brain.slash_delay = 5.0;
                     brain.attack = GTimer::from_seconds(20.0 / 30.0, TimerMode::Once);
                 } else if rng.random::<f32>() < 1.0 / 3.0 {
-                    // `EliteShield` carry: teleport to a floor 120..300
-                    // away, poof at the destination.
-                    let mut dest = epos;
-                    for _ in 0..100 {
-                        let a = rng.random_range(0.0..std::f32::consts::TAU);
-                        let d = rng.random_range(120.0..=300.0);
-                        let cand = epos + glam::Vec2::from_angle(a) * d;
-                        if mask.is_walkable(cand) {
-                            dest = cand;
-                            break;
-                        }
-                    }
-                    pos.0 = dest;
-                    // `EliteShield` anchor: pins the creator 60 ticks,
-                    // blocks incoming fire, then poofs (`Alarm_0`).
+                    // GML `EliteShielder/Alarm_1:13-20`: plant the shield
+                    // where it stands, then hold still for 85 steps. The hop
+                    // itself is the shield's `Alarm_0`, 60 steps in.
                     commands.spawn((
                         GameCleanup,
                         LevelCleanup,
                         Team::Enemy,
-                        Pos(dest),
+                        Pos(epos),
                         EliteBlocker {
                             owner: entity,
                             timer: GTimer::from_seconds(60.0 / 30.0, TimerMode::Once),
@@ -8879,24 +8873,12 @@ pub fn tick_elite_shielders(
                 brain.walk = rng.random_range(20.0..=30.0);
                 vel.0 = head * 12.0;
             } else if freeze > 40.0 && rng.random::<f32>() < 0.25 {
-                let mut dest = epos;
-                for _ in 0..100 {
-                    let a = rng.random_range(0.0..std::f32::consts::TAU);
-                    let d = rng.random_range(120.0..=300.0);
-                    let cand = epos + glam::Vec2::from_angle(a) * d;
-                    if mask.is_walkable(cand) {
-                        dest = cand;
-                        break;
-                    }
-                }
-                pos.0 = dest;
-                // `EliteShield` anchor: pins the creator 60 ticks,
-                // blocks incoming fire, then poofs (`Alarm_0`).
+                // GML `EliteShielder/Alarm_1:35-42`: same shield, no sight.
                 commands.spawn((
                     GameCleanup,
                     LevelCleanup,
                     Team::Enemy,
-                    Pos(dest),
+                    Pos(epos),
                     EliteBlocker {
                         owner: entity,
                         timer: GTimer::from_seconds(60.0 / 30.0, TimerMode::Once),
@@ -8914,15 +8896,12 @@ pub fn tick_elite_shielders(
     }
 }
 
-/// Verbatim `objects/EliteShield` law (`Step_0` + `Alarm_0` +
-/// `Collision_projectile`): while armed the anchor pins its creator to
-/// itself, deflects `typ` 1 shots back to the IDPD team, destroys `typ`
-/// 2 shots, then poofs away.
 pub fn tick_elite_blockers(
     time: Res<SimTime>,
     mut commands: Commands,
+    mask: Res<FloorMask>,
     mut blockers: Query<(Entity, &Pos, &mut EliteBlocker), Without<Enemy>>,
-    mut owners: Query<&mut Pos, With<Enemy>>,
+    mut owners: Query<(&mut Pos, &mut EnemyBrain), With<Enemy>>,
     mut shots: Query<
         (
             Entity,
@@ -8935,26 +8914,8 @@ pub fn tick_elite_blockers(
     >,
 ) {
     let dt = time.delta_secs;
+    let mut rng = rand::rng();
     for (b, bpos, mut blocker) in &mut blockers {
-        blocker.timer.tick(dt);
-        if blocker.timer.just_finished() {
-            commands.spawn((
-                GameCleanup,
-                LevelCleanup,
-                Pos(bpos.0),
-                StaticFx {
-                    path: "images/sprEliteShielderShieldDisappear.png",
-                },
-                PickupLifetime {
-                    timer: GTimer::from_seconds(1.0, TimerMode::Once),
-                },
-            ));
-            commands.entity(b).despawn();
-            continue;
-        }
-        if let Ok(mut opos) = owners.get_mut(blocker.owner) {
-            opos.0 = bpos.0;
-        }
         for (s, spos, mut team, mut vel, typ) in &mut shots {
             if *team != Team::Player {
                 continue;
@@ -8976,6 +8937,33 @@ pub fn tick_elite_blockers(
                 _ => {}
             }
         }
+        blocker.timer.tick(dt);
+        if !blocker.timer.just_finished() {
+            continue;
+        }
+        // GML `EliteShield/Alarm_0.gml:1-31`: the shield stays where it was
+        // raised for 60 steps, then the CREATOR hops 120 + random(180) px in
+        // a random direction onto a floor tile and re-arms at 30.
+        commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            Pos(bpos.0),
+            StaticFx {
+                path: "images/sprEliteShielderShieldDisappear.png",
+            },
+            PickupLifetime {
+                timer: GTimer::from_seconds(1.0, TimerMode::Once),
+            },
+        ));
+        commands.entity(b).despawn();
+        let Ok((mut opos, mut brain)) = owners.get_mut(blocker.owner) else {
+            continue;
+        };
+        let len = 120.0 + rng.random_range(0.0..180.0);
+        let dir = rng.random_range(0.0..std::f32::consts::TAU);
+        opos.0 = mask
+            .cell_center(mask.world_to_cell(opos.0 + glam::Vec2::new(dir.cos(), dir.sin()) * len));
+        brain.attack = GTimer::from_seconds(30.0 / 30.0, TimerMode::Once);
     }
 }
 
