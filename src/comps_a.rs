@@ -437,6 +437,9 @@ pub struct Run {
     pub total_kills: u32,
 
     pub blackswords: u32,
+    /// GML `GameCont.swordbosskill`: bosses felled while a Black Sword is in
+    /// the run, in GML object-name order. All eight earn Chicken skin C.
+    pub swordbosskill: [bool; 8],
     /// Run-time in sim steps (GML `GameCont.tottimer`: HUD clock and
     /// Plant/B throne-skin gate).
     pub tottimer: u32,
@@ -493,6 +496,7 @@ impl Default for Run {
             game_over: false,
             total_kills: 0,
             blackswords: 0,
+            swordbosskill: [false; 8],
             tottimer: 0,
             popolevel: 0.0,
             nochest: 0,

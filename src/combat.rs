@@ -641,6 +641,20 @@ pub fn resolve_enemy_deaths(
             dirty.0 = true;
         }
 
+        // GML `scrOnBossKill.gml:62-95`: with a Black Sword in the run, each
+        // boss joins `GameCont.swordbosskill` and the full eight earns
+        // Chicken skin C.
+        if let Some(slot) = crate::savedata_part::sword_boss_slot(enemy.kind)
+            && pinv0.weapons.contains(&crate::data::WEAPON_BLACK_SWORD)
+        {
+            run.swordbosskill[slot] = true;
+            if run.swordbosskill.iter().all(|hit| *hit)
+                && crate::savedata_part::unlock_skin(&mut save, crate::data::RaceId::Chicken, 2)
+            {
+                dirty.0 = true;
+            }
+        }
+
         let unlocks = check_kill_unlocks(&mut save, enemy.kind, race_state.race, None);
         if !unlocks.races.is_empty() {
             dirty.0 = true;

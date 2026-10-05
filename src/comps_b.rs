@@ -374,6 +374,10 @@ pub struct PendingDelayedBoss {
     pub arm_delay: f32,
 
     pub from_wall: bool,
+    /// GML `WantBoss/Create_0.gml:3` `number = max(loops * 2, 1)`;
+    /// `Alarm_0` spends one per step, so a stacked desert puts `2 * loops`
+    /// bandits through the wall one frame apart.
+    pub number: u32,
 }
 
 impl PendingDelayedBoss {

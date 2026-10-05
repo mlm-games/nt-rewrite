@@ -715,6 +715,24 @@ pub fn try_unlock_race_with_menu(
     true
 }
 
+/// GML `scrOnBossKill.gml:62-95`: with a Black Sword in the run, each boss
+/// name goes on `GameCont.swordbosskill`, and the full set of eight earns
+/// Chicken skin C. The port keys the list on `EnemyKind`, in the same order.
+pub fn sword_boss_slot(kind: crate::data::EnemyKind) -> Option<usize> {
+    use crate::data::EnemyKind::*;
+    Some(match kind {
+        BigBandit => 0,
+        BigDog => 1,
+        LilHunter => 2,
+        Throne => 3,
+        ThroneII => 4,
+        FrogQueen => 5,
+        Hyper => 6,
+        Captain => 7,
+        _ => return None,
+    })
+}
+
 pub fn check_kill_unlocks(
     save: &mut SaveData,
     kind: crate::data::EnemyKind,
@@ -813,6 +831,12 @@ pub struct CheckKillUnlocks {
 
 fn try_unlock_skin(save: &mut SaveData, race: crate::data::RaceId, skin: usize) -> bool {
     try_unlock_skin_with_menu(save, race, skin, None)
+}
+
+/// GML `scrOnBossKill.gml:93` `scrRaceUnlockSkin(Race.Chicken,
+/// SkinLetter.C)` once `GameCont.swordbosskill` holds every boss.
+pub fn unlock_skin(save: &mut SaveData, race: crate::data::RaceId, skin: usize) -> bool {
+    try_unlock_skin(save, race, skin)
 }
 
 /// GML `LilHunterFly/Step_0:15-17` `scrRaceUnlockSkin(Race.Rogue,

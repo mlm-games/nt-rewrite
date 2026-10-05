@@ -577,6 +577,7 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
             run.game_over = false;
             run.total_kills = 0;
             run.blackswords = 0;
+            run.swordbosskill = [false; 8];
             run.tottimer = 0;
             run.popolevel = 0.0;
             run.nochest = 0;
@@ -2110,6 +2111,7 @@ pub fn spawn_level(
                             require_open_chests: !is_last,
                             arm_delay: if is_last { 120.0 / 30.0 } else { 0.0 },
                             from_wall: true,
+                            number: crate::worldgen::big_bandit_count(run.loop_count),
                         },
                     ));
                 }

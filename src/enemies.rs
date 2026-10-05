@@ -6304,67 +6304,66 @@ pub fn tick_delayed_boss_spawns(
         };
         let player_pos = player_pos.0;
 
-        let mut best_wall: Option<(glam::Vec2, (i32, i32))> = None;
-        let mut best_score = f32::MAX;
+        // GML `WantBoss/Alarm_0.gml:7-31`. The marker sits at the room
+        // sentinel, so the search box is fixed at 426x240 around it; inside
+        // it a wall qualifies when it has clear line to the player, sits
+        // 100..124 px away, is isolated (`distance_to_object(Wall) <= 2`),
+        // and touches floor.
+        let sentinel = glam::Vec2::new(crate::comps_a::TILE * 0.5, crate::comps_a::TILE * 0.5);
+        let mut rng = rand::rng();
+        let probe = player_pos
+            + glam::Vec2::new(rng.random_range(-30.0..30.0), rng.random_range(-30.0..30.0));
+        let mut candidates: Vec<((i32, i32), glam::Vec2)> = Vec::new();
         if pending_boss.from_wall {
-            for (_, cell, pos, screen_end) in &walls {
+            for (_, cell, pos, _) in &walls {
                 let p = pos.0;
-                let d = p.distance(player_pos);
-                if d < 120.0 || d > 260.0 {
+                if (p.x - sentinel.x).abs() >= 213.0 || (p.y - sentinel.y).abs() >= 120.0 {
                     continue;
                 }
-                let mut score = (d - 180.0).abs() + (p.y - player_pos.y).abs() * 0.25;
-                if screen_end.is_some() {
-                    score -= 20.0;
+                let d = p.distance(player_pos);
+                if !(100.0..124.0).contains(&d) {
+                    continue;
                 }
-                if score < best_score {
-                    best_score = score;
-                    best_wall = Some((p, (cell.0, cell.1)));
+                if crate::walls::segment_hits_wall(p, player_pos, &mask) {
+                    continue;
                 }
+                if !mask.is_walkable(glam::Vec2::new(p.x + crate::worldgen::WALL_PX, p.y))
+                    && !mask.is_walkable(glam::Vec2::new(p.x - crate::worldgen::WALL_PX, p.y))
+                    && !mask.is_walkable(glam::Vec2::new(p.x, p.y + crate::worldgen::WALL_PX))
+                    && !mask.is_walkable(glam::Vec2::new(p.x, p.y - crate::worldgen::WALL_PX))
+                {
+                    continue;
+                }
+                candidates.push(((cell.0, cell.1), p));
             }
         }
 
         let kind = pending_boss.kind;
+        pending_boss.number = pending_boss.number.saturating_sub(1);
 
-        let spawn_pos = if let Some((p, _)) = best_wall {
-            p
-        } else {
-            let mut rng = rand::rng();
-            let mut best = mask.random_floor_pos(&mut rng, 120.0);
-            for _ in 0..32 {
-                let ang = rng.random_range(0.0..std::f32::consts::TAU);
-                let cand = player_pos
-                    + glam::Vec2::new(ang.cos(), ang.sin()) * rng.random_range(140.0..240.0);
-                if mask.is_walkable(cand) {
-                    best = cand;
-                    break;
-                }
+        let spawn_pos = candidates
+            .iter()
+            .min_by(|a, b| {
+                a.1.distance_squared(probe)
+                    .total_cmp(&b.1.distance_squared(probe))
+            })
+            .map(|(_, p)| *p);
+        let Some(spawn_pos) = spawn_pos else {
+            if pending_boss.number == 0 {
+                commands.entity(marker_e).despawn();
             }
-            best
+            return;
         };
-
-        commands.entity(marker_e).despawn();
-        trauma.add(0.3);
-
-        if let Some((p, cell)) = best_wall {
-            for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1), (0, 0)] {
-                commands.spawn((
-                    GameCleanup,
-                    LevelCleanup,
-                    crate::comps_a::PendingWallBreak {
-                        cell: (cell.0 + dx, cell.1 + dy),
-                        pos: p,
-                        spawn_floor: true,
-                    },
-                ));
-            }
+        if pending_boss.number == 0 {
+            commands.entity(marker_e).despawn();
         }
+        trauma.add(0.3);
 
         spawn_enemy_at(
             &mut commands,
             &catalog,
             kind,
-            spawn_pos,
+            spawn_pos + glam::Vec2::new(rng.random_range(-2.0..2.0), rng.random_range(-2.0..2.0)),
             difficulty_multiplier(run.floor),
             false,
             false,
