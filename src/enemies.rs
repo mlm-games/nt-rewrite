@@ -113,8 +113,13 @@ pub fn spawn_hp(kind: EnemyKind, base_hp: i32, loops: u32) -> i32 {
         EnemyKind::MeleeFake | EnemyKind::IceFlower => return base_hp.max(1),
         _ => (base_hp as f32, false),
     };
-    let scaled = hp * (1.0 + l / 20.0);
-    let out = if ceil { scaled.ceil() } else { scaled };
+    // GML runs the object's own `max_hp = ceil(...)` first and only then
+    // `enemy/Create_0.gml:7` multiplies by `1 + loops / 20`.
+    let out = if ceil {
+        hp.ceil() * (1.0 + l / 20.0)
+    } else {
+        hp * (1.0 + l / 20.0)
+    };
     out.round().max(1.0) as i32
 }
 
@@ -240,15 +245,26 @@ fn spawn_enemy_impl(
         | EnemyKind::Ballguy => 0.0,
         _ => rng.random_range(0.0..std::f32::consts::TAU),
     };
-    let initial_heading = if kind == EnemyKind::Ballguy {
-        (pos - glam::Vec2::new(10016.0, 10016.0))
-            .y
-            .atan2((pos - glam::Vec2::new(10016.0, 10016.0)).x)
+    // GML `point_distance(10016, 10016, x, y)` names the room sentinel, which
+    // in the port's coordinates is `(TILE * 0.5, TILE * 0.5)`.
+    let sentinel = glam::Vec2::splat(crate::worldgen::TILE as f32 * 0.5);
+    let initial_heading = if matches!(kind, EnemyKind::Ballguy | EnemyKind::SuperFrog) {
+        let away = pos - sentinel;
+        away.y.atan2(away.x)
     } else {
         0.0
     };
     let initial_velocity = match kind {
+        // `SuperFrog/Create_0.gml:18` `motion_add(point_direction(10016,
+        // 10016, x, y), 1)`; the Exploder inherits it from the same parent
+        // chain.
         EnemyKind::Ballguy => glam::Vec2::from_angle(initial_heading) * 30.0,
+        EnemyKind::SuperFrog => glam::Vec2::from_angle(initial_heading) * 30.0,
+        // GML `FrogQueen/Create_0.gml:37` `motion_add(random_angle, 2)` with
+        // `friction = 0`, so the drift never decays.
+        EnemyKind::FrogQueen => {
+            glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU)) * 60.0
+        }
         EnemyKind::ScrapBossMissile => {
             glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU)) * 60.0
         }
@@ -6061,6 +6077,77 @@ pub fn tick_want_revive_popo_freak(
     }
 }
 
+/// GML `objects/FrogQueenDeath/Other_7.gml`: when the dying sprite finishes,
+/// 80 `EnemyBullet2` at 4 px/step spiral out from `random_angle` in 4.5-degree
+/// steps, each trailed by an `AcidStreak` at 8, four `PortalClear`s ring the
+/// wreck at +-32, `sndBallMamaDead2` lands, and a size-2 `Corpse` takes the
+/// queen's place.
+pub fn tick_frog_queen_deaths(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mut cues: ResMut<Queue<AudioCue>>,
+    mut q: Query<(Entity, &Pos, &mut crate::comps_b::FrogQueenDeath)>,
+) {
+    let dt = time.delta_secs;
+    let mut rng = rand::rng();
+    for (entity, pos, mut death) in &mut q {
+        death.timer.tick(dt);
+        if !death.timer.just_finished() {
+            continue;
+        }
+        commands.entity(entity).despawn();
+        let mut ang = rng.random_range(0.0..std::f32::consts::TAU);
+        for _ in 0..80 {
+            let d = glam::Vec2::from_angle(ang);
+            commands.spawn((
+                GameCleanup,
+                LevelCleanup,
+                Team::Enemy,
+                Projectile {
+                    damage: 2,
+                    life: GTimer::from_seconds(600.0, TimerMode::Once),
+                    radius: 4.0,
+                    knockback: 120.0,
+                    explosive: false,
+                    source: Some(DamageSource::enemy(
+                        Entity::PLACEHOLDER,
+                        EnemyKind::FrogQueen,
+                    )),
+                },
+                ProjectileTyp(2),
+                Velocity(d * 120.0),
+                Pos(pos.0),
+            ));
+            crate::environment::spawn_native_streak(&mut commands, true, pos.0, ang, 8.0 * 30.0);
+            ang += 4.5_f32.to_radians();
+        }
+        for (dx, dy) in [(-32.0, -32.0), (-32.0, 32.0), (32.0, -32.0), (32.0, 32.0)] {
+            commands.spawn((
+                GameCleanup,
+                LevelCleanup,
+                crate::comps_b::PortalClear {
+                    timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
+                    scale: 1.0,
+                },
+                Pos(pos.0 + glam::Vec2::new(dx, dy)),
+            ));
+        }
+        enemy_cue(&mut cues, "sndBallMamaDead2");
+        commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            Corpse {
+                kind: EnemyKind::FrogQueen,
+                size: 2,
+                life: GTimer::from_seconds(20.0, TimerMode::Once),
+                pos: pos.0,
+                flip_x: false,
+            },
+            Pos(pos.0),
+        ));
+    }
+}
+
 /// GML `objects/LastDie` (`Create_0` + `Alarm_0`): 17.5 steps after the
 /// Captain dies a `PopoExplosion` goes off at the wreck. `LastExecute`'s
 /// 400-step collapse is presentation only and is not simulated.
@@ -6376,6 +6463,7 @@ pub fn tick_delayed_boss_spawns(
 pub fn tick_frog_eggs(
     time: Res<SimTime>,
     mut commands: Commands,
+    mut cues: ResMut<Queue<AudioCue>>,
     run: Res<Run>,
     mut q: Query<(Entity, &Enemy, &mut EnemyBrain, &Pos), With<Enemy>>,
 ) {
@@ -6390,6 +6478,9 @@ pub fn tick_frog_eggs(
         }
         let hatch = pos.0;
         commands.entity(e).despawn();
+        // GML `FrogEgg/Alarm_1.gml:14`.
+        let opening = ["sndFrogEggOpen1", "sndFrogEggOpen2"][rng.random_range(0..2)];
+        enemy_cue(&mut cues, opening);
 
         queue_enemy_spawn(
             &mut commands,
@@ -6852,12 +6943,16 @@ pub fn tick_toxic_gas(
                     let kind = enemy.map(|e| e.kind);
                     let conversion =
                         *target_team == Team::Enemy && kind == Some(EnemyKind::Ballguy);
-                    if *target_team == Team::Enemy
+                    // GML `SuperFrog/Collision_ToxicGas.gml:1` and
+                    // `FrogQueen/Collision_ToxicGas.gml:4-12`: both absorb a
+                    // cloud for 1 HP instead of taking its damage, and the
+                    // queen additionally eats the cloud.
+                    let absorbs = *target_team == Team::Enemy
                         && matches!(
                             kind,
                             Some(EnemyKind::SuperFrog) | Some(EnemyKind::FrogQueen)
-                        )
-                    {
+                        );
+                    if absorbs && target_health.hp >= target_health.max {
                         return None;
                     }
                     if *target_team == Team::Player {
@@ -6869,11 +6964,17 @@ pub fn tick_toxic_gas(
                     } else if next_hurt.as_ref().is_some_and(|next| next.0 > frame.0) {
                         return None;
                     }
-                    Some((target_entity, target_pos.0, *target_team, conversion))
+                    Some((
+                        target_entity,
+                        target_pos.0,
+                        *target_team,
+                        conversion,
+                        absorbs,
+                    ))
                 },
             )
         };
-        let Some((target_entity, target_pos, target_team, conversion)) = target else {
+        let Some((target_entity, target_pos, target_team, conversion, absorbs)) = target else {
             continue;
         };
         if conversion {
@@ -6895,6 +6996,30 @@ pub fn tick_toxic_gas(
         else {
             continue;
         };
+        if absorbs {
+            target_health.hp += 1;
+            if target_health.hp > target_health.max {
+                target_health.hp = target_health.max;
+            }
+            if target_team == Team::Enemy
+                && let Some(next) = next_hurt.as_deref_mut()
+            {
+                next.0 = frame.0 + 5;
+            }
+            // Only the queen's own handler destroys the cloud; the SuperFrog
+            // walks on through it.
+            if target_team == Team::Enemy
+                && let Some(kind) = sets
+                    .p1()
+                    .get(target_entity)
+                    .ok()
+                    .and_then(|(_, _, _, _, _, _, enemy, _)| enemy.map(|e| e.kind))
+                && kind == EnemyKind::FrogQueen
+            {
+                commands.entity(gas_entity).despawn();
+            }
+            continue;
+        }
         if target_team == Team::Player {
             target_health.invuln = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
         }
@@ -6989,8 +7114,9 @@ pub fn tick_mom_shots(
     }
 }
 
-/// Verbatim `objects/SuperFrog/Alarm_2`: every 3 ticks a stray
-/// `EnemyBullet2` (damage 2 at 2 px/tick) leaves at a random angle.
+/// Verbatim `objects/SuperFrog/Alarm_2`: `Create_0:22` arms it for 5 ticks,
+/// then each `Alarm_2` fires a stray `EnemyBullet2` (damage 2 at 2 px/tick) at
+/// `random_angle` from the frog's own position and re-arms for 3.
 pub fn tick_super_frogs(
     mut commands: Commands,
     mut ticks: Local<HashMap<Entity, u8>>,
@@ -7003,7 +7129,7 @@ pub fn tick_super_frogs(
         }
         let t = ticks.entry(entity).or_insert(0);
         *t = t.wrapping_add(1);
-        if *t % 3 != 0 {
+        if *t < 5 || (*t - 5) % 3 != 0 {
             continue;
         }
         let a = rng.random_range(0.0..std::f32::consts::TAU);
@@ -7021,7 +7147,7 @@ pub fn tick_super_frogs(
                 source: Some(DamageSource::enemy(entity, enemy.kind)),
             },
             Velocity(d * 60.0),
-            Pos(pos.0 + d * 10.0),
+            Pos(pos.0),
         ));
     }
 }
@@ -7580,6 +7706,7 @@ pub fn tick_special_props(
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
     run: Res<Run>,
+    mut cues: ResMut<Queue<AudioCue>>,
     mut save: ResMut<crate::savedata_part::SaveData>,
     mut dirty: ResMut<crate::comps_a::SaveDirty>,
     mut props: Query<
@@ -7660,8 +7787,54 @@ pub fn tick_special_props(
             SpecialPropDeath::BecomeScrapBoss => {
                 queue_enemy_spawn(&mut commands, EnemyKind::BigDog, at, 1.0, run.loop_count);
             }
+            SpecialPropDeath::CarVenusFixed => {
+                // GML `CarVenusFixed/Destroy_0.gml:12-15`: only in the crib.
+                enemy_cue(&mut cues, "sndExplosionCar");
+                enemy_cue(&mut cues, "sndCarLoop");
+                if run.area == AreaId::Crib {
+                    commands.spawn((
+                        GameCleanup,
+                        LevelCleanup,
+                        crate::comps_b::NewCarPlz {
+                            timer: GTimer::from_seconds(150.0 / 30.0, TimerMode::Once),
+                        },
+                        Pos(at),
+                    ));
+                }
+            }
         }
         commands.entity(entity).despawn();
+    }
+}
+
+/// GML `objects/NewCarPlz` (`Create_0` + `Alarm_1`): the crib's replacement car
+/// appears where the last one blew up.
+pub fn tick_new_car_plz(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    catalog: Res<repame_anim::AnimCatalog>,
+    run: Res<Run>,
+    mut q: Query<(Entity, &Pos, &mut crate::comps_b::NewCarPlz)>,
+) {
+    if q.is_empty() {
+        return;
+    }
+    let dt = time.delta_secs;
+    let mut rng = rand::rng();
+    for (entity, pos, mut plz) in &mut q {
+        plz.timer.tick(dt);
+        if !plz.timer.just_finished() {
+            continue;
+        }
+        commands.entity(entity).despawn();
+        crate::setup::spawn_prop_sim(
+            &mut commands,
+            &catalog,
+            &run,
+            crate::worldgen::PropKind::CarVenusFixed,
+            pos.0 + glam::Vec2::new(rng.random_range(-3.0..3.0), rng.random_range(-3.0..3.0)),
+            false,
+        );
     }
 }
 

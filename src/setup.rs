@@ -1069,7 +1069,9 @@ fn prop_stats(kind: PropKind, styleb: bool, loop_count: u32) -> PropStats {
         // GML `VenuzCarpet` has no parent and no events: decoration.
         PropKind::VenuzCarpet => s(164.0, 68.0, 1, 1, None),
         // GML `CarVenusFixed`: `max_hp = 25`, `size = 1`.
-        PropKind::CarVenusFixed => s(32.0, 32.0, 1, 25, None),
+        // GML `CarVenusFixed/Destroy_0.gml:1-23`: 5 `Explosion` + 3
+        // `SmallExplosion` at `orandom(3)`, then 6 `GroundFlame`.
+        PropKind::CarVenusFixed => s(32.0, 32.0, 1, 25, Some(PropDeathEffect::car_venus_fixed())),
         // GML `GiantWeaponChest` / `GiantAmmoChest`: no parent, no hp, no
         // break -- they are opened by `Collision_Player`.
         PropKind::GiantWeaponChest | PropKind::GiantAmmoChest => s(64.0, 64.0, 1, 1, None),
@@ -1352,6 +1354,8 @@ pub fn spawn_prop_sim(
 
     let stats = prop_stats(kind, styleb, run.loop_count);
     let idle = prop_idle_for(catalog, run, kind, pos, styleb);
+    let special = (kind == PropKind::CarVenusFixed)
+        .then_some(crate::comps_b::SpecialPropDeath::CarVenusFixed);
     // GML `FloorMaker/Step_0.gml:33-49` mirrors the +x column's
     // `BigGeneratorInactive` (`image_xscale = -1`) to face the corridor.
     let flip = if matches!(kind, PropKind::SodaMachine) {
@@ -1403,6 +1407,9 @@ pub fn spawn_prop_sim(
     // generic corpse-and-rads path.
     if kind == PropKind::VenuzTV {
         ec.insert(crate::comps_b::SpecialPropDeath::VenuzTv);
+    }
+    if let Some(kind) = special {
+        ec.insert(kind);
     }
     // GML `image_speed = 0.4` on every destructible prop.
     if let Some(def) = catalog.def(idle) {
@@ -1561,6 +1568,17 @@ pub fn spawn_rad_container(
         ec.insert(anim);
     }
     ec.id()
+}
+
+/// GML `instance_furthest(10016, 10016, enemy)`: the enemy whose tile is
+/// furthest from the room sentinel, which in port coordinates is
+/// `(TILE * 0.5, TILE * 0.5)`.
+fn furthest_enemy(enemies: &[(EnemyKind, glam::Vec2)]) -> Option<glam::Vec2> {
+    let sentinel = glam::Vec2::splat(crate::worldgen::TILE as f32 * 0.5);
+    enemies.iter().map(|(_, pos)| *pos).max_by(|a, b| {
+        a.distance_squared(sentinel)
+            .total_cmp(&b.distance_squared(sentinel))
+    })
 }
 
 /// GML `objects/GenCont/Alarm_2.gml:11-26`: the one and only secret
@@ -2230,6 +2248,11 @@ pub fn spawn_level(
                     EnemyKind::Technomancer => glam::Vec2::new(0.0, 0.0),
                     EnemyKind::Captain => glam::Vec2::new(0.0, 80.0),
                     EnemyKind::Hyper => glam::Vec2::new(0.0, 0.0),
+                    // GML `scrPopulate.gml:346-351`: the Frog Queen lands on
+                    // the `enemy` furthest from the room sentinel.
+                    EnemyKind::FrogQueen => {
+                        furthest_enemy(&plan.enemies).unwrap_or(glam::Vec2::new(320.0, -160.0))
+                    }
                     _ => glam::Vec2::new(320.0, -160.0),
                 };
                 spawn_enemy_at(
@@ -2243,6 +2266,30 @@ pub fn spawn_level(
                     run.loop_count,
                     spawn_context,
                 );
+                if other == EnemyKind::FrogQueen {
+                    // GML `FrogQueen/Create_0.gml:39-43`: five `PortalClear`s
+                    // clear her landing.
+                    for (dx, dy) in [
+                        (0.0, 0.0),
+                        (0.0, -24.0),
+                        (0.0, 24.0),
+                        (-24.0, 0.0),
+                        (24.0, 0.0),
+                    ] {
+                        commands.spawn((
+                            GameCleanup,
+                            LevelCleanup,
+                            PortalClear {
+                                timer: GTimer::from_seconds(
+                                    5.0 / 30.0,
+                                    crate::time::TimerMode::Once,
+                                ),
+                                scale: 1.0,
+                            },
+                            Pos(pos + glam::Vec2::new(dx, dy)),
+                        ));
+                    }
+                }
             }
         }
     }

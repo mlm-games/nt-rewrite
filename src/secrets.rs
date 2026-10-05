@@ -373,19 +373,18 @@ pub fn tick_van_hq(
     mut triggers: ResMut<SecretTriggers>,
     mut cues: ResMut<crate::msg::Queue<crate::audio::AudioCue>>,
     player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
-    mut vans: Query<
+    mut enemies: Query<
         (
             Entity,
             &Pos,
             &mut crate::comps_a::Health,
-            &crate::idpd::IdpdVanDeploy,
+            Option<&crate::idpd::IdpdVanDeploy>,
         ),
         (With<Enemy>, Without<Player>),
     >,
     mut shots: Query<(Entity, &crate::comps_a::Team), With<crate::Projectile>>,
-    mut enemies: Query<(Entity, &mut crate::comps_a::Health), With<Enemy>>,
 ) {
-    if vans.is_empty() || !input.peek_interact_pressed() {
+    if enemies.is_empty() || !input.peek_interact_pressed() {
         return;
     }
     let Ok(ppos) = player_q.single().map(|p| p.0) else {
@@ -393,8 +392,9 @@ pub fn tick_van_hq(
     };
     let Some(entity) = crate::pickups::nearest_prompt_span(
         ppos,
-        vans.iter()
-            .filter(|(_, _, _, deploy)| !deploy.freak && deploy.inert > 0.0)
+        enemies
+            .iter()
+            .filter(|(_, _, _, deploy)| deploy.is_some_and(|d| !d.freak && d.inert > 0.0))
             .map(|(entity, pos, _, _)| (entity, pos.0, crate::pickups::VAN_PROMPT)),
     ) else {
         return;
@@ -402,7 +402,7 @@ pub fn tick_van_hq(
 
     if run.tried_hq {
         // GML `Player/Collision_Van.gml:5-8`: `with (other) hp = 0` and out.
-        if let Ok((_, _, mut hp, _)) = vans.get_mut(entity) {
+        if let Ok((_, _, mut hp, _)) = enemies.get_mut(entity) {
             hp.hp = 0;
         }
         return;
@@ -418,7 +418,7 @@ pub fn tick_van_hq(
         volume: 1.0,
         variance: 0.0,
     });
-    for (_, mut hp) in enemies.iter_mut() {
+    for (_, _, mut hp, _) in enemies.iter_mut() {
         hp.hp = 0;
     }
     commands.entity(entity).despawn();

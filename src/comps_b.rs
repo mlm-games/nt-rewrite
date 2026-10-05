@@ -1357,6 +1357,15 @@ pub enum SpecialPropDeath {
     VaultStatue,
     VenuzTv,
     BecomeScrapBoss,
+    /// GML `CarVenusFixed/Destroy_0.gml:12-15`: in the crib the wreck leaves
+    /// a `NewCarPlz` behind, which raises a fresh car 150 steps later.
+    CarVenusFixed,
+}
+
+/// GML `objects/NewCarPlz` (`alarm[1] = 150` from the wreck).
+#[derive(Component, Clone, Copy, Debug)]
+pub struct NewCarPlz {
+    pub timer: Timer,
 }
 
 #[derive(Component, Clone, Copy)]
@@ -1686,6 +1695,14 @@ pub struct WantRevivePopoFreak {
 /// GML `objects/RevivePopoFreak`: the 15-step second half of the revive.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RevivePopoFreak;
+
+/// GML `objects/FrogQueenDeath`: plays `sprFrogQueenDying` (30 frames at
+/// 6 fps) and then fires the 80-round `EnemyBullet2` spiral from
+/// `Other_7`.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct FrogQueenDeath {
+    pub timer: Timer,
+}
 
 /// GML `objects/LastDie`: the Captain's death marker, which pops a
 /// `PopoExplosion` 17.5 steps in and then hands off to `LastExecute`.

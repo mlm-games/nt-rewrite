@@ -748,6 +748,35 @@ pub fn resolve_enemy_deaths(
             | EnemyKind::EliteShielder => {
                 commands.queue(|world: &mut World| crate::idpd::freeze_idpd_wave(world));
             }
+            EnemyKind::FrogQueen => {
+                // GML `FrogQueen/Destroy_0:3-8`: a player holding any golden
+                // weapon gets a `wep_frog_pistol` at their own feet, loaded.
+                if pinv0.weapons.iter().any(|w| {
+                    *w != crate::data::WEAPON_NONE
+                        && crate::weapon_runtime::weapon_meta(*w).wep_gold
+                }) {
+                    let e = crate::pickups::spawn_pickup(
+                        &mut commands,
+                        &catalog,
+                        crate::comps_b::PickupKind::Weapon(crate::data::WEAPON_GOLDEN_FROG_PISTOL),
+                        player_pos.0,
+                        0,
+                        false,
+                    );
+                    commands
+                        .entity(e)
+                        .insert(crate::comps_b::WepPickupAmmo(true));
+                }
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    crate::comps_b::FrogQueenDeath {
+                        // 30 frames at 6 fps.
+                        timer: GTimer::from_seconds(5.0, TimerMode::Once),
+                    },
+                    Pos(pos),
+                ));
+            }
             EnemyKind::BigBandit if run.can_oasis => {
                 // GML `BanditBoss/Destroy_0.gml:13-22`: inside a live
                 // `CanOasis` window the kill opens a portal at the wreck,

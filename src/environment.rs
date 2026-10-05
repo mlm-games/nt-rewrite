@@ -321,6 +321,8 @@ pub struct PropDeathEffect {
     pub explosion: Option<ExplosionPayload>,
     /// GML `repeat (N) { instance_create(..., Explosion) }`.
     pub blasts: u8,
+    /// GML `repeat (N) { instance_create(x + orandom(J), ..., SmallExplosion) }`.
+    pub small_blasts: u8,
     /// `orandom(J)` scatter per blast (0 = the exact prop position).
     pub blast_jitter: f32,
     pub hazard: Option<EnvironmentHazardSpec>,
@@ -545,6 +547,22 @@ impl PropDeathEffect {
         }
     }
 
+    /// GML `CarVenusFixed/Destroy_0.gml:1-23`: FIVE `Explosion` and THREE
+    /// `SmallExplosion` at `orandom(3)`, then six `GroundFlame` each kicked
+    /// `move_contact_solid(random_angle, 4 + random(16))`.
+    pub fn car_venus_fixed() -> Self {
+        Self {
+            explosion: Self::blast(32.0, 5),
+            blasts: 5,
+            blast_jitter: 3.0,
+            small_blasts: 3,
+            ground_flames: 6,
+            flame_jitter: 0.0,
+            flame_launch: Some((4.0, 16.0)),
+            ..Default::default()
+        }
+    }
+
     /// GML `WaterMineExplode/Step_0.gml`: one `Explosion` at
     /// `orandom(3)` from `y - 8`, 12 `Bubble`, and the 16-bullet
     /// `EnemyBullet3` ring.
@@ -752,6 +770,31 @@ pub fn spawn_prop_death_effect(
                     timer: GTimer::from_seconds(0.04, TimerMode::Once),
                     radius: explosion.radius,
                     damage: explosion.damage,
+                    team: Team::Player,
+                    hits_player: true,
+                    source,
+                },
+                Pos(pos + off),
+            ));
+        }
+    }
+
+    if effect.small_blasts > 0 {
+        let mut rng = rand::rng();
+        for _ in 0..effect.small_blasts {
+            let j = effect.blast_jitter;
+            let off = if j > 0.0 {
+                glam::Vec2::new(rng.random_range(-j..j), rng.random_range(-j..j))
+            } else {
+                glam::Vec2::ZERO
+            };
+            commands.spawn((
+                GameCleanup,
+                LevelCleanup,
+                crate::combat::Explosion {
+                    timer: GTimer::from_seconds(0.04, TimerMode::Once),
+                    radius: 20.0,
+                    damage: 5,
                     team: Team::Player,
                     hits_player: true,
                     source,

@@ -765,9 +765,8 @@ pub fn check_kill_unlocks(
         EnemyKind::BigDog => {
             award(save, &mut menu, crate::data::RaceId::BigDog);
         }
-        EnemyKind::FrogQueen => {
-            award(save, &mut menu, crate::data::RaceId::Frog);
-        }
+        // GML grants no race here: `scrRaceUnlock(Race.Frog)` lives only in
+        // `objects/Player/Other_4.gml:12`, for dying AS Frog.
         // GML hatches `HostileHorror` from a starved rad chest and
         // unlocks Horror on the encounter (kill-gated here: every
         // spawned horror that dies counts).

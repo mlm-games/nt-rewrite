@@ -571,6 +571,7 @@ pub fn boss_ai(
         let to_player = player_pos - epos;
         let dir = to_player.normalize_or_zero();
         let hurting = hurt.is_some();
+        let has_target = player_q.single().is_ok();
 
         boss.enraged = health.hp <= (health.max / 2).max(1);
         boss.phase_timer.tick(dt);
@@ -710,7 +711,6 @@ pub fn boss_ai(
             }
             EnemyKind::FrogQueen => frog_queen_ai(
                 &mut commands,
-                &mut trauma,
                 &mut toast,
                 entity,
                 &mut boss,
@@ -726,6 +726,10 @@ pub fn boss_ai(
                 &prop_shapes,
                 &wall_shapes,
                 run.loop_count,
+                has_target,
+                hurting,
+                health.hp,
+                health.max,
             ),
             EnemyKind::Technomancer => {
                 if let Some(st) = tech.as_deref_mut() {
@@ -1517,6 +1521,7 @@ pub fn taunt_cue_name(kind: EnemyKind) -> Option<&'static str> {
         EnemyKind::BigDog => Some("sndBigDogTaunt"),
         EnemyKind::Hyper => Some("sndHyperCrystalTaunt"),
         EnemyKind::LilHunter => Some("sndLilHunterTaunt"),
+        EnemyKind::FrogQueen => Some("sndBallMamaTaunt"),
         EnemyKind::Technomancer => Some("sndLastTaunt"),
         EnemyKind::YvBoss => Some("sndGunGodTaunt"),
         EnemyKind::Throne => Some("sndNothingTaunt"),
@@ -2445,7 +2450,6 @@ pub fn tick_hyper_orbit_crystals(
 #[allow(clippy::too_many_arguments)]
 fn frog_queen_ai(
     commands: &mut Commands,
-    trauma: &mut Trauma,
     toast: &mut Toast,
     owner: Entity,
     boss: &mut BossBrain,
@@ -2461,6 +2465,10 @@ fn frog_queen_ai(
     props: &[(glam::Vec2, glam::Vec2)],
     walls: &[(glam::Vec2, (i32, i32))],
     loops: u32,
+    has_target: bool,
+    hurting: bool,
+    health_hp: i32,
+    health_max: i32,
 ) -> bool {
     let mut rng = rand::rng();
     let mut fired = false;
@@ -2476,27 +2484,45 @@ fn frog_queen_ai(
     let dist = to_player.length();
     let aim = to_player.y.atan2(to_player.x);
     let wall_centers: Vec<glam::Vec2> = walls.iter().map(|(c, _)| *c).collect();
-    let los =
-        dist < 512.0 && !crate::walls::segment_hits_wall_legacy(epos, player_pos, &wall_centers);
+    // GML `collision_line(x, y, target.x, target.y, Wall, 0, 0)` has no range
+    // limit, so sight is purely "no wall on the line".
+    let los = !crate::walls::segment_hits_wall_legacy(epos, player_pos, &wall_centers);
 
     // GML `Alarm_1` (brain).
     if boss.attack_timer.just_finished() {
-        boss.attack_timer = GTimer::from_seconds(
-            (30.0 + rng.random_range(0.0..=20.0)) / 30.0,
-            TimerMode::Once,
-        );
+        boss.attack_timer =
+            GTimer::from_seconds((30.0 + rng.random_range(0.0..20.0)) / 30.0, TimerMode::Once);
         brain.walk = 0.0;
         boss.target = if los {
-            glam::Vec2::from_angle(aim + rng.random_range(-10.0..=10.0_f32).to_radians())
+            glam::Vec2::from_angle(aim + rng.random_range(-10.0..10.0_f32).to_radians())
         } else {
             glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU))
         };
+        // GML `Alarm_1:33-37`: with no target at all she drifts on a fresh
+        // random heading and one tick in eight takes a long walk.
+        if !has_target {
+            boss.target = glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU));
+            if rng.random_range(0.0..8.0) < 1.0 {
+                brain.walk = 50.0;
+            }
+        }
+        // GML `Other_10:21-24`. (`:26` asks for `!sndlowhp` but tests
+        // `sndlowhp`, so `sndBallMamaLowHP` machine-guns every step below
+        // quarter health in the reference; the port plays it once instead.)
+        if !boss.enraged && health_hp * 2 < health_max {
+            boss.enraged = true;
+            boss_cue(commands, "sndBallMamaHalfHP");
+        }
         if rng.random::<f32>() < 0.25 {
             boss.special_timer = GTimer::from_seconds(10.0 / 30.0, TimerMode::Once);
         } else {
             brain.walk = 50.0;
             if (rng.random::<f32>() < 1.0 / 3.0 && los) || dist < 160.0 {
-                if boss.pattern_index == 0 && loops == 1 {
+                // GML `Alarm_1:16`: the banner only shows on loop 1, while
+                // she is on screen or already under 95% health. The port has
+                // no view rect in the sim, so only the health half survives.
+                let hurt_enough = (health_hp as f32) < health_max as f32 * 0.95;
+                if boss.pattern_index == 0 && loops == 1 && hurt_enough {
                     boss.pattern_index = 1;
                     toast.show("MOM");
                     commands.spawn((
@@ -2519,33 +2545,41 @@ fn frog_queen_ai(
         if brain.ammo > 0 {
             if frogs < 8 {
                 queue_enemy_spawn(&mut *commands, EnemyKind::FrogEgg, epos, 1.0, loops);
+                // GML `FrogEgg/Create_0.gml:13`.
+                boss_cue(
+                    commands,
+                    ["sndFrogEggSpawn1", "sndFrogEggSpawn2", "sndFrogEggSpawn3"]
+                        [rng.random_range(0..3)],
+                );
             }
             brain.ammo -= 1;
             if brain.ammo > 0 {
                 boss.special_timer = GTimer::from_seconds(10.0 / 30.0, TimerMode::Once);
             }
         } else {
-            let jitter = rng.random_range(-30.0..=30.0_f32).to_radians();
+            let jitter = rng.random_range(-30.0..30.0_f32).to_radians();
             let sdir = glam::Vec2::from_angle(aim + jitter);
+            // GML `Alarm_2:17` creates the `MomProjectile` at her own origin.
             commands.spawn((
                 GameCleanup,
                 LevelCleanup,
                 Team::Enemy,
                 Projectile {
                     damage: 5,
-                    life: GTimer::from_seconds(4.0, TimerMode::Once),
+                    life: GTimer::from_seconds(600.0, TimerMode::Once),
                     radius: 7.0,
-                    knockback: 150.0,
+                    // `projectile/Create_0.gml:2` `knockback_speed = 4`.
+                    knockback: 120.0,
                     explosive: false,
                     source: Some(DamageSource::enemy(owner, EnemyKind::FrogQueen)),
                 },
                 crate::comps_a::ProjectileTyp(2),
                 MomShot,
                 Velocity(sdir * 120.0),
-                Pos(epos + sdir * 20.0),
+                Pos(epos),
             ));
             fired = true;
-            trauma.add(0.15);
+            boss_cue(commands, "sndBallMamaFire");
         }
     }
 
@@ -2555,7 +2589,11 @@ fn frog_queen_ai(
         vel.0 = vel.0.normalize() * cap;
     }
     if brain.walk > 0.0 {
-        gml_motion_add_clamp(&mut vel.0, boss.target, 0.6, 1.5 + loops as f32 / 2.0, dt);
+        // GML `Other_10:13-19`: the 0.6 impulse is skipped entirely while the
+        // hurt strip is up, but `walk--` still runs.
+        if !hurting {
+            gml_motion_add_clamp(&mut vel.0, boss.target, 0.6, 1.5 + loops as f32 / 2.0, dt);
+        }
         brain.walk -= dt * 30.0;
         if brain.walk < 0.0 {
             brain.walk = 0.0;
