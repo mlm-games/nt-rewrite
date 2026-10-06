@@ -143,9 +143,25 @@ pub fn tick_campfire(
             CampfirePhase::Rising => {
                 campfire.timer.tick(dt);
                 trauma.add(0.02);
+                // GML `BecomeNothing/Alarm_4.gml:1` `sndBecomeNothingRumble`,
+                // armed at `alarm[4] = 170` and landing late in the rise.
+                if !campfire.rumbled && campfire.timer.elapsed_secs() >= 1.13 {
+                    campfire.rumbled = true;
+                    cues.push(AudioCue {
+                        name: "sndBecomeNothingRumble",
+                        volume: 1.0,
+                        variance: 0.0,
+                    });
+                }
 
                 if campfire.timer.just_finished() {
                     campfire.set_phase(CampfirePhase::SpawnThroneII, 0.35);
+                    // GML `BecomeNothing/Alarm_6.gml:2` `sndNothingRise`.
+                    cues.push(AudioCue {
+                        name: "sndNothingRise",
+                        volume: 1.0,
+                        variance: 0.0,
+                    });
                 }
             }
 

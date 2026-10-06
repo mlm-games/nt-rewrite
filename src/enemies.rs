@@ -8695,6 +8695,7 @@ pub fn tick_ratking(
     >,
     walls: Query<(&Pos, &WallCell), (With<WallTile>, Without<Enemy>, Without<Player>)>,
     mut headings: Local<HashMap<Entity, glam::Vec2>>,
+    mut cues: ResMut<Queue<AudioCue>>,
 ) {
     let Ok(player_pos) = player_q.single() else {
         return;
@@ -8732,6 +8733,10 @@ pub fn tick_ratking(
             brain.walk -= frames;
             if brain.walk < 0.0 {
                 brain.walk = 0.0;
+            }
+            // GML `RatkingRage/Other_10.gml:6-8`.
+            if brain.ratking_rage && brain.walk <= 0.0 {
+                enemy_cue(&mut cues, "sndRatkingChargeEnd");
             }
         }
         let cap = if brain.ratking_rage { 6.0 } else { 2.0 } * 30.0;
@@ -8790,6 +8795,8 @@ pub fn tick_ratking(
                 // GML `RatkingRage/Alarm_1:11` `meleedamage = 4`.
                 enemy.touch_damage = 4;
                 brain.walk = 40.0 + rng.random_range(0.0..10.0);
+                // GML `RatkingRage/Alarm_1.gml:6`.
+                enemy_cue(&mut cues, "sndRatkingCharge");
                 let d =
                     glam::Vec2::from_angle(aim + rng.random_range(-10.0..=10.0_f32).to_radians());
                 *headings.get_mut(&entity).unwrap() = d;
@@ -8808,6 +8815,8 @@ pub fn tick_ratking(
                 brain.ammo = [3.0, 4.0, 5.0][rng.random_range(0..3)] as u8;
                 brain.burst_timer = GTimer::from_seconds(1.0 / 30.0, TimerMode::Once);
                 brain.gunangle = aim;
+                // GML `Ratking/Alarm_1.gml:9`.
+                enemy_cue(&mut cues, "sndRatKingVomit");
                 next = rng.random_range(30.0..=35.0);
                 brain.walk = 40.0 + rng.random_range(0.0..10.0);
             }

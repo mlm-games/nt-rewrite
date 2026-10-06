@@ -115,6 +115,9 @@ pub struct CampfireState {
     pub idpd_gate_armed: bool,
 
     pub spawned_throne_ii: bool,
+
+    /// GML `BecomeNothing` `alarm[4]` latch for `sndBecomeNothingRumble`.
+    pub rumbled: bool,
 }
 
 impl CampfireState {
@@ -125,6 +128,7 @@ impl CampfireState {
             idpd_clear_confirm: Timer::from_seconds(0.35, TimerMode::Once),
             idpd_gate_armed: false,
             spawned_throne_ii: false,
+            rumbled: false,
         }
     }
 
@@ -429,6 +433,10 @@ pub struct HyperState {
     pub angle: f32,
     /// GML `intro`.
     pub intro: bool,
+    /// GML `sndhalfhp` (`HyperCrystal/Other_10.gml:34-37`).
+    pub halfhp: bool,
+    /// GML `sndlowhp` (`HyperCrystal/Other_10.gml:38-41`).
+    pub lowhp: bool,
 }
 
 impl Default for HyperState {
@@ -445,6 +453,8 @@ impl Default for HyperState {
             fastspin: 0.0,
             angle: 0.0,
             intro: false,
+            halfhp: false,
+            lowhp: false,
         }
     }
 }
@@ -741,6 +751,11 @@ pub struct BossBrain {
     /// GML `sndhalfhp` (`BanditBoss/Other_10.gml:20-23`): fired-once latch
     /// for the half-health line.
     pub halfhp: bool,
+    /// GML `Nothing`'s three-state `sndhalfhp`: 0 -> 1 cues the mid line,
+    /// then 1 -> 2 cues the low line. Split across `halfhp` + `lowhp`.
+    pub lowhp: bool,
+    /// GML `Nothing` `footstep` (`Nothing/Draw_0.gml:7`), reset at 2.75.
+    pub footstep: f32,
 }
 
 impl BossBrain {
@@ -772,6 +787,8 @@ impl BossBrain {
             taunt: false,
             intro_delay: -1.0,
             halfhp: false,
+            lowhp: false,
+            footstep: 0.0,
             tauntdelay: 0,
         }
     }

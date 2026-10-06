@@ -701,6 +701,7 @@ pub fn boss_ai(
                         &mut vel,
                         &mut pos,
                         h,
+                        &health,
                         epos,
                         player_pos,
                         crate::enemies::line_of_sight_public(epos, player_pos, &mask),
@@ -911,19 +912,25 @@ fn big_bandit_ai(
         let dist = epos.distance(player_pos);
         let los = !crate::walls::segment_hits_wall(epos, player_pos, mask);
         let intro = boss.aux >= 1.0;
+        // GML `Alarm_1.gml:26` `alarm[3] = 1` makes `Alarm_3` run this same
+        // step, and `Alarm_3.gml:3` `walk = 0` overrides the walk value
+        // assigned below at `Alarm_1.gml:31-34` - so the wind-up stands still.
+        let mut melee_armed = false;
         if dist < 240.0 || !intro {
             if los && dist > 48.0 && intro {
                 if rng.random_range(0.0..3.0) < 2.0 {
                     boss_cue(commands, "sndBigBanditStartShoot");
-                    brain.ammo = if loops > 0 { 15 } else { 10 };
-                    // GML scopes the whole burst arm on `GameCont.loops`, so
-                    // on loop 0 only `ammo` is raised and `alarm[2]` is never
-                    // armed.
+                    // GML `Alarm_1.gml:16-17`: `ammo = 10` then a bare
+                    // `if GameCont.loops ammo += 5`, so only the `+= 5` is
+                    // loop-gated; `alarm[2]/gunangle/alarm[1]` follow as bare
+                    // statements and always arm (loop 0 shoots too).
+                    brain.ammo = 10;
                     if loops > 0 {
-                        boss.special_timer = gml_alarm(1.0);
-                        brain.gunangle = dir.y.atan2(dir.x);
-                        boss.attack_timer = gml_alarm(70.0 + rng.random_range(0.0..5.0));
+                        brain.ammo += 5;
                     }
+                    boss.special_timer = gml_alarm(1.0);
+                    brain.gunangle = dir.y.atan2(dir.x);
+                    boss.attack_timer = gml_alarm(70.0 + rng.random_range(0.0..5.0));
                 }
             } else if brain.fire > 0 || health.hp < health.max || !intro {
                 boss.pattern_index += 1;
@@ -933,11 +940,12 @@ fn big_bandit_ai(
                 if boss.pattern_index >= 2 || !intro {
                     boss.pattern_index = 0;
                     // `alarm[3] = 1` then `alarm[1] = -1`; `Alarm_3` runs in
-                    // the same step and zeroes `walk` (`Alarm_3:3`).
+                    // the same step and zeroes `walk` (`Alarm_3:3`), which is
+                    // applied after the walk draw below.
                     boss.phase = BossPhase::Telegraph;
                     boss.phase_timer = gml_alarm(15.0);
                     boss.attack_timer = gml_alarm_off();
-                    brain.walk = 0.0;
+                    melee_armed = true;
                     trauma.add(0.08);
                     // GML `Alarm_3:5-14` reassigns the whole strip set and
                     // cues the wind-up; `enemy_anim_switch` then picks Tell
@@ -961,6 +969,10 @@ fn big_bandit_ai(
             heading = base + rng.random_range(-45.0f32..45.0).to_radians();
         }
         brain.walk = walk;
+        // GML `Alarm_3.gml:3` `walk = 0` lands after `Alarm_1`'s draw.
+        if melee_armed {
+            brain.walk = 0.0;
+        }
         boss.target = glam::Vec2::from_angle(heading);
         // GML `Alarm_1:30` `speed = 0.4` overwrites the walk impulses.
         vel.0 = boss.target * (0.4 * 30.0);
@@ -969,13 +981,15 @@ fn big_bandit_ai(
     // GML `Alarm_2` (shotgun burst, one `EnemyBullet1` every 4 steps).
     if boss.special_timer.just_finished() {
         if brain.ammo > 0 {
-            // GML `Alarm_2:2` `if ammo = 10` is an assignment, so the branch
-            // runs on the first round of every burst: the laugh plus the
-            // plain enemy-fire blip.
+            // GML `Alarm_2.gml:2`: the bare `if ammo = 10` scopes only
+            // `snd_play(sndBigBanditShootLaugh)` (a GameMaker decompiler
+            // `=`-for-`==`, so it gates the first round of a 10-burst); the
+            // following `snd_play(sndEnemyFire)` is a bare statement and
+            // fires on every shot.
             if brain.ammo == 15 || brain.ammo == 10 {
                 boss_cue(commands, "sndBigBanditShootLaugh");
-                boss_cue(commands, "sndEnemyFire");
             }
+            boss_cue(commands, "sndEnemyFire");
             brain.fire = 1;
             brain.ammo -= 1;
             if brain.ammo == 7 && loops > 0 {
@@ -1146,6 +1160,8 @@ fn big_dog_ai(
     // GML `Alarm_1` (spin fire).
     if boss.special_timer.is_finished() && boss.special_timer.just_finished() {
         if brain.ammo > 0 {
+            // GML `ScrapBoss/Alarm_1.gml:3`.
+            boss_cue(commands, "sndEnemyFire");
             brain.ammo -= 1;
             // Drift toward the target fanned by the spin direction.
             let drift = to_player.y.atan2(to_player.x) + boss.aux * 80.0_f32.to_radians();
@@ -1183,6 +1199,8 @@ fn big_dog_ai(
     if boss.attack_timer.just_finished() {
         if rng.random::<f32>() < 1.0 / 3.0 {
             // Spin attack.
+            // GML `ScrapBoss/Alarm_0.gml:6`.
+            boss_cue(commands, "sndBigDogSpin");
             boss.special_timer = GTimer::from_seconds(15.0 / 30.0, TimerMode::Once);
             // GML keeps `ammo` real: `10 + 10 * (1 - hp / max_hp)` spent one
             // per `Alarm_1`, so the volley is the ceiling of that value.
@@ -1193,7 +1211,11 @@ fn big_dog_ai(
             vel.0 = glam::Vec2::ZERO;
         } else {
             brain.ammo = 0;
+            // GML `ScrapBoss/Alarm_0.gml:16`: `instance_exists(Player)` gate
+            // is implied here - `missiles` only spawn against a live player.
             if rng.random::<f32>() < 1.0 / (3.0 + missiles as f32 / 2.0) {
+                // GML `ScrapBoss/Alarm_0.gml:17`.
+                boss_cue(commands, "sndBigDogMissile");
                 for _ in 0..3 {
                     queue_enemy_spawn_no_kill(
                         &mut *commands,
@@ -1229,6 +1251,10 @@ fn big_dog_ai(
         if brain.walk < 0.0 {
             brain.walk = 0.0;
         }
+        // GML `ScrapBoss/Other_10.gml:16-18` steps on every tenth tick.
+        if (brain.walk / 10.0).round() == brain.walk / 10.0 {
+            boss_cue(commands, "sndBigDogWalk");
+        }
     }
     // GML `Other_10:32`: `speed = 1` overwrites whatever the walk law built.
     if brain.ammo > 0 {
@@ -1244,6 +1270,11 @@ fn big_dog_ai(
         true,
     );
     let _ = trauma;
+    // GML `ScrapBoss/Other_10.gml:35-38`.
+    if health.hp < health.max / 2 && !boss.halfhp {
+        boss.halfhp = true;
+        boss_cue(commands, "sndBigDogHalfHP");
+    }
     fired
 }
 
@@ -1343,10 +1374,14 @@ fn lil_hunter_ai(
                 ));
                 lil_hunter_fire_ring(commands, pos.0, props, Some(mask));
                 fired = true;
+                // GML `LilHunterFly/Step_0.gml:62`.
+                boss_cue(commands, "sndLilHunterLand");
                 boss.attack_timer =
                     GTimer::from_seconds(rng.random_range(20.0..=30.0) / 30.0, TimerMode::Once);
                 if brain.burst_left == 1 {
                     brain.burst_left = 2;
+                    // GML `LilHunterFly/Step_0.gml:88`, on the first landing.
+                    boss_cue(commands, "sndLilHunterAppear");
                     toast.show("LIL HUNTER");
                     if loop_count == 0 {
                         commands.spawn((
@@ -1374,6 +1409,8 @@ fn lil_hunter_ai(
         } else {
             boss.phase = BossPhase::Teleport;
             boss.pattern_index = 1;
+            // GML `LilHunter/Alarm_2.gml:14`.
+            boss_cue(commands, "sndLilHunterLaunch");
         }
     }
 
@@ -1389,12 +1426,16 @@ fn lil_hunter_ai(
         if liftoff {
             boss.phase = BossPhase::Teleport;
             boss.pattern_index = 1;
+            // GML `LilHunter/Alarm_1.gml:16`.
+            boss_cue(commands, "sndLilHunterLaunch");
         } else if los {
             if rng.random::<f32>() < 3.0 / 4.0 {
                 if dist < 140.0 {
                     // Bouncer fan: 11 + loops shots from
                     // `gunangle - 50 - loops * 10`, stepping 10 degrees.
                     brain.gunangle = aim + rng.random_range(-25.0..=25.0_f32).to_radians();
+                    // GML `LilHunter/Alarm_1.gml:23`.
+                    boss_cue(commands, "sndLilHunterBouncer");
                     let mut addang = -50.0 - loop_count as f32 * 10.0;
                     for _ in 0..11 + loop_count as usize {
                         let ang = brain.gunangle + addang.to_radians();
@@ -1432,6 +1473,8 @@ fn lil_hunter_ai(
                         TimerMode::Once,
                     );
                     brain.gunangle = aim + rng.random_range(-15.0..=15.0_f32).to_radians();
+                    // GML `LilHunter/Alarm_1.gml:50`.
+                    boss_cue(commands, "sndLilHunterSniper");
                     for _ in 0..10 + loop_count as usize * 2 {
                         let sdir = glam::Vec2::from_angle(brain.gunangle);
                         fire_projectile(
@@ -1470,6 +1513,8 @@ fn lil_hunter_ai(
             // `GameCont.popolevel` in `Create_0` before any of their
             // `Alarm_1`s roll, so the whole batch shares the final level.
             brain.walk = 0.0;
+            // GML `LilHunter/Alarm_1.gml:71`.
+            boss_cue(commands, "sndLilHunterSummon");
             let waves = 1 + loop_count.saturating_sub(1) as usize;
             run.popolevel += waves as f32;
             for _ in 0..waves {
@@ -1528,6 +1573,11 @@ fn lil_hunter_ai(
     pos.0 += vel.0 * dt;
     resolve_prop_collision(&mut pos.0, def.radius, props.iter().copied());
     clamp_to_arena(&mut pos.0, def.radius);
+    // GML `LilHunter/Other_10.gml:27-30`.
+    if health.hp < health.max / 2 && !boss.halfhp {
+        boss.halfhp = true;
+        boss_cue(commands, "sndLilHunterHalfHP");
+    }
     fired
 }
 
@@ -1772,6 +1822,13 @@ fn throne_ai(
         brain.burst_left = 1;
         boss.pattern_index = 0;
         boss.attack_timer = GTimer::from_seconds(1.0 /* 30 ticks */, TimerMode::Once);
+        // GML `Nothing/Create_0.gml:1`. `burst_left` doubles as the hurt-damage
+        // accumulator below, so latch on `footstep` instead: it is only ever
+        // written while walking.
+        if boss.footstep == 0.0 {
+            boss.footstep = -1.0;
+            boss_cue(commands, "sndNothingStart");
+        }
     }
 
     // `with enemy { if id != other.id && object_index != Guardian { destroy } }`
@@ -1841,30 +1898,36 @@ fn throne_ai(
         boss.phase = BossPhase::Idle;
     }
 
-    // GML `Alarm_2`: mirrored Horror triplets, 6 rounds per volley tick.
-    if boss.special_timer.just_finished() && brain.ammo > 0 {
-        boss.special_timer = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
-        for flip in [1.0_f32, -1.0] {
-            for (dx, off) in [(40.0, 20.0_f32), (56.0, 0.0), (72.0, -20.0)] {
-                let ang = 270.0_f32.to_radians() + (brain.gunangle + off.to_radians()) * flip;
-                let sdir = glam::Vec2::from_angle(ang);
-                fire_projectile(
-                    commands,
-                    owner,
-                    epos + glam::Vec2::new(-dx * flip, 50.0),
-                    sdir,
-                    Team::Enemy,
-                    180.0,
-                    2,
-                    3.0,
-                    4.5,
-                    120.0,
-                    EnemyKind::Throne,
-                );
+    // GML `Alarm_2` (`Nothing/Alarm_3.gml:1-29`): mirrored Horror triplets, 6
+    // rounds per volley tick, and `sndNothingBeamEnd` once the magazine is dry.
+    if boss.special_timer.just_finished() {
+        if brain.ammo > 0 {
+            boss.special_timer = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
+            for flip in [1.0_f32, -1.0] {
+                for (dx, off) in [(40.0, 20.0_f32), (56.0, 0.0), (72.0, -20.0)] {
+                    let ang = 270.0_f32.to_radians() + (brain.gunangle + off.to_radians()) * flip;
+                    let sdir = glam::Vec2::from_angle(ang);
+                    fire_projectile(
+                        commands,
+                        owner,
+                        epos + glam::Vec2::new(-dx * flip, 50.0),
+                        sdir,
+                        Team::Enemy,
+                        180.0,
+                        2,
+                        3.0,
+                        4.5,
+                        120.0,
+                        EnemyKind::Throne,
+                    );
+                }
             }
+            fired = true;
+            brain.ammo -= 1;
+        } else {
+            // GML `Nothing/Alarm_3.gml:26-28`.
+            boss_cue(commands, "sndNothingBeamEnd");
         }
-        fired = true;
-        brain.ammo -= 1;
     }
 
     // GML `Alarm_1` (brain). While the beam charges the brain holds
@@ -1990,9 +2053,30 @@ fn throne_ai(
         }
     }
 
+    // GML `Nothing/Other_10.gml:3-13`: `sndhalfhp` is a three-state latch
+    // (0 -> mid line, 1 -> low line), so both lines need their own flag.
+    if boss.halfhp {
+        if !boss.lowhp && frac <= 0.4 {
+            boss.lowhp = true;
+            boss_cue(commands, "sndNothingLowHP");
+        }
+    } else if frac < 0.7 {
+        boss.halfhp = true;
+        boss_cue(commands, "sndNothingMidHP");
+    }
+
     // GML `Other_10` locomotion: stomp-step down + surge, capped at 4.
     if brain.walk > 0.0 {
         trauma.add(0.08);
+        // GML `Nothing/Draw_0.gml:5-13`: a footstep every 2.75 units of
+        // `footstep` while walking with a live player.
+        if player_pos.is_finite() {
+            boss.footstep = boss.footstep.max(0.0) + 0.4;
+            if boss.footstep > 2.75 {
+                boss.footstep -= 2.75;
+                boss_cue(commands, "sndNothingFootstep");
+            }
+        }
         pos.0.y += 30.0 * dt;
         gml_motion_add_clamp(&mut vel.0, boss.target, 2.0, 4.0, dt);
         brain.walk -= dt * 30.0;
@@ -2100,6 +2184,8 @@ fn throne_ii_ai(
         let mut exited = false;
         if boss.aux == 1.0 {
             brain.ammo += 1;
+            // GML `Nothing2/Alarm_1.gml:8`.
+            boss_cue(commands, "sndBigBallFire");
             brain.gunangle = aim + (30.0 + rng.random_range(0.0..=10.0)) * brain.strafe_dir;
             let sdir = glam::Vec2::from_angle(brain.gunangle);
             fire_projectile(
@@ -2150,6 +2236,11 @@ fn throne_ii_ai(
             fired = true;
             brain.walk = 0.0;
             brain.ammo += 1;
+            // GML `Nothing2/Alarm_1.gml:41`: the hose cue fires on the first
+            // round of the volley only (`if (shots == 0)` runs before `shots++`).
+            if brain.ammo == 1 {
+                boss_cue(commands, "sndExploGuardianFire");
+            }
             boss.attack_timer = GTimer::from_seconds(2.0 / 30.0, TimerMode::Once);
             if brain.ammo == (15 + loop_count * 5) as u8 {
                 brain.ammo = 0;
@@ -2162,6 +2253,8 @@ fn throne_ii_ai(
         }
         if !exited && boss.aux == 3.0 {
             // `Throne2Ball` ring with independent random speeds.
+            // GML `Nothing2/Alarm_1.gml:53`.
+            boss_cue(commands, "sndNothing2Ball");
             let count = 4 + loop_count as usize;
             let step = 360.0 / count as f32;
             let mut ang = rng.random_range(0.0..std::f32::consts::TAU);
@@ -2224,6 +2317,11 @@ fn throne_ii_ai(
         vel.0 = vel.0.normalize() * 15.0;
     }
     pos.0 += vel.0 * dt;
+    // GML `Nothing2/Other_10.gml:15-18`.
+    if health.hp < health.max / 2 && !boss.halfhp {
+        boss.halfhp = true;
+        boss_cue(commands, "sndNothing2HalfHP");
+    }
     let _ = trauma;
     fired
 }
@@ -2247,6 +2345,7 @@ fn hyper_ai(
     vel: &mut Velocity,
     pos: &mut Pos,
     state: &mut HyperState,
+    health: &Health,
     epos: glam::Vec2,
     player_pos: glam::Vec2,
     los: bool,
@@ -2289,6 +2388,8 @@ fn hyper_ai(
             // the fight keeps regenerating adds.
             hyper_ensure_orbit(commands, owner, epos, loop_count, false, run);
             state.crystals = true;
+            // GML `HyperCrystal/Alarm_1.gml:12`.
+            boss_cue(commands, "sndHyperCrystalSpawn");
             state.fastspin = 50.0;
             state.dist = 0.0;
             state.wantdist = 25.0;
@@ -2298,11 +2399,15 @@ fn hyper_ai(
             let total = hyper_orbit_count(loop_count);
             if live_crystals <= total / 2 {
                 state.crystals = false;
+                // GML `HyperCrystal/Alarm_1.gml:36`.
+                boss_cue(commands, "sndHyperCrystalRelease");
                 state.alarm1 = gml_alarm(50.0);
             } else {
                 state.wantdist = 80.0;
                 // GML `Alarm_1:40-46`: player out of sight.
                 if !los && state.intro {
+                    // GML `HyperCrystal/Alarm_1.gml:41`.
+                    boss_cue(commands, "sndHyperCrystalChargeExplo");
                     state.wantdist = 120.0;
                     state.nospin = 50.0;
                     state.alarm2 = gml_alarm(50.0);
@@ -2324,6 +2429,8 @@ fn hyper_ai(
             .filter(|(_, c)| c.distance(player_pos) < 140.0);
         match victim {
             Some((at, _)) if state.intro => {
+                // GML `HyperCrystal/Alarm_2.gml:5`.
+                boss_cue(commands, "sndHyperCrystalSearch");
                 commands.entity(*at).insert(HyperCrystalArm {
                     timer: gml_alarm(40.0),
                 });
@@ -2337,6 +2444,8 @@ fn hyper_ai(
     if !state.intro && los {
         state.intro = true;
         state.alarm3 = gml_alarm(2.0);
+        // GML `HyperCrystal/Alarm_1.gml:7`.
+        boss_cue(commands, "sndHyperCrystalAppear");
     }
     if state.alarm3.just_finished() {
         toast.show("HYPER CRYSTAL");
@@ -2347,6 +2456,16 @@ fn hyper_ai(
             },
         ));
         state.alarm3 = gml_alarm_off();
+    }
+
+    // GML `HyperCrystal/Other_10.gml:34-41`.
+    if health.hp < health.max / 2 && !state.halfhp {
+        state.halfhp = true;
+        boss_cue(commands, "sndHyperCrystalHalfHP");
+    }
+    if health.hp < health.max / 4 && !state.lowhp {
+        state.lowhp = true;
+        boss_cue(commands, "sndHyperCrystalLowHP");
     }
 
     false
@@ -2699,6 +2818,8 @@ fn technomancer_ai(
         state.main = true;
         state.visual = TechnoVisual::Appear;
         state.alarm5 = gml_alarm(17.0);
+        // GML `TechnoMancer/Alarm_4.gml:13`.
+        boss_cue(commands, "sndTechnomancerAppear");
     }
 
     // GML `Alarm_3` (`scrBossIntro(7)`), once the instance is awake.
@@ -2735,6 +2856,8 @@ fn technomancer_ai(
     match state.visual {
         // GML `Alarm_1:4-9`: finish appearing, then stand down as `main`.
         TechnoVisual::Appear => {
+            // GML `TechnoMancer/Alarm_1.gml:5`.
+            boss_cue(commands, "sndTechnomancerActivate");
             state.visual = TechnoVisual::Active;
             state.main = false;
             state.alarm5 = gml_alarm(17.0);
@@ -2744,13 +2867,19 @@ fn technomancer_ai(
             // GML `Alarm_1:13-27`. The revive gate is `random(5) < 6`, always
             // true in GML, so any visible corpse outranks emplacing turrets.
             if nearest_walkable(corpses, epos, mask).is_some() {
+                // GML `TechnoMancer/Alarm_1.gml:22`.
+                boss_cue(commands, "sndTechnomancerRevive");
                 state.alarm5 = gml_alarm(70.0);
                 state.alarm2 = gml_alarm(55.0);
             } else if (turrets as u32) < 4 * loops {
+                // GML `TechnoMancer/Alarm_1.gml:31`.
+                boss_cue(commands, "sndTechnomancerSpawnTurret");
                 state.alarm5 = gml_alarm(52.0);
                 state.alarm6 = gml_alarm(35.0);
             } else {
                 // GML `Alarm_1:36-46`: not the elected instance.
+                // GML `TechnoMancer/Alarm_1.gml:41`.
+                boss_cue(commands, "sndTechnomancerDisappear");
                 state.visual = TechnoVisual::Disappear;
                 state.alarm4 = gml_alarm(22.0);
                 state.main = false;
