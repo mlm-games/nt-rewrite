@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use web_time::{Duration, Instant};
 
 use rand::RngExt;
-use repame_audio::{Audio, AudioChannel, CueDef, Variation};
+use repame_audio::{Audio, AudioChannel, CueDef, CueRequest, Variation};
 
 use crate::App;
 
@@ -16,10 +16,9 @@ pub struct AudioHost {
     epoch: Instant,
     sounds: Option<PathBuf>,
     stems: HashSet<String>,
-    cues: HashSet<String>,
+    missing: HashSet<String>,
     tracks: HashSet<String>,
     amb_tracks: HashSet<String>,
-    missing: HashSet<String>,
     last_miss_log: Option<Instant>,
     music_want: Option<&'static str>,
     amb_want: Option<&'static str>,
@@ -59,7 +58,6 @@ impl AudioHost {
             epoch: Instant::now(),
             sounds,
             stems,
-            cues: HashSet::new(),
             tracks: HashSet::new(),
             amb_tracks: HashSet::new(),
             missing: HashSet::new(),
@@ -101,7 +99,7 @@ impl AudioHost {
     }
 
     fn play_cue(&mut self, cue: &repame_audio::Cue, slider: f32) {
-        if !self.sfx.is_live() || !self.ensure_cue(cue.name) {
+        if !self.sfx.is_live() || !self.request_cue(cue.name) {
             return;
         }
         let mut volume = cue.volume;
@@ -124,10 +122,12 @@ impl AudioHost {
             .play_at_ms(cue.name, volume, rate, 0.0, now_ms);
     }
 
-    fn ensure_cue(&mut self, stem: &str) -> bool {
-        if self.cues.contains(stem) {
-            return true;
-        }
+    /// Ask the bank for a stem, decoding off-thread on first sight.
+    ///
+    /// `Queued` drops this play and costs the frame nothing; the stem
+    /// becomes audible on a later frame. `Failed` is terminal, so the
+    /// stem goes in `missing` and is never requested again.
+    fn request_cue(&mut self, stem: &str) -> bool {
         if self.missing.contains(stem) {
             return false;
         }
@@ -143,13 +143,11 @@ impl AudioHost {
             pitch_wobble: 0.0,
             variation: Variation::RoundRobin,
         };
-        match self.sfx.load_cue(stem, def, &[bytes.as_slice()]) {
-            Ok(()) => {
-                self.cues.insert(stem.to_owned());
-                true
-            }
-            Err(e) => {
-                self.mark_missing(stem, &format!("decode failed: {e}"));
+        match self.sfx.request_cue(stem, def, &[bytes.as_slice()]) {
+            CueRequest::Ready => true,
+            CueRequest::Queued => false,
+            CueRequest::Failed(error) => {
+                self.mark_missing(stem, &format!("decode failed: {error}"));
                 false
             }
         }
