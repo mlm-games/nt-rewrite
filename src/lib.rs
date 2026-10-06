@@ -230,6 +230,9 @@ pub struct App {
     /// Previous frame's app state (entering InGame snaps the camera on
     /// the fresh player instead of swooping from the menu look point).
     was_state: AppState,
+    /// Web-only QUIT latch: `process::exit` traps the wasm instance, so the
+    /// web shell parks on an empty root instead.
+    quit_web: bool,
     last_splash_mode: u8,
     letterbox_frame: f32,
     /// Previous fixed step's app state (drives the spiral lifecycle in
@@ -387,6 +390,7 @@ impl App {
             },
             was_transitioning: false,
             was_state: AppState::default(),
+            quit_web: false,
             last_splash_mode: 0,
             letterbox_frame: 0.0,
             adv_state: AppState::default(),
@@ -3339,6 +3343,15 @@ impl App {
             .get_resource::<crate::state::QuitRequested>()
             .is_some_and(|q| q.0)
         {
+            // `process::exit` is `unreachable` on wasm32-unknown-unknown: it
+            // traps the instance and strands every winit `RefCell` guard,
+            // so the next event panics with "RefCell already borrowed".
+            #[cfg(target_arch = "wasm32")]
+            {
+                self.quit_web = true;
+                return ZStack(Modifier::new().fill_max_size());
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             std::process::exit(0);
         }
 
@@ -5295,6 +5308,12 @@ pub fn menu_overlay_lines(kind: MenuOverlay, world: &mut World) -> Vec<String> {
 /// Root view: playable game view (sim + render + vortex + HUD + menus).
 /// Thin wrapper over [`App::view`] so `main.rs` stays trivial.
 pub fn root_view(sched: &mut Scheduler, ctx: &RenderContext, app: &mut App, dt: Duration) -> View {
+    // After a web QUIT the shell keeps servicing frames; stop the sim and
+    // paint nothing so the tab can just be closed.
+    #[cfg(target_arch = "wasm32")]
+    if app.quit_web {
+        return ZStack(Modifier::new().fill_max_size());
+    }
     app.view(sched, ctx, dt)
 }
 
