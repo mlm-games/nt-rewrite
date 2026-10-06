@@ -823,6 +823,69 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
         }
     }
 
+    if resume.is_some() {
+        // GML `Vlambeer/Create_0:87-105`: a just-loaded run re-runs the
+        // level-entry decision, and a banked Patience pick suppresses the
+        // skill arm (`_can_skill`) so it is not re-offered on the resumed
+        // floor. `grant_patience_pick` runs after the decision, matching the
+        // GML order (GenCont's create block is what follows LevCont's).
+        let offer = {
+            let player_e = {
+                let mut q = world.query_filtered::<Entity, With<crate::comps_a::Player>>();
+                q.iter(world).next()
+            };
+            let race = player_e
+                .and_then(|e| world.get::<RaceState>(e))
+                .map_or(RaceId::Chicken, |r| r.race);
+            player_e.and_then(|e| {
+                world.resource_scope(|world, mut run: Mut<Run>| {
+                    let mut player = world.get_mut::<Player>(e)?;
+                    if crate::state::choose_level_entry(
+                        player.mutation_picks_owed,
+                        0,
+                        u32::from(player.ultra_pick_owed),
+                        run.patiencepick,
+                    ) != crate::state::LevelEntry::LevCont
+                    {
+                        return None;
+                    }
+                    Some(crate::progression::level_entry_draft(
+                        &mut run,
+                        &mut player,
+                        race,
+                    ))
+                })
+            })
+        };
+        match offer {
+            Some(crate::progression::DraftOffer::Ultra(choices)) => {
+                world.insert_resource(PendingUltra { choices });
+                world.resource_mut::<crate::state::Paused>().0 = true;
+            }
+            Some(crate::progression::DraftOffer::Mutation(choices)) => {
+                world.insert_resource(PendingMutation { choices });
+                world.resource_mut::<crate::state::Paused>().0 = true;
+            }
+            Some(crate::progression::DraftOffer::None) | None => {}
+        }
+    }
+
+    {
+        // GML `GenCont/Create_0:47-52` for the run-start generation pass, so a
+        // resumed run banks Patience's pick the same way a floor advance does.
+        let player_e = {
+            let mut q = world.query_filtered::<Entity, With<crate::comps_a::Player>>();
+            q.iter(world).next()
+        };
+        if let Some(e) = player_e {
+            world.resource_scope(|world, mut run: Mut<Run>| {
+                if let Some(mut player) = world.get_mut::<Player>(e) {
+                    crate::progression::grant_patience_pick(&mut run, &mut player);
+                }
+            });
+        }
+    }
+
     if resume.is_none() && loadout.crown != CrownKind::None {
         world
             .resource_mut::<Toast>()

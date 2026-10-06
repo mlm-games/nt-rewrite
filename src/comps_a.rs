@@ -489,6 +489,14 @@ pub struct Run {
     /// entered floor (run start + every advance), driving the game-over
     /// roadmap. Capped so co-op marathons can't grow it unbounded.
     pub waypoints: Vec<Waypoint>,
+    /// GML `GameCont.patient`: one-shot latch, so Patience's free pick is
+    /// banked at most once per run (`GenCont/Create_0:48`).
+    pub patient: bool,
+    /// GML `GameCont.patiencepick`: a banked free pick still unspent. Held
+    /// so a resumed run does not re-open the draft for it on the floor it
+    /// resumes (`Vlambeer/Create_0:96`), and cleared by `LevCont/Create_0:20`
+    /// when the draft does open.
+    pub patiencepick: bool,
 }
 
 impl Default for Run {
@@ -524,6 +532,8 @@ impl Default for Run {
             tutorial: false,
             blood_crown: false,
             waypoints: Vec::new(),
+            patient: false,
+            patiencepick: false,
         }
     }
 }
@@ -663,7 +673,6 @@ pub struct Player {
 
     pub euphoria: bool,
 
-    pub patience_bonus: bool,
     pub patience_used: bool,
 
     pub ultra: Option<UltraMutationId>,
@@ -737,7 +746,6 @@ impl Default for Player {
             throne_butt: false,
             heavy_heart_wanted: false,
             euphoria: false,
-            patience_bonus: false,
             patience_used: false,
             ultra: None,
             ultra_damage_mult: 1.0,

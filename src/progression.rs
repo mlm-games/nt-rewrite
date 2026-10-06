@@ -9,10 +9,6 @@
 //! Deferred, with reason:
 //! - `setup_run`: needs save-loadout (`race_loadout`, skins) + weapons table
 //!   + world spawn; lands with the save phase.
-//! - `begin_between_floor_skill_picks` (public system): needs mutation-pick
-//!   UI state; lands with the UI phase. Its resource flow (pause +
-//!   `PendingMutation`/`PendingUltra`) is ported as a private helper because
-//!   `tick_portal_suck` / `handle_mutation_choice` call it.
 //! - `starting_ammo_for`: needs the `WEAPONS` ammo table; lands with the
 //!   weapons phase (ammo mapping now rides `weapon_runtime`).
 //! - `tick_floor_transition` stage 2 runs the full bevy law: fresh plan +
@@ -644,6 +640,20 @@ pub fn try_recharge_strong_spirit(player: &mut Player, health: &Health) {
     player.try_recharge_strong_spirit(health);
 }
 
+/// GML `GenCont/Create_0:47-52`: Patience ("MUTATE LATER") banks one free
+/// mutation pick the next time a floor is generated, once per run. The
+/// grant lands in the generation pass, which GML only reaches when `LevCont`
+/// was not chosen for that level, so the pick waits a floor rather than
+/// opening a draft on the spot.
+pub fn grant_patience_pick(run: &mut Run, player: &mut Player) {
+    if run.patient || !player.mutations.contains(&MutationId::Patience) {
+        return;
+    }
+    run.patient = true;
+    run.patiencepick = true;
+    player.mutation_picks_owed = player.mutation_picks_owed.saturating_add(1);
+}
+
 /// Queue the loading-screen floor transition (bevy
 /// `try_start_pending_floor_gen` parity, including the per-area vortex
 /// `SpiralCtl` re-warm the ambience duck keys off).
@@ -740,12 +750,7 @@ pub fn roll_mutations_with_for(
         want_base += 1;
     }
 
-    if player.patience_bonus && !destiny {
-        want_base = 4;
-    }
     let want = pool.len().min(want_base);
-
-    player.patience_bonus = false;
 
     for _ in 0..want {
         let idx = rng.random_range(0..pool.len());
@@ -1124,7 +1129,6 @@ pub fn apply_mutation(
         }
         MutationId::Patience => {
             player.patience_used = true;
-            player.patience_bonus = true;
         }
     }
 
@@ -2531,9 +2535,27 @@ pub fn tick_portal_suck(
     }
     let _ = &mut health;
 
-    if player.ultra_pick_owed || player.mutation_picks_owed > 0 {
+    // A floor advance is never a just-loaded room start, so the Patience
+    // skill arm is never suppressed here (`Vlambeer/Create_0:96`).
+    if crate::state::choose_level_entry(
+        player.mutation_picks_owed,
+        0,
+        u32::from(player.ultra_pick_owed),
+        false,
+    ) == crate::state::LevelEntry::LevCont
+    {
         deferred.0 = true;
-        begin_between_floor_skill_picks(&mut commands, &mut player, race, &mut paused);
+        match level_entry_draft(&mut run, &mut player, race) {
+            DraftOffer::Ultra(choices) => {
+                commands.insert_resource(PendingUltra { choices });
+                paused.0 = true;
+            }
+            DraftOffer::Mutation(choices) => {
+                commands.insert_resource(PendingMutation { choices });
+                paused.0 = true;
+            }
+            DraftOffer::None => paused.0 = false,
+        }
         if player.mutation_picks_owed == 0 && !player.ultra_pick_owed {
             if !paused.0 {
                 deferred.0 = false;
@@ -2582,43 +2604,39 @@ fn unlock_held_crown(
     dirty.0 = true;
 }
 
-/// Between-floor skill picks. Private core of the deferred
-/// `begin_between_floor_skill_picks` (pause + pending-pick resources);
-/// the public system with mutation-pick UI state lands with the UI
-/// phase.
-fn begin_between_floor_skill_picks(
-    commands: &mut Commands,
-    player: &mut Player,
-    race: RaceId,
-    paused: &mut crate::state::Paused,
-) {
+/// What GML's `LevCont` construction owes the player at a level entry.
+pub enum DraftOffer {
+    None,
+    Ultra(Vec<UltraMutationId>),
+    Mutation(Vec<MutationId>),
+}
+
+/// GML `LevCont/Create_0`: the level-entry draft. Ultra first (it only opens
+/// once the player has hit Level Ultra), then owed mutation picks; a roll
+/// that comes up empty burns one owed pick and rolls again, so a pool
+/// exhausted by the mutations already taken drains the debt instead of
+/// opening an empty screen.
+///
+/// The banked Patience pick is consumed by the draft *existing*, not by what
+/// it shows, so `patiencepick` clears on entry (GML
+/// `LevCont/Create_0:18-21`) and the next floor's skill arm is live again.
+pub fn level_entry_draft(run: &mut Run, player: &mut Player, race: RaceId) -> DraftOffer {
+    run.patiencepick = false;
     if player.ultra_pick_owed && player.ultra.is_none() && player.level >= 10 {
-        paused.0 = true;
-        let choices = ultra_choices_for_crown(race, player.crown == CrownKind::Destiny);
-        commands.insert_resource(PendingUltra { choices });
-
-        return;
+        return DraftOffer::Ultra(ultra_choices_for_crown(
+            race,
+            player.crown == CrownKind::Destiny,
+        ));
     }
-
-    if player.mutation_picks_owed > 0 {
+    while player.mutation_picks_owed > 0 {
         let choices = roll_mutations_for(player, race);
         if choices.is_empty() {
-            while player.mutation_picks_owed > 0 {
-                let c = roll_mutations_for(player, race);
-                if c.is_empty() {
-                    player.mutation_picks_owed = player.mutation_picks_owed.saturating_sub(1);
-                } else {
-                    paused.0 = true;
-                    commands.insert_resource(PendingMutation { choices: c });
-                    return;
-                }
-            }
-            paused.0 = false;
-            return;
+            player.mutation_picks_owed = player.mutation_picks_owed.saturating_sub(1);
+            continue;
         }
-        paused.0 = true;
-        commands.insert_resource(PendingMutation { choices });
+        return DraftOffer::Mutation(choices);
     }
+    DraftOffer::None
 }
 
 /// GML `SitDown`: sitting on the fallen throne (E at the sit zone)
@@ -2777,6 +2795,17 @@ pub fn tick_floor_transition(
             // `scrCrownCheck` at populate time).
             run.tutorial = false;
             run.blood_crown = player.crown == crate::data::CrownKind::Blood;
+            // GML `GenCont/Create_0` runs its whole create block before the
+            // floor is built, so the banked Patience pick and the run save
+            // both land ahead of generation.
+            grant_patience_pick(&mut run, &mut player);
+            // GML `Vlambeer/Create_0:111-118`: every level entered outside a
+            // just-loaded continue writes the run save. Without this the
+            // save on disk stays at the last floor that reached a draft, so
+            // closing the app mid-run resumes on the wrong floor.
+            commands.queue(|world: &mut World| {
+                let _ = crate::run_save::save_run(world);
+            });
             let mut plan = crate::worldgen::generate_level(&run);
             // Player landing first (plan-space; `spawn_level` builds the
             // same mask from these cells, so placement below agrees).

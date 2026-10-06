@@ -665,7 +665,7 @@ pub fn begin_continued_run(world: &mut World) -> Result<(), String> {
     world.init_resource::<BootFlags>();
     {
         let mut flags = world.resource_mut::<BootFlags>();
-        if flags.recontinued_times > 2 {
+        if recontinue_deletes_save(flags.recontinued_times) {
             crate::run_save::delete_run_save();
         }
         flags.recontinued_times += 1;
