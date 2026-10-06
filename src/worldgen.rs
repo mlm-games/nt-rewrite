@@ -2496,6 +2496,45 @@ fn populate(
         }
     }
 
+    // GML `scrPopulate.gml:358-372`: the Labs last subarea seeds a
+    // `TechnoMancer` on every enemy site more than 160 px from the sentinel
+    // and more than 120 px from an already-seeded one, then culls back to
+    // `2 + _loops` by dropping the ones furthest from the sentinel. Each
+    // survivor lays six `PortalClear`s at `orandom(60)`.
+    if plan.boss == Some(EnemyKind::Technomancer) {
+        let cap = 2 + run.loop_count;
+        let sentinel = Vec2::splat(TILE as f32 * 0.5);
+        let mut sites: Vec<Vec2> = Vec::new();
+        for (_, at) in &plan.enemies {
+            if at.distance(sentinel) <= 160.0 {
+                continue;
+            }
+            if sites.iter().any(|site| site.distance(*at) <= 120.0) {
+                continue;
+            }
+            sites.push(*at);
+        }
+        sites.sort_by(|a, b| {
+            a.distance_squared(sentinel)
+                .total_cmp(&b.distance_squared(sentinel))
+        });
+        sites.truncate(cap as usize);
+        plan.boss = None;
+        for at in sites {
+            for _ in 0..6 {
+                events.push(PopulationEvent::PortalClear {
+                    pos: at
+                        + Vec2::new(rng.random_range(-60.0..60.0), rng.random_range(-60.0..60.0)),
+                    scale: 1.0,
+                });
+            }
+            events.push(PopulationEvent::Enemy {
+                kind: EnemyKind::Technomancer,
+                pos: at,
+            });
+        }
+    }
+
     // GML `scrPopulate.gml:239-253`: sewers subarea 1 hides a single
     // `PizzaEntrance` on a floor tile, and `PizzaEntrance/Create_0:3-5`
     // clears every `prop` within 64 px of it. The tile predicate GML uses
