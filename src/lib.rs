@@ -40,11 +40,17 @@
 //! [`SpiralCtl`] steps at the fixed cadence inside [`App::advance`]
 //! (sim-pure); the sim schedule in `schedule.rs` is unchanged.
 
+// `CallbackResources::insert` proves `T: Send + Sync`, and wgpu's resource
+// graph (`ContextWgpuCore` -> `Hub` -> `Global` -> registry -> `Vec`) is deep
+// enough to exceed the default trait-solver recursion depth.
+#![recursion_limit = "256"]
+
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use web_time::Duration;
 
+use crate::shadow_pass::{ShadowPass, ShadowSnapshot};
 use crate::vortex_pass::{VARD_VARIANTS, VortexPass, VortexTexture};
 use bevy_ecs::prelude::*;
 use glam::Vec2;
@@ -80,8 +86,9 @@ use crate::render::{
     fog_sprites, fx_instances, fx_texts, gml_camera_step, gml_view_size, hud_gui_texts_dp,
     hud_sprites, letterbox_sprites, menu_gui_texts, menu_gui_texts_dp, menu_gui_texts_vw,
     menu_sprites, pause_button_sprites, portal_indicator_sprites, settings_slider_hit,
-    settings_slider_value, shadow_sprites, sideart_sprites, spiral_figures, splash_sprites,
-    srgb_to_linear, stamp_z, title_cam_focus, title_camera_step, touch_sprites, view_rect_world,
+    settings_slider_value, shadow_color, shadow_sprites, sideart_sprites, spiral_figures,
+    splash_sprites, srgb_to_linear, stamp_z, title_cam_focus, title_camera_step, touch_sprites,
+    view_rect_world,
     world_camera, world_instances_cached,
 };
 use crate::schedule::build_sim_schedule;
@@ -125,6 +132,7 @@ pub mod render;
 pub mod run_save;
 pub mod savedata_part;
 pub mod schedule;
+pub mod shadow_pass;
 pub mod secrets;
 pub mod setup;
 pub mod spatial;
@@ -3544,6 +3552,22 @@ impl App {
         let mut front_chrome_sprites: Vec<SpriteInstance> = Vec::new();
         let mut spiral_figure_sprites: Vec<SpriteInstance> = Vec::new();
         let mut cover_hud_sprites: Vec<SpriteInstance> = Vec::new();
+        // GML `scrGameIsGenerationScreen` verbatim: while the generation
+        // conts own the draw (`GenCont` behind Loading, `LevCont` behind
+        // the mutation/ultra offer) the room draws NOTHING but the spiral
+        // + cover text - the old floor sits under an opaque vortex backdrop
+        // and would paint through the fullscreen pass (the "tiles over the
+        // vortex" bug). The campfire title is NOT a generation screen for
+        // draw purposes: `MenuGen` builds the camp, then `Menu` (whose draw
+        // scripts own the chrome, not `TopCont`) draws spiral remnant +
+        // camp + pods + portraits, so TopCont-sourced HUD bars stay off
+        // but the Menu chrome stays on.
+        let generation_screen = spiral_cover
+            || matches!(
+                menu_kind,
+                Some(MenuOverlay::Loading) | Some(MenuOverlay::Mutation)
+            );
+        let playing = !generation_screen;
         let (mut sprites, texts) = if self.assets.is_some() {
             let assets = self.assets.as_ref().expect("checked");
             // Cursor world position for the GML crosshair distance
@@ -3561,22 +3585,6 @@ impl App {
             // lottery HUD bars under floor tiles. Push order matches rung
             // order, so the canvas path (push-ordered) and the GPU path
             // (z-sorted) agree.
-            // GML `scrGameIsGenerationScreen` verbatim: while the generation
-            // conts own the draw (`GenCont` behind Loading, `LevCont` behind
-            // the mutation/ultra offer) the room draws NOTHING but the spiral
-            // + cover text - the old floor sits under an opaque vortex backdrop
-            // and would paint through the fullscreen pass (the "tiles over the
-            // vortex" bug). The campfire title is NOT a generation screen for
-            // draw purposes: `MenuGen` builds the camp, then `Menu` (whose draw
-            // scripts own the chrome, not `TopCont`) draws spiral remnant +
-            // camp + pods + portraits, so TopCont-sourced HUD bars stay off
-            // but the Menu chrome stays on.
-            let generation_screen = spiral_cover
-                || matches!(
-                    menu_kind,
-                    Some(MenuOverlay::Loading) | Some(MenuOverlay::Mutation)
-                );
-            let playing = !generation_screen;
             let mut s = if playing {
                 shadow_sprites(&mut self.sim.world, assets)
             } else {
@@ -4172,6 +4180,95 @@ impl App {
         };
 
         let staging = self.staging.clone();
+        // GML `shad`: `BackCont` stamps every `scrShadows` emitter into ONE
+        // surface and blits it once at 0.4, so overlapping wall shadows never
+        // darken each other. `crate::shadow_pass` reproduces that with an
+        // offscreen mask, and it has to paint BETWEEN the floor and everything
+        // above it - which the single world batch cannot express. So when the
+        // floor has stamps, split the batch at the shadow rung and mount the
+        // pass between the two viewports. No stamps (a generation screen
+        // draws no room, and the placeholder path has no assets) keeps the
+        // single-viewport path untouched.
+        let stamps = if playing {
+            self.static_world_cache.wall_shadows()
+        } else {
+            Arc::new([])
+        };
+        let split_shad = self.assets.is_some() && !stamps.is_empty();
+        let (floor_frame, display_frame) = if split_shad {
+            let (below, above): (Vec<SpriteInstance>, Vec<SpriteInstance>) = display_frame
+                .sprites
+                .iter()
+                .cloned()
+                .partition(|s| s.z < Z_SHADOW);
+            let floor = Arc::new(FrameInput {
+                sprites: below,
+                texts: Vec::new(),
+                background: display_frame.background,
+                overlay_color: None,
+                ..display_frame.as_ref().clone()
+            });
+            let rest = Arc::new(FrameInput {
+                sprites: above,
+                background: None,
+                ..display_frame.as_ref().clone()
+            });
+            (Some(floor), rest)
+        } else {
+            (None, display_frame)
+        };
+        let floor_view = floor_frame.map(|input| {
+            let mut view = Viewport2dGpuWithIdShared(
+                input,
+                GeomHandle::new(),
+                self.assets
+                    .as_ref()
+                    .map(|a| a.take_uploads())
+                    .unwrap_or_default(),
+                self.assets
+                    .as_ref()
+                    .map(|a| a.batch_desc())
+                    .unwrap_or_default(),
+                "viewport2d.floor",
+                |_| {},
+            );
+            view.modifier = view.modifier.hit_passthrough();
+            view
+        });
+        let shadow_view = stamps.is_empty().then(|| {
+            let box_dp = self.gml_frame().box_dp;
+            Embedded(
+                Modifier::new()
+                    .absolute()
+                    .size(Dp(box_dp[2]), Dp(box_dp[3]))
+                    .offset(Some(Dp(box_dp[0])), Some(Dp(box_dp[1])), None, None)
+                    .hit_passthrough(),
+                Callback::new(ShadowPass::new(
+                    ShadowSnapshot {
+                        stamps,
+                        cam: self.cam,
+                        world_size,
+                        viewport_dp,
+                        color: {
+                            let c = shadow_color(area);
+                            [
+                                srgb_to_linear(c[0]),
+                                srgb_to_linear(c[1]),
+                                srgb_to_linear(c[2]),
+                            ]
+                        },
+                    },
+                    self.assets
+                        .as_ref()
+                        .map(|a| a.batch_desc())
+                        .unwrap_or_default(),
+                    self.assets
+                        .as_ref()
+                        .map(|a| a.take_uploads())
+                        .unwrap_or_default(),
+                )),
+            )
+        });
         let viewport = if self.assets.is_some() {
             let geom = GeomHandle::new();
             let uploads = self
@@ -4394,6 +4491,12 @@ impl App {
             if let Some(vortex) = vortex_layer.take() {
                 layers.push(vortex);
             }
+        }
+        if let Some(floor) = floor_view {
+            layers.push(floor);
+        }
+        if let Some(shadow) = shadow_view {
+            layers.push(shadow);
         }
         layers.push(viewport);
         if vortex_above {

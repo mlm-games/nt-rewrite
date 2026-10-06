@@ -1241,6 +1241,16 @@ pub const GRID_OVERLAP: f32 = 1.0;
 pub const Z_FLOOR: f32 = -3.0;
 pub const Z_GROUND_DETAIL: f32 = -2.5;
 pub const Z_SHADOW: f32 = -2.0;
+/// GML `FloorExplo` is created at depth 0 (its `Create_0` runs when a wall
+/// breaks), so its `sprFloor<area>Explo` patch draws OVER `BackCont`'s
+/// `shad` blit, not under it: at `Z_FLOOR` the 0.4 `shadow_color` quad
+/// landed on the rubble and dropped its mean RGB from (61,48,43) to
+/// ~(37,29,26). GML would also put it above the wall `Bot` (same depth-0
+/// creation order), but a `Bot` never overlaps a hole cell - `Wall/Create_0`
+/// only draws it when `place_meeting(x, y + 16, Floor)` hits floor, and the
+/// destroyed wall's own south cell is the hole - so any rung in (-2, 0) is
+/// pixel-identical.
+pub const Z_FLOOR_EXPLO: f32 = -1.0;
 pub const Z_WORLD: f32 = 0.0;
 pub const Z_WALL_SUBTOP: f32 = 1.5;
 pub const Z_FX: f32 = 1.0;
@@ -1965,11 +1975,22 @@ pub struct StaticWorldCache {
     wall_trans: Arc<[SpriteInstance]>,
     wall_top: Arc<[SpriteInstance]>,
     wall_centers: Arc<[Vec2]>,
+    /// GML `scrShadows` wall half: every flipped `Out` sprite at
+    /// `(x, y + 16)`, untinted. These are COVERAGE stamps, not draws - they
+    /// go into the `shad` surface (`crate::shadow_pass`) that `BackCont`
+    /// composites once, never into the batch as per-wall 0.4 quads.
+    wall_shadows: Arc<[SpriteInstance]>,
 }
 
 impl StaticWorldCache {
     pub fn clear(&mut self) {
         *self = Self::default();
+    }
+
+    /// The `shad` coverage stamps for the current floor. Empty until
+    /// [`world_instances_cached`] has run once for this key.
+    pub fn wall_shadows(&self) -> Arc<[SpriteInstance]> {
+        self.wall_shadows.clone()
     }
 }
 
@@ -2081,6 +2102,7 @@ pub fn world_instances_cached(
     let cached_wall_trans = reuse.then(|| cache.wall_trans.clone());
     let cached_wall_top = reuse.then(|| cache.wall_top.clone());
     let cached_wall_centers = reuse.then(|| cache.wall_centers.clone());
+    let cached_wall_shadows = reuse.then(|| cache.wall_shadows.clone());
     let mut out = cached_prefix
         .as_deref()
         .map(|sprites| sprites.to_vec())
@@ -2089,7 +2111,6 @@ pub fn world_instances_cached(
         .as_deref()
         .map(|sprites| sprites.to_vec())
         .unwrap_or_default();
-    let mut wall_shadows = Vec::new();
     let mut wall_trans = cached_wall_trans
         .as_deref()
         .map(|sprites| sprites.to_vec())
@@ -2101,6 +2122,10 @@ pub fn world_instances_cached(
     let mut wall_centers = cached_wall_centers
         .as_deref()
         .map(|centers| centers.to_vec())
+        .unwrap_or_default();
+    let mut wall_shadows = cached_wall_shadows
+        .as_deref()
+        .map(|sprites| sprites.to_vec())
         .unwrap_or_default();
     if !reuse {
         wall_centers = world
@@ -2193,11 +2218,10 @@ pub fn world_instances_cached(
                 if let Some(mut s) =
                     place_top_left(assets, explo_png, frame, top_left, [1.0; 4], GRID_OVERLAP)
                 {
-                    s.z = Z_FLOOR;
+                    s.z = Z_FLOOR_EXPLO;
                     out.push(s);
                 }
             }
-            let floor_end = out.len();
             // Walls: GML law (`GenCont/Alarm_0` + `SubTopCont/Draw_0`): Out
             // skirt always (neighbor-cropped), Bot iff the screen-south tile is
             // floor (`place_meeting(x, y + 16, Floor)` on the wall instance),
@@ -2309,9 +2333,16 @@ pub fn world_instances_cached(
             }
             // Wall drop shadows (GML `scrShadows` wall half: the full Out
             // sprite flipped under each wall with no `TopSmall` at
-            // `(x, y + 16)`).
-            if has(wall_out_png) {
-                let shadow_tint = shadow_color(area);
+            // `(x, y + 16)`). GML stamps these into the `shad` surface with
+            // `c_black` at alpha 1 (`scrShadows.gml:29`), so they are untinted
+            // COVERAGE quads: the surface holds a union, never a sum, and
+            // `BackCont/Draw_0:11-12` composites that union once at
+            // `draw_set_alpha(0.4)` fogged to `shadow_color`. They are cached
+            // out of the batch for `crate::shadow_pass` to build that surface -
+            // drawn per-wall in the batch they stacked (a 24x32 sprite on a
+            // 16px grid overlaps 8px sideways and 16px down, so 2-3 deep:
+            // 0.64/0.784 where GML is a flat 0.4).
+            if has(wall_out_png) && wall_shadows.is_empty() {
                 for cell in walls.iter().rev() {
                     let (wx, wy) = (cell.0, cell.1);
                     if trans_set.contains(&(wx, wy + 1)) {
@@ -2325,18 +2356,13 @@ pub fn world_instances_cached(
                         false,
                         true,
                         0.0,
-                        // GML `scrShadows.gml:29` draws the wall `outspr` flipped
-                        // into the `shad` surface with `c_black` at alpha 1; the
-                        // surface itself is fogged to `shadow_color` at 0.4 by
-                        // `BackCont/Draw_0:11-12`.
-                        shadow_tint,
+                        [1.0; 4],
                     ) {
                         s.z = Z_SHADOW;
                         wall_shadows.push(s);
                     }
                 }
             }
-            out.splice(floor_end..floor_end, wall_shadows.drain(..));
         }
         if let Some(key) = key {
             cache.key = Some(key);
@@ -2345,6 +2371,7 @@ pub fn world_instances_cached(
             cache.wall_trans = Arc::from(wall_trans.clone());
             cache.wall_top = Arc::from(wall_top.clone());
             cache.wall_centers = Arc::from(wall_centers.clone());
+            cache.wall_shadows = Arc::from(wall_shadows.clone());
         }
     }
 
@@ -11557,6 +11584,10 @@ mod verbatim_ui_layers {
     #[test]
     fn z_ladder_orders_chrome_above_world() {
         assert!(Z_SHADOW < Z_WORLD);
+        // GML `FloorExplo` is a depth-0 instance, so its rubble patch draws
+        // over the `shad` blit and (irrelevant overlap aside) over the Bot.
+        assert!(Z_FLOOR_EXPLO > Z_SHADOW);
+        assert!(Z_FLOOR_EXPLO < Z_WORLD);
         assert!(Z_WORLD < Z_FX);
         assert!(Z_FX <= Z_BLOOM);
         assert!(Z_BLOOM < Z_FOG);
