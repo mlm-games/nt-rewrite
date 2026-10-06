@@ -11442,6 +11442,7 @@ pub fn fx_texts(world: &mut World) -> Vec<WorldText> {
             pos: Vec2::new(n.x, n.y),
             color: n.color,
             size: NUMBER_TEXT_SIZE,
+            font_family: None,
         })
         .collect()
 }
