@@ -475,6 +475,7 @@ pub fn boss_ai(
             &mut Pos,
             &mut Health,
             Option<&mut SpriteAnim>,
+            Option<&mut crate::comps_b::EnemySprites>,
             Option<&HurtAnim>,
             Option<&mut TechnomancerState>,
             Option<&mut HyperState>,
@@ -556,6 +557,7 @@ pub fn boss_ai(
         mut pos,
         health,
         mut anim,
+        mut sprites,
         hurt,
         mut tech,
         mut hyper,
@@ -600,6 +602,7 @@ pub fn boss_ai(
                 &wall_shapes,
                 &mask,
                 run.loop_count,
+                sprites.as_deref_mut(),
             ),
             EnemyKind::BigDog => big_dog_ai(
                 &mut commands,
@@ -848,10 +851,12 @@ fn big_bandit_ai(
     walls: &[(glam::Vec2, (i32, i32))],
     mask: &FloorMask,
     loops: u32,
+    sprites: Option<&mut crate::comps_b::EnemySprites>,
 ) -> bool {
     let mut rng = rand::rng();
     let frames = dt * crate::SIM_HZ as f32;
     let mut fired = false;
+    let mut sprites = sprites;
 
     // GML `Create_0`: `alarm[1] = 1`, `chargewait = 2`, `charge = 0`,
     // `ammo = 10`, `shot = 0`, `walk = 0`, `meleedamage = 0`, `intro = 0`.
@@ -909,6 +914,7 @@ fn big_bandit_ai(
         if dist < 240.0 || !intro {
             if los && dist > 48.0 && intro {
                 if rng.random_range(0.0..3.0) < 2.0 {
+                    boss_cue(commands, "sndBigBanditStartShoot");
                     brain.ammo = if loops > 0 { 15 } else { 10 };
                     // GML scopes the whole burst arm on `GameCont.loops`, so
                     // on loop 0 only `ammo` is raised and `alarm[2]` is never
@@ -933,6 +939,14 @@ fn big_bandit_ai(
                     boss.attack_timer = gml_alarm_off();
                     brain.walk = 0.0;
                     trauma.add(0.08);
+                    // GML `Alarm_3:5-14` reassigns the whole strip set and
+                    // cues the wind-up; `enemy_anim_switch` then picks Tell
+                    // while it stands still and Dash once it moves.
+                    if let Some(set) = sprites.as_deref_mut() {
+                        set.idle = "images/sprBanditBossTell.png";
+                        set.walk = Some("images/sprBanditBossDash.png");
+                    }
+                    boss_cue(commands, "sndBigBanditMeleeStart");
                 }
             }
         }
@@ -955,6 +969,13 @@ fn big_bandit_ai(
     // GML `Alarm_2` (shotgun burst, one `EnemyBullet1` every 4 steps).
     if boss.special_timer.just_finished() {
         if brain.ammo > 0 {
+            // GML `Alarm_2:2` `if ammo = 10` is an assignment, so the branch
+            // runs on the first round of every burst: the laugh plus the
+            // plain enemy-fire blip.
+            if brain.ammo == 15 || brain.ammo == 10 {
+                boss_cue(commands, "sndBigBanditShootLaugh");
+                boss_cue(commands, "sndEnemyFire");
+            }
             brain.fire = 1;
             brain.ammo -= 1;
             if brain.ammo == 7 && loops > 0 {
@@ -969,8 +990,9 @@ fn big_bandit_ai(
                 3.0,
                 dt,
             );
+            // GML `Alarm_2:14` `orandom(15)` is `random(15) - 7.5`.
             let sdir = glam::Vec2::from_angle(
-                brain.gunangle + rng.random_range(-15.0f32..=15.0).to_radians(),
+                brain.gunangle + rng.random_range(-7.5f32..=7.5).to_radians(),
             );
             commands.spawn((
                 GameCleanup,
@@ -987,11 +1009,13 @@ fn big_bandit_ai(
                 ProjectileTyp(1),
                 ProjectileFade("images/sprEnemyBulletHit.png"),
                 Velocity(sdir * 240.0),
-                Pos(epos + sdir * 20.0),
+                // GML `Alarm_2:11` spawns the bullet on the muzzle point.
+                Pos(epos),
             ));
             fired = true;
         } else {
-            // GML `Alarm_2:22`.
+            // GML `Alarm_2:20-22`.
+            boss_cue(commands, "sndBigBanditStopShoot");
             boss.attack_timer = gml_alarm(60.0 + rng.random_range(0.0..10.0));
         }
     }
@@ -1003,6 +1027,7 @@ fn big_bandit_ai(
             boss.phase = BossPhase::Charging;
             boss.phase_timer = gml_alarm(if boss.aux >= 1.0 { 20.0 } else { 5.0 });
             brain.gunangle = dir.y.atan2(dir.x);
+            boss_cue(commands, "sndBigBanditMelee");
             // GML `Alarm_4:12` `motion_add(gunangle, 10)`; `Other_10` runs
             // before the alarms, so the 10 px/step survives this step.
             vel.0 += glam::Vec2::from_angle(brain.gunangle) * (10.0 * 30.0) * frames;
@@ -1014,13 +1039,37 @@ fn big_bandit_ai(
         }
         BossPhase::Cooldown if boss.phase_timer.just_finished() => {
             boss.phase = BossPhase::Idle;
-            boss.aux = 1.0;
+            // GML `Alarm_5:1-8` puts the normal strips back and re-arms the
+            // decide tick.
+            if let Some(set) = sprites.as_deref_mut() {
+                set.idle = "images/sprBanditBossIdle.png";
+                set.walk = Some("images/sprBanditBossWalk.png");
+            }
             boss.attack_timer = gml_alarm(45.0 + rng.random_range(0.0..30.0));
+            // GML `Alarm_5:14-22`.
+            if boss.aux < 1.0 {
+                boss.aux = 1.0;
+                boss_cue(commands, "sndBigBanditIntro");
+                if loops == 0 {
+                    commands.spawn((
+                        GameCleanup,
+                        BossIntro {
+                            timer: GTimer::from_seconds(1.1, TimerMode::Once),
+                        },
+                    ));
+                }
+            }
         }
         _ => (),
     }
     if boss.phase != BossPhase::Charging {
         enemy.touch_damage = 0;
+    }
+
+    // GML `Other_10:20-23`.
+    if health.hp < health.max / 2 && !boss.halfhp {
+        boss.halfhp = true;
+        boss_cue(commands, "sndBigBanditHalfHP");
     }
 
     // GML `Collision_Wall.gml:4-8`: `charge > 0 || !intro` destroys the tile.

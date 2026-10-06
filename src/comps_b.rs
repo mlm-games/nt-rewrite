@@ -360,10 +360,24 @@ impl LoopTransition {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct PendingDelayedBoss {
     pub kind: EnemyKind,
-    /// GML `WantBoss/Step_0:16-17`: `alarm[0] = 120` on the area's last
-    /// subarea, zero everywhere else. Counted once, then the marker breeds
-    /// one bandit per step.
+    /// GML `WantBoss/Step_0:16-17`: `alarm[0] = 120`, held back until the
+    /// floor counts as the area's last subarea (which `CanOasis/Create_0`
+    /// can promote a desert 1-1/1-2 to) and the live enemy count is still
+    /// above `enemies * treshhold`. Negative means "never armed", zero or
+    /// less counts down, and once it lapses the marker breeds one bandit
+    /// per step.
     pub arm_delay: f32,
+    /// GML `WantBoss/Create_0.gml:2` `enemies = instance_number(enemy)`,
+    /// captured on the marker's first step. `rad_maggots` is the
+    /// `instance_number(RadMaggot)` term `Step_0:15` subtracts.
+    pub enemies: u32,
+    pub rad_maggots: u32,
+    /// GML `WantBoss/Alarm_0.gml:7-13`: the 426x240 search box is measured
+    /// from the marker's own position, and lines 12-13 then move the marker
+    /// onto the target - so from the second `Alarm_0` on, the box travels
+    /// with the player. The very first attempt is measured from the
+    /// off-arena spawn point and finds nothing.
+    pub at: Vec2,
     pub from_wall: bool,
     /// GML `WantBoss/Create_0.gml:3` `number = max(loops * 2, 1)`;
     /// `Alarm_0` spends one per step, so a stacked desert puts `2 * loops`
@@ -728,6 +742,9 @@ pub struct BossBrain {
     /// first empty revolver and `Alarm_5` raising `intro`, which is what
     /// `Alarm_1.gml:3` waits on before the brain starts picking weapons.
     pub intro_delay: f32,
+    /// GML `sndhalfhp` (`BanditBoss/Other_10.gml:20-23`): fired-once latch
+    /// for the half-health line.
+    pub halfhp: bool,
 }
 
 impl BossBrain {
@@ -758,6 +775,7 @@ impl BossBrain {
             aux: 0.0,
             taunt: false,
             intro_delay: -1.0,
+            halfhp: false,
             tauntdelay: 0,
         }
     }

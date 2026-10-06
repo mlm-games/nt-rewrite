@@ -6403,6 +6403,19 @@ pub fn tick_delayed_boss_spawns(
     // 120 steps on the area's last subarea - so `alarm[0]`, which starts at
     // 0, fires on the very first step and then every step after.
     let living = enemies.iter().filter(|e| !enemy_def(e.kind).boss).count() as u32;
+    let rads = enemies
+        .iter()
+        .filter(|e| e.kind == EnemyKind::RadMaggot)
+        .count() as u32;
+    // GML `WantBoss/Step_0:9-12` keys `treshhold` (and with it the
+    // `alarm[0] = 120` hold) off `GameCont.subarea == maxsubarea`, and
+    // `CanOasis/Create_0.gml:1-3` rewrites `GameCont.subarea` to
+    // `maxsubarea` the moment the desert chest condition holds. So the
+    // window promotes 1-1/1-2 to the last subarea and the 4 s hold
+    // applies there too.
+    let subarea_is_max = run.floor_in_area
+        >= crate::worldgen::gml_max_subarea(crate::worldgen::gml_area_from_run(&run))
+        || run.can_oasis;
 
     for (marker_e, mut pending_boss) in &mut pending {
         if living == 0 {
@@ -6410,6 +6423,20 @@ pub fn tick_delayed_boss_spawns(
             continue;
         }
 
+        if pending_boss.enemies == 0 {
+            pending_boss.enemies = living;
+            pending_boss.rad_maggots = rads;
+        }
+        // GML `WantBoss/Step_0:14-19`: the 4 s hold is (re)armed while the
+        // floor is still nearly untouched and counts as the last subarea.
+        if pending_boss.arm_delay < 0.0 {
+            let treshhold = if subarea_is_max { 0.9 } else { 0.98 };
+            let untouched = living.saturating_sub(pending_boss.rad_maggots) as f32
+                > pending_boss.enemies as f32 * treshhold;
+            if subarea_is_max && untouched {
+                pending_boss.arm_delay = 120.0 / 30.0;
+            }
+        }
         if pending_boss.arm_delay > 0.0 {
             pending_boss.arm_delay -= time.delta_secs;
             continue;
@@ -6420,27 +6447,46 @@ pub fn tick_delayed_boss_spawns(
         };
         let player_pos = player_pos.0;
 
-        // GML `WantBoss/Alarm_0.gml:7-31`. The marker sits at the room
-        // sentinel, so the search box is fixed at 426x240 around it; inside
+        // GML `WantBoss/Alarm_0.gml:7-31`. Lines 12-13 put the marker on the
+        // player, and the next step measures the 426x240 box from there, so
+        // the box tracks the player rather than a fixed arena anchor. Inside
         // it a wall qualifies when it has clear line to the player, sits
-        // 100..124 px away, is isolated (`distance_to_object(Wall) <= 2`),
-        // and touches floor.
-        let sentinel = glam::Vec2::new(crate::comps_a::TILE * 0.5, crate::comps_a::TILE * 0.5);
+        // 100..124 px away, has a wall neighbour within 2 px
+        // (`distance_to_object(Wall) <= 2`), and touches floor.
+        let sentinel = pending_boss.at;
+        pending_boss.at = player_pos;
         let mut rng = rand::rng();
         let probe = player_pos
             + glam::Vec2::new(rng.random_range(-30.0..30.0), rng.random_range(-30.0..30.0));
         let mut candidates: Vec<((i32, i32), glam::Vec2)> = Vec::new();
         if pending_boss.from_wall {
+            // GML `distance_to_object(Wall) <= 2`: the nearest OTHER wall has
+            // to sit within 2 px of this one's box, i.e. the breach tile is
+            // part of a wall run rather than a lone pillar. Wall boxes are
+            // 32 px on GML's 16 px lattice, so any neighbour within two
+            // lattice steps (32 px) overlaps or touches and qualifies.
+            let occupied: std::collections::HashSet<(i32, i32)> = walls
+                .iter()
+                .map(|(_, cell, _, _)| (cell.0, cell.1))
+                .collect();
             for (_, cell, pos, _) in &walls {
                 let p = pos.0;
                 if (p.x - sentinel.x).abs() >= 213.0 || (p.y - sentinel.y).abs() >= 120.0 {
                     continue;
                 }
                 let d = p.distance(player_pos);
-                if !(100.0..124.0).contains(&d) {
+                if d <= 100.0 || d >= 124.0 {
                     continue;
                 }
                 if crate::walls::segment_hits_wall(p, player_pos, &mask) {
+                    continue;
+                }
+                let run_neighbour = (-2..=2).any(|ox| {
+                    (-2..=2).any(|oy| {
+                        (ox != 0 || oy != 0) && occupied.contains(&(cell.0 + ox, cell.1 + oy))
+                    })
+                });
+                if !run_neighbour {
                     continue;
                 }
                 if !mask.is_walkable(glam::Vec2::new(p.x + crate::worldgen::WALL_PX, p.y))

@@ -2180,8 +2180,6 @@ pub fn spawn_level(
                 // chest on the floor is open, which is what makes them the CanOasis
                 // secret. The port's old `0.10 + i*0.02` killed gate with no chest
                 // condition held the bandit back on 1-3 and fired it early elsewhere.
-                let is_last = run.floor_in_area
-                    >= crate::worldgen::gml_max_subarea(crate::worldgen::gml_area_from_run(run));
                 // GML plants a single `WantBoss` marker; `number` inside it
                 // is what decides how many bandits come through.
                 commands.spawn((
@@ -2189,7 +2187,14 @@ pub fn spawn_level(
                     LevelCleanup,
                     PendingDelayedBoss {
                         kind,
-                        arm_delay: if is_last { 120.0 / 30.0 } else { 0.0 },
+                        // Armed live by `tick_delayed_boss_spawns`: GML reads
+                        // `GameCont.subarea == maxsubarea` every step, and
+                        // `CanOasis/Create_0` rewrites `subarea`, so the hold
+                        // cannot be frozen at spawn time.
+                        arm_delay: -1.0,
+                        enemies: 0,
+                        rad_maggots: 0,
+                        at: glam::Vec2::ZERO,
                         from_wall: true,
                         number: crate::worldgen::big_bandit_count(run.loop_count),
                     },

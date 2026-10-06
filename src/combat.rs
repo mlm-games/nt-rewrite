@@ -777,6 +777,14 @@ pub fn resolve_enemy_deaths(
                     Pos(pos),
                 ));
             }
+            // GML `BanditBoss/Destroy_0.gml:9-11`.
+            EnemyKind::BigBandit if run.loop_count == 0 && race_state.race == RaceId::Rebel => {
+                cues.push(AudioCue {
+                    name: "sndMutant10KillBigBandit",
+                    volume: 1.0,
+                    variance: 0.0,
+                });
+            }
             EnemyKind::BigBandit if run.can_oasis => {
                 // GML `BanditBoss/Destroy_0.gml:13-22`: inside a live
                 // `CanOasis` window the kill opens a portal at the wreck,
