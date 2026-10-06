@@ -44,7 +44,7 @@ use crate::comps_a::{
     ARENA_H, ARENA_W, AimDir, DogGuardianLeap, DogGuardianPose, FloorMask, GrenadeFuse, Health,
     HitId, Inventory, LightningArc, PendingMutation, PendingUltra, Player, Projectile,
     ProjectileFade, RaceState, Run, SelectedCharacter, SlashProjectile, TILE, Team, TopSmalls,
-    Velocity, WallCell, WallTile, floor_cell_for_wall,
+    Velocity, WALL_TILE, WallCell, WallTile, floor_cell_for_wall,
 };
 use crate::comps_b::{
     Beam, BigDogMissileState, BossBrain, BossPhase, ChestArt, ChestKind, Corpse, CrownObject,
@@ -1047,31 +1047,40 @@ fn wall_out_raw(seed: u64, wx: i32, wy: i32) -> usize {
         + [0usize, 4][(wall_hash(seed, wx, wy, 0x32) % 2) as usize]
 }
 
-/// GML `mcr_wall_update_lrwh` verbatim (`macros_general.gml:75-80`):
+/// GML `mcr_wall_update_lrwh` verbatim (`macros_general.gml:75-79`):
 /// `l`/`r` are the source-rect origin into the 24-wide Out cell, `w`/`h`
-/// its extent. `place_free` = no wall body at that 16px neighbor cell, so
-/// `l = 0` means no wall to the west and the window keeps the full 4px
-/// west skirt of the 24-wide cell; a wall next door cuts it to 4.
-fn wall_out_crop(wall_set: &HashSet<(i32, i32)>, wx: i32, wy: i32) -> (f32, f32, f32, f32) {
-    let l = if wall_set.contains(&(wx - 1, wy)) {
-        4.0
-    } else {
+/// its extent. `place_free` asks whether *anything* sits at that probe point,
+/// so a wall keeps its 4px skirt only over empty space - floor tiles and holes
+/// crop it too, which is why this takes the mask and not just the wall set
+/// (`comps_a::static_blocked_at`).
+fn wall_out_crop(
+    cells: &HashSet<(i32, i32)>,
+    wall_set: &HashSet<(i32, i32)>,
+    opened: &HashSet<(i32, i32)>,
+    wx: i32,
+    wy: i32,
+) -> (f32, f32, f32, f32) {
+    let base = Vec2::new(wx as f32 * WALL_TILE, wy as f32 * WALL_TILE);
+    let free = |at: Vec2| !crate::comps_a::static_blocked_at(cells, wall_set, opened, at);
+    let l = if free(base + Vec2::new(-WALL_TILE, 0.0)) {
         0.0
-    };
-    let w = if wall_set.contains(&(wx + 1, wy)) {
-        20.0 - l
     } else {
+        4.0
+    };
+    let w = if free(base + Vec2::new(WALL_TILE, 0.0)) {
         24.0 - l
-    };
-    let r = if wall_set.contains(&(wx, wy - 1)) {
-        4.0
     } else {
+        20.0 - l
+    };
+    let r = if free(base + Vec2::new(0.0, -WALL_TILE)) {
         0.0
-    };
-    let h = if wall_set.contains(&(wx, wy + 1)) {
-        20.0 - r
     } else {
+        4.0
+    };
+    let h = if free(base + Vec2::new(0.0, WALL_TILE)) {
         24.0 - r
+    } else {
+        20.0 - r
     };
     (l, r, w, h)
 }
@@ -2241,7 +2250,7 @@ pub fn world_instances_cached(
                         frame,
                         wx,
                         wy,
-                        wall_out_crop(&solid_wall_set, wx, wy),
+                        wall_out_crop(&cells, &solid_wall_set, &opened, wx, wy),
                         [1.0; 4],
                     ) {
                         s.z = Z_WALL_SUBTOP;

@@ -14,6 +14,7 @@
 use bevy_ecs::prelude::*;
 use repame_fx::Trauma;
 
+use crate::audio::AudioCue;
 use crate::combat::queue_enemy_spawn;
 use crate::comps_a::{
     ARENA_H, ARENA_W, FloorMask, FloorStarted, GameCleanup, HammerheadBudget, Health, LevelCleanup,
@@ -41,11 +42,14 @@ pub use crate::comps_a::floor_cell_for_wall;
 /// re-closes the hole: for each of the 8 neighbours at +/-16 px it creates a new
 /// `Wall` wherever there is neither a `Floor` nor a `Wall`, which is what stops
 /// the wall ring from degrading when a break has no floor on the far side.
+#[allow(clippy::too_many_arguments)]
 pub fn apply_pending_wall_breaks(
     mut commands: Commands,
     mut mask: ResMut<FloorMask>,
     mut tops: ResMut<TopSmalls>,
     mut trauma: ResMut<Trauma>,
+    run: Res<Run>,
+    mut cues: ResMut<Queue<AudioCue>>,
     pending: Query<(Entity, &PendingWallBreak)>,
     walls: Query<(Entity, &WallCell, &Pos), With<WallTile>>,
 ) {
@@ -53,13 +57,21 @@ pub fn apply_pending_wall_breaks(
     // along a charge, so the same wall is named many times per boss swing. Bevy
     // despawns are deferred, so without this the wall is despawned, burst and
     // shaken once per marker.
-    let mut handled: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
+    let mut despawned: std::collections::HashSet<Entity> = std::collections::HashSet::new();
+    // `scrWallDestroy`'s `do/until` loops on `collision_rectangle` over the dead
+    // wall's bbox, so every `Wall` sharing that cell dies with it - and each one
+    // used to spawn its own `FloorExplo`. The port keeps one hole per cell
+    // (`broken_cells`) and one despawn per entity (`despawned`), which is the
+    // same end state: no wall left standing on a hole, one hole, one rubble
+    // sprite.
+    let mut broken_cells: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
     let mut resealed: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
     // GML `FloorExplo/Create_0:19-27` runs before its `Top` spawns, so the new
     // `TopSmall`s test the re-sealed ring: track the post-break wall set here
     // rather than the deferred entity view.
     let mut live_walls: std::collections::HashSet<(i32, i32)> =
         walls.iter().map(|(_, cell, _)| (cell.0, cell.1)).collect();
+    let break_sound = wall_break_sound(crate::worldgen::gml_area_from_run(&run));
 
     for (marker_e, brk) in &pending {
         commands.entity(marker_e).despawn();
@@ -70,17 +82,26 @@ pub fn apply_pending_wall_breaks(
             if (cell.0, cell.1) != brk.cell && wpos.distance(brk.pos) > WALL_PX * 0.75 {
                 continue;
             }
-            if !handled.insert((cell.0, cell.1)) {
+            if !despawned.insert(wall_e) {
                 continue;
             }
 
             commands.entity(wall_e).despawn();
             live_walls.remove(&(cell.0, cell.1));
+            if !broken_cells.insert((cell.0, cell.1)) {
+                continue;
+            }
 
             if brk.spawn_floor {
                 // The 16x16 cell, not the 32x32 `Floor` that covers it: GML's
                 // `FloorExplo` mask is 16x16 (`mskFloorExplo.yy:74,89`).
                 mask.opened.insert((cell.0, cell.1));
+                // `FloorExplo/Create_0:3-7`: `scrWallBreakSound()` per break.
+                cues.push(AudioCue {
+                    name: break_sound,
+                    volume: 0.4,
+                    variance: 0.2,
+                });
             }
             broken.push(((cell.0, cell.1), wpos));
 
@@ -152,6 +173,47 @@ pub fn apply_pending_wall_breaks(
         for broken_cell in &broken {
             tops.spawn_around_break(broken_cell.0, &mask.cells, &live_walls, &mask.opened);
         }
+
+        // `FloorExplo/Create_0:46-51`: `with (Wall)` inside 32 px destroys any
+        // wall standing on a `FloorExplo` (`position_meeting(x, y, FloorExplo)`)
+        // - no new hole, no re-seal, no rubble. Left in, that wall keeps drawing
+        // its Bot/Top/Out over the hole it stands in. The same pass re-derives
+        // `visible` and `l/r/w/h`; the port reads both from the mask at draw
+        // time.
+        for ((bx, by), _) in &broken {
+            let origin = glam::Vec2::new(*bx as f32 * WALL_PX, *by as f32 * WALL_PX);
+            for (wall_e, cell, _) in &walls {
+                // `point_distance` is origin-to-origin, so measure the
+                // candidate's origin too, not its `Pos` centre.
+                let at = glam::Vec2::new(cell.0 as f32 * WALL_PX, cell.1 as f32 * WALL_PX);
+                if despawned.contains(&wall_e)
+                    || at.distance(origin) > 32.0
+                    || !mask.opened.contains(&(cell.0, cell.1))
+                {
+                    continue;
+                }
+                despawned.insert(wall_e);
+                commands.entity(wall_e).despawn();
+                live_walls.remove(&(cell.0, cell.1));
+            }
+        }
+    }
+}
+
+/// GML `scrWallBreakSound` (`scripts/scrWallBreakSound`): `GameCont.area` picks
+/// the bank, `snd_play_pitchvol(_snd, 0.2, 0.4)` plays it at 0.4 with +/-0.2
+/// pitch.
+fn wall_break_sound(gml_area: i32) -> &'static str {
+    match gml_area {
+        // area_sewers, area_palace, area_pizza_sewers, area_mansion, area_crib
+        2 | 7 | 102 | 103 | 107 => "sndWallBreakBrick",
+        3 => "sndWallBreakScrap",
+        // area_caves, area_cursed_caves
+        4 | 104 => "sndWallBreakCrystal",
+        6 => "sndWallBreakLabs",
+        105 => "sndWallBreakJungle",
+        101 => "sndOasisExplosionSmall",
+        _ => "sndWallBreak",
     }
 }
 

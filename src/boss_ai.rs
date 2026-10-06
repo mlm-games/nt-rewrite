@@ -2043,10 +2043,14 @@ fn throne_ii_ai(
     let mut fired = false;
 
     // GML `Nothing2/Other_10`: walls turn invisible (still solid via
-    // the floor mask; tops have no port entities).
-    for w in walls {
-        commands.entity(*w).remove::<WallTile>();
-        commands.entity(*w).insert(InvisiWall);
+    // the floor mask; tops have no port entities). `Create_0:12-16` breaks the
+    // isolated walls first, so the sweep stays deferred to the second tick -
+    // one frame early would strand those breaks with nothing left to break.
+    if boss.aux != 0.0 {
+        for w in walls {
+            commands.entity(*w).remove::<WallTile>();
+            commands.entity(*w).insert(InvisiWall);
+        }
     }
 
     // GML `Create_0`: `alarm[0] = 1`, `alarm[1] = 90`, `alarm[2] = 2`,
