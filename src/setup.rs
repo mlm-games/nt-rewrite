@@ -2172,14 +2172,10 @@ pub fn spawn_level(
                 // then alarm[0] = 120 at maxsubarea, else if !losthope &&
                 // !chestprop && ChestOpen && !RadChest && !RadChestBig &&
                 // !RadMaggotChest && !RogueChest then CanOasis, alarm[0] = 1.
-                // `enemies` is captured in `WantBoss/Create_0` with the whole
-                // floor still alive, so `surviving > initial * 0.9` holds on the
-                // first step: treshhold is a *remaining* fraction and the bandit
-                // is a timed encounter, not a kill gate - the last desert subarea
-                // breaches 4 s in, 1-1/1-2 breach immediately but only once every
-                // chest on the floor is open, which is what makes them the CanOasis
-                // secret. The port's old `0.10 + i*0.02` killed gate with no chest
-                // condition held the bandit back on 1-3 and fired it early elsewhere.
+                // `alarm[0]` starts at -1, so the marker only ever breaches once
+                // one of those two lines hands it a value: 1-3 arms 4 s after
+                // the floor is picked over, and 1-1/1-2 arm on every chest being
+                // opened, which is what makes them the CanOasis secret.
                 // GML plants a single `WantBoss` marker; `number` inside it
                 // is what decides how many bandits come through.
                 commands.spawn((
@@ -2193,7 +2189,6 @@ pub fn spawn_level(
                         // cannot be frozen at spawn time.
                         arm_delay: -1.0,
                         enemies: 0,
-                        rad_maggots: 0,
                         at: glam::Vec2::ZERO,
                         from_wall: true,
                         number: crate::worldgen::big_bandit_count(run.loop_count),

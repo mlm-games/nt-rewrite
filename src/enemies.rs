@@ -6369,10 +6369,88 @@ pub fn tick_want_lil_hunter(
     }
 }
 
+/// GML `WantBoss/Alarm_0.gml:7-45` - the wall tile the bandit climbs out of.
+/// `WantBoss/Alarm_0.gml:12-13` moves the marker onto the player and the next
+/// alarm measures the 426x240 box from there, so `from` is the marker's
+/// position as the step *before* this one and the box tracks the player. A
+/// wall qualifies when it sits inside that box, is `100..124` px from the
+/// player with clear line, has another wall within 2 px
+/// (`distance_to_object(Wall) <= 2`), and touches floor. The pick is
+/// `instance_nearest` to a random point 30 px around the player.
+fn breach_wall(
+    from: glam::Vec2,
+    player_pos: glam::Vec2,
+    from_wall: bool,
+    mask: &FloorMask,
+    walls: &Query<
+        (
+            Entity,
+            &crate::comps_a::WallCell,
+            &Pos,
+            Option<&crate::comps_b::ScreenEnd>,
+        ),
+        With<crate::comps_a::WallTile>,
+    >,
+) -> Option<glam::Vec2> {
+    if !from_wall {
+        return None;
+    }
+    // GML `distance_to_object(Wall) <= 2`: the nearest OTHER wall has to sit
+    // within 2 px of this one's box, i.e. the breach tile is part of a wall run
+    // rather than a lone pillar. Wall boxes are 32 px on GML's 16 px lattice,
+    // so any neighbour within two lattice steps overlaps or touches.
+    let occupied: std::collections::HashSet<(i32, i32)> = walls
+        .iter()
+        .map(|(_, cell, _, _)| (cell.0, cell.1))
+        .collect();
+    let mut candidates: Vec<glam::Vec2> = Vec::new();
+    for (_, cell, pos, _) in walls.iter() {
+        let p = pos.0;
+        if (p.x - from.x).abs() >= 213.0 || (p.y - from.y).abs() >= 120.0 {
+            continue;
+        }
+        let d = p.distance(player_pos);
+        if d <= 100.0 || d >= 124.0 {
+            continue;
+        }
+        if crate::walls::segment_hits_wall(p, player_pos, mask) {
+            continue;
+        }
+        let run_neighbour = (-2..=2).any(|ox| {
+            (-2..=2)
+                .any(|oy| (ox != 0 || oy != 0) && occupied.contains(&(cell.0 + ox, cell.1 + oy)))
+        });
+        if !run_neighbour {
+            continue;
+        }
+        if !mask.is_walkable(glam::Vec2::new(p.x + crate::worldgen::WALL_PX, p.y))
+            && !mask.is_walkable(glam::Vec2::new(p.x - crate::worldgen::WALL_PX, p.y))
+            && !mask.is_walkable(glam::Vec2::new(p.x, p.y + crate::worldgen::WALL_PX))
+            && !mask.is_walkable(glam::Vec2::new(p.x, p.y - crate::worldgen::WALL_PX))
+        {
+            continue;
+        }
+        candidates.push(p);
+    }
+    let mut rng = rand::rng();
+    let probe =
+        player_pos + glam::Vec2::new(rng.random_range(-30.0..30.0), rng.random_range(-30.0..30.0));
+    candidates.into_iter().min_by(|a, b| {
+        a.distance_squared(probe)
+            .total_cmp(&b.distance_squared(probe))
+    })
+}
+
 /// GML `WantBoss/Step_0` + `WantBoss/Alarm_0`: the Big Bandit's arming gate and
-/// wall breach. Once it arms, the bandit climbs out of a wall near the player,
-/// the wall breaks, and the screen shakes.
-#[allow(clippy::too_many_arguments)]
+/// wall breach.
+///
+/// `alarm[0]` starts at -1, which GameMaker never fires, so the marker is deaf
+/// until `Step_0` hands it a value - and `Step_0` only ever does that on the
+/// area's last subarea (`= 120`) or once every chest on the floor is open
+/// (`= 1`). Desert 1-1/1-2 therefore never breach on the kill threshold at all:
+/// their bandit is the CanOasis secret, armed by the chests. Once armed, the
+/// bandit climbs out of a wall near the player, the wall breaks, and the screen
+/// shakes.
 pub fn tick_delayed_boss_spawns(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -6386,6 +6464,7 @@ pub fn tick_delayed_boss_spawns(
     mut toast: ResMut<Toast>,
     mut pending: Query<(Entity, &mut PendingDelayedBoss)>,
     enemies: Query<&Enemy, With<Enemy>>,
+    triggers: Res<crate::secrets::SecretTriggers>,
     player_q: Query<&Pos, With<Player>>,
     walls: Query<
         (
@@ -6397,155 +6476,153 @@ pub fn tick_delayed_boss_spawns(
         With<crate::comps_a::WallTile>,
     >,
 ) {
-    // GML `WantBoss/Step_0:4-7`: the marker gives up on a floor with nothing
-    // left to kill. Nothing else in `Step_0` gates the breach - the 0.98 /
-    // 0.9 threshold only plants `CanOasis` and delays the first spawn by
-    // 120 steps on the area's last subarea - so `alarm[0]`, which starts at
-    // 0, fires on the very first step and then every step after.
-    let living = enemies.iter().filter(|e| !enemy_def(e.kind).boss).count() as u32;
+    // GML `instance_number(enemy)` counts every enemy instance, bandits
+    // included, and `instance_number(RadMaggot)` is read live each step rather
+    // than snapshotted.
+    let mut live = enemies.iter().count() as u32;
     let rads = enemies
         .iter()
         .filter(|e| e.kind == EnemyKind::RadMaggot)
         .count() as u32;
-    // GML `WantBoss/Step_0:9-12` keys `treshhold` (and with it the
-    // `alarm[0] = 120` hold) off `GameCont.subarea == maxsubarea`, and
-    // `CanOasis/Create_0.gml:1-3` rewrites `GameCont.subarea` to
-    // `maxsubarea` the moment the desert chest condition holds. So the
-    // window promotes 1-1/1-2 to the last subarea and the 4 s hold
-    // applies there too.
-    let subarea_is_max = run.floor_in_area
-        >= crate::worldgen::gml_max_subarea(crate::worldgen::gml_area_from_run(&run))
-        || run.can_oasis;
+    let (subarea_is_max, treshhold) =
+        crate::secrets::oasis_treshhold(&run, triggers.oasis_subarea_promoted);
+    let dt = time.delta_secs;
 
     for (marker_e, mut pending_boss) in &mut pending {
-        if living == 0 {
+        if pending_boss.enemies == 0 {
+            pending_boss.enemies = live;
+        }
+
+        // GameMaker runs the Alarm events before the Step events within a step,
+        // so `Alarm_0` spends `number` before `Step_0` gets to re-arm.
+        let mut firing = false;
+        if pending_boss.arm_delay >= 0.0 {
+            pending_boss.arm_delay -= dt;
+            firing = pending_boss.arm_delay <= 0.0;
+        }
+        if firing
+            && breach_bandit(
+                &mut commands,
+                &catalog,
+                &mut pending_boss,
+                marker_e,
+                &run,
+                scarier.0,
+                heavy_heart.0,
+                &mask,
+                &mut trauma,
+                &mut hitstop,
+                &mut toast,
+                &player_q,
+                &walls,
+            )
+        {
+            live += 1;
+        }
+
+        // GML `WantBoss/Step_0:2-5`: the marker gives up once nothing is
+        // standing - and a bandit counts as standing, so a floor the player
+        // cleared still feeds the rest of `number`.
+        if live == 0 {
             commands.entity(marker_e).despawn();
             continue;
         }
-
-        if pending_boss.enemies == 0 {
-            pending_boss.enemies = living;
-            pending_boss.rad_maggots = rads;
-        }
-        // GML `WantBoss/Step_0:14-19`: the 4 s hold is (re)armed while the
-        // floor is still nearly untouched and counts as the last subarea.
-        if pending_boss.arm_delay < 0.0 {
-            let treshhold = if subarea_is_max { 0.9 } else { 0.98 };
-            let untouched = living.saturating_sub(pending_boss.rad_maggots) as f32
-                > pending_boss.enemies as f32 * treshhold;
-            if subarea_is_max && untouched {
+        // GML `WantBoss/Step_0:14-24`. The chest branch runs second, so it wins
+        // over the 4 s hold, and the whole block is skipped while a `CanOasis`
+        // window is up - which is what lets the remaining `number` bandits come
+        // through one per step once the window opens.
+        let untouched = live.saturating_sub(rads) as f32 > pending_boss.enemies as f32 * treshhold;
+        if !run.can_oasis && untouched {
+            if subarea_is_max {
                 pending_boss.arm_delay = 120.0 / 30.0;
             }
-        }
-        if pending_boss.arm_delay > 0.0 {
-            pending_boss.arm_delay -= time.delta_secs;
-            continue;
-        }
-
-        let Ok(player_pos) = player_q.single() else {
-            continue;
-        };
-        let player_pos = player_pos.0;
-
-        // GML `WantBoss/Alarm_0.gml:7-31`. Lines 12-13 put the marker on the
-        // player, and the next step measures the 426x240 box from there, so
-        // the box tracks the player rather than a fixed arena anchor. Inside
-        // it a wall qualifies when it has clear line to the player, sits
-        // 100..124 px away, has a wall neighbour within 2 px
-        // (`distance_to_object(Wall) <= 2`), and touches floor.
-        let sentinel = pending_boss.at;
-        pending_boss.at = player_pos;
-        let mut rng = rand::rng();
-        let probe = player_pos
-            + glam::Vec2::new(rng.random_range(-30.0..30.0), rng.random_range(-30.0..30.0));
-        let mut candidates: Vec<((i32, i32), glam::Vec2)> = Vec::new();
-        if pending_boss.from_wall {
-            // GML `distance_to_object(Wall) <= 2`: the nearest OTHER wall has
-            // to sit within 2 px of this one's box, i.e. the breach tile is
-            // part of a wall run rather than a lone pillar. Wall boxes are
-            // 32 px on GML's 16 px lattice, so any neighbour within two
-            // lattice steps (32 px) overlaps or touches and qualifies.
-            let occupied: std::collections::HashSet<(i32, i32)> = walls
-                .iter()
-                .map(|(_, cell, _, _)| (cell.0, cell.1))
-                .collect();
-            for (_, cell, pos, _) in &walls {
-                let p = pos.0;
-                if (p.x - sentinel.x).abs() >= 213.0 || (p.y - sentinel.y).abs() >= 120.0 {
-                    continue;
-                }
-                let d = p.distance(player_pos);
-                if d <= 100.0 || d >= 124.0 {
-                    continue;
-                }
-                if crate::walls::segment_hits_wall(p, player_pos, &mask) {
-                    continue;
-                }
-                let run_neighbour = (-2..=2).any(|ox| {
-                    (-2..=2).any(|oy| {
-                        (ox != 0 || oy != 0) && occupied.contains(&(cell.0 + ox, cell.1 + oy))
-                    })
-                });
-                if !run_neighbour {
-                    continue;
-                }
-                if !mask.is_walkable(glam::Vec2::new(p.x + crate::worldgen::WALL_PX, p.y))
-                    && !mask.is_walkable(glam::Vec2::new(p.x - crate::worldgen::WALL_PX, p.y))
-                    && !mask.is_walkable(glam::Vec2::new(p.x, p.y + crate::worldgen::WALL_PX))
-                    && !mask.is_walkable(glam::Vec2::new(p.x, p.y - crate::worldgen::WALL_PX))
-                {
-                    continue;
-                }
-                candidates.push(((cell.0, cell.1), p));
+            if triggers.oasis_chests_ready {
+                pending_boss.arm_delay = 1.0 / 30.0;
             }
         }
-
-        // GML `WantBoss/Alarm_0.gml:32-45`: with no qualifying wall nothing
-        // happens this step and `number` is left alone; the marker keeps
-        // trying on the next one.
-        let kind = pending_boss.kind;
-        let Some(spawn_pos) = candidates
-            .iter()
-            .min_by(|a, b| {
-                a.1.distance_squared(probe)
-                    .total_cmp(&b.1.distance_squared(probe))
-            })
-            .map(|(_, p)| *p)
-        else {
-            continue;
-        };
-        pending_boss.number -= 1;
-        if pending_boss.number == 0 {
-            commands.entity(marker_e).despawn();
-        }
-        trauma.add(0.3);
-
-        spawn_enemy_at(
-            &mut commands,
-            &catalog,
-            kind,
-            spawn_pos + glam::Vec2::new(rng.random_range(-2.0..2.0), rng.random_range(-2.0..2.0)),
-            difficulty_multiplier(run.floor),
-            false,
-            false,
-            run.loop_count,
-            EnemySpawnContext {
-                subarea: run.floor_in_area,
-                blood_crown: run.blood_crown,
-                scarier_face: scarier.0,
-                heavy_heart: heavy_heart.0,
-            },
-        );
-
-        commands.spawn((
-            GameCleanup,
-            BossIntro {
-                timer: GTimer::from_seconds(1.1, TimerMode::Once),
-            },
-        ));
-        toast.show("BIG BANDIT");
-        hitstop.trigger(0.2, 0.15);
     }
+}
+
+/// One GML `WantBoss/Alarm_0` pass. Returns whether a bandit actually broke
+/// through, which is also what makes it count toward `instance_number(enemy)`.
+#[allow(clippy::too_many_arguments)]
+fn breach_bandit(
+    commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
+    pending_boss: &mut PendingDelayedBoss,
+    marker_e: Entity,
+    run: &Run,
+    scarier_face: bool,
+    heavy_heart: bool,
+    mask: &FloorMask,
+    trauma: &mut Trauma,
+    hitstop: &mut HitStop,
+    toast: &mut Toast,
+    player_q: &Query<&Pos, With<Player>>,
+    walls: &Query<
+        (
+            Entity,
+            &crate::comps_a::WallCell,
+            &Pos,
+            Option<&crate::comps_b::ScreenEnd>,
+        ),
+        With<crate::comps_a::WallTile>,
+    >,
+) -> bool {
+    // GML `WantBoss/Alarm_0.gml:1-6`: no target means a 5 step retry, and
+    // `:46` re-arms at 1 either way so the marker tries again next step.
+    let Ok(player_pos) = player_q.single() else {
+        pending_boss.arm_delay = 5.0 / 30.0;
+        return false;
+    };
+    let player_pos = player_pos.0;
+    let spawn_pos = breach_wall(
+        pending_boss.at,
+        player_pos,
+        pending_boss.from_wall,
+        mask,
+        walls,
+    );
+    pending_boss.at = player_pos;
+    let Some(spawn_pos) = spawn_pos else {
+        pending_boss.arm_delay = 1.0 / 30.0;
+        return false;
+    };
+    pending_boss.number -= 1;
+    let spent = pending_boss.number == 0;
+    pending_boss.arm_delay = 1.0 / 30.0;
+    trauma.add(0.3);
+
+    let mut rng = rand::rng();
+    spawn_enemy_at(
+        commands,
+        catalog,
+        pending_boss.kind,
+        spawn_pos + glam::Vec2::new(rng.random_range(-2.0..2.0), rng.random_range(-2.0..2.0)),
+        difficulty_multiplier(run.floor),
+        false,
+        false,
+        run.loop_count,
+        EnemySpawnContext {
+            subarea: run.floor_in_area,
+            blood_crown: run.blood_crown,
+            scarier_face,
+            heavy_heart,
+        },
+    );
+
+    commands.spawn((
+        GameCleanup,
+        BossIntro {
+            timer: GTimer::from_seconds(1.1, TimerMode::Once),
+        },
+    ));
+    toast.show("BIG BANDIT");
+    hitstop.trigger(0.2, 0.15);
+    if spent {
+        commands.entity(marker_e).despawn();
+    }
+    true
 }
 
 pub fn tick_frog_eggs(

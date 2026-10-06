@@ -355,23 +355,19 @@ impl LoopTransition {
 /// GML `WantBoss` - the marker that arms the Big Bandit. `WantBoss/Step_0`
 /// compares the **surviving** enemy count against `enemies` (captured in
 /// `WantBoss/Create_0` at generation time) scaled by `treshhold`, which is
-/// `0.98` normally and `0.9` on the area's last subarea, so the bandit arms
-/// once `0.02` / `0.10` of the floor's trash is dead.
+/// `0.98` normally and `0.9` on the area's last subarea.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct PendingDelayedBoss {
     pub kind: EnemyKind,
-    /// GML `WantBoss/Step_0:16-17`: `alarm[0] = 120`, held back until the
-    /// floor counts as the area's last subarea (which `CanOasis/Create_0`
-    /// can promote a desert 1-1/1-2 to) and the live enemy count is still
-    /// above `enemies * treshhold`. Negative means "never armed", zero or
-    /// less counts down, and once it lapses the marker breeds one bandit
-    /// per step.
+    /// GML `alarm[0]`: GameMaker hands a fresh instance `-1`, which never
+    /// fires, so the marker stays deaf until `WantBoss/Step_0` assigns it.
+    /// Only the last subarea assigns `120` (the 4 s hold) and only an
+    /// all-chests-opened floor assigns `1` (the CanOasis arm); every other
+    /// desert floor never arms and never breaches.
     pub arm_delay: f32,
     /// GML `WantBoss/Create_0.gml:2` `enemies = instance_number(enemy)`,
-    /// captured on the marker's first step. `rad_maggots` is the
-    /// `instance_number(RadMaggot)` term `Step_0:15` subtracts.
+    /// captured on the marker's first step.
     pub enemies: u32,
-    pub rad_maggots: u32,
     /// GML `WantBoss/Alarm_0.gml:7-13`: the 426x240 search box is measured
     /// from the marker's own position, and lines 12-13 then move the marker
     /// onto the target - so from the second `Alarm_0` on, the box travels

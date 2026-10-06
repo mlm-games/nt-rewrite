@@ -12,9 +12,8 @@ use repame_sim::SimTime;
 use crate::time::{GTimer, TimerMode};
 
 use crate::comps_a::{Inventory, Player, Run, Toast};
-use crate::comps_b::{BossBrain, Enemy, Pickup, PickupKind};
-use crate::data::{AreaId, SecretTarget};
-use crate::enemy_data::enemy_def;
+use crate::comps_b::{Enemy, Pickup, PickupKind, RadChestContainer};
+use crate::data::{AreaId, EnemyKind, SecretTarget};
 use crate::spatial::Pos;
 
 /// Tracks secret eligibility across a floor run.
@@ -31,6 +30,12 @@ pub struct SecretTriggers {
     pub damage_taken_this_floor: bool,
 
     pub oasis_chests_ready: bool,
+
+    /// GML `CanOasis/Create_0.gml:2-4` rewrites `GameCont.subarea` to
+    /// `maxsubarea` and nothing ever puts it back, so a desert 1-1/1-2 that has
+    /// opened its window keeps the last-subarea `0.9` threshold for the rest of
+    /// the floor even after the window itself lapses.
+    pub oasis_subarea_promoted: bool,
 
     pub oasis_floor_chests_initial: u32,
     pub oasis_floor_enemies_initial: u32,
@@ -52,6 +57,7 @@ impl Default for SecretTriggers {
             oasis_eligible: true,
             damage_taken_this_floor: false,
             oasis_chests_ready: false,
+            oasis_subarea_promoted: false,
             oasis_floor_chests_initial: 0,
             oasis_floor_enemies_initial: 1,
             oasis_snapshot_done: false,
@@ -100,6 +106,7 @@ impl SecretTriggers {
         self.oasis_eligible = true;
         self.damage_taken_this_floor = false;
         self.oasis_chests_ready = false;
+        self.oasis_subarea_promoted = false;
         self.oasis_snapshot_done = false;
         self.oasis_floor_chests_initial = 0;
         self.oasis_floor_enemies_initial = 1;
@@ -117,7 +124,7 @@ pub fn observe_oasis_floor_start(
     run: Res<Run>,
     mut triggers: ResMut<SecretTriggers>,
     pickups_q: Query<&Pickup>,
-    enemies_q: Query<&Enemy, Without<BossBrain>>,
+    enemies_q: Query<&Enemy>,
 ) {
     if triggers.oasis_snapshot_done || !triggers.oasis_eligible {
         return;
@@ -129,26 +136,44 @@ pub fn observe_oasis_floor_start(
         .iter()
         .filter(|p| matches!(p.kind, PickupKind::Chest(_)))
         .count() as u32;
-    triggers.oasis_floor_enemies_initial =
-        (enemies_q.iter().filter(|e| !enemy_def(e.kind).boss).count() as u32).max(1);
+    // GML `WantBoss/Create_0.gml:2` `enemies = instance_number(enemy)` counts
+    // every enemy instance, bandits included.
+    triggers.oasis_floor_enemies_initial = enemies_q.iter().count() as u32;
     triggers.oasis_snapshot_done = true;
 }
 
-/// Flag the floor as oasis-ready once every chest is opened while
-/// (nearly) nothing was killed. GML `WantBoss/Step_0:14-24` (the
-/// `CanOasis` marker: at least one `ChestOpen`, no unopened `chestprop`
-/// or rad/rogue chest, and fewer than 2% of the enemies dead - 10% on
-/// the area's last subarea).
+/// GML `WantBoss/Step_0:9-12`: `treshhold` is `0.9` on the area's last
+/// subarea and `0.98` everywhere else, and `CanOasis/Create_0.gml:1-3`
+/// rewrites `GameCont.subarea` to `maxsubarea` for good, so a live window
+/// promotes desert 1-1/1-2. Returns whether the floor counts as the last
+/// subarea plus the threshold itself.
+pub fn oasis_treshhold(run: &Run, promoted: bool) -> (bool, f32) {
+    let is_max = run.floor_in_area
+        >= crate::worldgen::gml_max_subarea(crate::worldgen::gml_area_from_run(run))
+        || run.can_oasis
+        || promoted;
+    (is_max, if is_max { 0.9 } else { 0.98 })
+}
+
+/// Flag the floor as oasis-ready once every chest is opened while the
+/// floor still counts as untouched. GML `WantBoss/Step_0:19-21`: at least
+/// one `ChestOpen`, no unopened `chestprop` / `RadChest` / `RadChestBig` /
+/// `RadMaggotChest` / `RogueChest`, and the integer
+/// `instance_number(enemy) - instance_number(RadMaggot) > enemies *
+/// treshhold` from `Step_0:15` (which is what `!losthope` adds, since that
+/// latch flips on the same compare without the rad-maggot term).
 pub fn detect_oasis_eligibility(
     run: Res<Run>,
     mut triggers: ResMut<SecretTriggers>,
     pickups_q: Query<&Pickup>,
-    enemies_q: Query<&Enemy, Without<BossBrain>>,
+    rad_chests_q: Query<(), With<RadChestContainer>>,
+    enemies_q: Query<&Enemy>,
 ) {
     if triggers.oasis_chests_ready
         || run.area != AreaId::Desert
         || run.floor_in_area > 3
         || !triggers.oasis_eligible
+        || !triggers.oasis_snapshot_done
     {
         return;
     }
@@ -156,21 +181,27 @@ pub fn detect_oasis_eligibility(
     let chests_left = pickups_q
         .iter()
         .filter(|p| matches!(p.kind, PickupKind::Chest(_)))
-        .count();
-    if chests_left > 0 || !triggers.oasis_snapshot_done {
+        .count()
+        + rad_chests_q.iter().count();
+    if chests_left > 0 {
         return;
     }
+    // GML `instance_exists(ChestOpen)`: only a `chestprop` chest leaves one
+    // behind when it opens, so a floor whose only chest is a rad chest can
+    // never raise the marker.
     if triggers.oasis_floor_chests_initial == 0 {
         return;
     }
 
-    let living_trash = enemies_q.iter().filter(|e| !enemy_def(e.kind).boss).count() as u32;
-    let killed = triggers
-        .oasis_floor_enemies_initial
-        .saturating_sub(living_trash);
-    let kill_frac = killed as f32 / triggers.oasis_floor_enemies_initial.max(1) as f32;
-    let max_kill = if run.floor_in_area == 3 { 0.10 } else { 0.02 };
-    if kill_frac <= max_kill {
+    let live = enemies_q.iter().count() as u32;
+    let rad_maggots = enemies_q
+        .iter()
+        .filter(|e| e.kind == EnemyKind::RadMaggot)
+        .count() as u32;
+    let (_, treshhold) = oasis_treshhold(&run, triggers.oasis_subarea_promoted);
+    if live.saturating_sub(rad_maggots) as f32
+        > triggers.oasis_floor_enemies_initial as f32 * treshhold
+    {
         triggers.oasis_chests_ready = true;
     }
 }
@@ -316,6 +347,7 @@ pub fn tick_can_oasis(
     let mut opened = false;
     if triggers.oasis_chests_ready && triggers.oasis_eligible {
         triggers.oasis_chests_ready = false;
+        triggers.oasis_subarea_promoted = true;
         opened = true;
         commands.spawn((
             crate::comps_a::GameCleanup,
