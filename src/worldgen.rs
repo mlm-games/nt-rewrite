@@ -192,12 +192,14 @@ pub fn generation_goal(floor: u32) -> usize {
     110
 }
 
-/// GML `TutCont/Create_0.gml:18-40`. `TutCont` hand-lays a `choose(3, 4)`
-/// half-extent square of `Floor` on a 32 px grid centred on the room
-/// sentinel, dropping each corner on `irandom(2)`, and then hangs a
-/// `TutorialTarget` on the `Floor` nearest 196 px out along each of the
-/// four 45-degree diagonals.
-fn tutorial_arena(plan: &mut LevelPlan, events: &mut Vec<PopulationEvent>, rng: &mut StdRng) {
+/// GML `TutCont/Create_0.gml:18-28`. `TutCont` hand-lays a `choose(3, 4)`
+/// half-extent square of `Floor` on a 32 px grid centred on the room sentinel,
+/// dropping each corner on `irandom(2)`. `GenCont/Create_0:36` creates
+/// `TutCont` before the `FloorMaker` at `:43`, so these floors take
+/// `Floor/Create_0.gml:15-19`'s `styleb = false` (no maker to be near yet) and
+/// are already floor for both `FloorMaker/Step_0.gml:69`'s
+/// `instance_number(Floor) > goal` and `GenCont/Alarm_0.gml:3`'s wall pass.
+fn tutorial_floor_cells(genr: &mut Gen, rng: &mut StdRng) {
     let w = 3 + i32::from(rng.random_bool(0.5));
     let h = 3 + i32::from(rng.random_bool(0.5));
     for xx in -w..=w {
@@ -205,42 +207,43 @@ fn tutorial_arena(plan: &mut LevelPlan, events: &mut Vec<PopulationEvent>, rng: 
             if xx.abs() == w && yy.abs() == h && rng.random::<u8>() < 2 {
                 continue;
             }
-            plan.floor_cells.push((xx, yy));
+            genr.floor(xx, yy, false);
         }
     }
-    plan.floor_cells.sort_unstable();
-    plan.floor_cells.dedup();
+}
 
-    let centre = Vec2::splat(TILE as f32 * 0.5);
+/// GML `TutCont/Create_0.gml:30-40`: a `TutorialTarget` on the `Floor` nearest
+/// 196 px out along each of the four 45-degree diagonals. The probe is
+/// `10000 + ldrx(196, ang)` - the `10000` room origin, not the `10016`
+/// sentinel - and only the tutorial square exists at this point, so the
+/// nearest cell is the same one GML's `instance_nearest` finds.
+fn tutorial_targets(plan: &mut LevelPlan) {
     let mut ang = 45.0_f32.to_radians();
     for _ in 0..4 {
-        let probe = centre + Vec2::from_angle(ang) * 196.0;
+        let probe = Vec2::from_angle(ang) * 196.0;
         if let Some(cell) = plan.floor_cells.iter().copied().min_by(|a, b| {
             cell_center_px(a.0, a.1)
                 .distance_squared(probe)
                 .total_cmp(&cell_center_px(b.0, b.1).distance_squared(probe))
         }) {
-            // GML `Create_0:21`: the target settles against geometry. It is
-            // pushed straight onto the event list because the enemy pass that
-            // normally drains `plan.enemies` has already run.
-            let at = cell_center_px(cell.0, cell.1);
-            plan.enemies.push((EnemyKind::TutorialTarget, at));
-            events.push(PopulationEvent::Enemy {
-                kind: EnemyKind::TutorialTarget,
-                pos: at,
-            });
+            plan.enemies
+                .push((EnemyKind::TutorialTarget, cell_center_px(cell.0, cell.1)));
         }
         ang += std::f32::consts::FRAC_PI_2;
     }
 }
 
 fn generation_goal_for_run(run: &Run) -> usize {
-    // GML `GenCont/Create_0:38` sets `goal = 5`, but the `FloorMaker` it
-    // creates at `:43-45` runs `Create_0` AFTER `TutCont` exists, so
-    // `FloorMaker/Create_0:22-24` immediately overrides it to 1 - the
-    // tutorial square plus a single stub corridor.
+    // GML `GenCont/Create_0:38` sets `goal = 5`. The `FloorMaker` created at
+    // `:43-45` reads it in `Create_0:8-10`, overrides it to 1 at `:22-24`
+    // because `TutCont` exists, and is then handed `GenCont.goal` again by the
+    // `with` at `:44`, so the maker's effective goal is 5 either way. It never
+    // reaches the `else` branch of `FloorMaker/Step_0:69-87` regardless: the
+    // tutorial square is 45..81 `Floor`s, so `instance_number(Floor) > goal`
+    // holds on the maker's first step and it dies without calling
+    // `scrMakeFloor`.
     if run.tutorial {
-        return 1;
+        return 5;
     }
     if is_secret_area(run.area) {
         return match run.area {
@@ -1062,6 +1065,13 @@ fn apply_safespawn_shift(plan: &mut LevelPlan, run: &Run, gen_rng: &mut StdRng) 
             };
             *p += delta_px;
         }
+        // GML `GenCont/Step_0:40-47` `with (hitme) if (object_index != Player)`
+        // rides every enemy along. Only the tutorial's `TutorialTarget`s are
+        // on the plan this early - `scrPopulate`/`scrPopProps` run in
+        // `Alarm_0`, after the shift - so this is a no-op everywhere else.
+        for (_, at) in plan.enemies.iter_mut() {
+            *at += delta_px;
+        }
         if plan.floor_cells.contains(&(0, 0)) {
             stacked += 1;
         } else {
@@ -1087,6 +1097,18 @@ pub fn generate_level(run: &Run) -> LevelPlan {
     let goal = generation_goal_for_run(run);
 
     let mut genr = Gen::new(run, area, false);
+    // GML `GenCont/Create_0:35-45` creates `TutCont` (which lays its square in
+    // `Create`) before it creates the `FloorMaker`, so the tutorial square is
+    // already floor when the maker tests `instance_number(Floor) > goal` and
+    // when `GenCont/Alarm_0:3` makes the walls.
+    if run.tutorial {
+        let mut rng = phase_rng(run.gen_seed, RNG_TUTORIAL);
+        tutorial_floor_cells(&mut genr, &mut rng);
+        // GML `TutCont/Create_0:32-40` also hangs the four `TutorialTarget`s
+        // here, before the `FloorMaker` exists, so they are `hitme` by the
+        // time `GenCont/Step_0:40-47` slides the level.
+        tutorial_targets(&mut genr.plan);
+    }
     let initial = genr.create_maker(0, 0);
     genr.run_makers(goal, vec![initial]);
     apply_safespawn_shift(&mut genr.plan, run, &mut genr.rng);
@@ -2624,11 +2646,14 @@ fn populate(
     // GML `GenCont/Alarm_0:24-37` -- the `TutCont` level keeps no roaming
     // enemy, no chest and no boss; the scripted `WeaponChest` (GML
     // `TutCont/Alarm_0` on entering PickingUp) ships in the plan so the
-    // walkthrough has a gun to pick up.
+    // walkthrough has a gun to pick up. The square and its four
+    // `TutorialTarget`s are stamped back in `generate_level`, because GML lays
+    // them inside `GenCont/Create_0`; `Alarm_0:26` spares the targets.
     if run.tutorial {
-        let mut rng = phase_rng(run.gen_seed, RNG_TUTORIAL);
-        events.retain(|event| !matches!(event, PopulationEvent::Enemy { .. }));
-        tutorial_arena(plan, &mut events, &mut rng);
+        events.retain(|event| match event {
+            PopulationEvent::Enemy { kind, .. } => *kind == EnemyKind::TutorialTarget,
+            _ => true,
+        });
         plan.chests.clear();
         plan.boss = None;
     }

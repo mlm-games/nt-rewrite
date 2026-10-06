@@ -279,6 +279,13 @@ pub fn boss_drops_rads(kind: EnemyKind) -> bool {
 fn gml_dead_stem(kind: EnemyKind, oasis: bool) -> &'static str {
     use EnemyKind::*;
     let base: &'static str = match kind {
+        EnemyKind::TutorialTarget => {
+            return if oasis {
+                "sndOasisDeath"
+            } else {
+                "sndBanditDie"
+            };
+        }
         Maggot | FiredMaggot | Sniper | IdpdVan | ScrapBossMissile | MeleeFake => "sndEnemyDie",
         Mimic | SuperMimic | WepMimic => "sndMimicDead",
         Bandit | SnowBandit | JungleBandit => "sndBanditDie",
