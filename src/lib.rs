@@ -3377,24 +3377,12 @@ impl App {
                 .is_some_and(|s| s.settings.keyboard_enabled);
             keyboard && self.staging.borrow().touch_active.is_empty()
         };
-        let overlay_now = self
-            .sim
-            .world
-            .get_resource::<OverlayMenu>()
-            .copied()
-            .unwrap_or_default();
-        let paused_now = self
-            .sim
-            .world
-            .get_resource::<crate::state::Paused>()
-            .is_some_and(|p| p.0);
-        // GML `UberCont/Step_0:175-183` has no state carve-outs: from the first
-        // splash frame, desktop keyboard mode hides the OS cursor
-        // (`opt_keyboard` defaults true on desktop, nothing in boot/menus/
-        // death clears it) and the game crosshair (`UberCont/Draw_75`, gated
-        // only on `window_get_cursor() == cr_none` + `show_crosshair`) draws
-        // over everything. Pause/overlay are the only hides.
-        let hide_os_cursor = keyboard_mode && !paused_now && overlay_now == OverlayMenu::None;
+        // GML `UberCont/Step_0:175-183`, verbatim: the OS cursor is hidden
+        // iff `opt_keyboard` (and the debug overlay is not under the mouse).
+        // `scrOptionsUpdate` only ever writes `opt_keyboard` from the saved
+        // option, so nothing in boot, menus, pause or death moves it - the
+        // gate carries no state term at all.
+        let hide_os_cursor = keyboard_mode;
         // GML `game_end` parity for the QUIT row (bevy `AppExit` has no
         // headless window service; the desktop shell exits here).
         if self
@@ -3873,11 +3861,14 @@ impl App {
             // the raw crosshair draws alongside the lerped `TopCont` one. The
             // port's `keyboard_mode` (raw `keyboard_enabled`, no touch) carries
             // the cursor-hidden half; deliberately no per-screen kind list (the
-            // old 5-kind gate left keyboard gameplay cursorless). Skipped while
-            // paused/an overlay owns the pointer and on touch (no cursor at
-            // all). Pixels decode once per (frame, tint) into `cursor_img`; the
-            // runner caches the OS handle by content hash.
-            let menu_crosshair = keyboard_mode && !paused && overlay == OverlayMenu::None;
+            // old 5-kind gate left keyboard gameplay cursorless). Menus are NOT
+            // a carve-out: `UberCont` stays active while a menu is up, so GML
+            // draws the crosshair over it. `!paused` is not a cursor rule either -
+            // it stands in for `instance_deactivate_all(true)` in
+            // `UberCont/Step_1`, which deactivates `UberCont` itself and so stops
+            // `Draw_75` until the run resumes. Pixels decode once per (frame, tint)
+            // into `cursor_img`; the runner caches the OS handle by content hash.
+            let menu_crosshair = keyboard_mode && !paused;
             cursor_req = if menu_crosshair {
                 let frame = self
                     .sim
