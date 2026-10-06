@@ -124,6 +124,7 @@ fn profile_dir() -> PathBuf {
 
 fn store_in(dir: &Path) -> SaveStore<FsStorage> {
     SaveStore::new(dir, run_save_file_name())
+        .with_validator(SaveStore::<FsStorage>::is_intact_ron)
 }
 
 fn store() -> SaveStore<FsStorage> {
@@ -442,6 +443,20 @@ mod tests {
 
         save_run_in(&mut world, &dir).expect("write");
         assert!(dir.join(run_save_file_name()).is_file());
+
+        // Every later save must overwrite in place: a write that quarantines
+        // its own target renames it to `corrupted_*`, which on wasm panics
+        // inside `std::process::id()`.
+        world.resource_mut::<Run>().floor = 8;
+        save_run_in(&mut world, &dir).expect("rewrite");
+        let rewritten = load_run_in(&dir).expect("reload");
+        assert_eq!(rewritten.session.run.floor, 8);
+        let leftovers: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("corrupted_"))
+            .collect();
+        assert!(leftovers.is_empty(), "quarantined: {leftovers:?}");
 
         let loaded = load_run_in(&dir).expect("load");
         assert_eq!(loaded.session.run.floor, 7);
