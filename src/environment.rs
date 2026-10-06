@@ -1628,33 +1628,36 @@ pub fn spawn_motes(
                 0.0,
                 0,
             ),
-            MoteStrip::Leaf | MoteStrip::Money | MoteStrip::Raven => (
-                match strip {
-                    MoteStrip::Leaf => "images/sprLeaf.png",
-                    MoteStrip::Money => "images/sprMoney.png",
-                    _ => "images/sprRavenFeather.png",
-                },
-                match strip {
-                    MoteStrip::Leaf => 5,
-                    MoteStrip::Money => 1,
-                    _ => 1,
-                },
-                1.8,
-                3.0,
-                0.0,
-                0.0,
-                0.0,
-                1.0,
-                0.0,
-                true,
-                Some((150.0 + rng.random_range(0.0..30.0)) / 30.0),
-                if matches!(strip, MoteStrip::Money | MoteStrip::Raven) {
-                    0.0
-                } else {
-                    0.4
-                },
-                1,
-            ),
+            MoteStrip::Leaf | MoteStrip::Money | MoteStrip::Raven | MoteStrip::TutorialSplinter => {
+                (
+                    match strip {
+                        MoteStrip::Leaf => "images/sprLeaf.png",
+                        MoteStrip::Money => "images/sprMoney.png",
+                        MoteStrip::TutorialSplinter => "images/sprTutorialSplinter.png",
+                        _ => "images/sprRavenFeather.png",
+                    },
+                    match strip {
+                        MoteStrip::Leaf | MoteStrip::TutorialSplinter => 5,
+                        MoteStrip::Money => 1,
+                        _ => 1,
+                    },
+                    1.8,
+                    3.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    true,
+                    Some((150.0 + rng.random_range(0.0..30.0)) / 30.0),
+                    if matches!(strip, MoteStrip::Money | MoteStrip::Raven) {
+                        0.0
+                    } else {
+                        0.4
+                    },
+                    1,
+                )
+            }
             MoteStrip::Curse => (
                 "images/sprCurse.png",
                 6,
@@ -1742,7 +1745,9 @@ pub fn spawn_motes(
             image.phase = rng.random_range(0.0..frames as f32);
         }
         let depth = match strip {
-            MoteStrip::Leaf | MoteStrip::Money | MoteStrip::Raven => 1.0,
+            MoteStrip::Leaf | MoteStrip::Money | MoteStrip::Raven | MoteStrip::TutorialSplinter => {
+                1.0
+            }
             MoteStrip::Dust | MoteStrip::Smoke | MoteStrip::Curse | MoteStrip::PortalL => -1.0,
         };
         commands.spawn((

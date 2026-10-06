@@ -1320,6 +1320,10 @@ pub enum MoteStrip {
     Leaf,
     Money,
     Raven,
+    /// GML `TutorialTarget/Destroy_0.gml:5-9`: `Feather` with
+    /// `sprite_index = sprTutorialSplinter`, so it keeps `Feather`'s sway and
+    /// spin and only the art changes.
+    TutorialSplinter,
     Curse,
     PortalL,
 }

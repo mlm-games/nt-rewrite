@@ -165,6 +165,69 @@ pub fn drive_tutorial(world: &mut World) {
     tick_tutorial(world, dt);
 }
 
+/// GML `TutCont/Alarm_0.gml:9-12`: once `step_current` has run past `Fin` and
+/// no `Portal` lives, the tutorial raises its own exit portal on the room
+/// sentinel (`Corpse/Alarm_0:1-2` blocks the ordinary clear portal while
+/// `TutCont` exists). `Portal/Alarm_1` then `game_restart()`s rather than
+/// flipping the floor. Needs `&mut World` for the catalog, so it rides the
+/// schedule the way [`drive_tutorial`] does.
+pub fn drive_tutorial_exit(world: &mut World) {
+    if !world
+        .get_resource::<crate::comps_a::Run>()
+        .is_some_and(|r| r.tutorial)
+    {
+        return;
+    }
+    if !world
+        .get_resource::<TutorialState>()
+        .is_some_and(|t| t.portal_open)
+    {
+        return;
+    }
+    let already = {
+        let mut portals = world.query_filtered::<Entity, With<crate::comps_b::Portal>>();
+        portals.iter(world).next().is_some()
+    };
+    if already {
+        return;
+    }
+
+    // GML `Portal/Step_0.gml:17-20`: an idle portal drags the player in, and
+    // `portal_attract` gates on `run.portal_open`.
+    world.resource_mut::<crate::comps_a::Run>().portal_open = true;
+    // GML `Portal/Create_0.gml:5` picks `sndOasisPortal` off
+    // `GameCont.underwater`, which the desert tutorial can never be.
+    world
+        .resource_mut::<crate::msg::Queue<crate::audio::AudioCue>>()
+        .push(crate::audio::AudioCue {
+            name: "sndPortalOpen",
+            volume: 1.0,
+            variance: 0.0,
+        });
+
+    // GML `Portal/Create_0.gml:7-11`: every non-player projectile dies with the
+    // portal that replaces the floor.
+    let enemy_shots: Vec<Entity> = {
+        let mut shots = world.query::<(Entity, &crate::comps_a::Team)>();
+        shots
+            .iter(world)
+            .filter(|(_, team)| **team != crate::comps_a::Team::Player)
+            .map(|(e, _)| e)
+            .collect()
+    };
+
+    // GML `instance_create(10016, 10016, Portal)`.
+    let at = glam::Vec2::splat(crate::worldgen::TILE as f32 * 0.5);
+    world.resource_scope(|world, catalog: Mut<repame_anim::AnimCatalog>| {
+        let mut commands = world.commands();
+        for shot in enemy_shots {
+            commands.entity(shot).despawn();
+        }
+        crate::progression::spawn_portal_at(&mut commands, &catalog, at, 1);
+    });
+    world.flush();
+}
+
 /// Tutorial advance tick (GML `TutCont/Alarm_0` verbatim): on timer expiry
 /// clear the latch, step forward, re-arm 45 steps on `Fin`, raise the gun
 /// when `PickingUp` comes up, and past `Fin` latch the exit portal open.

@@ -118,6 +118,9 @@ pub fn derive_dead_path(idle: &'static str) -> &'static str {
         "images/sprMutant15Idle.png" => "images/sprMutant15Dead.png",
         "images/sprMutant16Idle.png" => "images/sprMutant16Dead.png",
         "images/sprBanditIdle.png" => "images/sprBanditDead.png",
+        // GML `TutorialTarget/Create_0.gml:7` `spr_dead = sprTargetDead`, which
+        // `enemy/Destroy_0.gml:15` hands to the `CorpseActive`.
+        "images/sprTargetIdle.png" => "images/sprTargetDead.png",
         "images/sprMaggotIdle.png" => "images/sprMaggotDead.png",
         "images/sprScorpionIdle.png" => "images/sprScorpionDead.png",
         "images/sprRatIdle.png" => "images/sprRatDead.png",

@@ -738,6 +738,22 @@ pub fn resolve_enemy_deaths(
         }
 
         match enemy.kind {
+            // GML `TutorialTarget/Destroy_0.gml:5-9`: `repeat 5 + irandom(3)`
+            // `Feather`s re-skinned as `sprTutorialSplinter`, after
+            // `event_inherited()` has already handed `sprTargetDead` to the
+            // corpse.
+            EnemyKind::TutorialTarget => {
+                let mut rng = rand::rng();
+                let count = 5 + rng.random_range(0..3);
+                crate::environment::spawn_motes(
+                    &mut commands,
+                    &catalog,
+                    save.settings.particles,
+                    pos,
+                    crate::comps_b::MoteStrip::TutorialSplinter,
+                    count,
+                );
+            }
             // GML `Grunt`, `Inspector`, `Shielder` and their three elites all
             // end `Destroy_0.gml` with `scrOnPopoKill()`.
             EnemyKind::IdpdGrunt

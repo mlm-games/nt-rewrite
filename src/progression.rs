@@ -2955,6 +2955,8 @@ pub fn pick_loading_tip(_run: &Run) -> String {
 /// Portal Disappear-end: flip the level via a near-instant
 /// `PortalSucking` (the player is already at the portal core, so the
 /// lerp is a no-op and `tick_portal_suck` performs the floor advance).
+/// This is the port's GML `Portal/Alarm_1`, which `game_restart()`s instead
+/// while `TutCont` lives.
 pub fn kick_portal_transition(
     commands: &mut Commands,
     player_q: &mut Query<(Entity, &Pos, Option<&PortalSucking>), (With<Player>, Without<Portal>)>,
@@ -2963,6 +2965,16 @@ pub fn kick_portal_transition(
     run: &Run,
 ) {
     if run.game_over {
+        return;
+    }
+    // GML `Portal/Alarm_1.gml:1-4`.
+    if run.tutorial {
+        let Ok((player_e, _, _)) = player_q.single_mut() else {
+            return;
+        };
+        commands
+            .entity(player_e)
+            .insert(crate::state::TutorialRestart);
         return;
     }
     let Ok((player_e, ppos, suck_opt)) = player_q.single_mut() else {

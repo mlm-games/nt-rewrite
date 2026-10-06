@@ -128,6 +128,7 @@ pub fn build_sim_schedule() -> Schedule {
                 secrets::tick_van_hq.in_set(NtSimSet::Always),
                 secrets::secret_debug_toast.in_set(NtSimSet::Always),
                 state::drive_tutorial.in_set(NtSimSet::Always),
+                state::drive_tutorial_exit.in_set(NtSimSet::Always),
                 crown::tick_crown_life.in_set(NtSimSet::Always),
                 crown::tick_crown_love.in_set(NtSimSet::Always),
                 crown::tick_crown_curses.in_set(NtSimSet::Always),
