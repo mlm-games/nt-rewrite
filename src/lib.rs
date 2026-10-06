@@ -484,7 +484,7 @@ impl App {
     /// Vortex background atlas for a GML area (headless-observable; the same
     /// build the live frame uses).
     pub fn debug_vortex_art(dir: &Path, gml_area: u8) -> Arc<VortexArt> {
-        Arc::new(VortexArt::load(dir, gml_area, 1))
+        Arc::new(VortexArt::load(dir, gml_area))
     }
 
     pub fn has_assets(&self) -> bool {
@@ -3861,7 +3861,7 @@ impl App {
             if let Some(dir) = self.assets_dir.clone() {
                 self.vortex_art = Some(match self.vortex_art.take() {
                     Some(art) => art.with_area(&dir, gml_area),
-                    None => Arc::new(VortexArt::load(&dir, gml_area, 1)),
+                    None => Arc::new(VortexArt::load(&dir, gml_area)),
                 });
                 self.vortex_art_area = Some(gml_area);
                 self.vortex_art_pending
@@ -3883,17 +3883,25 @@ impl App {
             let snap = self
                 .spiral
                 .snapshot_with_render_mode(bg_alpha, draw_bolts, draw_details);
-            // World units are GUI px and this camera frames `world_size`, the
-            // GML view rect, so the layer lands 1:1 with the main batch and the
-            // pillarbox clips it without the node being sized to the box.
+            // The spiral lives in GUI space, which the old fullscreen pass
+            // mapped straight off this node's rect. `VortexBatch` maps the same
+            // rect through the batch camera, so the node has to BE the GML box:
+            // that is what places it and what clips it to the pillarbox. A
+            // full-canvas node would scale the whole vortex to the window and
+            // spill it into the bars.
             let mut pass = VortexBatch::new(
-                self.cam.fit_matrix(viewport_dp, world_size),
+                [snap.view[2], snap.view[3]],
                 Arc::clone(self.vortex_art.as_ref().expect("vortex art loaded")),
                 Arc::clone(&self.vortex_art_pending),
             );
             pass.push_snapshot(&snap);
+            let box_dp = self.gml_frame().box_dp;
             Embedded(
-                Modifier::new().fill_max_size().hit_passthrough(),
+                Modifier::new()
+                    .absolute()
+                    .size(Dp(box_dp[2]), Dp(box_dp[3]))
+                    .offset(Some(Dp(box_dp[0])), Some(Dp(box_dp[1])), None, None)
+                    .hit_passthrough(),
                 Callback::new(pass),
             )
         });
@@ -4029,6 +4037,9 @@ impl App {
             background,
             overlay_color,
             chroma: 0.0,
+            lights: Vec::new(),
+            occluders: Arc::new([]),
+            ambient: None,
         });
         let live_offer = menu_kind == Some(MenuOverlay::Mutation)
             || self
@@ -4145,6 +4156,9 @@ impl App {
                 background: None,
                 overlay_color: None,
                 chroma: 0.0,
+                lights: Vec::new(),
+                occluders: Arc::new([]),
+                ambient: None,
             };
             if self.assets.is_some() {
                 let desc = self
@@ -4383,6 +4397,9 @@ impl App {
                         background: None,
                         overlay_color: None,
                         chroma: 0.0,
+                        lights: Vec::new(),
+                        occluders: Arc::new([]),
+                        ambient: None,
                     };
                     let mut view = Viewport2dGpuWithIdShared(
                         Arc::new(frame),

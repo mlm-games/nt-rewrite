@@ -14,10 +14,11 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use glam::Mat4;
-use repame_sprite::{AtlasUpload, BatchDesc, SpriteBatch, SpriteBlend, TextureFilter};
+use repame_sprite::{
+    AtlasUpload, BatchDesc, SpriteBatch, SpriteBlend, TextureFilter, screen_camera,
+};
 use repose_render_wgpu::{CallbackRenderPass, CallbackResources, ScreenDescriptor, WgpuCallback};
 
 pub const VORTEX_WISPS: usize = 128;
@@ -77,6 +78,15 @@ const ART_SKEW_RAD: f32 = std::f32::consts::FRAC_PI_4;
 /// `image_speed = 2` at 30 steps/s in the port's frame clock: the 2-frame wisp
 /// strip advances every 15 ticks.
 const SPIRAL_FRAME_TICKS: f32 = 15.0;
+
+/// Process-wide atlas generation counter. `SpriteBatch` keys its atlas on the
+/// generation and only replays uploads when it moves, so a generation must
+/// never repeat for different pixels.
+static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+fn next_generation() -> u64 {
+    NEXT_GENERATION.fetch_add(1, Ordering::Relaxed)
+}
 
 const CENTER: [f32; 2] = [0.5, 0.5];
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
@@ -138,7 +148,7 @@ pub struct VortexArt {
 }
 
 impl VortexArt {
-    pub fn load(dir: &Path, gml_area: u8, generation: u64) -> Self {
+    pub fn load(dir: &Path, gml_area: u8) -> Self {
         let mut cells: Vec<(u32, u32, Vec<u8>)> = Vec::new();
         let spiral = add(&mut cells, cut(dir, "images/sprSpiral.png", SPIRAL_FRAMES));
         let bolt = add(
@@ -169,7 +179,7 @@ impl VortexArt {
             pixels,
             rects: Vec::new(),
             uploads: Vec::new(),
-            generation,
+            generation: next_generation(),
             spiral,
             bolt,
             debris,
@@ -194,7 +204,7 @@ impl VortexArt {
             pixels: self.pixels.clone(),
             rects: Vec::new(),
             uploads: Vec::new(),
-            generation: self.generation,
+            generation: next_generation(),
             spiral: self.spiral,
             bolt: self.bolt,
             debris: self.debris,
@@ -215,6 +225,7 @@ impl VortexArt {
             art.cells[slot].h = h;
             art.pixels[slot] = rgba;
         }
+        art.debris_px = art.cells[art.debris].w as f32;
         art.relayout();
         Arc::new(art)
     }
@@ -249,7 +260,6 @@ impl VortexArt {
                 rgba: self.pixels[i].clone(),
             })
             .collect();
-        self.generation = self.generation.wrapping_add(1).max(1);
     }
 }
 
@@ -344,7 +354,11 @@ pub struct VortexQuad {
 }
 
 impl VortexBatch {
-    pub fn new(camera: Mat4, art: Arc<VortexArt>, upload_pending: Arc<AtomicBool>) -> Self {
+    /// `view` is the GUI rect (`[cx, cy, w, h]`) the mounted node rect shows.
+    /// The spiral's own world space is that rect, so the camera maps it 1:1
+    /// onto the node - never the game camera, which during a floor transition
+    /// frames the room instead and would throw the vortex off-centre.
+    pub fn new(view: [f32; 2], art: Arc<VortexArt>, upload_pending: Arc<AtomicBool>) -> Self {
         let mut batch = SpriteBatch::with_id(
             "vortex",
             BatchDesc {
@@ -354,7 +368,7 @@ impl VortexBatch {
                 uploads_gen: art.generation,
             },
         );
-        batch.set_camera(camera);
+        batch.set_camera(screen_camera([view[0], view[1]]));
         if upload_pending.load(Ordering::Relaxed) {
             batch.extend_uploads(art.uploads.iter().map(|u| AtlasUpload { ..u.clone() }));
         }
@@ -595,7 +609,7 @@ mod vortex_art_tests {
     #[test]
     fn every_configured_strip_resolves() {
         let Some(dir) = assets() else { return };
-        let art = VortexArt::load(&dir, 1, 1);
+        let art = VortexArt::load(&dir, 1);
         let expect = |base: usize, frames: usize, fw: u32, fh: u32| {
             for f in 0..frames {
                 let cell = &art.cells[base + f];
@@ -631,7 +645,7 @@ mod vortex_art_tests {
     #[test]
     fn area_switch_recuts_the_debris_strip() {
         let Some(dir) = assets() else { return };
-        let desert = Arc::new(VortexArt::load(&dir, 1, 1));
+        let desert = Arc::new(VortexArt::load(&dir, 1));
         assert_eq!(desert.debris_px, 8.0);
         let jungle = desert.with_area(&dir, 105);
         assert_eq!(jungle.debris_px, 16.0);
@@ -650,7 +664,7 @@ mod vortex_art_tests {
     #[test]
     fn packing_fits_one_layer_without_overlap() {
         let Some(dir) = assets() else { return };
-        let art = VortexArt::load(&dir, 1, 1);
+        let art = VortexArt::load(&dir, 1);
         let mut claimed = vec![false; (LAYER * LAYER) as usize];
         for c in &art.cells {
             assert!(
