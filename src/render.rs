@@ -44,7 +44,7 @@ use crate::comps_a::{
     ARENA_H, ARENA_W, AimDir, DogGuardianLeap, DogGuardianPose, FloorMask, GrenadeFuse, Health,
     HitId, Inventory, LightningArc, PendingMutation, PendingUltra, Player, Projectile,
     ProjectileFade, RaceState, Run, SelectedCharacter, SlashProjectile, TILE, Team, TopSmalls,
-    Velocity, WALL_TILE, WallCell, WallTile, floor_cell_for_wall,
+    Velocity, WallCell, WallTile, floor_cell_for_wall,
 };
 use crate::comps_b::{
     Beam, BigDogMissileState, BossBrain, BossPhase, ChestArt, ChestKind, Corpse, CrownObject,
@@ -1049,39 +1049,17 @@ fn wall_out_raw(seed: u64, wx: i32, wy: i32) -> usize {
 
 /// GML `mcr_wall_update_lrwh` verbatim (`macros_general.gml:75-79`):
 /// `l`/`r` are the source-rect origin into the 24-wide Out cell, `w`/`h`
-/// its extent. `place_free` asks whether *anything* sits at that probe point,
-/// so a wall keeps its 4px skirt only over empty space - floor tiles and holes
-/// crop it too, which is why this takes the mask and not just the wall set
-/// (`comps_a::static_blocked_at`).
-fn wall_out_crop(
-    cells: &HashSet<(i32, i32)>,
-    wall_set: &HashSet<(i32, i32)>,
-    opened: &HashSet<(i32, i32)>,
-    wx: i32,
-    wy: i32,
-) -> (f32, f32, f32, f32) {
-    let base = Vec2::new(wx as f32 * WALL_TILE, wy as f32 * WALL_TILE);
-    let free = |at: Vec2| !crate::comps_a::static_blocked_at(cells, wall_set, opened, at);
-    let l = if free(base + Vec2::new(-WALL_TILE, 0.0)) {
-        0.0
-    } else {
-        4.0
-    };
-    let w = if free(base + Vec2::new(WALL_TILE, 0.0)) {
-        24.0 - l
-    } else {
-        20.0 - l
-    };
-    let r = if free(base + Vec2::new(0.0, -WALL_TILE)) {
-        0.0
-    } else {
-        4.0
-    };
-    let h = if free(base + Vec2::new(0.0, WALL_TILE)) {
-        24.0 - r
-    } else {
-        20.0 - r
-    };
+/// its extent. `place_free` only registers instances flagged `solid`, so a
+/// probe sees `Wall` and nothing else - `Floor` and `FloorExplo` are both
+/// `solid = false` and stay out of it, as do props, actors and the boss.
+/// The caller's mask is the 16px `Wall` one, so a probe covers exactly the
+/// neighbour cell.
+fn wall_out_crop(wall_set: &HashSet<(i32, i32)>, wx: i32, wy: i32) -> (f32, f32, f32, f32) {
+    let free = |ox: i32, oy: i32| !wall_set.contains(&(wx + ox, wy + oy));
+    let l = if free(-1, 0) { 0.0 } else { 4.0 };
+    let w = if free(1, 0) { 24.0 - l } else { 20.0 - l };
+    let r = if free(0, -1) { 0.0 } else { 4.0 };
+    let h = if free(0, 1) { 24.0 - r } else { 20.0 - r };
     (l, r, w, h)
 }
 
@@ -2250,7 +2228,7 @@ pub fn world_instances_cached(
                         frame,
                         wx,
                         wy,
-                        wall_out_crop(&cells, &solid_wall_set, &opened, wx, wy),
+                        wall_out_crop(&solid_wall_set, wx, wy),
                         [1.0; 4],
                     ) {
                         s.z = Z_WALL_SUBTOP;

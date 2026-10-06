@@ -10,9 +10,7 @@ use repame_sim::SimTime;
 
 use crate::audio::AudioCue;
 use crate::combat::queue_enemy_spawn;
-use crate::comps_a::{
-    FloorMask, GameCleanup, LevelCleanup, PendingWallBreak, Player, Run, Toast, WallCell,
-};
+use crate::comps_a::{GameCleanup, LevelCleanup, PendingWallBreak, Player, Run, Toast, WallCell};
 use crate::comps_b::{
     CampfirePhase, CampfireProp, CampfireState, CuzStrip, Enemy, LoopTransition, YungCuz, YvCouch,
 };
@@ -93,7 +91,6 @@ pub fn tick_campfire(
     mut cues: ResMut<Queue<AudioCue>>,
     enemies: Query<&Enemy>,
     mut campfires: Query<(Entity, &Pos, &mut CampfireState), With<CampfireProp>>,
-    mask: Res<FloorMask>,
     walls: Query<&WallCell>,
 ) {
     let dt = time.delta_secs;
@@ -165,12 +162,10 @@ pub fn tick_campfire(
                 // GML `Nothing2/Create_0:12-16`: every `Wall` with nothing at
                 // all on its four sides goes through `scrWallDestroy` - a real
                 // hole with rubble - before the boss's first step turns the rest
-                // invisible. `place_free` also sees props and the `Nothing2`
-                // that is mid-Create; the mask reduction knows only walls
-                // (invisible ones included, they still block) and floor, so a
-                // wall under the throne's own sprite can break here when GML
-                // keeps it. A marker for a wall that is already invisible finds
-                // nothing to break and drops out.
+                // invisible. `place_free` registers only `solid` instances, so
+                // the four probes see walls alone: the floor the wall ring hugs
+                // and the `Nothing2` mid-Create are both `solid = false` and
+                // never hold a wall back.
                 let wall_cells: std::collections::HashSet<(i32, i32)> =
                     walls.iter().map(|c| (c.0, c.1)).collect();
                 for cell in &wall_cells {
@@ -178,19 +173,8 @@ pub fn tick_campfire(
                         cell.0 as f32 * crate::worldgen::WALL_PX,
                         cell.1 as f32 * crate::worldgen::WALL_PX,
                     );
-                    let free = |at: glam::Vec2| {
-                        !crate::comps_a::static_blocked_at(
-                            &mask.cells,
-                            &wall_cells,
-                            &mask.opened,
-                            at,
-                        )
-                    };
-                    if free(origin + glam::Vec2::new(-crate::worldgen::WALL_PX, 0.0))
-                        && free(origin + glam::Vec2::new(crate::worldgen::WALL_PX, 0.0))
-                        && free(origin + glam::Vec2::new(0.0, -crate::worldgen::WALL_PX))
-                        && free(origin + glam::Vec2::new(0.0, crate::worldgen::WALL_PX))
-                    {
+                    let free = |ox: i32, oy: i32| !wall_cells.contains(&(cell.0 + ox, cell.1 + oy));
+                    if free(-1, 0) && free(1, 0) && free(0, -1) && free(0, 1) {
                         commands.spawn((
                             GameCleanup,
                             LevelCleanup,

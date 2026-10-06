@@ -102,26 +102,6 @@ pub fn floor_cell_for_wall(wx: i32, wy: i32) -> (i32, i32) {
     (wx.div_euclid(2), wy.div_euclid(2))
 }
 
-/// GML `place_free(x, y)` reduced to the instances a query can afford to
-/// enumerate: 16px `mskWall` cells (invisible ones included, they stay solid),
-/// 32px `mskFloor` tiles and 16px `FloorExplo` holes (`FloorExplo` inherits
-/// `Floor`, so a hole blocks a probe exactly like the tile it replaced).
-/// Actors, props and debris are transient and ignored.
-pub fn static_blocked_at(
-    floor: &std::collections::HashSet<(i32, i32)>,
-    walls: &std::collections::HashSet<(i32, i32)>,
-    opened: &std::collections::HashSet<(i32, i32)>,
-    p: Vec2,
-) -> bool {
-    let half = (
-        (p.x / WALL_TILE).floor() as i32,
-        (p.y / WALL_TILE).floor() as i32,
-    );
-    walls.contains(&half)
-        || opened.contains(&half)
-        || floor.contains(&((p.x / TILE).floor() as i32, (p.y / TILE).floor() as i32))
-}
-
 /// Live GML `TopSmall` instances, in 16x16 wall-grid coordinates.
 ///
 /// GML creates them once: every `Floor` spawns 8 `Top`s at its 32px
