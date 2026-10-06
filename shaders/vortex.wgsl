@@ -169,7 +169,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             if (all(buv > vec2<f32>(0.0)) & all(buv < vec2<f32>(1.0))) {
                 let bolt_uv_x = (frame * 176.0 + 0.5 + buv.x * 175.0) / 1056.0;
                 let bolt_uv_y = (0.5 + buv.y * 175.0) / 176.0;
-                let btex = textureSample(bolt_tex, lin_smp, vec2<f32>(bolt_uv_x, bolt_uv_y));
+                let btex = textureSampleLevel(bolt_tex, lin_smp, vec2<f32>(bolt_uv_x, bolt_uv_y), 0.0);
                 acc = source_over(acc, btex.rgb, btex.a);
                 let bolt_black = clamp(0.4 - s * 0.5, 0.0, 1.0);
                 if (bolt_black > 0.001) {
@@ -192,9 +192,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             let suv = rel / half_ext * 0.5 + vec2<f32>(0.5, 0.5);
             if (all(suv > vec2<f32>(0.0)) & all(suv < vec2<f32>(1.0))) {
                 let uv = (suv * 127.0 + 0.5) / 128.0;
-                var tex = textureSample(spiral_idpd_tex, lin_smp, uv);
+                var tex = textureSampleLevel(spiral_idpd_tex, lin_smp, uv, 0.0);
                 if (idpd2) {
-                    tex = textureSample(spiral_idpd2_tex, lin_smp, uv);
+                    tex = textureSampleLevel(spiral_idpd2_tex, lin_smp, uv, 0.0);
                 }
                 acc = source_over(acc, tex.rgb, tex.a);
                 let black_a = clamp(0.8 - s, 0.0, 1.0);
@@ -214,9 +214,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             // Half-texel inset to avoid atlas bleeding (sprite is 64x64 in 128x64 strip)
             let uv_x = (sframe * 64.0 + 0.5 + suv.x * 63.0) / 128.0;
             let uv_y = (0.5 + suv.y * 63.0) / 64.0;
-            var tex = textureSample(spiral_tex, lin_smp, vec2<f32>(uv_x, uv_y));
+            var tex = textureSampleLevel(spiral_tex, lin_smp, vec2<f32>(uv_x, uv_y), 0.0);
             if (kind > 0.5 && kind < 1.5) {
-                tex = textureSample(spiral_proto_tex, lin_smp, vec2<f32>(uv_x, uv_y));
+                tex = textureSampleLevel(spiral_proto_tex, lin_smp, vec2<f32>(uv_x, uv_y), 0.0);
             }
             // GML two-pass: white (c_white, alpha tex.a) then black 0.8 - s
             acc = source_over(acc, tex.rgb, tex.a);
@@ -251,7 +251,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             // frames in a 4-wide horizontal strip, half-texel inset
             let uv_x = (frame * fpx + 0.5 + duv.x * (fpx - 1.0)) / (4.0 * fpx);
             let uv_y = (0.5 + duv.y * (fpx - 1.0)) / fpx;
-            let tex = textureSample(debris_tex, lin_smp, vec2<f32>(uv_x, uv_y));
+            let tex = textureSampleLevel(debris_tex, lin_smp, vec2<f32>(uv_x, uv_y), 0.0);
             // scrDrawSpiral: white 1, then black (1 - xscale)
             acc = source_over(acc, tex.rgb, tex.a);
             let black_a = clamp(1.0 - xs, 0.0, 1.0);
@@ -302,7 +302,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             // two 3px frames side by side in the 6x3 strip
             let suv_x = (st.w * 3.0 + 0.5 + sduv.x * 2.0) / 6.0;
             let suv_y = (0.5 + sduv.y * 2.0) / 3.0;
-            let stex = textureSample(star_tex, lin_smp, vec2<f32>(suv_x, suv_y));
+            let stex = textureSampleLevel(star_tex, lin_smp, vec2<f32>(suv_x, suv_y), 0.0);
             // scrDrawSpiral: white 1, then black (1 - xscale)
             acc = source_over(acc, stex.rgb, stex.a);
             let sblack = clamp(1.0 - xs, 0.0, 1.0);
