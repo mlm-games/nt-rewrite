@@ -11,7 +11,7 @@ use repame_sim::SimTime;
 use crate::audio::AudioCue;
 use crate::combat::queue_enemy_spawn;
 use crate::comps_a::{
-    FloorMask, GameCleanup, LevelCleanup, PendingWallBreak, Player, Run, Toast, WallCell, WallTile,
+    FloorMask, GameCleanup, LevelCleanup, PendingWallBreak, Player, Run, Toast, WallCell,
 };
 use crate::comps_b::{
     CampfirePhase, CampfireProp, CampfireState, CuzStrip, Enemy, LoopTransition, YungCuz, YvCouch,
@@ -94,7 +94,7 @@ pub fn tick_campfire(
     enemies: Query<&Enemy>,
     mut campfires: Query<(Entity, &Pos, &mut CampfireState), With<CampfireProp>>,
     mask: Res<FloorMask>,
-    walls: Query<&WallCell, With<WallTile>>,
+    walls: Query<&WallCell>,
 ) {
     let dt = time.delta_secs;
     let idpd_alive = enemies
@@ -165,8 +165,12 @@ pub fn tick_campfire(
                 // GML `Nothing2/Create_0:12-16`: every `Wall` with nothing at
                 // all on its four sides goes through `scrWallDestroy` - a real
                 // hole with rubble - before the boss's first step turns the rest
-                // invisible. `place_free` sees props and actors too; the mask
-                // reduction only knows walls, floor and earlier holes.
+                // invisible. `place_free` also sees props and the `Nothing2`
+                // that is mid-Create; the mask reduction knows only walls
+                // (invisible ones included, they still block) and floor, so a
+                // wall under the throne's own sprite can break here when GML
+                // keeps it. A marker for a wall that is already invisible finds
+                // nothing to break and drops out.
                 let wall_cells: std::collections::HashSet<(i32, i32)> =
                     walls.iter().map(|c| (c.0, c.1)).collect();
                 for cell in &wall_cells {

@@ -60,10 +60,12 @@ pub fn apply_pending_wall_breaks(
     let mut despawned: std::collections::HashSet<Entity> = std::collections::HashSet::new();
     // `scrWallDestroy`'s `do/until` loops on `collision_rectangle` over the dead
     // wall's bbox, so every `Wall` sharing that cell dies with it - and each one
-    // used to spawn its own `FloorExplo`. The port keeps one hole per cell
-    // (`broken_cells`) and one despawn per entity (`despawned`), which is the
-    // same end state: no wall left standing on a hole, one hole, one rubble
-    // sprite.
+    // would spawn its own `FloorExplo`. `setup.rs` merges `wall_cells` and
+    // `small_walls` into one set before spawning and the re-seal is keyed by
+    // `live_walls`, so the port never stacks two: `broken_cells` keeps the
+    // effects to one per cell and `despawned` still kills a duplicate if one
+    // ever appears, which is the state GML reaches routinely and the port must
+    // not answer with wall art over a hole.
     let mut broken_cells: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
     let mut resealed: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
     // GML `FloorExplo/Create_0:19-27` runs before its `Top` spawns, so the new
@@ -176,10 +178,12 @@ pub fn apply_pending_wall_breaks(
 
         // `FloorExplo/Create_0:46-51`: `with (Wall)` inside 32 px destroys any
         // wall standing on a `FloorExplo` (`position_meeting(x, y, FloorExplo)`)
-        // - no new hole, no re-seal, no rubble. Left in, that wall keeps drawing
-        // its Bot/Top/Out over the hole it stands in. The same pass re-derives
-        // `visible` and `l/r/w/h`; the port reads both from the mask at draw
-        // time.
+        // - no new hole, no re-seal, no rubble. The same pass re-derives `visible`
+        // and `l/r/w/h`; the port reads both from the mask at draw time. The
+        // port's own invariants keep this from firing (the re-seal skips opened
+        // cells and every wall at a broken cell is despawned above), so it only
+        // matters if a duplicate ever survives a break - and then it is the
+        // difference between rubble and a wall drawn on top of it.
         for ((bx, by), _) in &broken {
             let origin = glam::Vec2::new(*bx as f32 * WALL_PX, *by as f32 * WALL_PX);
             for (wall_e, cell, _) in &walls {
