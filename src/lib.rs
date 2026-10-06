@@ -45,7 +45,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use web_time::Duration;
 
-use crate::vortex_pass::{VARD_VARIANTS, VortexPass, VortexTexture};
+use crate::vortex_pass::{VortexArt, VortexBatch};
 use bevy_ecs::prelude::*;
 use glam::Vec2;
 use rand::RngExt;
@@ -76,13 +76,13 @@ use crate::render::{
     ATLAS_PAGES, ATLAS_SIZE, CamPoi, CamStepInput, GmlCamera, RenderAssets, SettingSliderTarget,
     StaticWorldCache, Z_BLOOM, Z_CROSSHAIR, Z_FAINTED, Z_FOG, Z_FX, Z_HUD, Z_MENU,
     Z_PORTAL_INDICATOR, Z_SHADOW, Z_SIDEART, Z_SPIRAL_FIGURES, Z_SPLASH, Z_TOUCH, background_color,
-    bloom_sprites, cam_viewdist_for, crosshair_sprites, decode_png, fainted_bar_sprites,
-    fog_sprites, fx_instances, fx_texts, gml_camera_step, gml_view_size, hud_gui_texts_dp,
-    hud_sprites, letterbox_sprites, menu_gui_texts, menu_gui_texts_dp, menu_gui_texts_vw,
-    menu_sprites, pause_button_sprites, portal_indicator_sprites, settings_slider_hit,
-    settings_slider_value, shadow_sprites, sideart_sprites, spiral_figures, splash_sprites,
-    srgb_to_linear, stamp_z, title_cam_focus, title_camera_step, touch_sprites, view_rect_world,
-    world_camera, world_instances_cached,
+    bloom_sprites, cam_viewdist_for, crosshair_sprites, fainted_bar_sprites, fog_sprites,
+    fx_instances, fx_texts, gml_camera_step, gml_view_size, hud_gui_texts_dp, hud_sprites,
+    letterbox_sprites, menu_gui_texts, menu_gui_texts_dp, menu_gui_texts_vw, menu_sprites,
+    pause_button_sprites, portal_indicator_sprites, settings_slider_hit, settings_slider_value,
+    shadow_sprites, sideart_sprites, spiral_figures, splash_sprites, srgb_to_linear, stamp_z,
+    title_cam_focus, title_camera_step, touch_sprites, view_rect_world, world_camera,
+    world_instances_cached,
 };
 use crate::schedule::build_sim_schedule;
 use crate::setup::setup_run_with_seed;
@@ -271,11 +271,13 @@ pub struct App {
     cursor_img: Option<std::sync::Arc<repose_core::CustomCursorImage>>,
     cursor_img_key: Option<(i32, [u32; 3], u64, u32)>,
     last_live_frame: Option<Arc<FrameInput>>,
-    /// Decoded vortex background textures for `vortex_tex_area`
-    /// (slots: spiral, bolt, debris, proto, idpd, idpd2, star, variants).
-    vortex_tex: Vec<VortexTexture>,
-    vortex_tex_area: Option<u8>,
-    vortex_tex_gen: u64,
+    /// Vortex background atlas for `vortex_art_area`: every strip cut into one
+    /// cell per frame, pixels cached so an area switch re-cuts only `sprDebris`.
+    vortex_art: Option<Arc<VortexArt>>,
+    vortex_art_area: Option<u8>,
+    /// Set when the atlas changed, so the next mounted pass replays the cached
+    /// uploads (`SpriteBatch` drops uploads once their generation is applied).
+    vortex_art_pending: Arc<std::sync::atomic::AtomicBool>,
     // staged shell input (drained into `NtInput`/`MenuEdge` per frame):
     // staging owns every level - `staging.held` (layout-independent
     // physical positions, GML `keyboard_check` parity),
@@ -406,9 +408,9 @@ impl App {
             cursor_img: None,
             cursor_img_key: None,
             last_live_frame: None,
-            vortex_tex: Vec::new(),
-            vortex_tex_area: None,
-            vortex_tex_gen: 0,
+            vortex_art: None,
+            vortex_art_area: None,
+            vortex_art_pending: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             window_focused: true,
             staging: repame_shell::Staging::shared(),
             shortcut_edges: repame_shell::shared_edges(),
@@ -472,70 +474,17 @@ impl App {
         self.cursor_img = None;
         self.cursor_img_key = None;
         self.last_live_frame = None;
-        self.vortex_tex.clear();
-        self.vortex_tex_area = None;
-        self.vortex_tex_gen = self.vortex_tex_gen.wrapping_add(1).max(1);
+        self.vortex_art = None;
+        self.vortex_art_area = None;
+        self.vortex_art_pending
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
-    /// Vortex background textures for a GML area (headless-observable;
-    /// same decode the live frame uses on area switches).
-    pub fn debug_vortex_textures(dir: &Path, gml_area: u8) -> Vec<VortexTexture> {
-        Self::load_vortex_textures(dir, gml_area, 1)
-    }
-
-    /// Vortex background textures for a GML area (decoded once per
-    /// area; slots match the shader bindings: spiral, bolt, debris,
-    /// proto, idpd, idpd2, star, and seven variant debris strips).
-    /// Missing files fall back to area 0 debris so the pass always has
-    /// fourteen bound slots.
-    fn load_vortex_textures(dir: &Path, gml_area: u8, generation: u64) -> Vec<VortexTexture> {
-        fn decode(dir: &Path, name: &str) -> Option<(u32, u32, Vec<u8>)> {
-            decode_png(&dir.join("images").join(format!("{name}.png"))).ok()
-        }
-        // GML `SpiralDebris/Create_0` verbatim: the mote strip is
-        // `sprDebris + GameCont.area` - the FULL GML area number, not the
-        // art variant. Campfire (area 0) reuses `sprDebris0`; secret areas
-        // use their own (`sprDebris101` …). Never `sprDebris1` here.
-        let debris = decode(dir, &format!("sprDebris{gml_area}"))
-            .or_else(|| decode(dir, "sprDebris0"))
-            .unwrap_or((1u32, 1u32, vec![255, 255, 255, 255]));
-        let mut out = Vec::new();
-        let stems = [
-            "sprSpiral",
-            "sprPortalLightning",
-            "",
-            "sprSpiralProto",
-            "sprSpiralIDPD",
-            "sprSpiralIDPD2",
-            "sprSpiralStar",
-        ];
-        for (slot, stem) in stems.into_iter().enumerate() {
-            let (w, h, rgba) = if stem.is_empty() {
-                debris.clone()
-            } else {
-                decode(dir, stem).unwrap_or((1u32, 1u32, vec![255, 255, 255, 255]))
-            };
-            out.push(VortexTexture {
-                slot: slot as u32,
-                w,
-                h,
-                rgba: rgba.into(),
-                generation,
-            });
-        }
-        for (index, stem) in VARD_VARIANTS.into_iter().enumerate() {
-            let (w, h, rgba) = decode(dir, stem.strip_prefix("images/").unwrap_or(stem))
-                .unwrap_or((1u32, 1u32, vec![0, 0, 0, 0]));
-            out.push(VortexTexture {
-                slot: (7 + index) as u32,
-                w,
-                h,
-                rgba: rgba.into(),
-                generation,
-            });
-        }
-        out
+    /// Vortex background atlas for a GML area (headless-observable; the same
+    /// build the live frame uses).
+    pub fn debug_vortex_art(dir: &Path, gml_area: u8) -> Arc<VortexArt> {
+        Arc::new(VortexArt::load(dir, gml_area, 1))
     }
 
     pub fn has_assets(&self) -> bool {
@@ -705,7 +654,7 @@ impl App {
 
     /// Spiral snapshot for one rendered frame (headless-observable).
     pub fn spiral_snapshot(&self, bg_alpha: f32) -> crate::vortex_pass::VortexSnapshot {
-        self.spiral.snapshot(bg_alpha)
+        self.spiral.snapshot_with_render_mode(bg_alpha, true, true)
     }
 
     /// Spiral liveness for the vortex mount decision (headless
@@ -721,7 +670,7 @@ impl App {
     }
 
     /// Spiral clock (headless freeze assertion).
-    pub fn spiral_ticks(&self) -> f32 {
+    pub fn spiral_ticks(&self) -> u32 {
         self.spiral.ticks
     }
 
@@ -748,11 +697,6 @@ impl App {
     /// Live debris motes in the current ring (headless cull diagnostics).
     pub fn spiral_debris_live(&self) -> usize {
         self.spiral.debris.iter().filter(|d| d.alive).count()
-    }
-
-    /// Drain fast-forward bias (headless drain diagnostics).
-    pub fn spiral_drain_bias(&self) -> f32 {
-        self.spiral.drain_bias
     }
 
     /// Live star motes (headless drain diagnostics).
@@ -3625,8 +3569,7 @@ impl App {
             // so the figures never float over the flat camp or the dim. They
             // follow the live SpiralCont emitter position, which is view-local
             // and independent of the room camera.
-            let vortex_mounted_later = self.assets.is_some()
-                && !self.vortex_tex.is_empty()
+            let vortex_mounted_later = self.vortex_art.is_some()
                 && !matches!(menu_kind, Some(MenuOverlay::Title))
                 && (!matches!(menu_kind, Some(MenuOverlay::Splash)) || splash_logo)
                 && (!paused || spiral_cover)
@@ -3910,15 +3853,19 @@ impl App {
             AppState::InGame => (0.0, false, false),
         };
         self.last_bg_alpha = bg_alpha;
-        // Vortex art follows the GML area (debris strip is per-area);
-        // decode once per area, not per frame.
+        // Vortex art follows the GML area (debris strip is per-area). The rest
+        // of the atlas is decoded once and replayed from its pixel cache, so
+        // an area switch costs one PNG decode plus a texture write.
         let gml_area = gml_area_for_area(area);
-        if self.assets_dir.is_some() && self.vortex_tex_area != Some(gml_area) {
+        if self.assets_dir.is_some() && self.vortex_art_area != Some(gml_area) {
             if let Some(dir) = self.assets_dir.clone() {
-                self.vortex_tex_gen = self.vortex_tex_gen.wrapping_add(1).max(1);
-                let generation = self.vortex_tex_gen;
-                self.vortex_tex = Self::load_vortex_textures(&dir, gml_area, generation);
-                self.vortex_tex_area = Some(gml_area);
+                self.vortex_art = Some(match self.vortex_art.take() {
+                    Some(art) => art.with_area(&dir, gml_area),
+                    None => Arc::new(VortexArt::load(&dir, gml_area, 1)),
+                });
+                self.vortex_art_area = Some(gml_area);
+                self.vortex_art_pending
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
             }
         }
         // The vortex layer mounts only where a GML spiral caller exists:
@@ -3927,31 +3874,26 @@ impl App {
         // through the main-menu handoff. Paused/GameOver draw their captured
         // room or dead-run panel instead of a live spiral.
         let splash = menu_kind == Some(MenuOverlay::Splash);
-        let vortex_requested = self.assets.is_some()
-            && !self.vortex_tex.is_empty()
+        let vortex_requested = self.vortex_art.is_some()
             && (!splash || splash_logo)
             && (!paused || spiral_cover)
             && !game_over
             && (self.spiral.alive || !self.spiral.is_done() || spiral_cover);
-        let snap = vortex_requested.then(|| {
-            self.spiral
-                .snapshot_with_render_mode(bg_alpha, draw_bolts, draw_details)
-        });
-        let mut vortex_layer = snap.map(|snap| {
-            let mut pass = VortexPass::new(snap);
-            pass.extend_textures(self.vortex_tex.clone());
-            // The engine hands this node's rect to the pass as the viewport, so
-            // anchoring to the GML box both clips the quad to the pillarbox
-            // and keeps its `view` uv->GUI mapping 1:1 with the batch.
-            // `fill_max_size` spread the spiral over the bars: the batch
-            // frames in-shader, a fullscreen pass only sees the raw canvas.
-            let box_dp = self.gml_frame().box_dp;
+        let mut vortex_layer = vortex_requested.then(|| {
+            let snap = self
+                .spiral
+                .snapshot_with_render_mode(bg_alpha, draw_bolts, draw_details);
+            // World units are GUI px and this camera frames `world_size`, the
+            // GML view rect, so the layer lands 1:1 with the main batch and the
+            // pillarbox clips it without the node being sized to the box.
+            let mut pass = VortexBatch::new(
+                self.cam.fit_matrix(viewport_dp, world_size),
+                Arc::clone(self.vortex_art.as_ref().expect("vortex art loaded")),
+                Arc::clone(&self.vortex_art_pending),
+            );
+            pass.push_snapshot(&snap);
             Embedded(
-                Modifier::new()
-                    .absolute()
-                    .size(Dp(box_dp[2]), Dp(box_dp[3]))
-                    .offset(Some(Dp(box_dp[0])), Some(Dp(box_dp[1])), None, None)
-                    .hit_passthrough(),
+                Modifier::new().fill_max_size().hit_passthrough(),
                 Callback::new(pass),
             )
         });

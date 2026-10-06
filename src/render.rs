@@ -10,7 +10,7 @@
 //! `pickups.rs`, `weapon_id_sprite`).
 //!
 //! Portal/vortex is intentionally NOT sprite-mapped: it belongs to the
-//! fullscreen pass (`crate::vortex_pass::VortexPass`) driven from
+//! vortex batch (`crate::vortex_pass::VortexBatch`) driven from
 //! [`crate::vortex::SpiralCtl`]. [`background_color`] (per-area dark fill)
 //! is the fallback where no vortex layer is mounted; portal entities are
 //! skipped.
@@ -1610,7 +1610,7 @@ pub fn gml_view_size(viewport_dp: [f32; 2]) -> [f32; 2] {
 
 /// Full-viewport fill under the sprite batch, per area. Fallback where
 /// no vortex layer is mounted (pre-run menus, missing art); live frames
-/// drive `crate::vortex_pass::VortexPass` on top of this.
+/// drive `crate::vortex_pass::VortexBatch` on top of this.
 pub fn background_color(area: AreaId) -> [f32; 4] {
     // GML `scrAreaGetBackroundColor` verbatim (GameMaker `#rrggbb` -> sRGB
     // 0..1; custom area colors are shell-side and fall through here).
@@ -11549,7 +11549,7 @@ pub fn hud_texts_dp(
 //   as `WorldText`.
 // - Portal bodies draw their live strip (swaps ride `animate_portal`); shock/clear/
 //   strike draw 1-frame-per-step strips in the hit-FX pass. The vortex background is
-//   not a sprite (fullscreen `crate::vortex_pass::VortexPass`).
+//   not a sprite (`crate::vortex_pass::VortexBatch`).
 // - Dynamic art paths bevy built at runtime (`weapon_id_sprite` falls back to revolver
 //   here too when `wep_sprt` is `mskNone`/absent; secret tile families fall back to
 //   route strips when the pack lacks `sprFloor10x`).

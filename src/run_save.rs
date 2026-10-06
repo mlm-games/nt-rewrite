@@ -123,8 +123,7 @@ fn profile_dir() -> PathBuf {
 }
 
 fn store_in(dir: &Path) -> SaveStore<FsStorage> {
-    SaveStore::new(dir, run_save_file_name())
-        .with_validator(SaveStore::<FsStorage>::is_intact_ron)
+    SaveStore::new(dir, run_save_file_name()).with_validator(SaveStore::<FsStorage>::is_intact_ron)
 }
 
 fn store() -> SaveStore<FsStorage> {

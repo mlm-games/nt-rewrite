@@ -312,7 +312,10 @@ impl Debris {
 #[derive(Resource, Debug)]
 pub struct SpiralCtl {
     pub angle: f32,
-    pub ticks: f32,
+    /// 30 Hz tick counter. Integral: the ring lookup is `(birth - 1) % N` and
+    /// the strip frame is `age / 15`, so an f32 clock would start skipping
+    /// ticks past 2^24 (~6.5 days of uninterrupted ticking).
+    pub ticks: u32,
     acc: f32,
     pub ring: Vec<[f32; 4]>,
     pub head: usize,
@@ -324,8 +327,7 @@ pub struct SpiralCtl {
     pub stars: Vec<Star>,
     pub vards: Vec<Vard>,
     pub alive: bool,
-    pub death_tick: Option<f32>,
-    pub drain_bias: f32,
+    pub death_tick: Option<u32>,
     pub kind: SpiralKind,
     pub gml_area: u8,
     /// Deterministic-stream seed (run seed; snapshots with equal seeds
@@ -337,7 +339,6 @@ pub struct SpiralCtl {
     wisp_initial: Vec<f32>,
     wisp_xscale: Vec<f32>,
     wisp_grow: Vec<f32>,
-    wisp_frozen: Vec<bool>,
     /// GML `SpiralCont.bossfight` (`instance_exists(Nothing2) ||
     /// instance_exists(Nothing2Appear) || instance_exists(NothingSpiral)`): no
     /// `SpiralDebris` births while set. GML `Nothing2/Create_0` spawns
@@ -373,7 +374,7 @@ impl SpiralCtl {
     pub fn warmed_up_for_gml_area_seeded_in_view(gml_area: u8, seed: u64, view_w: f32) -> Self {
         let mut ctl = Self {
             angle: 0.0,
-            ticks: 0.0,
+            ticks: 0,
             acc: 0.0,
             ring: vec![[-1.0; 4]; MAX_WISPS],
             head: 0,
@@ -399,7 +400,6 @@ impl SpiralCtl {
             vards: Vec::new(),
             alive: true,
             death_tick: None,
-            drain_bias: 0.0,
             kind: SpiralKind::for_gml_area(gml_area),
             gml_area,
             seed,
@@ -410,7 +410,6 @@ impl SpiralCtl {
             wisp_initial: vec![0.0; MAX_WISPS],
             wisp_xscale: vec![0.0; MAX_WISPS],
             wisp_grow: vec![0.0; MAX_WISPS],
-            wisp_frozen: vec![false; MAX_WISPS],
         };
         ctl.angle = ctl.random01() * 360.0;
         for _ in 0..WARMUP_TICKS {
@@ -425,12 +424,6 @@ impl SpiralCtl {
         if self.alive {
             self.alive = false;
             self.death_tick = Some(self.ticks);
-            for slot in 0..MAX_WISPS {
-                let birth = self.ring[slot][2];
-                if birth >= 0.0 && self.wisp_xscale[slot] < 0.01 {
-                    self.wisp_frozen[slot] = true;
-                }
-            }
         }
     }
 
@@ -449,7 +442,7 @@ impl SpiralCtl {
             if w[2] < 0.0 {
                 return false;
             }
-            if self.ticks - w[2] < 0.0 {
+            if self.ticks as f32 - w[2] < 0.0 {
                 return true;
             }
             self.wisp_xscale[slot] <= self.thresh()
@@ -476,13 +469,13 @@ impl SpiralCtl {
         if birth < 0.0 {
             return 0.0;
         }
-        let age = self.ticks - birth;
+        let age = self.ticks as f32 - birth;
         if age <= 0.0 {
             return 0.0;
         }
         let proto = self.kind == SpiralKind::Proto;
         let live_ticks = match self.death_tick {
-            Some(d) => (d - birth).clamp(0.0, age),
+            Some(d) => (d as f32 - birth).clamp(0.0, age),
             None => age,
         };
         let mut grow = 0.0f32;
@@ -530,7 +523,7 @@ impl SpiralCtl {
     }
 
     fn tick_once(&mut self) {
-        self.ticks += 1.0;
+        self.ticks += 1;
         let drain = !self.alive;
         // GML `Spiral/Step_0` bolt clock first: live wisps advance
         // before this tick's birth runs, so a newborn's `Create_0`
@@ -549,7 +542,7 @@ impl SpiralCtl {
             self.wisp_xscale[slot] = xscale;
             let birth = self.ring[slot][2] as u32;
             self.streams[slot].lanim +=
-                0.2 + stream_hash01(self.seed, birth, self.ticks as u32, STREAM_RATE_SALT) * 0.3;
+                0.2 + stream_hash01(self.seed, birth, self.ticks, STREAM_RATE_SALT) * 0.3;
         }
         if self.alive {
             let kind = self.kind;
@@ -579,7 +572,7 @@ impl SpiralCtl {
                 // radians trig, so the ring stores `(angle_deg + 45).to_radians()`
                 // (rotation only; `+45` is wisp-art-only - the bolt pass strips it).
                 let mut rot = (self.angle + 45.0).to_radians();
-                if kind == SpiralKind::Idpd && (self.ticks as i64 % 11) <= 1 {
+                if kind == SpiralKind::Idpd && self.ticks % 11 < 2 {
                     // GML only swaps sprite_index to sprSpiralIDPD2 here;
                     // the angle is untouched. Variant rides in the sign bit.
                     rot = -rot.abs();
@@ -590,11 +583,11 @@ impl SpiralCtl {
                 // GML `instance_create(x, y, Spiral)`: the wisp's
                 // `xstart/ystart` freeze at the emitter pos (the cont's
                 // just-stepped `x/y`), NOT the cont's live pos.
-                self.ring[slot] = [x, y, self.ticks, rot];
+                self.ring[slot] = [x, y, self.ticks as f32, rot];
                 self.head = (slot + 1) % MAX_WISPS;
                 // GML `Spiral/Create_0`: `lanim = -random(300)`,
                 // `langle = random_angle` (deterministic stream).
-                let birth = self.ticks as u32;
+                let birth = self.ticks;
                 let proto = kind == SpiralKind::Proto;
                 self.wisp_initial[slot] = if proto {
                     stream_hash01(self.seed, birth, 0, STREAM_PROTO_SALT) * 0.01
@@ -603,7 +596,6 @@ impl SpiralCtl {
                 };
                 self.wisp_xscale[slot] = self.wisp_initial[slot];
                 self.wisp_grow[slot] = 0.0;
-                self.wisp_frozen[slot] = false;
                 self.streams[slot] = WispStream {
                     lanim: -stream_hash01(self.seed, birth, 0, STREAM_HEAD_SALT) * 300.0,
                     langle: stream_hash01(self.seed, birth, 0, STREAM_ANGLE_SALT)
@@ -660,13 +652,6 @@ impl SpiralCtl {
                     }
                 }
             }
-        } else {
-            // Drain (SpiralCont dead): GML speeds growth (grow*=1.5,
-            // destroy at 3.0 not 2.5) but `lanim` keeps realtime cadence.
-            // Do NOT rewind births here - the shader indexes slots by
-            // `(birth-1) % N`, so rewinding would orphan live wisps.
-            // The CPU snapshot applies the same drain law per birth.
-            self.drain_bias += 5.5;
         }
 
         for i in 0..MAX_DEBRIS {
@@ -881,14 +866,13 @@ impl SpiralCtl {
     }
 
     /// Snapshot for the background pass: exactly what
-    /// [`VortexPass`](crate::vortex_pass::VortexPass) consumes (converter, not
-    /// engine change). `glob_a = (ticks, drain_bias, bg_r, bg_g)`,
-    /// `glob_b = (bg_b, bg_alpha, thresh, kindpacked)` with the bevy paddings
-    /// (`-1` wisps, `-1000` debris), plus each wisp's `lanim`/`langle` stream
+    /// [`VortexBatch`](crate::vortex_pass::VortexBatch) consumes (converter, not
+    /// engine change). Carries the bevy paddings (`-1` wisps, `-1000` debris)
+    /// plus each wisp's `lanim`/`langle` stream
     /// (GML `Spiral` bolt clock) indexed like the ring. Background is always
     /// black (bevy `background_color`); `bg_alpha` follows GML `scrDrawSpiral`
     /// (opaque everywhere except the campfire title; see the `bg_alpha` match at
-    /// the `VortexPass` mount in `lib.rs`). Sound flags (`WispStream::sound_played`,
+    /// the `VortexBatch` mount in `lib.rs`). Sound flags (`WispStream::sound_played`,
     /// `Debris::sound_played`) stay sim-side - the snapshot carries no audio, the
     /// shell drains them directly (GML plays them inline in the draw script).
     pub fn snapshot(&self, bg_alpha: f32) -> VortexSnapshot {
@@ -913,18 +897,13 @@ impl SpiralCtl {
         for (dst, src) in debris.iter_mut().zip(self.debris_ring.iter()) {
             *dst = *src;
         }
-        let mut streams = [[-1.0, 0.0, 0.0, 0.0]; VORTEX_WISPS];
+        let mut streams = [[-1.0, 0.0, 0.0]; VORTEX_WISPS];
         for (slot, (dst, src)) in streams.iter_mut().zip(self.streams.iter()).enumerate() {
             let scale = self.ring[slot][2]
                 .ge(&0.0)
                 .then_some(self.wisp_xscale[slot])
                 .unwrap_or(0.0);
-            *dst = [
-                src.lanim,
-                src.langle,
-                scale,
-                if self.wisp_frozen[slot] { 1.0 } else { 0.0 },
-            ];
+            *dst = [src.lanim, src.langle, scale];
         }
         let mut stars = [[-1000.0, 0.0, 0.0, 0.0]; VORTEX_WISPS];
         for (dst, src) in stars
@@ -962,7 +941,6 @@ impl SpiralCtl {
             vards,
             vard_meta,
             ticks: self.ticks,
-            drain_bias: self.drain_bias,
             bg_rgb: [0.0, 0.0, 0.0],
             bg_alpha,
             thresh: self.thresh(),
@@ -1124,16 +1102,16 @@ mod vortex_ui_parity {
         ctl.kill();
         let death = ctl.ticks;
         // Youngest wisp: born 1 tick before the kill.
-        let young = death - 1.0;
+        let young = death as f32 - 1.0;
         // 10 drain ticks in: GML grows it to ~0.3, still swirling.
-        ctl.ticks = death + 10.0;
+        ctl.ticks = death + 10;
         let s = ctl.wisp_scale_at(young);
         assert!(
             s < 3.0,
             "young wisp must still swirl 10 ticks after kill, got {s}"
         );
         // 25 drain ticks in: GML blows it past the plane (~42).
-        ctl.ticks = death + 25.0;
+        ctl.ticks = death + 25;
         let s = ctl.wisp_scale_at(young);
         assert!(
             s > 3.0,
