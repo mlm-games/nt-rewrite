@@ -1448,6 +1448,12 @@ pub fn portal_check(
     vault: Query<Entity, With<CrownPedestal>>,
     vault_statues: Query<Entity, With<crate::crown::VaultStatue>>,
 ) {
+    // GML `Corpse/Alarm_0.gml:3`: `TutCont` blocks the ordinary exit portal,
+    // so the tutorial's own portal (GML `TutCont/Alarm_0:11`) is the only
+    // way out.
+    if run.tutorial {
+        return;
+    }
     if run.game_over || run.portal_open {
         return;
     }

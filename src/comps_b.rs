@@ -1692,6 +1692,14 @@ pub struct WantRevivePopoFreak {
     pub timer: Timer,
 }
 
+/// GML `objects/TutorialTarget`: the spawn point `Step_2` pins the dummy to,
+/// plus the one-off geometry settle from `Create_0:21`.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct TutorialTargetHome {
+    pub at: Vec2,
+    pub seated: bool,
+}
+
 /// GML `objects/RevivePopoFreak`: the 15-step second half of the revive.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RevivePopoFreak;

@@ -192,11 +192,55 @@ pub fn generation_goal(floor: u32) -> usize {
     110
 }
 
+/// GML `TutCont/Create_0.gml:18-40`. `TutCont` hand-lays a `choose(3, 4)`
+/// half-extent square of `Floor` on a 32 px grid centred on the room
+/// sentinel, dropping each corner on `irandom(2)`, and then hangs a
+/// `TutorialTarget` on the `Floor` nearest 196 px out along each of the
+/// four 45-degree diagonals.
+fn tutorial_arena(plan: &mut LevelPlan, events: &mut Vec<PopulationEvent>, rng: &mut StdRng) {
+    let w = 3 + i32::from(rng.random_bool(0.5));
+    let h = 3 + i32::from(rng.random_bool(0.5));
+    for xx in -w..=w {
+        for yy in -h..=h {
+            if xx.abs() == w && yy.abs() == h && rng.random::<u8>() < 2 {
+                continue;
+            }
+            plan.floor_cells.push((xx, yy));
+        }
+    }
+    plan.floor_cells.sort_unstable();
+    plan.floor_cells.dedup();
+
+    let centre = Vec2::splat(TILE as f32 * 0.5);
+    let mut ang = 45.0_f32.to_radians();
+    for _ in 0..4 {
+        let probe = centre + Vec2::from_angle(ang) * 196.0;
+        if let Some(cell) = plan.floor_cells.iter().copied().min_by(|a, b| {
+            cell_center_px(a.0, a.1)
+                .distance_squared(probe)
+                .total_cmp(&cell_center_px(b.0, b.1).distance_squared(probe))
+        }) {
+            // GML `Create_0:21`: the target settles against geometry. It is
+            // pushed straight onto the event list because the enemy pass that
+            // normally drains `plan.enemies` has already run.
+            let at = cell_center_px(cell.0, cell.1);
+            plan.enemies.push((EnemyKind::TutorialTarget, at));
+            events.push(PopulationEvent::Enemy {
+                kind: EnemyKind::TutorialTarget,
+                pos: at,
+            });
+        }
+        ang += std::f32::consts::FRAC_PI_2;
+    }
+}
+
 fn generation_goal_for_run(run: &Run) -> usize {
-    // GML `GenCont/Create_0`: a fresh tutorial run builds the 5-floor
-    // `TutCont` arena instead of the area goal.
+    // GML `GenCont/Create_0:38` sets `goal = 5`, but the `FloorMaker` it
+    // creates at `:43-45` runs `Create_0` AFTER `TutCont` exists, so
+    // `FloorMaker/Create_0:22-24` immediately overrides it to 1 - the
+    // tutorial square plus a single stub corridor.
     if run.tutorial {
-        return 5;
+        return 1;
     }
     if is_secret_area(run.area) {
         return match run.area {
@@ -311,6 +355,7 @@ const RNG_ENEMY_CALL: u64 = 0xD6E8_FEB8_6659_FD93;
 const RNG_PROPS: u64 = 0xA076_1D64_78BD_642F;
 const RNG_CHEST: u64 = 0xE703_7ED1_A0B4_28DB;
 const RNG_PIZZA: u64 = 0x8EBC_6AF0_9C88_C6E3;
+const RNG_TUTORIAL: u64 = 0x9E37_79B9_7F4A_7C15;
 /// GML draws the crib's `CarVenusFixed` roll from the default
 /// `random(5)` stream (`GenCont/Alarm_2.gml:95`) inside `Alarm_2`, one
 /// step before `Alarm_0` reseeds that stream for `scrPopulate`; the port
@@ -2581,17 +2626,11 @@ fn populate(
     // `TutCont/Alarm_0` on entering PickingUp) ships in the plan so the
     // walkthrough has a gun to pick up.
     if run.tutorial {
-        plan.enemies.clear();
+        let mut rng = phase_rng(run.gen_seed, RNG_TUTORIAL);
+        events.retain(|event| !matches!(event, PopulationEvent::Enemy { .. }));
+        tutorial_arena(plan, &mut events, &mut rng);
         plan.chests.clear();
         plan.boss = None;
-        if let Some(&(fx, fy)) = plan
-            .floor_cells
-            .iter()
-            .max_by_key(|c| c.0.abs() + c.1.abs())
-        {
-            plan.chests.push(ChestSpawn::Weapon(cell_center_px(fx, fy)));
-        }
-        events.retain(|event| !matches!(event, PopulationEvent::Enemy { .. }));
     }
     events.extend(plan.chests.iter().copied().map(PopulationEvent::Chest));
     plan.population_events = events;

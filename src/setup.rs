@@ -2949,18 +2949,31 @@ mod verbatim_title_to_first_level {
         setup_run_with_seed(&mut world, 1234);
         let run = world.resource::<Run>();
         assert!(run.tutorial);
-        assert!(world.query::<&Enemy>().iter(&world).next().is_none());
-        // GML `TutCont/Alarm_0` scripts one `WeaponChest` on entering
-        // the PickingUp step; the plan ships it so the walkthrough has
-        // a gun to pick up.
-        let chests: Vec<_> = world
+        // GML `GenCont/Alarm_0:25-28` scrubs every `enemy` except
+        // `TutorialTarget`, and `TutCont/Create_0:32-40` plants four of those
+        // on the diagonals 196 px out.
+        let kinds: Vec<EnemyKind> = world
+            .query::<&Enemy>()
+            .iter(&world)
+            .map(|e| e.kind)
+            .collect();
+        assert_eq!(kinds, vec![EnemyKind::TutorialTarget; 4]);
+        // GML `TutCont/Alarm_0:19-53` raises the `WeaponChest` on entering
+        // the PickingUp step, so nothing is lying around at level start.
+        let chests = world
             .query::<&crate::comps_b::Pickup>()
             .iter(&world)
             .filter(|p| matches!(p.kind, crate::comps_b::PickupKind::Chest(_)))
-            .collect();
-        assert_eq!(chests.len(), 1);
+            .count();
+        assert_eq!(chests, 0);
+        // GML `TutCont/Create_0:18-28`: the `choose(3, 4)` half-extent
+        // square, corners dropped on `irandom(2)`, so 48..81 tiles.
         let mask = world.resource::<FloorMask>();
-        assert!(!mask.cells.is_empty() && mask.cells.len() < 40);
+        assert!(
+            (45..90).contains(&mask.cells.len()),
+            "tutorial square: {}",
+            mask.cells.len()
+        );
     }
 
     #[test]

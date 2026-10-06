@@ -492,6 +492,14 @@ fn spawn_enemy_impl(
     if let Some(anim_def) = catalog.def(def.sprite) {
         ec.insert(SpriteAnim::new(def.sprite, anim_def));
     }
+    if kind == EnemyKind::TutorialTarget {
+        // GML `TutorialTarget/Create_0.gml:26` `alarm[1] = -1` plus
+        // `Step_2.gml`'s unconditional pin back to `xstart`/`ystart`.
+        ec.insert(crate::comps_b::TutorialTargetHome {
+            at: pos,
+            seated: false,
+        });
+    }
     drop(ec);
     if kind == EnemyKind::SuperFrog {
         for _ in 0..10 {
@@ -6145,6 +6153,40 @@ pub fn tick_frog_queen_deaths(
             },
             Pos(pos.0),
         ));
+    }
+}
+
+/// GML `objects/TutorialTarget/Step_2.gml` plus `Create_0`'s `alarm[1] = -1`:
+/// the shooting-gallery dummy never wanders, never opens fire, and never
+/// takes its own step beyond being pinned back to its spawn point. The
+/// 12 px `move_contact_solid` shove from `Create_0:21` lands once.
+pub fn tick_tutorial_targets(
+    time: Res<SimTime>,
+    mask: Res<FloorMask>,
+    mut shots: Query<(
+        Entity,
+        &mut Pos,
+        Option<&mut crate::comps_b::TutorialTargetHome>,
+    )>,
+) {
+    if shots.is_empty() {
+        return;
+    }
+    let _ = time;
+    for (entity, mut pos, mut home) in &mut shots {
+        let Some(home) = home.as_deref_mut() else {
+            continue;
+        };
+        // GML `Create_0:21` settles the target against geometry once.
+        if !home.seated {
+            let mut at = pos.0;
+            mask.resolve_circle(&mut at, 12.0);
+            pos.0 = at;
+            home.seated = true;
+        }
+        // GML `Step_2`: `x = xstart; y = ystart`, unconditionally.
+        pos.0 = home.at;
+        let _ = entity;
     }
 }
 

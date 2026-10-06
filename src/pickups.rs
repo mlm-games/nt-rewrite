@@ -639,6 +639,20 @@ pub fn spawn_chest_with(
     pos: glam::Vec2,
     ctx: &ChestCtx,
 ) {
+    let art = chest_art(kind, ctx, false);
+    let frames = catalog.def(art.idle).map(|def| def.frames).unwrap_or(1);
+    spawn_chest_frames(commands, kind, pos, ctx, frames as u32);
+}
+
+/// [`spawn_chest_with`] for callers that hold a frame count instead of the
+/// catalog (the tutorial raises its chest straight off a `&mut World`).
+pub fn spawn_chest_frames(
+    commands: &mut Commands,
+    kind: ChestKind,
+    pos: glam::Vec2,
+    ctx: &ChestCtx,
+    frames: u32,
+) {
     let mut rng = rand::rng();
     // GML `WeaponChest/Create_0.gml:7-11` verbatim, with GML
     // `crown > 1` (any real crown) and the `instance_exists(GenCont)`
@@ -658,7 +672,6 @@ pub fn spawn_chest_with(
     // the index by hand on the same ramp as `chestprop/Step_0.gml:4-7`
     // (`random(0.04)` inside frame 0, then `+0.4` per step).
     let first_jitter = if kind == ChestKind::Rogue { 0.02 } else { 0.04 };
-    let frames = catalog.def(art.idle).map(|def| def.frames).unwrap_or(1);
 
     let mut ec = commands.spawn((
         GameCleanup,

@@ -165,45 +165,132 @@ pub fn drive_tutorial(world: &mut World) {
     tick_tutorial(world, dt);
 }
 
-/// Tutorial advance tick (GML `TutCont/Alarm_0` verbatim, minus the
-/// scripted `WeaponChest` spawn which rides worldgen): on timer expiry
-/// clear the latch, step forward, re-arm 45 steps on `Fin`, and past
-/// `Fin` latch the exit portal open (once). Clamps at `Fin` (GML
-/// `NUM - 1`).
+/// Tutorial advance tick (GML `TutCont/Alarm_0` verbatim): on timer expiry
+/// clear the latch, step forward, re-arm 45 steps on `Fin`, raise the gun
+/// when `PickingUp` comes up, and past `Fin` latch the exit portal open.
+/// Clamps at `Fin` (GML `NUM - 1`).
 pub fn tick_tutorial(world: &mut World, dt: f32) {
-    let run_tutorial = world
+    if !world
         .get_resource::<crate::comps_a::Run>()
-        .is_some_and(|r| r.tutorial);
-    if !run_tutorial {
+        .is_some_and(|r| r.tutorial)
+    {
         return;
     }
     world.init_resource::<TutorialState>();
-    let mut tut = world.resource_mut::<TutorialState>();
-    tut.timer.tick(dt);
-    if !tut.complete || !tut.timer.just_finished() {
+    {
+        let mut tut = world.resource_mut::<TutorialState>();
+        tut.timer.tick(dt);
+        if !tut.complete || !tut.timer.just_finished() {
+            return;
+        }
+        tut.complete = false;
+        let prev = tut.step;
+        tut.step = tut.step.next();
+        if tut.step == TutorialStep::Fin {
+            // GML `Alarm_0:8` `if (step_current == Fin) alarm[0] = 45`.
+            // Nothing ever calls `complete_step(Fin)`, so this timer alone
+            // carries the tutorial to its exit.
+            tut.complete = true;
+            tut.timer = GTimer::from_seconds(45.0 / 30.0, TimerMode::Once);
+        }
+        if prev == TutorialStep::Fin {
+            // GML `TutCont/Alarm_0.gml:12-15`: `step_current++` takes it past
+            // `Fin`, so `step_current > Fin` writes `game.tutorial = false`
+            // and spawns the exit `Portal`. Until this point the "COOL, WE'RE
+            // DONE HERE!" bar is still on screen, because `Draw_64` only
+            // hides it once the Portal exists.
+            tut.portal_open = true;
+            world
+                .resource_mut::<crate::savedata_part::SaveData>()
+                .tutorial_done = true;
+            world.resource_mut::<crate::comps_a::SaveDirty>().0 = true;
+        }
+    }
+
+    // GML `TutCont/Alarm_0.gml:19-53`: the gun appears only now. Up to 256
+    // random sites (the last attempt the player) are probed for one at least
+    // 32 px from any `Wall` or `hitme`; the chest is then shoved
+    // `move_contact_solid(random_angle, 32 + random(72))` behind a 20-dust
+    // fan. The room sentinel is the fallback site.
+    if world.resource::<TutorialState>().step != TutorialStep::PickingUp {
         return;
     }
-    tut.complete = false;
-    let prev = tut.step;
-    tut.step = tut.step.next();
-    if prev == TutorialStep::Fin {
-        // GML `TutCont/Alarm_0:12-15`: `step_current++` takes it past
-        // `Fin`, so `step_current > Fin` writes `game.tutorial = false`
-        // and spawns the exit `Portal`. Until this point the "COOL, WE'RE
-        // DONE HERE!" bar is still on screen, because `Draw_64` only
-        // hides it once the Portal exists.
-        tut.portal_open = true;
-        world
-            .resource_mut::<crate::savedata_part::SaveData>()
-            .tutorial_done = true;
-        world.resource_mut::<crate::comps_a::SaveDirty>().0 = true;
-    } else if tut.step == TutorialStep::Fin {
-        // GML `Alarm_0:8` `if (step_current == Fin) alarm[0] = 45`.
-        // Nothing ever calls `complete_step(Fin)`, so this timer alone
-        // carries the tutorial to its exit.
-        tut.complete = true;
-        tut.timer = GTimer::from_seconds(45.0 / 30.0, TimerMode::Once);
+    use rand::RngExt;
+    let mut rng = rand::rng();
+    let player: Vec<glam::Vec2> = world
+        .query_filtered::<&crate::spatial::Pos, With<crate::comps_a::Player>>()
+        .iter(world)
+        .map(|p| p.0)
+        .collect();
+    let corpses: Vec<glam::Vec2> = world
+        .query_filtered::<&crate::spatial::Pos, With<crate::comps_b::Corpse>>()
+        .iter(world)
+        .map(|p| p.0)
+        .collect();
+    let mut site = None;
+    if let Some(mask) = world.get_resource::<crate::comps_a::FloorMask>() {
+        for i in 0..256 {
+            let at = if i == 255 || (!player.is_empty() && i % 4 == 3) {
+                player.get(i % player.len().max(1)).copied()
+            } else {
+                Some(mask.random_floor_pos(&mut rng, 0.0))
+            };
+            let Some(at) = at else { continue };
+            // `distance_to_object(Wall) < 32` rejects the site, so a 32 px
+            // step in every direction has to stay clear.
+            let clear = [
+                glam::Vec2::new(32.0, 0.0),
+                glam::Vec2::new(-32.0, 0.0),
+                glam::Vec2::new(0.0, 32.0),
+                glam::Vec2::new(0.0, -32.0),
+            ]
+            .into_iter()
+            .all(|d| mask.is_walkable(at + d));
+            if !clear || corpses.iter().any(|c| c.distance(at) < 32.0) {
+                continue;
+            }
+            site = Some(at);
+            break;
+        }
     }
+    let at = site.unwrap_or_else(|| glam::Vec2::splat(crate::worldgen::TILE as f32 * 0.5));
+    let dir = rng.random_range(0.0..std::f32::consts::TAU);
+    let shove = rng.random_range(32.0..104.0);
+    let mut rest = at + glam::Vec2::from_angle(dir) * shove;
+    if let Some(mask) = world.get_resource::<crate::comps_a::FloorMask>() {
+        crate::spatial::move_contact_solid(
+            &mut rest,
+            glam::Vec2::from_angle(dir) * shove,
+            12.0,
+            &[],
+            Some(mask),
+        );
+    }
+    // GML `:37-42`: a 20-mote fan stepping 18 degrees off one heading.
+    let motes: Vec<f32> = (0..20)
+        .map(|_| (6.0 - rng.random_range(0.0..1.0)) * 30.0)
+        .collect();
+    let fan = dir;
+    world.commands().queue(move |world: &mut World| {
+        let frames = world
+            .resource::<repame_anim::AnimCatalog>()
+            .def("images/sprWeaponChest.png")
+            .map(|def| def.frames)
+            .unwrap_or(1) as u32;
+        let mut commands = world.commands();
+        crate::pickups::spawn_chest_frames(
+            &mut commands,
+            crate::comps_b::ChestKind::Weapon,
+            rest,
+            &crate::pickups::ChestCtx::default(),
+            frames,
+        );
+        let mut dust = fan;
+        for speed in motes {
+            crate::environment::spawn_native_streak(&mut commands, false, at, dust, speed);
+            dust += 18.0_f32.to_radians();
+        }
+    });
 }
 
 /// Boot-intro state (bevy `BootState` mode/timer half in

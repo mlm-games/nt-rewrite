@@ -374,6 +374,9 @@ pub fn build_sim_schedule() -> Schedule {
                     enemies::tick_new_car_plz
                         .in_set(NtSimSet::Combat)
                         .run_if(gameplay_active),
+                    enemies::tick_tutorial_targets
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
                     enemies::tick_frog_eggs
                         .in_set(NtSimSet::Combat)
                         .run_if(gameplay_active),

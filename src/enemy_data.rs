@@ -90,7 +90,9 @@ pub fn gml_size(kind: EnemyKind) -> i32 {
         | EnemyKind::JungleFly
         | EnemyKind::InvSpider
         | EnemyKind::MeleeFake
-        | EnemyKind::ScrapBossMissile => 1,
+        | EnemyKind::ScrapBossMissile
+        // GML `TutorialTarget/Create_0.gml:4` `size = 1`.
+        | EnemyKind::TutorialTarget => 1,
         EnemyKind::Scorpion
         | EnemyKind::GoldScorpion
         | EnemyKind::Ratking
@@ -181,6 +183,10 @@ fn choose(options: &[&'static str]) -> &'static str {
 pub fn gml_snd_hurt(kind: EnemyKind, oasis: bool, hp_frac: f32) -> &'static str {
     use EnemyKind::*;
     let base: &'static str = match kind {
+        // GML `TutorialTarget/Create_0.gml:13-19`.
+        EnemyKind::TutorialTarget => {
+            return if oasis { "sndOasisHurt" } else { "sndHitFlesh" };
+        }
         Throne => {
             return if hp_frac < 0.4 {
                 "sndNothingHurtLow"
@@ -1829,6 +1835,41 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             score: 5,
             touch_damage: 1,
             rad_drop: 1,
+            drop_chance: 0,
+            weapon_chance: 0,
+            drop_rolls: 1,
+            preferred_range: 0.0,
+            attack_jitter: 0.0,
+            attack_cooldown: 9.9,
+            bullets_per_shot: 0,
+            burst: false,
+            burst_interval: 0.0,
+            fan_spread: 0.0,
+            projectile_speed: 0.0,
+            projectile_spread: 0.0,
+            projectile_damage: 0,
+            projectile_radius: 0.0,
+            projectile_lifetime: 0.0,
+            projectile_color: [1.0, 1.0, 1.0, 1.0],
+            projectile_size: 1.0,
+            boss: false,
+        },
+        // GML `TutorialTarget/Create_0.gml`: `max_hp = 2`, `size = 1`,
+        // `meleedamage = 0`, `raddrop = 0`, `friction = 1000` (it never
+        // drifts off its `xstart`), and `gunangle = 0` with `alarm[1] = -1`
+        // so it never opens fire.
+        EnemyKind::TutorialTarget => EnemyDef {
+            name: "Target",
+            hp: 2,
+            speed: 0.0,
+            accel: 0.0,
+            radius: 12.0,
+            size: 24.0,
+            color: [0.85, 0.3, 0.3, 1.0],
+            sprite: "images/sprTargetIdle.png",
+            score: 0,
+            touch_damage: 0,
+            rad_drop: 0,
             drop_chance: 0,
             weapon_chance: 0,
             drop_rolls: 1,

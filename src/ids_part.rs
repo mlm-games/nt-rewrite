@@ -88,6 +88,8 @@ pub enum EnemyKind {
     MeleeFake,
     HostileHorror,
     FiredMaggot,
+    /// GML `objects/TutorialTarget`: the tutorial's shooting-gallery dummy.
+    TutorialTarget,
     /// GML `ScrapBossMissile`: homing missile with a trail gun.
     ScrapBossMissile,
     /// GML `EliteInspector`: control-drag field, baton dash-slash, PopoNade.
@@ -176,6 +178,7 @@ impl EnemyKind {
             EnemyKind::HostileHorror,
             EnemyKind::FiredMaggot,
             EnemyKind::ScrapBossMissile,
+            EnemyKind::TutorialTarget,
             EnemyKind::EliteInspector,
             EnemyKind::EliteShielder,
             EnemyKind::ProtoStatue,
