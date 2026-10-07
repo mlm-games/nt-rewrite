@@ -270,10 +270,14 @@ pub fn tick_tutorial(world: &mut World, dt: f32) {
         tut.complete = false;
         let prev = tut.step;
         tut.step = tut.step.next();
-        if tut.step == TutorialStep::Fin {
+        if tut.step == TutorialStep::Fin && !tut.portal_open {
             // GML `Alarm_0:8` `if (step_current == Fin) alarm[0] = 45`.
             // Nothing ever calls `complete_step(Fin)`, so this timer alone
-            // carries the tutorial to its exit.
+            // carries the tutorial to its exit. The `!portal_open` guard is
+            // GML's `exit` at `Alarm_0:14-17`: `step_current` is clamped to
+            // `NUM - 1` there and nothing re-arms `alarm[0]`, so once the
+            // exit portal is up the hold must stop - `Fin.next()` is `Fin`,
+            // so without this it would re-arm every 45 steps for good.
             tut.complete = true;
             tut.timer = GTimer::from_seconds(45.0 / 30.0, TimerMode::Once);
         }
@@ -314,8 +318,11 @@ pub fn tick_tutorial(world: &mut World, dt: f32) {
     let mut site = None;
     if let Some(mask) = world.get_resource::<crate::comps_a::FloorMask>() {
         for i in 0..256 {
-            let at = if i == 255 || (!player.is_empty() && i % 4 == 3) {
-                player.get(i % player.len().max(1)).copied()
+            // GML `Alarm_0:22-25`: every attempt rolls a random `Floor`,
+            // and only the last one (`++i >= 256`) falls back to a random
+            // `Player`.
+            let at = if i == 255 {
+                player.first().copied()
             } else {
                 Some(mask.random_floor_pos(&mut rng, 0.0))
             };
