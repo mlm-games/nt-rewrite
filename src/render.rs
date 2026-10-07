@@ -1297,6 +1297,11 @@ pub const Z_SPIRAL_FIGURES: f32 = 7.0;
 pub const Z_SIDEART: f32 = 8.0;
 pub const Z_HUD: f32 = 10.0;
 pub const Z_TOUCH: f32 = 12.0;
+/// GML `TutCont` sits at depth 0 but draws from `Draw_64`, so its bar lands
+/// after every `Draw_64` instance with a lower depth - that is, over `TopCont`
+/// (-15) and the touch chrome with it - and still under the splash and menu
+/// rungs.
+pub const Z_TUTORIAL: f32 = 13.0;
 pub const Z_SPLASH: f32 = 15.0;
 pub const Z_MENU: f32 = 20.0;
 /// GML in-run pause button (`UberCont/Draw_64:49`, depth -1000): lower
@@ -5436,6 +5441,39 @@ fn pad_control_name(entry: &repame_input::KeymapEntry) -> String {
         .to_string(),
         _ => "UNBOUND".to_string(),
     }
+}
+
+/// GML `TutCont/Draw_64.gml:8-10`: the `LETTERBOX_SIZE`-tall `c_black`
+/// band the step instruction is written over, drawn only while no `Portal`
+/// exists (same gate as [`tutorial_texts`]).
+///
+/// Touch-only in GML: the `c_lime` follow circle and the red chest pointer
+/// below are inside `if (is_touch())` (`:79-126`), and this bar is the
+/// keyboard/gamepad path's way of keeping the line legible. The port draws it
+/// on every device so the instruction keeps its backing everywhere - the
+/// letterbox bars GML draws for the rest of the game are the `letterbox_view`
+/// layer, not this one.
+pub fn tutorial_sprites(world: &mut World, canvas_dp: [f32; 2], view: [f32; 4]) -> Vec<SpriteInstance> {
+    let Some(state) = world.get_resource::<crate::state::TutorialState>() else {
+        return Vec::new();
+    };
+    if state.portal_open {
+        return Vec::new();
+    }
+    let gui = gml_view_size(canvas_dp);
+    let gm = hud_gui_map(view);
+    // Bottom-anchored band, so the world-space centre is half a bar up.
+    let centre = hud_gui_to_world(gm, view, gui[0] * 0.5, gui[1] - SETTINGS_LETTERBOX * 0.5);
+    let mut out = Vec::new();
+    let mut s = white_quad(
+        centre,
+        0.0,
+        Vec2::new(gui[0], SETTINGS_LETTERBOX),
+        [0.0, 0.0, 0.0, 1.0],
+    );
+    s.z = Z_TUTORIAL;
+    out.push(s);
+    out
 }
 
 /// GML `TutCont/Draw_64` instruction text. `TutCont/Create_0.gml:58-81` holds

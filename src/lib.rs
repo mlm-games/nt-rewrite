@@ -3855,6 +3855,29 @@ impl App {
                     &self.cam,
                 ));
             }
+            // GML `TutCont/Draw_64:9-10` paints the `c_black` band before the
+            // instruction it writes at `:72`, so it lives in the sprite batch
+            // under the text rather than in the `letterbox_view` layer -
+            // that one is gated on `scrLetterbox` and is a different bar.
+            // Same gate as `tutorial_texts`: live tutorial, portal not up.
+            if state == AppState::InGame
+                && self
+                    .sim
+                    .world
+                    .get_resource::<crate::comps_a::Run>()
+                    .is_some_and(|r| r.tutorial)
+                && !self
+                    .sim
+                    .world
+                    .get_resource::<crate::state::TutorialState>()
+                    .is_some_and(|t| t.portal_open)
+            {
+                s.extend(crate::render::tutorial_sprites(
+                    &mut self.sim.world,
+                    viewport_dp,
+                    hud_view,
+                ));
+            }
             // Boot reel (`Vlambeer/Draw_0` + `Logo/Draw_0`).
             if menu_kind == Some(MenuOverlay::Splash) {
                 let mut splash = splash_sprites(&mut self.sim.world, assets, view);
