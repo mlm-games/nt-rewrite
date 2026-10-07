@@ -1,15 +1,16 @@
-//! Wall breaking + throne-room props, ported from the bevy reference
-//! `game/walls.rs` with positions as [`Pos`] (`Vec2`) instead of
-//! `Transform.translation`.
+//! Wall breaking + throne-room props. Positions are [`Pos`] (`Vec2`), the
+//! stand-in for GML's plain `x`/`y`.
 //! Render split: the floor-sprite entity spawned per broken wall and the
-//! throne-room art stay out (renderer resolves floor from the [`FloorMask`]);
-//! bursts route through [`crate::effects::spawn_burst`] and trauma through
-//! `repame_fx::Trauma`, matching the bevy `VfxSpawner`/`ScreenEffects` call
-//! sites one-for-one.
-//! Pipeline note: the *only* drain of the [`PendingWallBreak`] queue (hammerhead
-//! chewing, boss charges, portal clears, delayed boss spawns). Wall entities are
-//! `(WallTile, WallCell, Pos)`; the flush matches by cell *or* by proximity
-//! (`WALL_PX * 0.75`), byte-identical to bevy.
+//! throne-room art stay out (renderer resolves floor from the
+//! [`FloorMask`]); bursts route through
+//! [`crate::effects::spawn_burst`] and trauma through `repame_fx::Trauma`
+//! (GML `scr_screenshake`).
+//! Pipeline note: the *only* drain of the [`PendingWallBreak`] queue
+//! (hammerhead chewing, boss charges, portal clears, delayed boss spawns).
+//! Wall entities are `(WallTile, WallCell, Pos)`; the flush matches by cell
+//! *or* by proximity (`WALL_PX * 0.75`, 12 px), the port's stand-in for
+//! GML's `collision_rectangle` bbox chain in `scrWallDestroy`
+//! (`scripts/scrWallDestroy/scrWallDestroy.gml:7-14`).
 
 use bevy_ecs::prelude::*;
 use repame_fx::Trauma;
@@ -35,7 +36,7 @@ pub use crate::comps_a::floor_cell_for_wall;
 
 /// Flush queued wall breaks: every wall matching by cell *or* within
 /// `WALL_PX * 0.75` of the break point goes (one marker can break several
-/// walls, bevy parity).
+/// walls, as GML's `scrWallDestroy` chain does).
 /// GML `scrWallDestroy` destroys the wall and creates a 16x16 `FloorExplo` at its
 /// position - so the hole is one wall cell wide, and any sibling `Wall`s inside
 /// the same 32x32 `Floor` neighbour stay solid. `FloorExplo/Create_0:19-27` then
@@ -54,9 +55,9 @@ pub fn apply_pending_wall_breaks(
     walls: Query<(Entity, &WallCell, &Pos), With<WallTile>>,
 ) {
     // `queue_wall_breaks_along_segment` stamps a marker every `WALL_PX * 0.5`
-    // along a charge, so the same wall is named many times per boss swing. Bevy
-    // despawns are deferred, so without this the wall is despawned, burst and
-    // shaken once per marker.
+    // along a charge, so the same wall is named many times per boss swing.
+    // `Commands` despawns are deferred, so without this every wall would be
+    // burst and shaken once per marker.
     let mut despawned: std::collections::HashSet<Entity> = std::collections::HashSet::new();
     // `scrWallDestroy`'s `do/until` loops on `collision_rectangle` over the dead
     // wall's bbox, so every `Wall` sharing that cell dies with it - and each one
@@ -221,7 +222,11 @@ fn wall_break_sound(gml_area: i32) -> &'static str {
     }
 }
 
-/// Queue breaks for every wall in `radius` of `pos` (bevy parity).
+/// Queue breaks for every wall in `radius` of `pos`. Port-only: GML has no
+/// radius break, it destroys one wall per collision
+/// (`BanditBoss/Collision_Wall.gml:4-6` and `Van/Collision_Wall.gml:4` both
+/// call `scrWallDestroy(other.id)`), so the radius is the port's batch
+/// stand-in.
 /// Walls arrive as a `(center, cell)` snapshot so callers don't thread
 /// queries through helpers (same convention as `boss_ai`).
 pub fn queue_wall_breaks_in_radius(
@@ -246,7 +251,9 @@ pub fn queue_wall_breaks_in_radius(
 }
 
 /// Queue breaks along a segment by stamping the radius helper every
-/// `WALL_PX * 0.5` px (bevy parity).
+/// `WALL_PX * 0.5` px (8 px). Port-only, same law as the radius helper:
+/// GML's charge only breaks the wall it collides with
+/// (`BanditBoss/Collision_Wall.gml:4-6`).
 pub fn queue_wall_breaks_along_segment(
     commands: &mut Commands,
     walls: &[(glam::Vec2, (i32, i32))],
@@ -264,8 +271,11 @@ pub fn queue_wall_breaks_along_segment(
     }
 }
 
-/// Segment-vs-wall test over the [`FloorMask`] (bevy parity: 12 px
-/// samples, arena-exterior samples ignored).
+/// Segment-vs-wall test over the [`FloorMask`]: 12 px samples,
+/// arena-exterior samples ignored. Port-only discretisation - GML traces
+/// the ray exactly, `collision_line(x, y, target.x, target.y, Wall, true,
+/// true)` (`scripts/scrTargetIsVisible/scrTargetIsVisible.gml:11`,
+/// `Bandit/Alarm_1.gml:5`).
 pub fn segment_hits_wall(a: glam::Vec2, b: glam::Vec2, mask: &FloorMask) -> bool {
     let delta = b - a;
     let len = delta.length();
@@ -283,9 +293,9 @@ pub fn segment_hits_wall(a: glam::Vec2, b: glam::Vec2, mask: &FloorMask) -> bool
     false
 }
 
-/// Segment-vs-wall test against wall entities (bevy
-/// `segment_hits_wall_query` parity, which delegates to the legacy
-/// entity walk). Thin wrapper over [`segment_hits_wall_legacy`].
+/// Segment-vs-wall test against wall entities, sampling the same 12 px
+/// ray GML traces exactly (see [`segment_hits_wall`]). Thin wrapper over
+/// [`segment_hits_wall_legacy`].
 pub fn segment_hits_wall_query(
     a: glam::Vec2,
     b: glam::Vec2,
@@ -297,7 +307,8 @@ pub fn segment_hits_wall_query(
 
 /// Legacy entity walk core, pure over wall centers so tests feed
 /// fixtures without a world: 12 px samples, hit within `WALL_PX * 0.55`
-/// of any wall center.
+/// (8.8 px) of any wall center. Port-only, same discretisation as
+/// [`segment_hits_wall`].
 pub fn segment_hits_wall_legacy(
     a: glam::Vec2,
     b: glam::Vec2,
@@ -431,7 +442,10 @@ pub fn handle_throne_room_props(
     }
 }
 
-/// Carpet occupancy flag for throne-room logic (AABB test, bevy parity).
+/// Carpet occupancy flag for throne-room logic (AABB test). Port-only:
+/// GML's `Carpet` has no event code and no player-on-carpet flag, its
+/// only reader being the footstep material
+/// (`scripts/scrFootSteps/scrFootSteps.gml:17`).
 pub fn update_carpet_occupancy(
     mut throne_room: ResMut<ThroneRoomState>,
     player_q: Query<&Pos, With<Player>>,

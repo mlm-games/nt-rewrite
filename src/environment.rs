@@ -1,9 +1,11 @@
-//! Area hazards, surface zones, and prop-death effects. Ported from nt's
-//! `game/environment.rs` (data + spawners + sim-half ticks).
-//! `animate_environment`'s alpha law lives in [`SurfacePulse::alpha_at`],
-//! applied renderer-side; art paths and hazard tints resolve renderer-side
-//! from the recorded [`PulseSprite`] / spec. Colors below are the exact bevy
-//! values as arrays.
+//! Area hazards, surface zones, and prop-death effects (data + spawners +
+//! sim-half ticks).
+//! The pulse alpha law lives in [`SurfacePulse::alpha_at`], applied
+//! renderer-side; art paths and hazard tints resolve renderer-side from the
+//! recorded [`PulseSprite`] / spec. GML has no alpha throb on these objects
+//! (no `image_alpha` in `Trap`, `TrapFire`, `IceFlower`, `Torch` or
+//! `GenCont`), so the wave is port-only; the RGBA colors below are the
+//! port's own hazard tints.
 
 use bevy_ecs::prelude::*;
 use rand::RngExt;
@@ -135,18 +137,17 @@ pub fn spawn_environment_hazard(
             GameCleanup,
             LevelCleanup,
             EnvironmentHazard::new(spec),
-            // Bevy attaches the hazard pulse + a solid-color sprite here
-            // (no image); the renderer draws the tinted rect with the
-            // `animate_environment` alpha law.
+            // The hazard pulse rides along here (no image); the renderer
+            // draws the tinted rect with the [`SurfacePulse`] alpha law.
             SurfacePulse::hazard(pos.x * 0.013 + pos.y * 0.009),
             Pos(pos),
         ))
         .id()
 }
 
-/// Bevy `SurfacePulse` verbatim: per-entity alpha throb applied every
-/// frame by `animate_environment` (renderer-side here - same wave law,
-/// driven by the sim clock).
+/// Per-entity alpha throb, applied every frame by the renderer from the
+/// sim clock. Port-only: no GML object throbs `image_alpha` for a hazard
+/// or decal, so there is no counterpart to cite.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct SurfacePulse {
     pub speed: f32,
@@ -174,18 +175,17 @@ impl SurfacePulse {
         }
     }
 
-    /// Bevy `animate_environment` alpha law at time `now` (seconds).
+    /// Alpha throb at time `now` (seconds): a sine between `min_alpha`
+    /// and `max_alpha` (port-only, see [`SurfacePulse`]).
     pub fn alpha_at(&self, now: f32) -> f32 {
         let wave = 0.5 + 0.5 * (now * self.speed + self.phase).sin();
         self.min_alpha + (self.max_alpha - self.min_alpha) * wave
     }
 }
 
-/// Renderer-side record for bevy `sprite_from_candidates` decal entities
-/// (fire-trap visuals). `None` path = solid fallback rect (bevy `Sprite`
-/// without image). Alpha always comes from the paired [`SurfacePulse`] via
-/// `alpha_at` (bevy `animate_environment` overwrites sprite alpha every
-/// frame).
+/// Renderer-side record for hazard decal entities (fire-trap visuals).
+/// `None` path = solid fallback rect. Alpha always comes from the paired
+/// [`SurfacePulse`] via `alpha_at`.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct PulseSprite {
     pub path: Option<&'static str>,
@@ -194,8 +194,11 @@ pub struct PulseSprite {
     pub flip_x: bool,
 }
 
-/// Bevy `sprite_from_candidates` pick law verbatim: first
-/// catalog-present candidate wins (no hash-pick).
+/// Pick law: first catalog-present candidate wins (no hash-pick).
+/// Port-only - GML resolves a missing sprite through `asset_get_index` /
+/// `sprite_exists` at draw time (`WepPickup/Draw_0.gml:4-9` falls back
+/// `sprite -> scr_weapon_get_sprite -> sprScrewDriver`), never a
+/// candidate list.
 pub fn pick_first_present(
     catalog: &repame_anim::AnimCatalog,
     candidates: &[&'static str],
@@ -206,12 +209,14 @@ pub fn pick_first_present(
         .find(|p| catalog.def(p).is_some())
 }
 
-/// Damage actors standing in live hazards (bevy `tick_environment_hazards`
-/// gameplay half: life/damage-tick timers, team gates, radius +
-/// player-invuln gates, Boiling Veins fire immunity at/below threshold,
-/// player invuln refresh + `mark_damage_taken`). Hit-flash rides
-/// [`HitFlash`], damage numbers the `repame_fx` floaters, pulse alpha rides
-/// [`SurfacePulse`] renderer-side (`animate_environment` law).
+/// Damage actors standing in live hazards (gameplay half: life/damage-tick
+/// timers, team gates, radius + player-invuln gates, Boiling Veins fire
+/// immunity at/below threshold, player invuln refresh +
+/// `mark_damage_taken`). Hit-flash rides [`HitFlash`], damage numbers the
+/// `repame_fx` floaters, pulse alpha rides [`SurfacePulse`]
+/// renderer-side. GML's counterpart is per-object, not a hazard field:
+/// `ToxicGas/Collision_hitme.gml:7-9` hits once through `scr_hit` then
+/// destroys itself.
 #[allow(clippy::type_complexity)]
 pub fn tick_environment_hazards(
     time: Res<SimTime>,
@@ -300,8 +305,10 @@ pub fn tick_environment_hazards(
     }
 }
 
-/// Arena-bounds check for hazard/prop placement (bevy
-/// `valid_environment_position` parity).
+/// Arena-bounds check for hazard/prop placement. Port-only: GML runs
+/// `scrPopProps` per `Floor` instance
+/// (`scripts/scrPopulate/scrPopulate.gml:203`) and never gates placement
+/// on arena bounds.
 pub fn valid_environment_position(pos: glam::Vec2, radius: f32) -> bool {
     pos.x.abs() <= ARENA_W * 0.5 - radius && pos.y.abs() <= ARENA_H * 0.5 - radius
 }

@@ -108,13 +108,20 @@ pub fn player_move(
 // [`AudioCue`]s in a [`Queue`], `Time<Fixed>` -> [`SimTime`], thread rng ->
 // `rand::rng()`.
 
-/// Stick aim -> [`AimDir`]. Bevy `player_aim` stick path verbatim: any
-/// nonzero deflection steers (no dead zone - bevy normalizes directly). The
-/// mouse path lives in the shell: every frame [`App::feed_input`](crate::App::feed_input)
-/// steers `aim_axis` at the latest viewport hover (world coords from the live
-/// fit, same role as bevy's `viewport_to_world_2d` cursor ray). With no
-/// deflection the last aim is kept (bevy only overwrote aim when a cursor ray
-/// hit). `Sprite` flips skipped.
+/// Stick aim -> [`AimDir`]. Any nonzero deflection steers: the port
+/// normalizes `aim_axis` directly, and so does GML - the gamepad sampler
+/// writes `KeyCont.dir_fire` on any nonzero axis pair with no magnitude
+/// gate (`scripts/InputHandling/InputHandling.gml:441-445`) and
+/// `Player/Step_0.gml:330` copies it into `gunangle` verbatim. (The 0.22
+/// dead zone in `input::dead_zone` is upstream and port-only.)
+/// The mouse path lives in the shell: every frame
+/// [`App::feed_input`](crate::App::feed_input) steers `aim_axis` at the
+/// latest viewport hover - GML's own mouse law is
+/// `KeyCont.dis_fire/dir_fire = point_distance/point_direction(x, y,
+/// mouse_x, mouse_y)` (`scripts/InputHandling/InputHandling.gml:467-468`).
+/// With no deflection the last aim is kept, matching GML's
+/// `aimassist_wait` hold (`Player/Step_0.gml:329-332`). Sprite flips
+/// skipped.
 ///
 /// Touch aim assist (GML `Player/Step_0:334`, `KeyCont.aimassist`, default on
 /// for touch): with the attack stick deflected and the held weapon taking
@@ -211,10 +218,14 @@ pub fn player_aim(
     }
 }
 
-/// Equip/cycle weapons. Slot-select + cycle logic is bevy-verbatim (skips
-/// `NONE` slots, wraps with `weapon_slots`); audio is the per-weapon swap stem
-/// GML `Player/Step_0:34` plays (`snd_play(wep_swap[wep])`, via
-/// [`GameAudio::play_weapon_swap`]). Fire timers keep running across a switch.
+/// Equip/cycle weapons. Port-only slot-select + cycle (skip `NONE` slots,
+/// wrap with `weapon_slots`): GML has two slots and one swap, no cycling
+/// (`Player/Step_0.gml:22-35` `press_swap && bwep != 0` -> `scrSwapWeps`,
+/// which exchanges `wep`/`bwep` verbatim at
+/// `scripts/scrSwapWeps/scrSwapWeps.gml:16-30`). Audio is the per-weapon
+/// swap stem GML `Player/Step_0.gml:34` plays (`snd_play(wep_swap[wep])`,
+/// via [`GameAudio::play_weapon_swap`]). Fire timers keep running across
+/// a switch.
 pub fn weapon_switch(
     mut input: ResMut<NtInput>,
     audio: Res<GameAudio>,
@@ -272,8 +283,9 @@ pub fn weapon_switch(
     }
 }
 
-/// Held-gun entities, sim half (bevy `ensure_weapon_visual` /
-/// `tick_weapon_visuals` minus `Sprite`/`Transform`).
+/// Held-gun entities, sim half (art/anchor/pose are renderer-owned).
+/// GML draws the guns in `Player/Draw_0.gml:47-57`: the Steroids extras
+/// stack behind at `c_silver`, then `bwep` unless Steroids.
 pub fn ensure_weapon_visual(
     mut commands: Commands,
     player_q: Query<
@@ -418,9 +430,12 @@ pub fn tick_weapon_visuals(
     }
 }
 
-/// Tick player-scoped cooldowns. Bevy-verbatim: ability cooldown, hurt
-/// invuln, shield and telekinesis timers. Fire-rate timers live in
-/// `player_fire`.
+/// Tick player-scoped cooldowns: ability cooldown, hurt invuln, shield and
+/// telekinesis timers. Fire-rate timers live in `player_fire`. GML counts
+/// the hurt window in frames, not a timer: `nexthurt = current_frame + N`
+/// (`scripts/scr_hit/scr_hit.gml:19` +5 steps,
+/// `Player/Step_0.gml:227` +10, `:91` +30) and `scr_can_hit` compares
+/// `current_frame < nexthurt` (`scripts/scr_can_hit/scr_can_hit.gml:10`).
 pub fn tick_player_timers(
     time: Res<SimTime>,
     mut q: Query<(
@@ -527,8 +542,7 @@ pub fn ally_ai(
 
 /// Hold abilities (GML hold_spec RMB): Eyes telekinesis push/pull, Horror
 /// rad-drain beam, Frog charge/release. Headless: catalog sprites stripped,
-/// laws verbatim. `RaceState` was unused in bevy (`let _ = race`) and is
-/// dropped from the query.
+/// laws verbatim. `RaceState` is unread here and dropped from the query.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn tick_hold_abilities(
     time: Res<SimTime>,
@@ -1058,8 +1072,10 @@ pub fn player_post_fire_speed_cap(
     }
 }
 
-/// Steroids second slot mirrors the other live slot. Verbatim bevy helper,
-/// shared with the fire path (`player_fire` imports this).
+/// Steroids second slot mirrors the other live slot, i.e. GML's
+/// `bwep` (`Player/Step_0.gml:416-438` swaps `wep`/`bwep` around the spec
+/// shot via `scrSwapWeps`). Shared with the fire path (`player_fire`
+/// imports this).
 pub fn steroids_secondary_slot(current: usize, slots: usize) -> usize {
     if slots > 1 {
         (current + 1) % slots

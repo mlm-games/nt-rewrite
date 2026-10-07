@@ -1,11 +1,13 @@
-//! nt on repame: 30 Hz fixed-step sim + repose views, no bevy.
+//! nt on repame: 30 Hz fixed-step sim (GML's own rate,
+//! `options/main/options_main.yy:18`) + repose views.
 //!
 //! [`App::view`] (from [`root_view`]) drains staged shell input into
 //! [`NtInput`], advances the sim at [`SIM_HZ`] through the full sim
 //! [`Schedule`], then composes: sprite viewport ([`Viewport2dGpu`] with
 //! assets, canvas [`Viewport2d`] placeholder without), HUD [`Text`] from
-//! [`hud_gui_texts_dp`](crate::render::hud_gui_texts_dp) (bevy
-//! `nt_hud_overlay` verbatim), menus from
+//! [`hud_gui_texts_dp`](crate::render::hud_gui_texts_dp) (GML
+//! `TopCont/Draw_64:17-20`: `scrDrawMiscHUD()` then
+//! `scrDrawPlayerHUD`), menus from
 //! [`menu_gui_texts_dp`](crate::render::menu_gui_texts_dp).
 //!
 //! Assets ([`resolve_assets_dir`], in order): 1. `$NT_ASSETS` (must
@@ -150,11 +152,13 @@ pub mod worldgen;
 
 pub use ids_part::{EnemyKind, MutationId, UltraMutationId};
 
-/// Fixed sim rate, matching the bevy build (`NT_SIM_HZ = 30`).
+/// Fixed sim rate, mirroring GML's 30 steps/s
+/// (`options/main/options_main.yy:18`).
 pub const SIM_HZ: f64 = 30.0;
 
-/// Pixel UI font bytes (bevy `app.rs::NT_UI_FONT` verbatim: Silkscreen,
-/// the fntM1 stand-in; OFL text beside it in `assets/fonts/`).
+/// Pixel UI font bytes (Silkscreen, the stand-in for GML's bitmap
+/// `fntM1` - `scripts/Language/Language.gml:3`, an 8px-per-line atlas
+/// in `fonts/fntM1/`; OFL text beside it in `assets/fonts/`).
 pub const NT_UI_FONT: &[u8] = include_bytes!("../assets/fonts/Silkscreen-Regular.ttf");
 /// Family name the overlay [`Text`](repose_ui::Text) views request.
 pub const NT_UI_FONT_FAMILY: &str = "Silkscreen";
@@ -320,8 +324,12 @@ pub struct App {
     /// edge in `feed_input`.
     last_touch_ids: Vec<i64>,
     touch_menu_positions: Vec<(i64, Vec2)>,
-    /// Viewport width in screen px for the touch button zones (bevy
-    /// reads `window.width()`; refreshed from the frame geometry).
+    /// Viewport width in screen px for the touch button zones;
+    /// refreshed from the frame geometry. GML zones their own anchors
+    /// off the view rect instead (`JoystickMove/Create_0.gml:1-2`:
+    /// `(view_width - global.view_width_max) / 2 + 64`), so this is a
+    /// port-only field; the zones themselves follow
+    /// `get_nearest_touch`.
     view_width: f32,
     /// Last frame's canvas-dp viewport + dp scale (menu button
     /// hit-testing runs in this space; refreshed every frame).
@@ -370,15 +378,18 @@ fn decode_vortex_art(dir: &Path, rel: &str) -> (u32, u32, Vec<u8>) {
 impl App {
     /// Game boot (what `main` uses): Splash state, no run yet. The menu
     /// state machine drives Splash -> MainMenu -> Title -> Loading, and
-    /// Loading runs `setup_run` into InGame (bevy `app.rs` flow).
+    /// Loading runs `setup_run` into InGame (GML's `MakeGame` boot ends
+    /// at `Loading`; `PlayButton/Other_10.gml:108-111` then builds the
+    /// `GameCont` + `MenuGen` pair and destroys the logo `SpiralCont`).
     pub fn new() -> Self {
         Self::boot(rand::random(), false)
     }
 
     /// Deterministic boot (tests pin the floor seed). Never touches disk:
     /// assets load explicitly via [`App::load_assets`].
-    /// Starts straight inside a live run (bevy parity: as if Loading just
-    /// finished `setup_run`).
+    /// Starts straight inside a live run (a test seam: as if Loading just
+    /// finished `setup_run`). GML has no counterpart - `romGame` boots
+    /// through `Vlambeer/Create_0.gml` every time.
     pub fn new_with_seed(seed: u64) -> Self {
         Self::boot(seed, true)
     }
@@ -502,8 +513,9 @@ impl App {
         // catalog) carry no `SpriteAnim` and, for enemies, no
         // `EnemySprites` table - backfill both so `player_anim_switch` /
         // `enemy_anim_switch` / `hurt_on_damage` match post-asset spawns
-        // (bevy parity: every actor spawns with its strip table + seeded
-        // idle anim).
+        // (GML assigns the strip table in the enemy's own `Create_0`:
+        // `Bandit/Create_0.gml:6-9` `spr_idle`/`spr_walk`/`spr_hurt`/
+        // `spr_dead`, overwritten per seasonal variant at `:27-39`).
         self.sim.world.insert_resource(catalog);
         crate::anim::backfill_spawn_anims(&mut self.sim.world);
         self.assets = Some(assets);
@@ -930,18 +942,27 @@ impl App {
         ran
     }
 
-    /// Spiral lifecycle per fixed step (view-layer half of bevy
-    /// `mark_vortex_dead` / `ensure_spiral_for_levelup`; the sim
-    /// `SpiralCtl` the ambience duck keys off is untouched):
-    /// - Loading entry warms a FRESH spiral (`Vlambeer` builds a fresh
-    ///   `SpiralCont` + `GenCont` on every `room_restart`, including RETRY
-    ///   - a continued mid-flight spiral would jump).
-    /// - InGame entry kills it (`GenCont/Destroy`; the 26-tick drain plays
-    ///   out like bevy's).
+    /// Spiral lifecycle per fixed step (view layer only; the sim
+    /// `SpiralCtl` the ambience duck keys off is untouched). GML's law:
+    /// whoever owns the room builds the `SpiralCont`, and whoever leaves
+    /// the level destroys it.
+    /// - Loading entry warms a FRESH spiral: `Vlambeer/Create_0.gml:89`
+    ///   builds one on every `room_restart` (including RETRY), and the
+    ///   continued-run branch does the same at `MakeGame/Alarm_0.gml:94`.
+    ///   A continued mid-flight spiral would jump.
+    /// - InGame entry kills it. `GenCont/Destroy_0.gml:187` destroys the
+    ///   `SpiralCont` outright, then the orphaned motes drain on their own
+    ///   (`Spiral/Step_0.gml:16-22`: `grow *= 1.5` and kill plane 3 instead
+    ///   of 2.5 while no `SpiralCont` exists).
     /// - Rising generation cover (floor transition or mutation/ultra offer)
-    ///   re-warms (`GenCont`/`LevCont` rooms build theirs); falling edge
-    ///   kills (`GenCont/Destroy`). Live gameplay, Title (no `SpiralCont`
-    ///   in the `MenuGen` room) and GameOver show only the flat area colour.
+    ///   re-warms; falling edge kills. Neither `GenCont` nor `LevCont`
+    ///   builds a `SpiralCont` (`scrLevelUpScreenSubmit.gml:12-19` swaps
+    ///   them in place) - the fresh one arrives with the next
+    ///   `room_restart` through `Vlambeer/Create_0.gml:89`.
+    /// - Live gameplay, Title (`MenuGen/Create_0.gml:44-46` creates
+    ///   `BackCont`/`TopCont`/`Menu` only, after
+    ///   `PlayButton/Other_10.gml:108` destroyed the logo cont) and
+    ///   GameOver show only the flat area colour.
     fn step_spiral_lifecycle(&mut self) {
         let state = self
             .sim
@@ -953,12 +974,14 @@ impl App {
         let (area, seed) = run
             .map(|r| (r.area, r.gen_seed))
             .unwrap_or((AreaId::Desert, 0));
-        // Bevy `mark_vortex_dead` is a one-way latch per tick: a kill and a
-        // rewarm must NEVER both fire in one call. On the `setup_run` tick
-        // the fresh seed arms the entry kill below AND a pending pick
-        // raises the cover edge further down - without the latch the cover
-        // rewarm rebuilds a live 150-tick spiral in the same tick the kill
-        // just drained (the load-end double start, ticks 185->150).
+        // One-way latch per tick, standing in for GML's room ownership: a
+        // kill and a rewarm must NEVER both fire in one call. On the
+        // `setup_run` tick the fresh seed arms the entry kill below AND a
+        // pending pick raises the cover edge further down - without the
+        // latch the cover rewarm rebuilds a live spiral in the same tick
+        // the kill just drained (the load-end double start, ticks
+        // 185->150, where 150 is `SpiralCont/Create_0.gml:36-47`'s
+        // `repeat 150` warmup).
         let mut killed_this_tick = false;
         let throne_ii_active = self
             .sim
@@ -1164,12 +1187,20 @@ impl App {
                 .next()
                 .map(|(_, _, inv)| inv.weapons[inv.current])
                 .unwrap_or(crate::data::WeaponId::NONE);
-            // GML `KeyCont.dis_fire`: cursor distance in world px, capped at
-            // 48 px (bevy `player_aim` `MAX_LOOK`; unbounded `dis/viewdist`
-            // drifts whole screens at a window edge). Uses the live cursor
-            // unprojection, so the lean follows the cursor as the camera
-            // moves. (`cursor_to_world` borrows `self.cam` only, so it was
-            // resolved into `live_hover` before the `world` borrow above.)
+            // GML `KeyCont.dis_fire`: raw cursor distance in world px,
+            // unbounded (`InputHandling.gml:467`
+            // `point_distance(x, y, mouse_x, mouse_y)`), divided by the
+            // weapon's lean divisor at `BackCont/Step_0.gml:69`
+            // (`dis_fire[index] / _viewdist`). The port clamps to
+            // [`CAM_MAX_LOOK`](crate::render::CAM_MAX_LOOK) (48 px): GML
+            // has no such cap and an unbounded lean drifts whole screens
+            // at a window edge. The gamepad arm scales stick deflection by
+            // `min(view_width, view_height) * 0.4` instead
+            // (`InputHandling.gml:442-444`, `BackCont/Step_0.gml:65`).
+            // Uses the live cursor unprojection, so the lean follows the
+            // cursor as the camera moves. (`cursor_to_world` borrows
+            // `self.cam` only, so it was resolved into `live_hover` before
+            // the `world` borrow above.)
             let (aim_dir, aim_dis) = match live_hover {
                 Some(h) => {
                     let d = h - player;
@@ -1687,8 +1718,10 @@ impl App {
     /// `Scheduler::pointer_pos_px` into `polled_pointer_px` every frame
     /// (GML `mouse_x`/`mouse_y` parity: no focus dispatch, no hit regions,
     /// no staleness clock). Unprojected through this frame's camera so aim
-    /// stays glued to the on-screen pointer (bevy `player_aim`
-    /// `viewport_to_world_2d` parity); `None` until the first mouse move.
+    /// stays glued to the on-screen pointer (the port-only
+    /// unprojection: GML's `mouse_x`/`mouse_y` are already view-space, so
+    /// it reads the cursor straight out of the room); `None` until the
+    /// first mouse move.
     pub fn stage_pointer_px(&mut self, phys_px: Option<[f32; 2]>) {
         self.polled_pointer_px = phys_px.map(|[x, y]| Vec2::new(x, y));
     }
@@ -2391,10 +2424,15 @@ impl App {
         if rmb_down && state == AppState::Title {
             self.sim.world.resource_mut::<NtInput>().take_spec_pressed();
         }
-        // Mutation digits travel the bevy two-step (`weapon_slot` pulse →
-        // `route_mutation_digit` → Select/Pick). No direct `MutationChoice`
-        // write here: that committed on the first press, bypassing the
-        // highlight law (`handle_mutation_keys`).
+        // Mutation digits travel the two-step: `weapon_slot` pulse →
+        // `route_mutation_digit` → Select/Pick. No direct
+        // `MutationChoice` write here: that committed on the first press,
+        // bypassing the highlight law (`menus::tick_ingame_menu`). GML's
+        // pointer law is the same two-step (`SkillIcon/Mouse_4.gml:7-17`:
+        // unselected highlights, selected commits), but its digit
+        // shortcut collapses it - `InputHandling.gml:281-292` sets
+        // `selected = 1` and then fires `ev_left_press`, so the card
+        // commits in one press. The port keeps two steps for both.
         // Shell edges with no `KeyCode` (Esc / R / Enter).
         let had_pause = self.pause_edge;
         let had_restart = self.restart_edge;
@@ -2410,11 +2448,15 @@ impl App {
             self.sim.world.resource_mut::<NtInput>().press_interact();
             self.interact_edge = false;
         }
-        // Splash advances on any key/mouse edge (bevy `boot_intro` law):
-        // arrows/WASD/digits never stage fire/interact/spec pulses, so without
-        // this a keyboard-only shell stalls on the logo until the timeout. Any
-        // `just` key, pad edge, or tap counts - edge split like GML
-        // `mouse_ui_clicked`: Android on the lift, desktop on the press.
+        // Splash advances on any key/mouse edge (GML `Logo/Draw_0.gml:7-8`:
+        // `scrGamepadAnykey() != -1 or keyboard_anykey()` fires a global
+        // left press, which `Logo/Mouse_53.gml:22-32` turns into either
+        // `alarm[1] = 2` or a clamped `alarm[0]`): arrows/WASD/digits never
+        // stage fire/interact/spec pulses, so without this a keyboard-only
+        // shell stalls on the logo until the timeout. Any `just` key, pad
+        // edge, or tap counts - edge split like GML `mouse_ui_clicked`
+        // (`macros_general.gml:196-206`): Android on the lift, desktop on
+        // the press.
         if state == AppState::Splash
             && (!just.is_empty()
                 || had_pause
@@ -2426,13 +2468,18 @@ impl App {
             self.sim.world.resource_mut::<NtInput>().press_interact();
         }
 
-        // Per-frame cursor aim (bevy `player_aim` mouse path): the cursor's
-        // *screen* position unprojected through the current camera steers
-        // `aim_axis` every tick, not just on hover events - a latched world
-        // point would go stale as the camera moves. The follow camera reads the
-        // same live point's distance as GML `dis_fire`. Stick input wins when
-        // nonzero (bevy precedence: `sample_keyboard` leaves `aim_axis` zero, a
-        // gamepad shell may layer on top). Frozen outside live play.
+        // Per-frame cursor aim: the cursor's *screen* position unprojected
+        // through the current camera steers `aim_axis` every tick, not just
+        // on hover events - a latched world point would go stale as the
+        // camera moves. GML recomputes `dis_fire`/`dir_fire` the same way,
+        // every step, from raw `mouse_x`/`mouse_y`
+        // (`InputHandling.gml:464-469`, skipped over a generation screen);
+        // the follow camera reads that same live distance
+        // (`BackCont/Step_0.gml:69`). GML picks one aim source by device
+        // (`BackCont/Step_0.gml:59-74`: `opt_gamepad` / `opt_keyboard` /
+        // `JoystickAttack`, in that order); the port layers instead, so a
+        // nonzero stick `aim_axis` from `sample_gamepads` wins and the
+        // cursor only fills a zero axis. Frozen outside live play.
         // Clicks: aim-at-click + fire in live game, confirm in menus; a click is
         // a single-frame edge (continuous hold needs shell pressed-state). Over
         // an open pause/settings/credits menu a click hit-tests the
@@ -2810,8 +2857,9 @@ impl App {
                 }
             }
         } else if let Some(_click) = staging_clicks.last().copied() {
-            // Splash/Loading advance on any mouse button (bevy `boot_intro`
-            // any-key/mouse law).
+            // Splash/Loading advance on any mouse button (same law as
+            // above; GML `Logo/Mouse_53.gml:22-29` handles the global left
+            // press).
 
             self.sim.world.resource_mut::<NtInput>().press_interact();
         } else {
@@ -3358,9 +3406,9 @@ impl App {
         // focus dispatch, so one poll replaces the root `cursor_move` +
         // viewport `Hover` dual staging (and its 30-frame stale clock).
         self.polled_pointer_px = sched.pointer_pos_px.map(|(x, y)| Vec2::new(x, y));
-        // Touch button zones read the viewport width (bevy
-        // `window.width()`); shells must stage contacts in the same px
-        // space as `sched.size`.
+        // Touch button zones read the viewport width (`sched.size`, the
+        // shell's physical px); shells must stage contacts in the same px
+        // space.
         if sched.size.0 > 0 {
             self.view_width = sched.size.0 as f32;
         }
@@ -3391,8 +3439,10 @@ impl App {
         // option, so nothing in boot, menus, pause or death moves it - the
         // gate carries no state term at all.
         let hide_os_cursor = keyboard_mode;
-        // GML `game_end` parity for the QUIT row (bevy `AppExit` has no
-        // headless window service; the desktop shell exits here).
+        // GML `game_end` parity for the QUIT row
+        // (`MainMenuButton/Other_10.gml:100-104`: `game_restart()` then
+        // `game_end()`). Port-only plumbing: the row raises
+        // `QuitRequested` and this shell call is where the process ends.
         if self
             .sim
             .world
@@ -4062,8 +4112,9 @@ impl App {
             Some(background_color(area).map(srgb_to_linear))
         };
         // Fullscreen overlays: hit flashes (white). Menu dimming is
-        // the scrim `UiBox` above (bevy parity: one 230-black layer
-        // over everything, background included), never the viewport
+        // the scrim `UiBox` below (GML parity: one black
+        // `draw_rectangle` over the whole view rect, background
+        // included - `MenuOptions/Draw_0.gml:4-12`), never the viewport
         // tint (that would double-dim the sprites).
         let dim_menu = state == AppState::InGame
             && matches!(
@@ -4699,10 +4750,13 @@ impl App {
         let letterbox_before_content = menu_kind
             .is_some_and(|kind| !matches!(kind, MenuOverlay::Credits | MenuOverlay::Unlock));
         if let Some(rows) = menu_rows {
-            // GML `GameOver/Draw_0:7-10` dims with `draw_set_alpha(0.7)`
-            // (178/255); pause/settings/credits/stats sit on the
-            // near-opaque bevy `scrim` (230/255). The Draw_75 cursor
-            // draws after, so it stays full-bright over the dim.
+            // GML `draw_set_alpha` per overlay: game over and pause dim at
+            // 0.7 (`GameOver/Draw_0:7-10`, `UberCont/Draw_0:72-75` =
+            // 178/255), unlock at 0.6 (`UnlockScreen/Other_10:5` =
+            // 153/255), and settings is the near-opaque one at 0.9
+            // (`MenuOptions/Draw_0:4-12` = 230/255), which credits/stats
+            // share. The `Draw_75` cursor (`UberCont/Draw_75:68-69`) draws
+            // after, so it stays full-bright over the dim.
             let scrim_alpha = match menu_kind {
                 Some(MenuOverlay::Pause | MenuOverlay::GameOver) => 178,
                 Some(MenuOverlay::Unlock) => 153,
@@ -4794,9 +4848,11 @@ fn tick_counter(mut ticks: ResMut<TickCount>) {
 /// Resources the sim schedule reads that `setup_run` does not own (mirrors
 /// the `insert_schedule_resources` list in `schedule.rs` tests), plus
 /// startup defaults for run-scoped resources (Run, Score, FloorMask,
-/// SaveData, Toast, menus...): bevy inserts these at app build and
-/// `setup_run` resets them in place, so booting at Splash (pre-run) never
-/// hits a missing-resource validation error.
+/// SaveData, Toast, menus...): the world insert is this crate's app-build
+/// step and `setup_run` resets them in place, so booting at Splash
+/// (pre-run) never hits a missing-resource validation error. GML has no
+/// global struct here - the same defaults are field initialisers in the
+/// controllers' own `Create_0` (`GameCont/Create_0.gml:7-47`).
 fn init_schedule_resources(world: &mut World) {
     use crate::audio::{AudioCue, GameAudio};
     use crate::combat::DeathEvents;
@@ -4847,9 +4903,9 @@ fn init_schedule_resources(world: &mut World) {
     // Area-fog scroll (GML TopCont `fogscroll`, persistent like the
     // controller itself: kept across floors, reset only on reboot).
     world.init_resource::<crate::environment::FogState>();
-    // Run-scoped startup defaults (bevy app-build parity): `setup_run`
-    // resets every one of these in place, so menus/pre-run frames run
-    // the full schedule without missing-resource errors.
+    // Run-scoped startup defaults (app-build step, as above):
+    // `setup_run` resets every one of these in place, so menus/pre-run
+    // frames run the full schedule without missing-resource errors.
     world.insert_resource(Score::default());
     world.insert_resource(Run::default());
     world.insert_resource(FloorMask::default());
@@ -5353,7 +5409,9 @@ fn route_menu_click(
             {
                 return None;
             }
-            // Bevy `bigname_button_at` parity: every menu button owns a
+            // Port-only hit box (the GML buttons are sprite instances
+            // collision-tested by `mouse_ui_hovered`,
+            // `macros_general.gml:212-241`): every menu button owns a
             // fixed 120x22 GUI box centered on its (gx, gy) (the dp text
             const HW: f32 = 60.0;
             const HH: f32 = 11.0;
@@ -5465,8 +5523,10 @@ pub fn menu_overlay_kind(
 }
 
 /// Menu overlay lines for one selected overlay: the text column of
-/// [`menu_gui_texts`](crate::render::menu_gui_texts) (bevy panel
-/// strings verbatim; positions/colors/sizes live in the GUI rows).
+/// [`menu_gui_texts`](crate::render::menu_gui_texts) (GML panel strings:
+/// `scrMenuButtonName.gml:18-37` for the main/play rows,
+/// `scrMakePauseButtons.gml:9-33` names the pause rows by `PauseButton`
+/// `image_index`; positions/colors/sizes live in the GUI rows).
 pub fn menu_overlay_lines(kind: MenuOverlay, world: &mut World) -> Vec<String> {
     menu_gui_texts(kind, world)
         .into_iter()

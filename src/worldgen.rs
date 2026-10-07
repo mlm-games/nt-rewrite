@@ -1,11 +1,17 @@
-//! Level-generation core, ported from `world.rs` floor generation
-//! (plus `is_secret_area` from the GML secret-area scripts).
+//! Level-generation core: the headless floor walk GML runs in
+//! `FloorMaker` - one maker per stamp, 32px steps, `goal` floor cells
+//! (`objects/FloorMaker/Step_0.gml:69-87`, `FloorMaker/Create_0.gml:1-9`),
+//! stamping `Floor`s through `scripts/scrMakeFloor.gml` - the 16px wall
+//! ring around each tile (`scripts/macros_general.gml:49-62`), and the
+//! population pass (`scrPopulate`, `scrPopEnemies`, `scrPopChests`,
+//! `scrPopProps`). `is_secret_area` follows GML
+//! `objects/GameCont/Other_5.gml:54` (`area >= 100`).
 //!
-//! Transform notes:
-//! - `use bevy::...` lines dropped. `crate::game::areas::AreaId` becomes
-//!   `crate::data::AreaId`; `crate::game::secret_areas::is_secret_area`
-//!   becomes the local `is_secret_area` ported below.
-//! - Logic, RNG call order, tables and comments are byte-identical to source.
+//! Per-area seeding mirrors GML `objects/GameCont/Create_0.gml:95`
+//! (`levseed = global.seed`) over `scripts/scrRngStatesReset.gml:3-17`;
+//! the port draws one `StdRng` per phase off `run.gen_seed` instead of
+//! re-seeding the one GameMaker stream, so its exact sequences still differ
+//! (see `phase_rng`).
 
 use glam::Vec2;
 use rand::rngs::StdRng;
@@ -16,9 +22,13 @@ use crate::comps_a::Run;
 use crate::comps_b::ChestKind;
 use crate::data::{AreaId, EnemyKind};
 
-// Supporting consts from world.rs:16 (`WALL_PX`) and components.rs:47
-// (`TILE`, via `crate::game::components::*`), copied verbatim (required by
-// the byte-identical `wall_cell_at` / `cell_center_*` below).
+// `TILE` is GML's 32px floor stamp (`scripts/scrMakeFloor.gml`, `x + 32`
+// offsets); `WALL_PX` is the 16px probe lattice `mcr_floor_make_walls` puts
+// walls on (`scripts/macros_general.gml:50-61`) - GML's own wall mask is
+// 24x24 (`objects/Wall/Create_0.gml:13-14`, narrowed to 20 by
+// `mcr_wall_update_lrwh` at `scripts/macros_general.gml:75-80`), which this
+// port does not model. Both grid the `wall_cell_at` / `cell_center_*`
+// helpers below.
 pub const WALL_PX: f32 = 16.0;
 pub const TILE: f32 = 32.0;
 
@@ -1885,8 +1895,8 @@ pub fn apply_chest_permutations(plan: &mut LevelPlan, ctx: ChestPermuteCtx) -> C
     out
 }
 
-// world.rs:818-835, verbatim (`Vec2` is glam here, already imported;
-// `TILE` above is components.rs:47 verbatim).
+// GML `Floor` sits at `10000 + 32k` from its origin, so the tile centre is
+// a half `TILE` in from that origin (`cell_dist2_origin` measures from it).
 fn cell_center_px(cx: i32, cy: i32) -> Vec2 {
     Vec2::new(cx as f32 * TILE + TILE * 0.5, cy as f32 * TILE + TILE * 0.5)
 }

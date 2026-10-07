@@ -1,10 +1,13 @@
-//! IDPD raid director. Ported from the bevy reference `game/idpd.rs` with
-//! positions as [`Pos`] (`Vec2`) instead of `Transform.translation`.
+//! IDPD raid director: the popo portal, its wave roll and the van lift.
+//! GML splits those across `objects/IDPDSpawn/*` (`Create_0.gml:1-36`
+//! places the portal and stamps `elite`, `Alarm_1.gml:3-48` rolls the
+//! wave), `objects/Van/*` and `objects/VanSpawn/Create_0.gml`; portals
+//! also come from the chest (`IDPDChest/Destroy_0.gml:11-20`) and from
+//! worldgen. A body is a [`Pos`] (`Vec2`).
 //!
 //! Render split: portal bursts route through [`crate::effects::spawn_burst`]
-//! and trauma through `repame_fx::Trauma`, matching the bevy
-//! `VfxSpawner`/`ScreenEffects` call sites. The warning sting is the
-//! `VanSpawn/Create_0:41` cue (`sndOasisPopo` under water, else
+//! and trauma through `repame_fx::Trauma`. The warning sting is the
+//! `VanSpawn/Create_0.gml:41` cue (`sndOasisPopo` under water, else
 //! `sndVanWarning`) at 1.0/0.0; the portal whoosh goes through
 //! [`GameAudio::play_portal`].
 //!
@@ -34,7 +37,9 @@ use crate::msg::Queue;
 use crate::spatial::Pos;
 use crate::time::{GTimer, TimerMode};
 
-/// True for the four IDPD kinds (bevy parity).
+/// True for the four IDPD kinds a raid puts on the floor: `Grunt`,
+/// `Shielder`, the dir-1 `EliteGrunt` elite and `Van` (GML
+/// `IDPDSpawn/Alarm_1.gml:18-27`, `VanSpawn/Alarm_1.gml:5`).
 pub fn is_idpd_kind(kind: EnemyKind) -> bool {
     matches!(
         kind,

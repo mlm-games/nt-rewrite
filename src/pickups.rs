@@ -1,8 +1,9 @@
-//! Pickup / drop spawning. Ported from nt's `game/pickups.rs` spawn helpers plus
-//! the combat drop fns (`spawn_rad_burst`, `maybe_spawn_drop`, `spawn_chest`, …).
-//! Render split: only rads carry `SpriteAnim` (bevy parity); static kinds resolve
-//! art renderer-side from the same kind -> path table. Juice pop-ins skipped
-//! (no sim effect).
+//! Pickup / drop spawning: the spawn helpers plus the combat drop fns
+//! (`spawn_rad_burst`, `maybe_spawn_drop`, `spawn_chest`, …) over GML's
+//! `Rad` / `AmmoPickup` / `HPPickup` / `WepPickup` / `chestprop` objects.
+//! Render split: only rads carry `SpriteAnim`; static kinds resolve
+//! art renderer-side from the same kind -> path table. Juice pop-ins
+//! skipped (no sim effect).
 
 use bevy_ecs::prelude::*;
 use rand::RngExt;
@@ -316,9 +317,13 @@ pub fn spawn_pickup(
 
     let mut rng = rand::rng();
     let mut ec = commands.spawn((GameCleanup, LevelCleanup, Pickup { kind }, Pos(pos)));
-    // Only rads animate (bevy parity). Static kinds carry no render
-    // handle here; the render phase maps kind -> art path itself
-    // (same table as `pickup_sprite`).
+    // Only rads animate. GML parks `image_speed = 0` on every pickup
+    // (`Rad/Create_0.gml:12`, `AmmoPickup/Create_0.gml:11`,
+    // `HPPickup/Create_0.gml:6`, `WepPickup/Create_0.gml:17`) and advances
+    // the strip from `Step_0` instead (`Rad/Step_0.gml:4`,
+    // `WepPickup/Step_0.gml:4-7`), so the art driver lives renderer-side
+    // here. Static kinds carry no render handle; the render phase maps
+    // kind -> art path itself (same table as `pickup_sprite`).
     if matches!(kind, PickupKind::Rad(_))
         && let Some((path, _)) = path
         && let Some(def) = catalog.def(path)
@@ -592,7 +597,7 @@ pub fn chest_art(kind: ChestKind, ctx: &ChestCtx, cursed: bool) -> ChestArt {
             }
         }
         // GML `CursedBigChest/Create_0.gml:5` sets `sprite_index =
-        // sprCursedChestBig`; `Destroy_0.gml:2` opens as
+        // sprCursedChestBig`; `CursedBigChest/Destroy_0.gml:2` opens as
         // `sprWeaponChestBigOpen`.
         ChestKind::CursedBig => art(
             "images/sprCursedChestBig.png",
@@ -834,7 +839,9 @@ fn spawn_rad_motion(
     });
 }
 
-/// Random unit-ish offset for scatter drops (bevy parity).
+/// Random unit-ish offset for scatter drops: uniform angle, uniform
+/// distance 0..22 px. Port-only - GML's drop scatter is `orandom(J)` per
+/// axis (`scripts/scrDrop/scrDrop.gml:64,70`), never a polar offset.
 pub fn random_offset() -> glam::Vec2 {
     let mut rng = rand::rng();
     let a = rng.random_range(0.0..std::f32::consts::TAU);
@@ -972,9 +979,9 @@ pub fn tick_flung_weapons(
     }
 }
 
-/// Cached per-tick gun-decide context (built once in a PreUpdate-ish
-/// system so `move_projectiles` stays under bevy's 16-system-param
-/// limit; GML `instance_nearest(x, y, Player)` + `GameCont.hard`).
+/// Cached per-tick gun-decide context (built once in a separate system
+/// so `move_projectiles` stays under bevy_ecs's 16-system-param limit;
+/// GML `instance_nearest(x, y, Player)` + `GameCont.hard`).
 #[derive(Resource, Clone)]
 pub struct GunDecideCache {
     pub ctx: Option<crate::decide_wep::DecideCtx>,
@@ -1208,8 +1215,12 @@ pub fn random_weapon(rng: &mut impl rand::RngExt) -> WeaponId {
     }
 }
 
-/// Gold-weapon roll (bevy `random_gold_weapon` parity: uniform over
-/// the weapons table's gold flag, plain roll when empty).
+/// Gold-weapon fallback roll (uniform over the weapons table's gold
+/// flag, plain roll when empty). Port-only: GML's gold roll is
+/// `scripts/scrDecideWepGold/scrDecideWepGold.gml:5-20`, a `do/until`
+/// that re-rolls a fixed 6-gun list (tier 2 past loop 0) until the
+/// player does not already hold it - the live path is
+/// [`crate::decide_wep::decide_wep_gold`].
 pub fn random_gold_weapon_fallback(rng: &mut impl rand::RngExt) -> WeaponId {
     let gold: Vec<WeaponId> = crate::weapons_data::WEAPONS
         .iter()
@@ -1307,9 +1318,10 @@ pub fn steroids_ambidextrous(player: &Player) -> bool {
     matches!(player.ultra, Some(UltraMutationId::SteroidsAmbidextrous))
 }
 
-/// Toast expiry (bevy `pickups.rs:999` parity: duration-zero timers are
-/// inert, otherwise the text clears when the 2.2 s timer lapses).
-/// Text-only effect; kept so run-setup crown toasts fade headless.
+/// Toast expiry: a duration-zero timer is inert, otherwise the text
+/// clears when the 2.2 s timer lapses. Port-only UI - GML has no toast
+/// at all. Text-only effect; kept so run-setup crown toasts fade
+/// headless.
 pub fn tick_toast(time: Res<repame_sim::SimTime>, mut toast: ResMut<Toast>) {
     if toast.timer.duration() <= 0.0 {
         return;
@@ -1324,12 +1336,12 @@ pub fn tick_toast(time: Res<repame_sim::SimTime>, mut toast: ResMut<Toast>) {
 // systems. Render split: `Visibility` blink-out and sprite alpha fades are
 // renderer-owned (skipped); the sim keeps lifetimes, motion, grants.
 
-/// GML `CursedPickup` (`Step_0.gml` + `Alarm_0.gml`) verbatim:
-/// `image_index` dwells on frame 0 advancing by `random(0.04)` then
-/// runs at `0.4`; on every frame turn (`current_frame_active`) there is
-/// a `random(4) < 1` chance to shed a `Curse`. `Alarm_0` re-arms every
-/// 2 steps, decrements `blink`, and on `blink < 0` plays the
-/// `SmallExplosion` and the disappear stings.
+/// GML `CursedPickup` (`CursedPickup/Step_0.gml` +
+/// `CursedPickup/Alarm_0.gml`) verbatim: `image_index` dwells on frame 0
+/// advancing by `random(0.04)` then runs at `0.4`; on every frame turn
+/// (`current_frame_active`) there is a `random(4) < 1` chance to shed a
+/// `Curse`. `Alarm_0` re-arms every 2 steps, decrements `blink`, and on
+/// `blink < 0` plays the `SmallExplosion` and the disappear stings.
 pub fn tick_cursed_ammo(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -1370,9 +1382,10 @@ pub fn tick_cursed_ammo(
             continue;
         }
         blink.alarm += 2.0;
-        // GML `Alarm_0.gml` tests `blink < 0` BEFORE decrementing. `blink`
-        // starts at 30, so the check sees 30-(k-1) on firing k and first
-        // goes negative at k=32 - step `A + 2*31` = `A + 62`.
+        // GML `CursedPickup/Alarm_0.gml` tests `blink < 0` BEFORE
+        // decrementing. `blink` starts at 30, so the check sees 30-(k-1) on
+        // firing k and first goes negative at k=32
+        // - step `A + 2*31` = `A + 62`.
         if blink.blink < 0 {
             crate::spawns::spawn_explosion_with_source_radius_kind(
                 &mut commands,
@@ -1463,7 +1476,10 @@ pub fn tick_pickup_drag(
 
 /// Pickup collection: ground-physics slide, lifetime expiry, telekinesis
 /// magnet, per-kind ranges, chest loot tables, rad/ammo/medkit/weapon
-/// grants. Bevy `collect_pickups` parity minus render blinks.
+/// grants. GML splits these across each pickup's `Step_0` (magnet law:
+/// `Rad/Step_0.gml:18-28`, `AmmoPickup/Step_0.gml:40-48`) and its
+/// `Collision_Player` (grants), plus `scripts/scrDrop/scrDrop.gml` for
+/// drops; render blinks stay renderer-owned.
 #[allow(clippy::too_many_arguments)]
 pub fn collect_pickups(
     time: Res<SimTime>,
@@ -1602,9 +1618,10 @@ pub fn collect_pickups(
                 gp.vel = glam::Vec2::ZERO;
             }
         }
-        // Render split: bevy spun the sprite (`rotate_z`) while sliding;
-        // headless pickups carry no angle channel, velocity decay above
-        // is the sim effect.
+        // Render split: the sprite spin is GML `WepPickup/Step_0.gml:9-11`
+        // (`image_angle += rotspeed * speed * 2` while not meeting a
+        // `Wall`); headless pickups carry no angle channel, so only the
+        // velocity decay above is the sim effect here.
 
         if let Some(mut lt) = lifetime {
             lt.timer.tick(time.delta_secs);
@@ -1692,15 +1709,16 @@ pub fn collect_pickups(
             let ctx = decide_ctx_for(&run, &player, race, &inv, u32::from(race == RaceId::Robot));
             let seed = drop_seed.map_or(0, |s| s.0);
 
-            // GML `scrChestOpened` (`scripts/scrChestOpened.gml:11-29`) is called
-            // at the TOP of every chest's `Collision_Player`, before the loot. The
-            // Crown of Hatred burns 1 HP through the normal i-frame check
-            // (`scrPlayerProcTakeDamage`, so 1 HP survives) and drops 16 rads at
-            // the PLAYER's position - the event runs `with (p)`. The `_amount =
-            // 24` line is dead code (`other` in a `Collision_Player` event is the
-            // Player, never a `RadChest`), deliberately NOT implemented.
-            // `ProtoChest` never calls the script (it runs its own block below),
-            // so it is excluded here to avoid the double trigger.
+            // GML `scrChestOpened` (`scrChestOpened.gml:11-29`) is called
+            // at the TOP of every chest's `Collision_Player`, before the
+            // loot. The Crown of Hatred burns 1 HP through the normal
+            // i-frame check (`scrPlayerProcTakeDamage`, so 1 HP survives)
+            // and drops 16 rads at the PLAYER's position
+            // - the event runs `with (p)`. The `_amount = 24` line is dead
+            //   code (`other` in a `Collision_Player` event is the Player,
+            //   never a `RadChest`), deliberately NOT implemented.
+            //   `ProtoChest` never calls the script (it runs its own block
+            //   below), so it is excluded here to avoid the double trigger.
             if chest != ChestKind::Proto && player.crown == CrownKind::Hatred && health.hp > 0 {
                 if health.invuln.is_finished() {
                     health.hp -= 1;
@@ -1890,12 +1908,14 @@ pub fn collect_pickups(
                         );
                         dir += 120.0_f32.to_radians();
                     }
-                    // `RadMaggotExplosion/Alarm_0.gml:1-4`:
-                    //   `repeat(20) { with instance_create(x + random(8) - 4,
-                    //     y + random(8) - 4, RadMaggot) motion_add(random_angle,
-                    //     random(5)) }`
-                    // A VELOCITY of 0-5 px/step, not a spawn offset.
-                    // `alarm[0] = 8` (`Create_0.gml:3`) is the eight-frame wind-up.
+                    // `RadMaggotExplosion/Alarm_0.gml:1-4`: `repeat(20) {
+                    // with instance_create(x + random(8)
+                    // - 4, y + random(8)
+                    // - 4, RadMaggot) motion_add(random_angle, random(5))
+                    //   }` A VELOCITY of 0-5 px/step, not a spawn offset.
+                    //   `alarm[0] = 8`
+                    //   (`RadMaggotExplosion/Create_0.gml:3`) is the
+                    //   eight-frame wind-up.
                     for _ in 0..20 {
                         let at = pickup_pos_value
                             + glam::Vec2::new(
@@ -1915,10 +1935,10 @@ pub fn collect_pickups(
                             false,
                         );
                     }
-                    // `Destroy_0.gml:13`'s `event_inherited()` is
-                    // `RadChest/Destroy_0.gml:4-12`, which repeats the same 4 x `Smoke`
-                    // + `ExploderExplo` + `sndEXPChest` before its own
-                    // `event_inherited()` reaches `prop/Destroy_0.gml:12`.
+                    // `RadChest/Destroy_0.gml:4-12` repeats 4 x `Smoke` +
+                    // `ExploderExplo` + `sndEXPChest`, then its own
+                    // `event_inherited()` at `:16` reaches
+                    // `prop/Destroy_0.gml:12` (`scrRadDrop`).
                     crate::environment::spawn_rad_chest_burst(
                         &mut commands,
                         true,

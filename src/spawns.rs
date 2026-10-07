@@ -1,9 +1,10 @@
 //! Combat spawn helpers. Ported from nt's `game/combat.rs` spawners plus
 //! prop-death damage glue.
 //! Render split: `SpriteAnim` when the catalog has the strip, else bare with
-//! renderer fallback (split/plasma art keys off `ProjectileTyp`, sentries and
-//! hazards off their markers). Bevy pop-ins and tint flashes dropped as render
-//! juice.
+//! renderer fallback (projectile art resolves in `render.rs::projectile_art`
+//! off `ProjectileVisual`, the source weapon, then the team; sentries and
+//! hazards off their markers). Scale pop-ins and tint flashes are not ported -
+//! strips draw at the catalog cell size (`render.rs`, fidelity notes).
 
 use bevy_ecs::prelude::*;
 use rand::RngExt;
@@ -290,8 +291,13 @@ pub fn spawn_split_projectiles(
     }
 }
 
-/// Plasma fan children. Art keys off `ProjectileTyp(2)` + size
-/// threshold renderer-side (big/small split at 14px, bevy parity).
+/// Plasma fan children on an even ring (`_ang += 360 / count` off the
+/// parent's heading; GML starts from `random_angle` and rings 10
+/// `PlasmaBall` in `PlasmaBig/Destroy_0.gml:8-14`, 4 `PlasmaBig` in
+/// `PlasmaHuge/Destroy_0.gml:7-13`). `PlasmaSize` is GML's `image_xscale`:
+/// it loses 0.1 per wall hit and the shell dies at `<= 0.5`
+/// (`PlasmaBall/Step_0.gml:6-8`). Art resolves renderer-side off the source
+/// weapon at the catalog cell size - the per-child growth scale is not drawn.
 pub fn spawn_plasma_children(
     commands: &mut Commands,
     pos: glam::Vec2,
@@ -426,9 +432,13 @@ pub fn spawn_weapon_pickup_from_projectile(
     );
 }
 
-/// GML scrBulletHitFX: oneshot fade at pos (bevy shape: oneshot 0.3 s
-/// when stripped, static 0.2 s otherwise), oriented by `angle`
-/// renderer-side via [`FxAngle`].
+/// GML `scripts/scrBulletHitFX/scrBulletHitFX.gml:4-13`: a `BulletHit` at
+/// `pos` taking the shooter's `image_angle`, with `image_speed` inherited
+/// when nonzero and otherwise the object's `0.4`
+/// (`BulletHit/Create_0.gml:2`), self-destroyed on animation end
+/// (`BulletHit/Other_7.gml:1`). Both lifetimes here are port-only caps - the
+/// strip oneshot gets 0.3 s and the static fallback 0.2 s, where GML waits
+/// the strip out. Heading rides [`FxAngle`] for the renderer.
 pub fn spawn_bullet_fade_fx(
     commands: &mut Commands,
     catalog: &AnimCatalog,
@@ -462,7 +472,9 @@ pub fn spawn_bullet_fade_fx(
 }
 
 /// Removal cascade: fade fx, sentry, explosions (incl. Jock bonus),
-/// hazards, splits, pickup spec, plasma children. Bevy parity.
+/// hazards, splits, pickup spec, plasma children - GML splits the same
+/// arms over each projectile's own `Destroy_0` (e.g.
+/// `objects/ClusterNade/Destroy_0.gml:1-13`, `objects/Rocket/Destroy_0.gml`).
 #[allow(clippy::too_many_arguments)]
 pub fn on_projectile_removed(
     commands: &mut Commands,

@@ -1,31 +1,38 @@
-//! Boss AI. Ported from the bevy reference `game/boss_ai.rs` with positions
-//! as [`Pos`] (`Vec2`) instead of `Transform.translation` (`Vec3`).
+//! Boss AI. Positions are [`Pos`] (`Vec2`), the stand-in for GML's `x`/`y`
 //!
-//! Render split: `Sprite`/`Anchor`/`Transform` writes, fire-strip swaps
-//! (`play_fire`) and `VfxSpawner` bursts stay out; kept: movement impulses,
-//! fan/ring volleys with full combat traits, `Explosion` + `Beam` spawns,
-//! pending-spawn queues, trauma, wall-break queues. Muzzle markers ride
-//! [`show_enemy_fire`] as for normal enemies (no-op without a seeded
-//! [`SpriteAnim`]).
+//! Render split: art writes and burst spawns stay out; kept: movement
+//! impulses, fan/ring volleys with full combat traits, `Explosion` + `Beam`
+//! spawns, pending-spawn queues, trauma, wall-break queues. The GML fire
+//! strip swap (`sprite_index = spr_fire`, e.g. `BanditBoss/Alarm_2.gml:7`,
+//! back to idle at `BanditBoss/Alarm_5.gml:5`) rides [`show_enemy_fire`] as
+//! for normal enemies (no-op without a seeded [`SpriteAnim`]).
 //!
-//! Timer adaptation: bevy `Timer` -> [`GTimer`] (`tick(dt)`, then
-//! `just_finished()`/`finished()`). bevy `short_ready_timer` (finished from
-//! birth) has no `GTimer` equivalent: [`ready_timer`] double-ticks a 10 ms
-//! `Once` timer into the same observable state (finished, not
-//! just-finished).
+//! Timer adaptation: GML counts `alarm[n]` down at 30 steps/s and runs the
+//! matching `Alarm_n` once when it lands (`BanditBoss/Create_0.gml:28`,
+//! `BanditBoss/Alarm_1.gml:1,3-5`), `-1` disarms
+//! (`BanditBoss/Alarm_1.gml:24`); [`GTimer`] is the headless stand-in
+//! (`tick` / `finished` / `just_finished`). A finished-from-birth timer has
+//! no GML counterpart: [`ready_timer`] double-ticks a 10 ms `Once` timer
+//! into the same observable state (finished, not just-finished).
 //!
-//! LOS adaptation: bevy traced wall *entities* (`segment_hits_wall_query`);
-//! headless uses the `(center, cell)` wall snapshot
-//! (`segment_hits_wall_legacy`). Wall *breaking* during charges still
-//! queues [`PendingWallBreak`]s against the wall entities.
+//! LOS adaptation: GML asks `collision_line(x, y, target.x, target.y, Wall,
+//! 0, 0)`
+//! - bbox test, every Wall object (`BanditBoss/Alarm_1.gml:12`,
+//!   `LilHunter/Alarm_1.gml:19`, `Guardian/Alarm_1.gml:11`)
+//! - or ranges through `scrTargetIsVisible`, which is the same call behind
+//!   a distance cap and with the precise / solid-only flags set
+//!   (`scrTargetIsVisible.gml:7-13`). Headless traces the segment against
+//!   the `(center, cell)` wall snapshot (`segment_hits_wall_legacy`). Wall
+//!   *breaking* during charges still queues [`PendingWallBreak`]s against
+//!   the wall entities.
 //!
 //! `Collision_Wall` adaptation: the GML event fires on mask overlap after
 //! motion, so `boss_wall_law` is a response-only pass
 //! (`move_bounce_solid_displacement`, zero displacement) run by the
 //! dispatcher after the handler, plus the per-kind destroy/bounce split.
 //!
-//! the `boss_ai` dispatcher carries 12 params (bevy_ecs 16-param cap), so no
-//! record-split; handlers take snapshots (`&[(Vec2, Vec2)]` props,
+//! the `boss_ai` dispatcher carries 12 params (bevy_ecs 16-param cap), so
+//! no record-split; handlers take snapshots (`&[(Vec2, Vec2)]` props,
 //! `&[(Vec2, (i32, i32))]` walls) so tests drive them without a world.
 
 use bevy_ecs::prelude::*;
@@ -95,20 +102,23 @@ pub fn hyper_orbit_count(loop_count: u32) -> usize {
 // Shared firing / spawn helpers (boss-specific thin wrappers; enemy fire
 // lives in `crate::enemies` and is NOT duplicated here).
 
-/// Loop-scaled spawn difficulty for boss adds (bevy parity).
+/// Boss-add spawn difficulty (1.0, 1.25 while enraged). Port-only:
+/// GML's half-health check only fires the taunt cue
+/// (`BanditBoss/Other_10.gml:20-22`), and GML's spawn difficulty is the
+/// run-level `GameCont.hard` (`scrPopulate.gml:4`).
 pub fn difficulty_for_loop(enraged: bool) -> f32 {
     1.0 + if enraged { 0.25 } else { 0.0 }
 }
 
-/// Clamp speed (bevy `limit_velocity` parity).
+/// Clamp speed to `max` (GML's per-boss `if speed > N speed = N`,
+/// e.g. `Guardian/Step_0.gml:10`, `BanditBoss/Other_10.gml:17`).
 fn limit_velocity(vel: &mut Velocity, max: f32) {
     if vel.0.length() > max {
         vel.0 = vel.0.normalize_or_zero() * max;
     }
 }
 
-/// Finished-from-birth, silent-until-re-armed timer (bevy
-/// `short_ready_timer` parity - see module docs).
+/// Finished-from-birth, silent-until-re-armed timer (see module docs).
 fn ready_timer() -> GTimer {
     let mut t = GTimer::from_seconds(0.01, TimerMode::Once);
     t.tick(0.01);
@@ -225,9 +235,12 @@ fn boss_wall_law(
     }
 }
 
-/// Queue wall breaks along a charge segment (bevy
-/// `queue_wall_breaks_along_segment` parity over the `(center, cell)`
-/// snapshot; `WALL_PX = 16` like the bevy build).
+/// Queue wall breaks along a charge segment, over the `(center, cell)`
+/// snapshot in `WALL_PX`-half steps (`src/worldgen.rs:22`). GML has no
+/// segment sweep: the charge just calls `scrWallDestroy` per mask
+/// overlap (`Nothing/Collision_Wall.gml:4-5`), and one wall's death
+/// cascades through the 24x24 wall mask by bbox overlap
+/// (`Wall/Create_0.gml:13-14`, `scrWallDestroy.gml:7-14`) - not a radius.
 fn queue_wall_breaks_along_segment(
     commands: &mut Commands,
     walls: &[(glam::Vec2, (i32, i32))],
@@ -258,9 +271,10 @@ fn queue_wall_breaks_along_segment(
     }
 }
 
-/// Single boss projectile (bevy `fire_projectile` parity: team +
-/// combat traits + source, no art; bevy boss shots carry no slash `typ`
-/// or fade either, so none is added here).
+/// Single boss projectile: team + combat traits + source, no art. The
+/// GML shots carry `typ`/`spr_fade` on their own bullet objects
+/// (`EnemyBullet1/Create_0.gml:2,4`, over `projectile/Create_0.gml:3`),
+/// so neither is added here.
 #[allow(clippy::too_many_arguments)]
 pub fn fire_projectile(
     commands: &mut Commands,
@@ -292,7 +306,12 @@ pub fn fire_projectile(
     ));
 }
 
-/// Fan volley around `dir` (bevy `fire_fan_with_kind` parity).
+/// Fan volley around `dir`: `count` shots `spread` apart, spawned 20px out
+/// along the shot line with 120 knockback. GML spells the same shape per
+/// boss (`Guardian/Alarm_1.gml:17-34`: three `GuardianBullet`s at 0 and
+/// +-40deg, 16px out at `x + right * 16`); the even spacing, the 20px
+/// offset and the 120 knockback (GML leaves it at the inherited
+/// `knockback_speed = 4`, `projectile/Create_0.gml:2`) are port-only.
 #[allow(clippy::too_many_arguments)]
 pub fn fire_fan_with_kind(
     commands: &mut Commands,
@@ -327,8 +346,10 @@ pub fn fire_fan_with_kind(
     }
 }
 
-/// Fan volley without a boss kind (bevy `fire_fan` parity: `Bandit`
-/// source fallback, exactly like bevy's `None` kind).
+/// Fan volley without a boss kind: the `Bandit` source is a fallback for
+/// callers that pass no enemy (GML spawns boss bullets with plain
+/// `instance_create`, e.g. `BanditBoss/Alarm_2.gml:11`, so there is no
+/// source to inherit).
 #[allow(clippy::too_many_arguments)]
 pub fn fire_fan(
     commands: &mut Commands,
@@ -359,7 +380,11 @@ pub fn fire_fan(
     );
 }
 
-/// Full-circle volley (bevy `fire_ring_with_kind` parity).
+/// Full-circle volley: `count` shots on `360 / count` from `phase`,
+/// spawned 22px out with 100 knockback. GML spells it out per boss
+/// (`LaserCrystal/Alarm_4.gml:8-15`: `5 + loops * 2` shots each
+/// `360 / count` apart, on the body); the 22px offset and the 100
+/// knockback are port-only.
 #[allow(clippy::too_many_arguments)]
 pub fn fire_ring_with_kind(
     commands: &mut Commands,
@@ -392,7 +417,8 @@ pub fn fire_ring_with_kind(
     }
 }
 
-/// Full-circle volley without a boss kind (bevy `fire_ring` parity).
+/// Full-circle volley without a boss kind (same `Bandit` source
+/// fallback as [`fire_fan`]).
 #[allow(clippy::too_many_arguments)]
 pub fn fire_ring(
     commands: &mut Commands,
@@ -421,8 +447,12 @@ pub fn fire_ring(
     );
 }
 
-/// Timed enemy beam (bevy `spawn_enemy_beam` parity; art/rotation resolve
-/// renderer-side from `Beam.dir/length/width`).
+/// Timed enemy beam; art/rotation resolve renderer-side from
+/// `Beam.dir/length/width`. GML grows the `EnemyLaser` 2px per alarm until
+/// it meets `hitme` past 16 steps or a wall, 160 steps max
+/// (`Laser/Alarm_0.gml:1-10`), drawn as `sprEnemyLaserStart`/`End` around
+/// the segment (`Laser/Draw_0.gml:4-6`); the fixed length, width and every
+/// colour below are port-only.
 pub fn spawn_enemy_beam(
     commands: &mut Commands,
     center: glam::Vec2,
@@ -442,7 +472,8 @@ pub fn spawn_enemy_beam(
             width,
             damage,
             knockback: 40.0,
-            // Bevy `spawn_enemy_beam` sprite tint (green, alpha 0.65).
+            // Port-only sprite tint (green, alpha 0.65); GML draws the beam
+            // untinted at alpha 1 (`Laser/Draw_0.gml:4`).
             color: [0.55, 1.0, 0.6, 0.65],
             timer: GTimer::from_seconds(duration, TimerMode::Once),
             tick: GTimer::from_seconds(0.06, TimerMode::Repeating),
@@ -454,9 +485,12 @@ pub fn spawn_enemy_beam(
 
 // Dispatcher.
 
-/// Boss brains: enrage check, timer ticks, per-kind handler, arena clamp
-/// (bevy `boss_ai` top to bottom; non-bosses `continue` before the first
-/// timer tick, exactly like bevy).
+/// Boss brains: enrage check, timer ticks, per-kind handler, arena clamp.
+/// GML spreads this over each boss object's own `Alarm_n` plus the shared
+/// `enemy/Step_0.gml:44-46` (`scrTarget()` then the `Other_10` handler);
+/// only `With<BossBrain>` bodies get here, and non-bosses are skipped
+/// before the first timer tick. `clamp_to_arena` is port-only - GML relies
+/// on wall masks.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn boss_ai(
     time: Res<SimTime>,
@@ -912,18 +946,21 @@ fn big_bandit_ai(
         let dist = epos.distance(player_pos);
         let los = !crate::walls::segment_hits_wall(epos, player_pos, mask);
         let intro = boss.aux >= 1.0;
-        // GML `Alarm_1.gml:26` `alarm[3] = 1` makes `Alarm_3` run this same
-        // step, and `Alarm_3.gml:3` `walk = 0` overrides the walk value
-        // assigned below at `Alarm_1.gml:31-34` - so the wind-up stands still.
+        // GML `BanditBoss/Alarm_1.gml:26` `alarm[3] = 1` makes `Alarm_3`
+        // run this same step, and `BanditBoss/Alarm_3.gml:3` `walk = 0`
+        // overrides the walk value assigned below at
+        // `BanditBoss/Alarm_1.gml:31-34`
+        // - so the wind-up stands still.
         let mut melee_armed = false;
         if dist < 240.0 || !intro {
             if los && dist > 48.0 && intro {
                 if rng.random_range(0.0..3.0) < 2.0 {
                     boss_cue(commands, "sndBigBanditStartShoot");
-                    // GML `Alarm_1.gml:16-17`: `ammo = 10` then a bare
-                    // `if GameCont.loops ammo += 5`, so only the `+= 5` is
-                    // loop-gated; `alarm[2]/gunangle/alarm[1]` follow as bare
-                    // statements and always arm (loop 0 shoots too).
+                    // GML `BanditBoss/Alarm_1.gml:16-17`: `ammo = 10` then
+                    // a bare `if GameCont.loops ammo += 5`, so only the `+=
+                    // 5` is loop-gated; `alarm[2]/gunangle/alarm[1]` follow
+                    // as bare statements and always arm (loop 0 shoots
+                    // too).
                     brain.ammo = 10;
                     if loops > 0 {
                         brain.ammo += 5;
@@ -969,23 +1006,26 @@ fn big_bandit_ai(
             heading = base + rng.random_range(-45.0f32..45.0).to_radians();
         }
         brain.walk = walk;
-        // GML `Alarm_3.gml:3` `walk = 0` lands after `Alarm_1`'s draw.
+        // GML `BanditBoss/Alarm_3.gml:3` `walk = 0` lands after `Alarm_1`'s
+        // draw.
         if melee_armed {
             brain.walk = 0.0;
         }
         boss.target = glam::Vec2::from_angle(heading);
-        // GML `Alarm_1:30` `speed = 0.4` overwrites the walk impulses.
+        // GML `BanditBoss/Alarm_1.gml:30` `speed = 0.4` overwrites the walk
+        // impulses.
         vel.0 = boss.target * (0.4 * 30.0);
     }
 
-    // GML `Alarm_2` (shotgun burst, one `EnemyBullet1` every 4 steps).
+    // GML `BanditBoss/Alarm_2` (shotgun burst, one `EnemyBullet1` every 4
+    // steps).
     if boss.special_timer.just_finished() {
         if brain.ammo > 0 {
-            // GML `Alarm_2.gml:2`: the bare `if ammo = 10` scopes only
-            // `snd_play(sndBigBanditShootLaugh)` (a GameMaker decompiler
-            // `=`-for-`==`, so it gates the first round of a 10-burst); the
-            // following `snd_play(sndEnemyFire)` is a bare statement and
-            // fires on every shot.
+            // GML `BanditBoss/Alarm_2.gml:2`: the bare `if ammo = 10`
+            // scopes only `snd_play(sndBigBanditShootLaugh)` (a GameMaker
+            // decompiler `=`-for-`==`, so it gates the first round of a
+            // 10-burst); the following `snd_play(sndEnemyFire)` is a bare
+            // statement and fires on every shot.
             if brain.ammo == 15 || brain.ammo == 10 {
                 boss_cue(commands, "sndBigBanditShootLaugh");
             }
@@ -3266,7 +3306,6 @@ fn captain_idpd_bullet(
 
 // Old Guardian.
 
-/// Kiting fan + enrage-scaled ring (bevy `old_guardian_ai` parity).
 #[allow(clippy::too_many_arguments)]
 // YV (Gun God).
 
@@ -3280,8 +3319,9 @@ fn captain_idpd_bullet(
 /// `boss.phase` Idle = pre-intro. `attack_timer`/`special_timer`/
 /// `phase_timer` are `alarm[1]`/`alarm[2]`/`alarm[4]` in seconds.
 #[allow(clippy::too_many_arguments)]
-/// `boss_ai` is at Bevy's 16-parameter limit, so the per-boss sound cues ride
-/// the deferred command queue instead of a `Queue<AudioCue>` parameter.
+/// `boss_ai` is at bevy_ecs' 16-parameter limit, so the per-boss sound
+/// cues ride the deferred command queue instead of a `Queue<AudioCue>`
+/// parameter.
 fn boss_cue(commands: &mut Commands, name: &'static str) {
     commands.queue(move |world: &mut World| {
         if let Some(mut cues) = world.get_resource_mut::<Queue<AudioCue>>() {

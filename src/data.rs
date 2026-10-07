@@ -1,8 +1,9 @@
-//! Game data ids and tables. Byte-exact port of the pure-data enums
-//! in nt's `content.rs` / `areas.rs` (`EnemyKind`, `MutationId`,
-//! `UltraMutationId` live in `ids_part.rs`, verified identical).
-//! Bevy-colored fields become portable types (`Color` -> `[f32; 4]`,
-//! `Vec2` -> glam); values are untouched.
+//! Game data ids and tables. `AreaId` discriminants are route identity,
+//! not GML's `area_*` values (`scripts/macros_general.gml:538-553`;
+//! convert with `crate::worldgen::gml_area_from_run`). `EnemyKind`,
+//! `MutationId` and `UltraMutationId` live in `ids_part.rs`. Colour fields
+//! are plain portable types (linear `[f32; 4]`, glam `Vec2`); values are
+//! untouched.
 
 pub use super::ids_part::{EnemyKind, MutationId, UltraMutationId};
 
@@ -286,8 +287,7 @@ pub enum HazardKind {
     Toxic,
 }
 
-/// Area-hazard definition. `color` is linear `[r, g, b, a]`
-/// (bevy `Color` in the original).
+/// Area-hazard definition. `color` is linear `[r, g, b, a]`.
 #[derive(Clone, Copy, Debug)]
 pub struct HazardDef {
     pub kind: HazardKind,

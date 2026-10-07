@@ -1,9 +1,11 @@
-//! Game timers. The bevy build stored `bevy::time::Timer` inside components
-//! (`Health.invuln`, `FireCooldown`, `GrenadeFuse`, …); `bevy_time` is engine,
-//! so the port mirrors its tick surface (`tick` / `finished` / `just_finished` /
-//! `duration` / `fraction`, once vs repeating) over plain seconds. Fixed-step
-//! driven (`dt = 1/30`); `just_finished` is true only on the completing tick,
-//! exactly like bevy, because dozens of systems branch on it.
+//! Game timers. GML counts `alarm[n]` down in steps and runs the matching
+//! `Alarm_n` event once when it lands, re-arming inside the handler for repeats
+//! (`Bandit/Create_0.gml:24`, `Bandit/Alarm_1.gml:1,46`); `-1` disarms
+//! (`BanditBoss/Alarm_1.gml:24`). [`GTimer`] is the headless stand-in over plain
+//! seconds, ticked at the fixed step (`dt = 1/30`, GML's 30 steps/s):
+//! `tick` / `finished` / `just_finished` / `duration` / `fraction`, once vs
+//! repeating. `just_finished` is true only on the completing tick, because
+//! dozens of systems branch on that single-tick edge.
 
 use bevy_ecs::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -15,7 +17,7 @@ pub enum TimerMode {
     Repeating,
 }
 
-/// Countdown/up timer with bevy `Timer::tick` semantics.
+/// Countdown/up timer over plain seconds (the GML alarm stand-in).
 #[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GTimer {
     elapsed: f32,
@@ -25,8 +27,7 @@ pub struct GTimer {
 }
 
 impl Default for GTimer {
-    /// Disarmed (finished from birth), matching bevy `Timer` users that
-    /// construct-then-`set_duration`.
+    /// Disarmed (finished from birth), the GML `alarm[n] = -1` state.
     fn default() -> Self {
         Self::disarmed()
     }
@@ -52,10 +53,10 @@ impl GTimer {
         }
     }
 
-    /// Advance by `dt` (bevy `Timer::tick` parity: no return value;
-    /// query `just_finished()` / `finished()` afterwards). A finished
-    /// `Once` (including zero-duration) never re-fires, exactly like
-    /// bevy's early-out on `is_finished`.
+    /// Advance by `dt` (no return value; query `just_finished()` /
+    /// `finished()` afterwards, GML's read-back from the alarm handler). A
+    /// finished `Once` (including zero-duration) never re-fires: GML alarms
+    /// are one-shot too, so a repeat comes from re-arming.
     pub fn tick(&mut self, dt: f32) {
         self.just_finished = false;
         if self.dur <= 0.0 {
@@ -87,7 +88,7 @@ impl GTimer {
         self.elapsed >= self.dur
     }
 
-    /// Alias matching bevy call sites (`is_finished`).
+    /// Alias for call sites that read `is_finished`.
     pub fn is_finished(&self) -> bool {
         self.finished()
     }
@@ -112,7 +113,7 @@ impl GTimer {
         (self.elapsed / self.dur).clamp(0.0, 1.0)
     }
 
-    /// Remaining seconds (bevy `remaining` parity for countdown users).
+    /// Remaining seconds for countdown users.
     pub fn remaining(&self) -> f32 {
         self.remaining_secs()
     }
@@ -123,7 +124,7 @@ impl GTimer {
         self.just_finished = false;
     }
 
-    /// Re-arm with a new duration (elapsed preserved, like bevy).
+    /// Re-arm with a new duration (elapsed preserved).
     pub fn set_duration(&mut self, dur: f32) {
         self.dur = dur.max(0.0);
     }

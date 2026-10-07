@@ -1,9 +1,18 @@
-// Portal vortex (ported from the former bevy prototype's vortex shader,
-// itself a direct transcription of `scrDrawSpiral.gml`).
+// Portal vortex - a transcription of GML `scripts/scrDrawSpiral.gml`: the
+// bolt pass at `:17-30` (`lanim in (0, 6)`, `!_is_menu` at `:8-14`), debris
+// `:36-41`, stars `:43-48`, center figures `:50-80`; spawns come from
+// `SpiralCont/Step_0.gml:22-56`, growth from `Spiral/Step_0.gml` +
+// `SpiralDebris/Step_0.gml`. The one-shots GML plays inline while drawing
+// (`sndPortalLightning{1..8}` once per wisp, `sndPortalFlyby{1..4}` per
+// mote past `xscale 1.3`, `SpiralDebris/Step_0.gml:32-36`) are drained by
+// the sim.
 // Rendered as ONE fullscreen quad: each wisp is a transformed sample of the
-// real spiral art; growth/alpha/lightning follow the GameMaker laws.
-// Bevy-isms removed: no `#import`, no material bind-group macro. Uniforms
-// arrive in one globals block; the art textures share one Nearest sampler.
+// real spiral art; growth/alpha/lightning follow the GameMaker laws. The
+// 128/32 slot counts are the sim's ring capacities (`VORTEX_WISPS` /
+// `VORTEX_DEBRIS`) - port-only; GML spawns a wisp per tick and a mote on
+// `random(16) < 1` and caps no instance count.
+// Uniforms arrive in one globals block; the art textures share one
+// Nearest sampler.
 // `view` maps screen uv to world/view coordinates; its center is the
 // live GUI view rect `(origin_x + view_w/2, origin_y + 120)`. GML
 // `display_set_gui_size(view)` makes GUI px == view px 1:1, so wisps

@@ -5,9 +5,10 @@
 //! [`RenderAssets`] packs `assets/images/anims.ron` strips into a
 //! [`repame_anim::AnimCatalog`] once and decodes the strip PNGs with the
 //! `image` crate: repame ships no image dep and `repame-atlas` docs have
-//! games decode their own pixels. Entity→strip NAME tables are ported from
-//! the bevy build (`world.rs` area sprites, `projectile_art.rs`,
-//! `pickups.rs`, `weapon_id_sprite`).
+//! games decode their own pixels. Entity→strip NAME tables are the port's
+//! own art index; each cites the GML object/script that picks the same
+//! sprite (`Wall/Create_0.gml:6-8`, `scrWeapons.gml:53`,
+//! `scrWeaponPickupCreate.gml:15`, `scrFire.gml:76-78`).
 //!
 //! Portal/vortex is intentionally NOT sprite-mapped: it belongs to the
 //! fullscreen pass (`crate::vortex_pass::VortexPass`) driven from
@@ -73,8 +74,10 @@ pub const ATLAS_SIZE: u32 = 2048;
 /// pages @2048 (see `repame-anim`'s `packs_full_nt_catalog` proof).
 pub const ATLAS_PAGES: u32 = 16;
 
-/// Unused historical constant (bevy lookahead); kept for the public
-/// API while the GML law drives the camera.
+/// Historical lookahead cap, kept for the public API but unused.
+/// GML has no such cap: `objects/BackCont/Step_0.gml:69` divides the
+/// unbounded `dis_fire` by `_viewdist`, so [`CAM_MAX_LOOK`] is the port's
+/// own clamp.
 pub const MAX_LOOK: f32 = 48.0;
 
 /// Packed atlas + decoded strip pixels + retained GPU uploads.
@@ -203,8 +206,9 @@ impl RenderAssets {
         Some(Vec2::new(def.w as f32, def.h as f32))
     }
 
-    /// Full sprite constructor including the engine `flip_y` channel
-    /// (bevy `Sprite.flip_y` - held guns mirror when aiming left).
+    /// Full sprite constructor including the engine `flip_y` channel.
+    /// GML's negative `image_yscale` is the mirror this stands in for:
+    /// `Player/Draw_0.gml:100` draws the back gun at scale `-bwepright`.
     #[allow(clippy::too_many_arguments)]
     fn sprite_for_full(
         &self,
@@ -234,9 +238,10 @@ impl RenderAssets {
         })
     }
 
-    /// Sized textured sprite (bevy `custom_size` parity for pulse
-    /// decals: cobweb/ice/trap visuals drawn at their recorded size,
-    /// not the native strip cell).
+    /// Sized textured sprite: pulse decals (cobweb/ice/trap visuals)
+    /// drawn at their recorded size instead of the native strip cell.
+    /// The size override is port-only - GML draws those objects through
+    /// `draw_self` at their authored scale.
     fn sprite_sized(
         &self,
         path: &str,
@@ -443,7 +448,8 @@ fn blit_cell(strip: &[u8], strip_w: u32, src: [u32; 4]) -> Vec<u8> {
     out
 }
 
-// Name tables (ported from the bevy build; art keys only, no pixels).
+// Name tables (art keys only, no pixels). Port-side indices; each cites
+// the GML object/script that picks the same sprite.
 
 /// GML `scrAreaGetMaxSubarea` verbatim (non-custom): the 3-floor
 /// areas plus HQ hold 3 subareas, everything else 1. The custom-mode
@@ -456,10 +462,13 @@ pub fn area_max_subarea(area: AreaId) -> u32 {
     }
 }
 
-/// Floor/wall/decal strips for a route floor.
-/// Bevy `world.rs::area_sprites` verbatim (floor index over the 15-floor
-/// route; wall `Out`/`Trans` variants exist but the renderer only needs
-/// floor + bot/top - see fidelity notes).
+/// Floor/wall/decal strips for a route floor (floor index over the
+/// 15-floor route). Each arm is the GML area NUMBER, which is what the
+/// sprite names interpolate: `Floor/Create_0.gml:42` picks
+/// `sprFloor<area>`, `Wall/Create_0.gml:6-8` `sprWall<area>Top/Out/Bot`
+/// (`macros_general.gml:539-545` numbers the seven route areas 1..7).
+/// Wall `Out`/`Trans` variants exist but the renderer only needs
+/// floor + bot/top - see fidelity notes.
 fn area_sprites(floor: u32) -> (&'static str, &'static str, &'static str) {
     let rf = ((floor.max(1) - 1) % 15) + 1;
     match rf {
@@ -506,8 +515,10 @@ fn area_sprites(floor: u32) -> (&'static str, &'static str, &'static str) {
     }
 }
 
-/// Route floor/wall/out/trans strips for a route floor, mirroring bevy
-/// `world.rs::area_sprites` (out/trans follow the same per-floor arms).
+/// Route floor/wall/out/trans strips for a route floor (out/trans follow
+/// the same per-floor arms). GML takes all five from one area number:
+/// `Wall/Create_0.gml:6-8` topspr/outspr/Bot,
+/// `TopSmall/Create_0.gml:15` the Trans.
 fn area_sprites_full(
     floor: u32,
 ) -> (
@@ -529,8 +540,9 @@ fn area_sprites_full(
         13..=15 => 7,
         _ => 1,
     };
-    // Out/Trans follow the same per-floor arms bevy uses
-    // (sprWall{N}Out / sprWall{N}Trans).
+    // Out/Trans follow the same per-floor arms: `sprWall{N}Out` /
+    // `sprWall{N}Trans`, GML `Wall/Create_0.gml:7` +
+    // `TopSmall/Create_0.gml:15`.
     let (o, tr): (&'static str, &'static str) = match n {
         0 => ("images/sprWall0Out.png", "images/sprWall0Trans.png"),
         2 => ("images/sprWall2Out.png", "images/sprWall2Trans.png"),
@@ -566,10 +578,12 @@ fn outside_sprite_for_run(floor: u32, has: impl Fn(&str) -> bool) -> &'static st
     }
 }
 
-/// Secret-area floor/wall override.
-/// Bevy `world.rs::area_sprites_for_run` verbatim (Oasis→101 … HQ→106),
-/// with the bevy `catalog.has` fallback to the route strips when the
-/// secret tile PNG is absent from this pack.
+/// Secret-area floor/wall override (Oasis→101 … HQ→106). The arm is the
+/// GML area number again, so `Floor/Create_0.gml:42` /
+/// `Wall/Create_0.gml:6-8` resolve these straight from
+/// `macros_general.gml:546-553`. The per-slot `catalog.has` fallback to
+/// the route strips when a secret tile PNG is absent from this pack is
+/// port-only (GML would draw the real asset).
 fn area_sprites_for_run(
     floor: u32,
     area: AreaId,
@@ -633,8 +647,8 @@ fn area_sprites_for_run(
 }
 
 /// Full route+secret strips for wall compositing (floor, bot, top, out,
-/// trans). Bevy `area_sprites_for_run` verbatim: secret 101–106 families
-/// with per-slot fallback to the route strips when the pack lacks them.
+/// trans): secret 101–106 families, per-slot fallback to the route strips
+/// when the pack lacks them (that fallback is port-only).
 fn area_sprites_full_for_run(
     floor: u32,
     area: AreaId,
@@ -694,10 +708,15 @@ fn area_sprites_full_for_run(
     )
 }
 
-/// Player projectile strip by weapon id.
-/// Bevy `projectile_art.rs::player_projectile_path` verbatim (ids 1–128;
-/// GOLDEN/ULTRA/CURSED prefixes sanitize to base via
-/// [`sanitize_weapon_id`]; unknown ids fall back by ammo type).
+/// Player projectile strip by weapon id. GML has no id→path table: each
+/// weapon's `case` in `scrFire.gml` names the projectile OBJECT it spawns
+/// (revolver → `Bullet1` at `scrFire.gml:77-83`, shotgun → `Bullet2` at
+/// `:122-155`, crossbow → `Bolt` at `:157-166`), and each object's own art
+/// is its `spriteId` in `<Object>/<Object>.yy` (`Bullet1/Bullet1.yy:40`,
+/// `Bolt/Bolt.yy:44`). This table is that object→strip mapping flattened
+/// per weapon id (1–128 = GML `maxwep`, `scrWeapons.gml:27`); ids outside
+/// it sanitize to the base weapon via [`sanitize_weapon_id`], and unknown
+/// ids fall back by ammo type.
 pub fn player_projectile_path(id: WeaponId) -> &'static str {
     let id = sanitize_weapon_id(id);
     if id == WeaponId::NONE {
@@ -843,10 +862,16 @@ pub fn player_projectile_path(id: WeaponId) -> &'static str {
     }
 }
 
-/// Enemy projectile strip by owner kind.
-/// Bevy `projectile_art.rs::enemy_projectile_path` verbatim; unlisted
-/// kinds (including nt-rewrite-only additions) fall back to the generic
-/// enemy bullet, exactly like bevy's `_` arm.
+/// Enemy projectile strip by owner kind. Same shape as the player table:
+/// GML shooters name the bullet OBJECT they create (`Bandit/Alarm_1.gml:10`
+/// and `BanditBoss/Alarm_2.gml:11` → `EnemyBullet1`,
+/// `SnowTank/Alarm_2.gml:7` and `Sniper/Alarm_2.gml:3` → `EnemyBullet4`,
+/// `scrFire.gml:893` → `EnemyBullet2`) and each object's art is its own
+/// `spriteId` (`EnemyBullet1/EnemyBullet1.yy:40` → `sprEnemyBullet1`,
+/// `EnemyBullet2/EnemyBullet2.yy:37` → `sprScorpionBullet`,
+/// `EnemyBullet4/EnemyBullet4.yy:38` → `sprEnemyBullet4`). Unlisted kinds
+/// (including nt-rewrite-only additions) fall back to the generic enemy
+/// bullet; that arm is port-only.
 pub fn enemy_projectile_path(kind: EnemyKind) -> &'static str {
     match kind {
         EnemyKind::Scorpion | EnemyKind::GoldScorpion => "images/sprScorpionBullet.png",
@@ -907,11 +932,17 @@ fn enemy_gun_art(kind: EnemyKind) -> Option<&'static str> {
     }
 }
 
-/// Bevy `pickups.rs::pickup_sprite` paths verbatim (its sizes are
-/// vestigial - `spawn_pickup` ignores them and draws native strip
-/// frames via `sprite_exact`; quads here size from the catalog cell
-/// the same way). Weapon pickups use the `weapon_id_sprite` law
-/// (`images/{wep_sprt}.png`, else revolver).
+/// Pickup strip per kind. Each GML pickup object carries its own art as its
+/// `spriteId` (`Rad/Rad.yy:39` → `sprRad`, `HPPickup/HPPickup.yy:40` →
+/// `sprHP`, `AmmoPickup/AmmoPickup.yy:40` → `sprAmmo`,
+/// `CursedPickup/CursedPickup.yy:39` → `sprCursedAmmo`, `Curse/Curse.yy:35`
+/// → `sprCurse`), and weapon pickups are created with `sprite_index =
+/// scr_weapon_get_sprite(_weapon)`
+/// (`scripts/scrWeaponPickupCreate/scrWeaponPickupCreate.gml:15`), i.e.
+/// `images/{wep_sprt}.png` from the `wep_sprt` register
+/// (`scrWeapons.gml:53`). Quads size from the catalog cell. Falling back to
+/// `sprRevolver` when `wep_sprt` is `mskNone` (`scrWeapons.gml:46`) is
+/// port-only; GML would draw sprite -1.
 pub fn pickup_art(kind: &PickupKind) -> Cow<'static, str> {
     match *kind {
         PickupKind::Rad(_) => Cow::Borrowed("images/sprRad.png"),
@@ -945,11 +976,13 @@ pub fn pickup_art(kind: &PickupKind) -> Cow<'static, str> {
     }
 }
 
-/// Priority: explicit GML visual (Bullet1/Bullet2) → melee slash flags →
-/// player weapon table → enemy-kind table → team fallback. nt-rewrite
-/// projectiles carry no art path (bevy attached `Sprite` + candidates at
-/// spawn), so this inverts the `player_projectile_candidates` /
-/// `enemy_projectile_sprite` choice.
+/// Priority: explicit GML visual (the `ProjectileVisual` an object-spawn
+/// carries) → melee slash flags → player weapon table → enemy-kind table →
+/// team fallback. GML settles this at spawn time instead: the shooter picks
+/// the object and sometimes overrides its sprite (`scrFire.gml:164,173`
+/// `sprite_index = sprBoltGold` / `sprGoldGrenade`), so `visual` is the
+/// port's stand-in for "this projectile instance already carries GML's own
+/// art". The team-only fallbacks at the end are port-only.
 fn projectile_art(
     proj: &Projectile,
     team: &Team,
@@ -996,12 +1029,12 @@ fn projectile_art(
 /// for the `AllyBullet.yy` spriteId `sprAllyBullet` body art.
 const ALLY_BULLET_FADE: &str = "images/sprAllyBulletHit.png";
 
-/// bevy `sprite_from_projectile_path` frame law: 2-frame strips pin to the
-/// second cell, longer strips animate at 12 fps (`projectile_anim`), phase
-/// driven by `life.elapsed_secs` so identical bullets stay in sync like
-/// bevy's per-entity `SpriteAnim` timers started at spawn.
-/// bevy `world.rs::wall_hash` verbatim: deterministic per-cell salt hash
-/// driving wall art variant frames from the run seed.
+/// Deterministic per-cell salt hash standing in for GML's live `random`
+/// rolls when picking wall art variant frames. GML draws a fresh roll per
+/// `Wall`/`Floor` instance at creation (`objects/Wall/Create_0.gml:16-32`,
+/// `objects/Floor/Create_0.gml:8-13`); the port has no RNG stream here, so
+/// the cell coords plus the run seed hash into the same distribution - see
+/// [`wall_body_raw`] / [`wall_out_raw`].
 fn wall_hash(seed: u64, wx: i32, wy: i32, salt: u64) -> u64 {
     let mut x = seed
         ^ ((wx as i64 as u64) << 32)
@@ -1147,9 +1180,10 @@ fn trans_cells(cells: &TopSmalls, trans_frames: u32) -> Vec<((i32, i32), i32)> {
 }
 
 /// sRGB channel -> linear light (exact transfer function). GPU tints
-/// are authored as sRGB display colors (bevy `Color::srgb` parity): the
-/// sRGB atlas decodes on sample and the sRGB target re-encodes on write,
-/// so tints must be linear - raw sRGB tints render washed out.
+/// are authored as sRGB display colors - GML's `c_*` / `#rrggbb` colors
+/// are display-space too: the sRGB atlas decodes on sample and the sRGB
+/// target re-encodes on write, so tints must be linear - raw sRGB tints
+/// render washed out.
 pub fn srgb_to_linear(c: f32) -> f32 {
     let c = c.clamp(0.0, 1.0);
     if c <= 0.04045 {
@@ -1227,9 +1261,9 @@ pub const GRID_OVERLAP: f32 = 1.0;
 /// SubTopCont wall-tops/bloom(-6) → TopCont fog/crosshair/revive(-15) →
 /// SpiralCont figures(-101) → Draw-GUI chain (GUI Begin 74 → GUI 64 →
 /// GUI End 75, in stage order, ignoring instance depth) → Menu(-1001).
-/// The world batch keeps its internal push order at 0 (bevy parity,
-/// untouched); every chrome layer above it stamps one rung so an atlas page
-/// can never lottery a HUD bar under a floor tile.
+/// The world batch keeps its internal push order at 0 (untouched); every
+/// chrome layer above it stamps one rung so an atlas page can never lottery
+/// a HUD bar under a floor tile.
 ///
 /// Draw-GUI stages vs sprite rungs: GML `UberCont/Draw_74`
 /// (`scrDrawSidearts`) runs BEFORE the GUI-64 HUD text, `UberCont/Draw_75`
@@ -1285,8 +1319,8 @@ pub(crate) fn stamp_z(out: &mut [SpriteInstance], z: f32) {
 
 /// Place a strip quad by its art top-left (GM draw origin): the catalog
 /// anchor lands `center` so origin-(0,0) floor/wall art sits on the grid
-/// exactly like bevy's `sprite_at_gm_origin` (passing a cell center would
-/// shift it by half a cell). `grow` extends the +x/+y edges (see
+/// (GML `draw_self` uses the same sprite origin - passing a cell center
+/// would shift it by half a cell). `grow` extends the +x/+y edges (see
 /// [`GRID_OVERLAP`]); UVs still span the cell.
 ///
 /// GML `Floor/Create_0:8-13` floor variant, verbatim: `random(500) < 1` takes
@@ -1373,8 +1407,7 @@ fn projectile_frame(assets: &RenderAssets, path: &str, life: &crate::time::GTime
 }
 // Camera + background.
 
-/// GML `objects/BackCont/Step_0.gml` camera law verbatim (replaces the bevy
-/// `CameraFollow` approximation, whose two-stage smoothing never matched).
+/// GML `objects/BackCont/Step_0.gml` camera law, verbatim.
 /// Per game step, local player at `player`:
 /// - POI pull: nearest Portal (else BecomeNothing/NothingDeath/
 ///   Nothing2Death/SitDown) contributes `dist/6` along its heading, capped
@@ -1413,8 +1446,16 @@ pub const CAM_VIEWDIST: f32 = 4.0;
 pub const CAM_VIEWDIST_MELEE: f32 = 8.0;
 /// GML aim lean divisor for bolts (`scr_weapon_get_type == Ammo.Bolts`).
 pub const CAM_VIEWDIST_BOLTS: f32 = 3.0;
-/// Aim-lean cap in world px (bevy `player_aim` `MAX_LOOK` verbatim:
-/// the lookahead never exceeds 48 px from the player, mouse or stick).
+/// Aim-lean cap in world px - the port's own clamp, no GML counterpart.
+/// GML's keyboard aim is unbounded:
+/// `scripts/InputHandling/InputHandling.gml:467` sets
+/// `dis_fire = point_distance(x, y, mouse_x, mouse_y)` with no ceiling and
+/// `objects/BackCont/Step_0.gml:69` just divides it by `_viewdist`. The
+/// gamepad path is bounded differently - stick length times
+/// `min(view_width, view_height) * 0.4`
+/// (`scripts/InputHandling/InputHandling.gml:442,444`) or, inside
+/// `BackCont`, `length * 72 / _viewdist`
+/// (`objects/BackCont/Step_0.gml:65`) - never by this constant.
 pub const CAM_MAX_LOOK: f32 = 48.0;
 /// GML follow rate (`lerp(..., 0.4)`).
 pub const CAM_LERP: f32 = 0.4;
@@ -2081,10 +2122,12 @@ fn static_world_key(world: &mut World, assets: &RenderAssets) -> Option<StaticWo
     })
 }
 
-/// Snapshot the sim world into GPU sprites (draw order = push order,
-/// bevy z-ladder: floor, walls, decals, props, corpses/portals,
-/// hazards, pickups, opened chests, enemies, player, projectiles,
-/// hit-FX, held guns, melee swings).
+/// Snapshot the sim world into GPU sprites (draw order = push order;
+/// within the world batch everything stays at `z = 0` and the push
+/// ladder is: floor, walls, decals, props, corpses/portals, hazards,
+/// pickups, opened chests, enemies, player, projectiles, hit-FX, held
+/// guns, melee swings). Chrome layers stamp their own rung - see the
+/// z-ladder doc above.
 pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInstance> {
     let mut cache = StaticWorldCache::default();
     world_instances_cached(world, assets, &mut cache)
@@ -2139,9 +2182,9 @@ pub fn world_instances_cached(
         // outside ring of floor tiles (a ±6-cell ring buried the transparent
         // vortex layer on the campfire title: the "no vortex on the title
         // screen" bug). Lit strip over mask cells only; room colour elsewhere.
-        // Quads place by art top-left (`place_top_left`, bevy
-        // `sprite_at_gm_origin` parity): origin-(0,0) art would sit half a cell
-        // off if given cell centers.
+        // Quads place by art top-left (`place_top_left`, GML
+        // `draw_self` sprite origin): origin-(0,0) art would sit half a
+        // cell off if given cell centers.
         if let (Some(run), Some(mask)) = (
             world.get_resource::<Run>(),
             world.get_resource::<FloorMask>(),
@@ -2375,8 +2418,15 @@ pub fn world_instances_cached(
         }
     }
 
-    // Throne carpet (bevy z -48: 72x480 srgba(0.75,0.12,0.14,0.85)
-    // rect under the walls).
+    // Throne carpet: 72x480 srgba(0.75,0.12,0.14,0.85) rect under the
+    // walls, on the `Detail` rung. GML spawns one `Carpet` instance per
+    // throne room (`objects/GenCont/Destroy_0.gml:146`, created at
+    // 10016, 8586) and draws its `sprCarpet` sprite (42x1000 centred,
+    // `sprites/sprCarpet/sprCarpet.yy`) at object depth 8 - the same
+    // depth as `Detail` (`scripts/__global_object_depths/
+    // __global_object_depths.gml:60,101`). The tint rect and its extents
+    // are the port's own stand-in; the occupancy itself is port-only
+    // (GML's `Carpet` has no event code and no reader).
     {
         let mut q = world.query::<(&Pos, &ThroneCarpet)>();
         for (pos, carpet) in q.iter(world) {
@@ -2387,11 +2437,12 @@ pub fn world_instances_cached(
         }
     }
 
-    // Pulse decals (bevy z -41: cobweb / ice / fire-trap ground
-    // visuals under the actors). Textured at the recorded size, or a
-    // solid tint rect when no candidate art is cataloged (bevy
-    // `sprite_from_candidates` fallback); alpha always follows bevy
-    // `animate_environment` via the paired `SurfacePulse`.
+    // Pulse decals (cobweb / ice / fire-trap ground visuals under the
+    // actors). Textured at the recorded size, or a solid tint rect when
+    // no candidate art is cataloged. Alpha always comes from the paired
+    // `SurfacePulse` on the sim clock - the throb itself is port-only
+    // (no GML object throbs `image_alpha` here; `TrapFire/Create_0.gml:2`
+    // only varies `image_speed`).
     {
         let now = pulse_now(world);
         let mut q = world.query::<(&Pos, &PulseSprite, &SurfacePulse)>();
@@ -2438,8 +2489,8 @@ pub fn world_instances_cached(
     }
 
     // Props (recorded art paths; hurt flash tints; mine/torch sprites
-    // throb via their `SurfacePulse`, bevy `animate_environment` law;
-    // ground decals draw gray 0.5).
+    // throb via their `SurfacePulse` - a port-only alpha law; ground
+    // decals draw gray 0.5).
     {
         let now = pulse_now(world);
         let mut q = world.query::<(
@@ -2663,9 +2714,13 @@ pub fn world_instances_cached(
         }
     }
 
-    // Live hazard rects (bevy z 7: spill hazards are a solid kind-color
-    // rect, `radius * 2`, with the hazard pulse alpha; textured
-    // fire-trap visuals already drew in the decal block above).
+    // Live hazard rects (spill hazards are a solid kind-color rect,
+    // `radius * 2`, with the hazard pulse alpha; textured fire-trap
+    // visuals already drew in the decal block above). GML draws spill
+    // gas as its own sprite - `objects/ToxicGas/ToxicGas.yy:40-41` names
+    // `sprToxicGas`, grown by `growspeed` in
+    // `objects/ToxicGas/Step_0.gml:4-10` - so the kind-color rect +
+    // port-only pulse alpha is this port's stand-in for that sprite.
     {
         let now = pulse_now(world);
         let mut q = world.query::<(
@@ -2688,11 +2743,14 @@ pub fn world_instances_cached(
             ));
         }
     }
-    // Corpse pass (bevy z -6, under hazards/pickups): enemy husks
-    // (`Corpse`), prop corpses (`PropSprites` without `Prop`), portal strips.
-    // Prop corpses keep their recorded `PropSprites` facing, the player husk
-    // its `Corpse.flip_x` (bevy parity). Hit-effect oneshots fade in their
-    // last 0.12 s (bevy `tick_hit_effects`).
+    // Corpse pass (drawn before hazards/pickups): enemy husks (`Corpse`),
+    // prop corpses (`PropSprites` without `Prop`), portal strips. GML
+    // orders this by object depth - `ObjectDepth[Corpse] = 1`
+    // (`scripts/__global_object_depths/__global_object_depths.gml:332`),
+    // so the husk draws over walls but under the depth-0 actors. Prop
+    // corpses keep their recorded `PropSprites` facing, the player husk
+    // its `Corpse.flip_x`. Hit-effect oneshots fade in their last 0.12 s;
+    // that tail is port-only (GML's fade sprites run their strip).
     {
         let mut q = world.query::<(
             Entity,
@@ -2760,15 +2818,17 @@ pub fn world_instances_cached(
         }
     }
 
-    // Portal shock/clear/strike draw with the hit-FX pass below
-    // (bevy z 14 band); see the FX section after projectiles.
+    // Portal shock/clear/strike draw with the hit-FX pass below; see the FX
+    // section after projectiles. GML puts them at their own depths
+    // (`ObjectDepth[PortalStrike] = -7`, `scripts/__global_object_depths/
+    // __global_object_depths.gml:29`); within the world batch they ride
+    // push order only.
 
-    // Pickups + chests: native strip-frame cells, like bevy
-    // `spawn_pickup`/`spawn_chest` (which ignore `pickup_sprite`'s vestigial
-    // sizes and draw via `sprite_exact`); `sprite_for` already sizes to the
-    // catalog cell, no override. Animated kinds (rads at 12fps from a random
-    // start, chest idle shimmer) ride their live `SpriteAnim` frame, static
-    // kinds sit on frame 0. Chests drive a fractional `image_index` by hand
+    // Pickups + chests at native strip-frame cells (GML `draw_self` /
+    // `draw_sprite` with no scale); `sprite_for` already sizes to the
+    // catalog cell, no override. Animated kinds (rads, chest idle
+    // shimmer) ride their live `SpriteAnim` frame, static kinds sit on
+    // frame 0. Chests drive a fractional `image_index` by hand
     // (GML `chestprop/Step_0.gml:4-7`, `image_speed = 0`), so a live
     // `GmlImage` wins over the catalog-fps `SpriteAnim`.
     {
@@ -2863,11 +2923,11 @@ pub fn world_instances_cached(
         }
     }
     // Enemies: live SpriteAnim wins (idle/walk/hurt/fire already switched
-    // sim-side); headless spawns fall back to the def idle (nt-rewrite never
-    // attaches `EnemySprites`, so bevy's walk/hurt strips resolve here from
-    // the anim path). Gun carriers draw the gun behind the body when aiming
-    // down-ish (gunangle ≤ 180°) and in front above it (GML per-kind
-    // `Draw_0` law).
+    // sim-side); headless spawns fall back to the def idle, so the
+    // walk/hurt strips resolve here from the anim path rather than a
+    // separate sprite set. Gun carriers draw the gun behind the body when
+    // aiming down-ish (gunangle ≤ 180°) and in front above it (GML
+    // per-kind `Draw_0` law).
 
     {
         // Throne flames (`Nothing/Draw_0` verbatim): four flame quads,
@@ -3456,10 +3516,17 @@ pub fn world_instances_cached(
     }
 
     // Projectiles: strip from the name tables; spin to the velocity
-    // heading (y-down atan2, matching bevy transform rotation).
-    // Grenade pre-detonation telegraph (bevy `tick_grenade_fuse`
-    // tint half): white/black strobe under 0.334 s, solid white once
-    // the friction switch armed.
+    // heading (y-down atan2 - GML sets `image_angle = direction` in
+    // `scripts/scr_projectile_create/scr_projectile_create.gml:26-28`).
+    // Grenade pre-detonation telegraph, GML law: black/white fog strobe
+    // over the last `flash_at` ticks before the blast (`objects/Grenade/
+    // Draw_0.gml:4-5`, `alarm[0] % 5 > 2 ? c_black : c_white`, with
+    // `alarm[0] = 60` and `flash_at = 10` at `objects/Grenade/
+    // Create_0.gml:11-12`). The port drives the window off the fuse's
+    // 6-tick `alarm[1]` (`objects/Grenade/Create_0.gml:10`), so its
+    // strobe window is shorter than GML's 10 ticks. The "solid white
+    // once the friction switch armed" tail is port-only - GML's
+    // non-strobe branch is a plain `draw_self()`.
     {
         let mut q = world.query::<(
             &Pos,
@@ -3606,10 +3673,12 @@ pub fn world_instances_cached(
         }
     }
 
-    // Hit-FX pass (bevy z 14 band, over projectiles, under guns):
-    // portal shock/clear/strike (GML 1-frame-per-step strips),
-    // bullet-hit/dust/fade oneshots with `FxAngle` orientation, and
-    // bare-PNG static fallbacks - all fading in the last 0.12 s.
+    // Hit-FX pass (over projectiles, under guns): portal
+    // shock/clear/strike (GML 1-frame-per-step strips), bullet-hit/dust/
+    // fade oneshots with `FxAngle` orientation, and bare-PNG static
+    // fallbacks - all fading in the last 0.12 s. The 0.12 s tail is
+    // port-only; GML's fade sprites advance through their strip instead
+    // (`objects/Bullet1/Create_0.gml:2` `spr_fade = sprBulletHit`).
     {
         let mut q = world.query::<(&Pos, &PortalShock)>();
         for (pos, shock) in q.iter(world) {
@@ -3730,7 +3799,7 @@ pub fn world_instances_cached(
                 out.push(s);
             }
         }
-        // Static FX fallbacks (bevy bare-PNG arm).
+        // Static FX fallbacks: single-strip effects, no animated frames.
         let mut q = world.query::<(&Pos, &StaticFx, Option<&FxAngle>, Option<&PickupLifetime>)>();
         for (pos, fx, angle, lifetime) in q.iter(world) {
             let rotation = angle.map(|a| a.0).unwrap_or(0.0);
@@ -3836,8 +3905,14 @@ pub fn world_instances_cached(
         }
     }
 
-    // Melee swings + wall-hits (bevy z 24, over guns): `SwingFx`
-    // rotation with the live strip, falling back to the wall-hit art.
+    // Melee swings + wall-hits (drawn after the held guns): `SwingFx`
+    // rotation with the live strip, falling back to the wall-hit art. The
+    // wall hit is GML's own: `Slash/Collision_Wall.gml:11-19` spawns a
+    // `MeleeHitWall` at the wall bbox centre, angled at it. The held-gun
+    // swing arc is not
+    // - GML's melee is the `Slash` projectile
+    //   (`objects/Slash/Create_0.gml:2`, `image_speed = 0.4`) plus the
+    //   `Dust` motes it spawns, so that half of the pass is port-only.
     {
         let mut q = world.query::<(&Pos, &SwingFx, Option<&SpriteAnim>)>();
         for (pos, fx, anim) in q.iter(world) {
@@ -3866,15 +3941,18 @@ pub const BEAM_STRIP: &str = "images/sprLightBeam.png";
 pub const ARC_STRIP: &str = "images/sprLightning.png";
 /// Muzzle tongue size (no muzzle strip exists in the catalog).
 pub const MUZZLE_SIZE: Vec2 = Vec2::new(24.0, 14.0);
-/// Damage-number font size in world units (bevy
-/// `DamageNumberConfig::default().font_size` verbatim).
+/// Damage-number font size in world units. Port-only: GML draws no
+/// floating damage numbers - combat feedback is the hurt flash
+/// (`sprite_index = spr_hurt`, `objects/Corpse/Collision_hitme.gml:10-11`)
+/// and the hit sprites named by each bullet's `spr_fade`
+/// (`objects/Bullet1/Create_0.gml:2`).
 pub const NUMBER_TEXT_SIZE: f32 = 28.0;
 
 /// Solid-color fallback quad (particle convention): [`SpriteInstance`]
 /// has no fill flag, so - like [`particle_sprites`] - this samples the
 /// full first atlas page (`uv 0..1`, page 0) and leans on the tint.
-/// Sim-clock seconds driving bevy `animate_environment`-law alphas
-/// (`SurfacePulse::alpha_at`); 0.0 headless without the resource.
+/// Sim-clock seconds driving the `SurfacePulse::alpha_at` throb (a
+/// port-only law); 0.0 headless without the resource.
 fn pulse_now(world: &World) -> f32 {
     world
         .get_resource::<repame_sim::SimTime>()
@@ -3901,10 +3979,11 @@ fn white_quad(center: Vec2, rotation: f32, size: Vec2, tint: [f32; 4]) -> Sprite
     }
 }
 
-/// Legacy 320x240 GUI view map (bevy `menus::nt_view` law, kept for
-/// reference): fill scale `s = min(w/320, h/240)`, centered offsets.
-/// Superseded by the GML law ([`gml_view_size`]: the GUI is the live view,
-/// 426x240 at 16:9); the text pipeline now maps through [`gui_texts_dp`].
+/// Legacy 320x240 GUI view map, port-only (kept for reference): fill
+/// scale `s = min(w/320, h/240)`, centered offsets. GML has no such
+/// map - its GUI *is* the live view (see [`hud_gui_map`] /
+/// [`gml_view_size`]: 426x240 at 16:9), so the text pipeline now maps
+/// through [`gui_texts_dp`].
 #[derive(Clone, Copy, Debug)]
 pub struct NtView {
     pub s: f32,
@@ -3912,8 +3991,9 @@ pub struct NtView {
     pub oy: f32,
 }
 
-/// Bevy `nt_view` law (viewport falls back to 1280x720). Kept for
-/// reference; the live pipeline uses [`gml_view_size`].
+/// Legacy 320x240 letterbox map (viewport falls back to 1280x720).
+/// Port-only, kept for reference; the live pipeline uses
+/// [`gml_view_size`].
 pub fn nt_view_for(viewport_w: f32, viewport_h: f32) -> NtView {
     let w = if viewport_w > 1.0 { viewport_w } else { 1280.0 };
     let h = if viewport_h > 1.0 { viewport_h } else { 720.0 };
@@ -4287,9 +4367,13 @@ pub fn hud_gui_texts(world: &mut World) -> Vec<HudGuiText> {
     out
 }
 
-/// One positioned overlay text in 320x240 GUI space (bevy
-/// `nt_text_at`/`bigname_button_at`/title/main-menu law verbatim, plus
-/// GML right-aligned misc-HUD rows).
+/// One positioned overlay text in GUI space. GML authors these as
+/// `draw_text_nt` / `draw_text_bigname` draw points in the live view
+/// (identity map, [`hud_gui_map`]): title buttons sit at
+/// `view_xview + xstart` (`objects/Menu/Draw_0.gml:9-17`) and the
+/// misc-HUD rows are right-aligned on `view_width - 2` with
+/// `draw_align(fa_right, fa_top)` (`scripts/scrDrawMiscHUD/
+/// scrDrawMiscHUD.gml:13-25`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct MenuGuiText {
     pub text: String,
@@ -4612,8 +4696,10 @@ pub fn hud_gui_texts_dp(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
     gui_texts_dp(canvas_dp, items)
 }
 
-// Menu overlay texts (bevy `menus/mod.rs` + `title_screen.rs` verbatim:
-// strings, 320x240 positions, colors, px sizes).
+// Menu overlay texts: strings, GUI positions, colors and px sizes
+// transcribed from the GML draw scripts (`draw_text_nt`,
+// `draw_text_bigname`, `objects/MainMenuButton/Draw_0.gml:6-9`,
+// `scripts/scrMenuButtonName/scrMenuButtonName.gml:19-34`).
 
 const GUI_CREAM: [u8; 4] = [238, 239, 225, 255];
 const GUI_GRAY: [u8; 4] = [125, 131, 141, 255];
@@ -4945,7 +5031,7 @@ fn settings_option_button(text: impl Into<String>, cx: f32, y: f32) -> MenuGuiTe
 }
 
 /// GML `gamepad_types` → `gamepad_icon_small` strip
-/// (`scripts/scrOptionsUpdate/scrOptionsUpdate.gml:149-163`).
+/// (`scrOptionsUpdate.gml:149-163`).
 fn gamepad_icon_strip(gamepad_type: u8) -> &'static str {
     match gamepad_type % 4 {
         0 => "images/sprXBONESmall.png",
@@ -5115,10 +5201,14 @@ fn gui_pause_button(
     }
 }
 
-/// Bevy `mutation_choice_parts` verbatim: ULTRA prefix + name/desc
-/// split on em-dash or hyphen. Returns the GML skill id too (the
-/// `mutation_choice_ids` parallel row), so the Throne Butt special can
-/// key off the picked skill, not the parsed name.
+/// Port-side parse of a packed offer row: ULTRA prefix + name/desc split
+/// on em-dash or hyphen. GML keeps the two halves apart instead - the
+/// `SkillIcon` description line is assembled from two lookups joined by a
+/// `#` line break, `"@w" + name + "#@s" + text` (`objects/SkillIcon/
+/// Draw_0.gml:51`; the ultra twin is `objects/UltraIcon/Draw_0.gml:32-33`).
+/// Returns the GML skill id too (the `mutation_choice_ids` parallel row),
+/// so the Throne Butt special can key off the picked skill, not the
+/// parsed name.
 fn mutation_choice_parts(choice: &str) -> (Option<u8>, String, String) {
     let trimmed = choice.trim();
     let trimmed = trimmed.strip_prefix("ULTRA:").unwrap_or(trimmed).trim();
@@ -5476,8 +5566,8 @@ pub fn unlock_popup_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
     out
 }
 
-/// Menu overlay texts for one [`crate::MenuOverlay`], following bevy
-/// `compose_root` (splash is sprite-only, so empty here).
+/// Menu overlay texts for one [`crate::MenuOverlay`] (splash is
+/// sprite-only here; its captions are the `Vlambeer/Draw_0` block).
 /// `vw` is the live GML GUI width in px ([`gml_view_size`], 426 at 16:9):
 /// view-centered rows use `vw / 2`, right-anchored rows `vw - N`
 /// (`scrMakePauseButtons`, `scrDrawMiscHUD`), left-anchored rows literal x.
@@ -6626,10 +6716,16 @@ fn push_toggle(out: &mut Vec<MenuGuiText>, label: &str, y: f32, on: bool) {
 // mirrors `settings_gui_texts` literals; `cx`/`hw` is the GUI-px mouse hit box (buttons at
 // `vw/2`, value cells at `cx+32`; sliders use the rendered track geometry).
 
-/// Player color presets cycled by the COLOR page button (bevy verbatim).
+/// Player color presets cycled by the COLOR page button. Port-only: GML's
+/// COLOR option is a free-text hex field on a swatch
+/// (`objects/MenuOptions/Other_20.gml:459-475`, validated to 6 chars at
+/// `:319-330`), not a fixed cycle.
 pub const COLOR_PRESETS: [&str; 5] = ["FF0000", "00FF00", "0000FF", "", "FF00FF"];
 
-/// Volume channel with absolute `Set*Vol` steppers (bevy ±0.1 buttons).
+/// Volume channel with absolute steppers. GML's audio page has four
+/// sliders, in this order (`objects/MenuOptions/Other_20.gml:96-103`:
+/// `volume_master` / `volume_music` / `volume_ambient` / `volume_sfx`);
+/// the ±stepper control and its 0.1 step are port-side.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VolumeChannel {
     Master,
@@ -6998,9 +7094,13 @@ pub fn settings_click_action(
     settings_hot_action(world, page, idx, dir)
 }
 
-/// Settings pages (bevy `settings_ui` arms verbatim: headers, rows,
-/// buttons; dynamic values read from [`SaveData`](crate::savedata_part::SaveData)
-/// + [`MenuState`](crate::state::menus::MenuState)).
+/// Settings pages: headers, rows and buttons transcribed from the GML
+/// option register (`objects/MenuOptions/Other_20.gml`, categories per
+/// `objects/MenuOptions/Create_0.gml` `OptionCategory`); dynamic values
+/// read from [`SaveData`](crate::savedata_part::SaveData) +
+/// [`MenuState`](crate::state::menus::MenuState). The fixed row/label
+/// layout GML computes from element metrics is flattened to literals
+/// here - port-only.
 fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
     use crate::savedata_part::SaveData;
     let cx = vw * 0.5;
@@ -7379,8 +7479,9 @@ fn settings_gui_texts(world: &mut World, vw: f32) -> Vec<MenuGuiText> {
             row.color = GUI_HIDDEN;
         }
     }
-    // Keyboard cursor highlight (bevy hover parity): the cursor row
-    // renders white so arrow-key nav is visible, not blind.
+    // Keyboard cursor highlight: the cursor row renders white so arrow-key
+    // nav is visible, not blind. Port-only - GML's options menu drives
+    // rows by pointer/gamepad input, not by a persisted cursor row.
     let cursor = world
         .get_resource::<MenuState>()
         .map(|m| m.settings_cursor)
@@ -7474,11 +7575,16 @@ fn ability_hud_sprites(
     out
 }
 
-/// Sprite HUD bars (GML `scrDrawPlayerHUD` regions, bevy `spawn_hud_art`
-/// GUI positions): bar frame 2 (20,4), fills (22,7) width `84*frac`, rad bar (4,4),
-/// ammo row y=32, weapon icons y=16, offer icons y=219, held ultra/skills from
-/// (`view_width-12`,13). GUI px == view px ([`hud_gui_map`]). `dt_secs` drives the
-/// `lsthealth` ghost decay (GML `Player/Step_0`: lerp 0.2 past a 20 gap, else 0.5/step).
+/// Sprite HUD bars. GML regions, GUI draw points verbatim: bar frame 2
+/// at (20,4), fills at (22,7) width `84*frac`, rad/exp bar at (4,4)
+/// (`scripts/scrDrawPlayerHUD/scrDrawPlayerHUD.gml:19,36-40,190`); ammo row
+/// y=32 (`:220`), weapon icons y=16 (`:106-107`); offer icons y=219 =
+/// `view_height - 21` (`objects/LevCont/Other_10.gml:6`); held
+/// ultra/skills from (`view_width-12`, 13)
+/// (`scripts/scrDrawMiscHUD/scrDrawMiscHUD.gml:73-75`).
+/// GUI px == view px ([`hud_gui_map`]). `dt_secs` drives the `lsthealth`
+/// ghost decay (GML `Player/Step_0`: lerp 0.2 past a 20 gap, else
+/// 0.5/step).
 pub fn hud_sprites(
     world: &mut World,
     assets: &RenderAssets,
@@ -8512,7 +8618,11 @@ pub fn go_button_pos(wh: [f32; 2], count: usize, bbox_h: f32) -> [f32; 2] {
 pub const TITLE_POD_W: f32 = 16.0;
 /// Character-pod hit height.
 pub const TITLE_POD_H: f32 = 24.0;
-/// GO button hit size (bevy `GO_W`/`GO_H`).
+/// GO button hit size. GML clicks the instance's own bbox
+/// (`objects/GoButton/Mouse_4.gml:7-9`), i.e. `sprGoButton` 35x19
+/// with bbox (0,0)-(34,18)
+/// (`sprites/sprGoButton/sprGoButton.yy:5-8,24,111`) — this port's
+/// 31-wide box is its own, slightly narrower hit rect.
 pub const TITLE_GO_W: f32 = 31.0;
 /// GO button hit height.
 pub const TITLE_GO_H: f32 = 19.0;
@@ -8593,13 +8703,22 @@ pub fn title_click_action(
 /// Mutation/ultra offer icon hit-test → [`UiAction`](crate::audio::UiAction).
 /// Geometry mirrors the offer-icon draw in `hud_sprites` exactly (same
 /// `step`/`half`/`start_x`/`icon_y` over the same live `vw`, `-12` shift at
-/// `n >= 10`); hit box is bevy `mutation_panel` size (`24*scale` x `32*scale` centered,
-/// top at `icon_y - 16*scale`). Two-step bevy law: unhighlighted highlights
-/// (`SelectMutation`), highlighted commits (`PickMutation`).
+/// `n >= 10`); the hit box is the `sprSkillIcon` / `sprEGSkillIcon`
+/// cell, 24x32 centred at (12,16)
+/// (`sprites/sprSkillIcon/sprSkillIcon.yy:48,134-145`) times `scale`.
+/// Layout and the two-step law are GML's:
+/// `objects/LevCont/Other_10.gml:4-12` places the icons at
+/// `min(32, floor(view_width / (num + 1)))` steps from the view centre,
+/// `view_yview + view_height - 21`, `-12` shift at `num >= 10`; clicking
+/// selects, clicking again commits - `objects/SkillIcon/Mouse_4.gml:7-17`
+/// (first click sets `selected`, a later one fires `event_user(0)` →
+/// `objects/SkillIcon/Other_10.gml`), with `objects/UltraIcon/Mouse_4.gml`
+/// as the twin. Unhighlighted highlights (`SelectMutation`), highlighted
+/// commits (`PickMutation`).
 pub fn mutation_icon_hit_action(world: &mut World, gx: f32, gy: f32, vw: f32) -> Option<UiAction> {
     // Ultra offers win over normal ones (same precedence as `sync_hud_state`
-    // and `tick_mutation_mirror`, bevy `hud.rs`): when both resources
-    // coexist the screen shows ultra cards, so hit-testing must too.
+    // and `tick_mutation_mirror`): when both resources coexist the screen
+    // shows ultra cards, so hit-testing must too.
     let n = world
         .get_resource::<PendingUltra>()
         .map(|u| u.choices.len())
@@ -9242,9 +9361,9 @@ pub fn char_splat_frame(race: RaceId, frames: u32) -> i32 {
 
 /// Deterministic 0..1 hash for headless jitter (GML `orandom`/`random`
 /// stand-in). Callers mix the quantized 30 Hz step into the seed so the
-/// boot reel shimmer/shake jitters every step like GML `Draw` (and bevy
-/// `boot_intro`, which re-rolls each tick) while staying deterministic
-/// for a given `t`.
+/// boot reel jitter re-rolls each step like GML's `Logo/Draw_0.gml:12-13`
+/// (shake) and `:29` (`random(1)` per glow copy) while staying
+/// deterministic for a given `t`.
 fn hash01(n: u32) -> f32 {
     let x = n.wrapping_mul(0x9E37_79B9).wrapping_add(0x85EB_CA6B);
     let mut h = x ^ (x >> 15);
@@ -9377,10 +9496,11 @@ pub fn splash_sprites(
             }
             if frame >= 7 {
                 // 8-way glow ring (`bm_add`, alpha 0.05), breathing
-                // with `wave` (GML `Logo/Draw_0`: ~0.13/draw == 3.9/s
-                // at 30 Hz: 0.05 plus `random(0.02)` per each of the 8
-                // copies; bevy matches with `dt * 3.9`). The per-copy
-                // radius re-rolls every step like GML's `random(1)`.
+                // with `wave` (GML `Logo/Draw_0.gml:24-35`: 0.05 plus
+                // `random(0.02)` per each of the 8 copies, so ~0.13 per
+                // draw == 3.9/s at 30 Hz; this port spells it
+                // `dt * 3.9`). The per-copy radius re-rolls every step
+                // like GML's `random(1)` at `:29`.
                 let wave = t * 3.9;
                 for i in 0..8u32 {
                     let ang = i as f32 * 45.0 * std::f32::consts::PI / 180.0;
@@ -11311,9 +11431,10 @@ pub fn fx_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInsta
     // icon at `_frames - ceil(_frames * fill)`, so a full magazine is icon frame 0.
     {
         if let Some(label) = world.get_resource::<crate::pickups::WeaponLabel>() {
-            // GML `draw_pickup_button.gml:49-56`: under the GAMEPAD
-            // switch the pill flips to `sprEPickup` frame 1 and takes
-            // the `pick` pad glyph at `(_x, _y - 8)` of the shifted pill.
+            // GML `draw_gamepad_button.gml:49-56`: under the GAMEPAD switch
+            // the pill flips to `sprEPickup` frame 1 and takes the `pick`
+            // pad glyph at `(_x, _y
+            // - 8)` of the shifted pill.
             let style = gamepad_style(world);
             let pad_pick = style.and_then(|_| {
                 let entry = world
@@ -11356,10 +11477,14 @@ pub fn fx_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInsta
         }
     }
 
-    // Beams: `Pos` is the sim segment center (`spawn_beam_shot`/`boss_ai` parity),
-    // so the quad stays center-anchored (the strip's `[0, 0.5]` anchor overridden) and
-    // `size.x = length` spans the endpoints. Tint = bevy `BeamSpec`/sprite color (ion
-    // cyan, laser red, boss orange/green).
+    // Beams: `Pos` is the sim segment center, so the quad stays
+    // center-anchored (the strip's `[0, 0.5]` anchor overridden) and
+    // `size.x = length` spans the endpoints. The tint is the sim's own
+    // beam color (ion cyan, laser red, boss orange/green) - GML draws
+    // lasers as their own objects (`objects/Laser/Draw_0.gml`) and lights
+    // the vault beam with `sprLightBeamVault`
+    // (`objects/CrownPed/Create_0.gml:4`), so the strip name and the
+    // color ramp here are port-side.
     {
         let mut q = world.query::<(&Pos, &Beam)>();
         for (pos, beam) in q.iter(world) {
@@ -11378,8 +11503,10 @@ pub fn fx_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInsta
 
     // Lightning arcs: one stretched quad per segment (`Pos` = midpoint,
     // `len`/`angle` on the marker). Strip frame follows the elapsed
-    // fraction; alpha follows bevy `tick_lightning_arcs`
-    // (`(1 - t) * 0.9`, no floor) on the arc color.
+    // fraction; alpha is the port's own `(1 - t) * 0.9` fade, no floor -
+    // GML has no arc entity to fade (`objects/LightningCrystal/
+    // Create_0.gml:10` just swaps in `sprLightningCrystalFire`), so there
+    // is nothing to cite.
     {
         let mut q = world.query::<(&Pos, &LightningArc)>();
         for (pos, arc) in q.iter(world) {
@@ -11397,9 +11524,13 @@ pub fn fx_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInsta
         }
     }
 
-    // Muzzles: no muzzle visual exists in GML or bevy - fire feedback
-    // is the yellow `muzzle_burst` particle spray (spawned sim-side)
-    // plus gun wkick. `FiredWeapon` markers expire silently.
+    // Muzzles: GML draws no muzzle flash either - fire feedback is the
+    // shell FX spawned at the muzzle
+    // (`scripts/scrBulletShotShellFX/scrBulletShotShellFX.gml:9-11`)
+    // plus the `wkick` recoil that offsets the gun sprite
+    // (`objects/Player/Draw_0.gml:109-111`). The yellow `muzzle_burst`
+    // spray and the warm tinted quad here are port-side.
+    // `FiredWeapon` markers expire silently.
 
     // Hazard clouds: kind-tinted translucent rects, no pulse; the ring has no
     // catalog entry, so ring degrades to a disc.
@@ -11453,9 +11584,16 @@ pub fn fx_texts(world: &mut World) -> Vec<WorldText> {
 }
 
 /// World-anchored HUD labels for the repose `Text` overlay: run extras
-/// with no bevy `nt_hud_overlay` equivalent (toast, floor/score/kills, GML clock + map
-/// name, boss bar, IDPD warning, game-over line, weapon pickup label). Core HP/level/
-/// ammo/LOW-HP rows live in [`hud_gui_texts`], not here.
+/// (toast, floor/score/kills, boss bar, IDPD warning, game-over line,
+/// weapon pickup label). Port-side assembly - GML draws the map name
+/// and kills on the roadmap
+/// (`scripts/scrDrawRoadmap/scrDrawRoadmap.gml:23-24`), the clock + map
+/// name bottom-right
+/// (`scripts/scrDrawMiscHUD/scrDrawMiscHUD.gml:13-25`) and the pickup
+/// name at `pickup + (0,-31)`
+/// (`scripts/scrDrawPlayerHUD/scrDrawPlayerHUD.gml:365`, prop prompts at
+/// `:375`), all as positioned GUI rows, not world-anchored floaters.
+/// Core HP/level/ammo/LOW-HP rows live in [`hud_gui_texts`], not here.
 pub fn hud_texts(world: &mut World) -> Vec<(String, [f32; 2])> {
     let hud: HudState = sync_hud_state(world);
     let player_pos = world
@@ -11543,35 +11681,47 @@ pub fn hud_texts_dp(
 
 // Fidelity notes.
 //
-// Compromises vs bevy (art-name level; sim truth kept):
-// - Wall quads composite Out/Bot/Top + Trans with the seeded bevy variant frames + GM
-//   origins; top decals (`sprNightDesert…`) undrawn. Darkened outside-floor ring
-//   (`sprFloorEx1` + 0.45 tint) is drawn.
-// - Ground decals draw the route floor's top-decal strip (bevy `area_sprites` 6th column)
-//   at gray 0.5 via `GroundDecalTint`.
-// - Projectile strips follow `projectile_frame`: 2-frame strips pin to the second cell,
-//   longer strips animate at 12 fps off the life clock. Custom sizes (plasma growth, bolt
-//   stretch) skipped - catalog cell size (pickups too: bevy `spawn_pickup` ignores
-//   `pickup_sprite` sizes, draws native strip frames).
+// Compromises vs GML (art-name level; sim truth kept):
+// - Wall quads composite Out/Bot/Top + Trans with the seeded variant frames
+//   + GM origins, matching the per-cell rolls GML makes at creation
+//   (`objects/Wall/Create_0.gml:16-32`). Two deviations: no darkened
+//   outside-floor ring is drawn (GML draws bare room background there too,
+//   `scripts/background_set_colour` + live floor cells only), and the
+//   per-floor top-decal strips ride the `PropKind::GroundDecal` prop
+//   (`setup.rs::ground_decal_for_floor`), not the wall pass.
+// - Ground decals draw the route floor's top-decal strip at gray 0.5 via
+//   `GroundDecalTint` (GML scatters one `Detail` per room tile,
+//   `scripts/scrPopulate/scrPopulate.gml:26-30`).
+// - Projectile strips follow `projectile_frame`: 2-frame strips pin to the
+//   second cell, longer strips animate at 12 fps off the life clock. Custom
+//   sizes (plasma growth, bolt stretch) skipped - catalog cell size
+//   (pickups too: GML's pickups are plain `draw_self` objects, so native
+//   strip frames are the right size).
 // - Chest idle shimmer rides the live `SpriteAnim` frame; opened chests draw
-//   kind-specific open art frozen on bevy's last frame.
-// - FX ride `fx_instances`/`fx_texts`: beams stretch `sprLightBeam` along the sim
-//   segment (tint = sim `Beam.color`: ion cyan, laser red, boss orange/green), arcs
-//   stretch `sprLightning` (frame follows life), muzzles are warm tinted quads (no
-//   muzzle strip in the catalog), hazards are kind-tinted discs ignoring per-cloud
-//   alpha (pulse on the sim clock, not the cloud's timer fraction; ring has no strip, so
-//   ring → disc), particles map 1:1 through `particle_sprites`, damage numbers resolve
-//   as `WorldText`.
-// - Portal bodies draw their live strip (swaps ride `animate_portal`); shock/clear/
-//   strike draw 1-frame-per-step strips in the hit-FX pass. The vortex background is
+//   kind-specific open art frozen on the strip's terminal frame, matching
+//   GML's `ChestOpen/Other_7.gml:1-2` (`image_index = image_number - 1`).
+// - FX ride `fx_instances`/`fx_texts`: beams stretch `sprLightBeam` along
+//   the sim segment (tint = sim `Beam.color`: ion cyan, laser red, boss
+//   orange/green), arcs stretch `sprLightning` (frame follows life),
+//   muzzles are warm tinted quads (GML draws no muzzle flash either),
+//   hazards are kind-tinted discs ignoring per-cloud alpha (pulse on the
+//   sim clock, not the cloud's timer fraction; ring has no strip, so
+//   ring → disc), particles map 1:1 through `particle_sprites`, damage
+//   numbers resolve as `WorldText` - GML has no damage numbers at all.
+// - Portal bodies draw their live strip; shock/clear/strike draw
+//   1-frame-per-step strips in the hit-FX pass. The vortex background is
 //   not a sprite (fullscreen `crate::vortex_pass::VortexPass`).
-// - Dynamic art paths bevy built at runtime (`weapon_id_sprite` falls back to revolver
-//   here too when `wep_sprt` is `mskNone`/absent; secret tile families fall back to
-//   route strips when the pack lacks `sprFloor10x`).
-// - Camera follow is the GML `BackCont` law verbatim (`gml_camera_step`: POI pull /6
-//   cap 72, aim lean dis/viewdist, orandom shake, snap, round, knock decay; view-layer
-//   state in `App`); only deviation: no per-run snap reset beyond boot and floor
-//   starts, so transitions don't re-swoop from the origin.
+// - Art names absent from the pack fall back rather than hole: weapon
+//   pickups use `sprRevolver` when `wep_sprt` is `mskNone`/absent
+//   (`scrWeapons.gml:46`); secret tile families fall back to route strips
+//   when the pack lacks `sprFloor10x`.
+// - Camera follow is the GML `BackCont` law verbatim (`gml_camera_step`:
+//   POI pull /6 cap 72, aim lean dis/viewdist, orandom shake, snap, round,
+//   knock decay; view-layer state in `App`). Two deviations:
+//   `CAM_MAX_LOOK` clamps the aim lean, which GML leaves unbounded
+//   (`objects/BackCont/Step_0.gml:69`), and there is no per-run snap
+//   reset beyond boot and floor starts, so transitions don't re-swoop
+//   from the origin.
 
 #[cfg(test)]
 mod verbatim_ui_layers {

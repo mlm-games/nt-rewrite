@@ -67,8 +67,10 @@ pub struct Beam {
     pub width: f32,
     pub damage: i32,
     pub knockback: f32,
-    /// Sprite tint (bevy `BeamSpec.color` parity: ion cyan, laser red,
-    /// boss orange/green; alpha rides along).
+    /// Sprite tint (ion cyan, laser red, boss orange/green; alpha rides
+    /// along). Port-only: GML draws its beams untinted in additive blend
+    /// (`IonBurst/Draw_0.gml:4-6`, `LightBeam/Draw_0.gml:4-5`, both
+    /// `c_white` + `bm_add`).
     pub color: [f32; 4],
     pub timer: Timer,
     pub tick: Timer,
@@ -469,8 +471,8 @@ pub struct SentryTurret {
     /// GML `SentryGun/Create_0.gml:14` `alarm[0] = 30`: the opening
     /// delay in steps, counted down before `fire` starts running.
     pub first_shot: f32,
-    /// GML `SentryGun/Create_0.gml:7` `ammo = 24`, spent one per alarm
-    /// and re-checked at the end of `Alarm_0.gml:56`.
+    /// GML `SentryGun/Create_0.gml:7` `ammo = 24`, spent one per alarm and
+    /// re-checked at the end of `SentryGun/Alarm_0.gml:56`.
     pub ammo: i32,
     pub range: f32,
     pub projectile_speed: f32,
@@ -744,9 +746,10 @@ pub struct BossBrain {
     /// GML `tauntdelay` (ticks without a live Player before taunting;
     /// YV resets it when the player exists).
     pub tauntdelay: u32,
-    /// GML `YVBoss/Alarm_2.gml:23` `alarm[5] = 10` - the frames between the
-    /// first empty revolver and `Alarm_5` raising `intro`, which is what
-    /// `Alarm_1.gml:3` waits on before the brain starts picking weapons.
+    /// GML `YVBoss/Alarm_2.gml:23` `alarm[5] = 10`
+    /// - the frames between the first empty revolver and `Alarm_5` raising
+    ///   `intro`, which is what `YVBoss/Alarm_1.gml:3` waits on before the
+    ///   brain starts picking weapons.
     pub intro_delay: f32,
     /// GML `sndhalfhp` (`BanditBoss/Other_10.gml:20-23`): fired-once latch
     /// for the half-health line.
@@ -905,10 +908,14 @@ impl From<WeaponKind> for PickupKind {
 pub struct Portal;
 
 /// GML Portal state machine (objects/Portal/*): Spawn -> Idle -> Disappear.
-/// `kind`: 1 normal, 2 popo (HQ), 3 proto (Vault), which pick the Idle strip.
-/// `anim` stands in for bevy's oneshot sprite anim: Spawn lasts
-/// `sprPortalSpawn` (2 frames @ 8 fps = 0.25 s), Disappear
-/// `sprPortalDisappear` (9 frames @ 12 fps = 0.75 s).
+/// `kind`: 1 normal, 2 popo (HQ), 3 proto (Vault), which pick the Idle
+/// strip (`Portal/Other_7.gml:10-12`). `anim` is the headless stand-in for
+/// the two strip runs GML plays at `image_speed = 0.4`
+/// (`Portal/Create_0.gml:2`): `sprPortalSpawn` is 2 frames until
+/// `Portal/Other_7.gml:1` swaps in the Idle strip (0.25 s here),
+/// `sprPortalDisappear` is 9 frames until `Portal/Other_7.gml:14-33` ends
+/// the level (0.75 s here). The decompiled `.yy` files carry no sprite
+/// `fps`, so the per-strip rates are the port's own.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct PortalState {
     pub kind: u8,
@@ -1112,9 +1119,12 @@ pub struct FireAnim {
     pub timer: Timer,
 }
 
-/// Opened-chest marker carrying its kind (bevy swaps the chest sprite
-/// to the kind-specific open art in `open_chest`; the renderer maps
-/// kind -> open strip here).
+/// Opened-chest marker carrying its kind: the kind selects the open art,
+/// which GML freezes per chest as `spr_dead` at create
+/// (`WeaponChest/Create_0.gml:4`, `AmmoChest/Create_0.gml:3`) and spawns
+/// as a separate `ChestOpen` on destroy
+/// (`WeaponChest/Destroy_0.gml:1-3`, `AmmoChest/Destroy_0.gml:1-3`). The
+/// renderer maps kind -> open strip here.
 #[derive(Component)]
 pub struct OpenedChest(pub ChestKind);
 
@@ -1484,29 +1494,38 @@ pub struct GoldCar;
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct BloodFlower;
 
-/// Ground-decal tint marker (bevy draws the area top-decal strip at
-/// gray 0.5 alpha; the renderer applies it).
+/// Ground-decal tint marker (the area top-decal strip at gray 0.5
+/// alpha; the renderer applies it). Port-only: GML's `TopDecal*` props
+/// draw untinted at full alpha through their `TopPot` parent
+/// (`SubTopCont/Draw_0.gml:30-32`).
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct GroundDecalTint;
 
 #[derive(Component)]
 pub struct SwingFx {
     pub timer: Timer,
-    /// Facing rotation radians (bevy `Transform` rotation: slash swing
-    /// angle or wall-hit `wang`; the renderer orients the strip).
+    /// Facing rotation radians (slash swing angle, or the wall-hit angle
+    /// GML `Slash/Collision_Wall.gml:14-17` points the `MeleeHitWall`
+    /// sprite at the wall's bbox centre; the renderer orients the strip).
     pub angle: f32,
 }
 
-/// Static-FX fallback marker (bevy `catalog.has` arm without an anim
-/// strip: art present as a bare PNG, drawn one frame for the marker
-/// lifetime). The renderer draws `path` frame 0 when resolvable.
+/// Static-FX fallback marker (the arm without an anim strip: art present
+/// as a bare PNG, drawn one frame for the marker lifetime). Port-only:
+/// GML always has a real sprite behind the FX - `scrBulletHitFX.gml:4-6`
+/// is handed one by the caller and copied onto a `BulletHit` - so this
+/// arm only exists for paths the anim catalog does not carry. The
+/// renderer draws `path` frame 0 when resolvable.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct StaticFx {
     pub path: &'static str,
 }
 
-/// Fade-FX orientation radians (bevy rotates the fade sprite by the
-/// projectile angle; the renderer applies it).
+/// Fade-FX orientation radians. GML `image_angle`: motes roll at spawn
+/// (`Dust/Create_0.gml:6`, `Smoke/Create_0.gml:6` `random_angle`) and a
+/// bullet-hit strip inherits the shooter's
+/// (`scripts/scrBulletHitFX/scrBulletHitFX.gml:6`
+/// `image_angle = other.image_angle`). The renderer applies it.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct FxAngle(pub f32);
 
@@ -1760,7 +1779,7 @@ pub struct LastDie {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct WantVan {
     pub enemies: usize,
-    /// `Create_0.gml:9` `spawnmoment = 0.2 + random(0.4)`.
+    /// `WantVan/Create_0.gml:9` `spawnmoment = 0.2 + random(0.4)`.
     pub spawnmoment: f32,
     pub canspawn: bool,
 }
@@ -1770,14 +1789,15 @@ pub struct WantVan {
 /// zero) and then opens two `IDPDSpawn` portals.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct WantPopo {
-    /// `Create_0.gml:7` `enemies = instance_number(enemy)` at floor start.
+    /// `WantPopo/Create_0.gml:7` `enemies = instance_number(enemy)` at
+    /// floor start.
     pub enemies: usize,
-    /// `Create_0.gml:8` `spawnmoment = 0.2 + random(0.6)`.
+    /// `WantPopo/Create_0.gml:8` `spawnmoment = 0.2 + random(0.6)`.
     pub spawnmoment: f32,
     /// `scrPopulate.gml:275` plants the extra Rogue marker only for a Rogue
     /// run; without one it retires on its first tick.
     pub rogue_only: bool,
-    /// Set once `Create_0.gml:1` has spent its half `popolevel`.
+    /// Set once `WantPopo/Create_0.gml:1` has spent its half `popolevel`.
     pub counted: bool,
 }
 
@@ -1875,8 +1895,9 @@ pub struct Corpse {
     pub size: i32,
     pub life: Timer,
     pub pos: Vec2,
-    /// Facing recorded at death (bevy `corpse_sprite.flip_x` parity;
-    /// only the player husk records a live flip).
+    /// Facing recorded at death (GML copies the dying instance's `right`
+    /// into the husk's `image_xscale`, `enemy/Destroy_0.gml:16` and
+    /// `Player/Destroy_0.gml:79`).
     pub flip_x: bool,
 }
 

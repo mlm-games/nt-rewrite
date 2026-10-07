@@ -1,10 +1,9 @@
 //! Audio selection: cues, area music/ambience.
-//! The bevy build spawned `AudioPlayer` entities straight from systems and
-//! resolved files through `AssetCatalog` + `AssetServer`; here systems output
-//! DATA and the platform layer (repame-audio) plays it:
+//! Systems here output DATA and the platform layer (repame-audio) plays it:
 //! * one-shots ([`AudioCue`]) queue with stem + volume + pitch variance; the
-//!   backend samples the pitch at play time (bevy `AudioM::play_sfx_varied`
-//!   parity) and resolves stems against its asset store.
+//!   pitch is sampled at play time, as GML does inside the play script
+//!   (GML `scripts/snd_play_hit.gml:11`), and the backend resolves stems
+//!   against its own asset store.
 //! * area music/ambience ([`sync_area_audio`]) resolves the GML `MusCont`
 //!   selection law to bare GML stems in [`AreaAudioState`], polled by the
 //!   backend every tick.
@@ -626,8 +625,8 @@ const BOSS_JINGLE_SECS: f32 = 180.0 / 30.0;
 /// GML `MusCont/Create_0.gml:10-12`
 /// `audio_sound_length(musThemeA) * 30 - 175` on the 48.0 s asset.
 const TITLE_A_SECS: f32 = (48.0 * 30.0 - 175.0) / 30.0;
-/// Ambience filter target (bevy `update_amb_filter` law: duck to 0.2
-/// while paused or while the spiral background state exists, else 1.0).
+/// Ambience filter target (GML `MusCont/Step_0.gml:4-8`: the filter ducks
+/// toward 0.2 while the spiral background or a pause holds, else 1.0).
 pub fn amb_filter_target(paused: bool, vortex_suppressed: bool) -> f32 {
     if paused || vortex_suppressed {
         0.2
@@ -849,7 +848,8 @@ pub fn tick_area_audio_fades(
     state.ambience_volume = (ambience_base * amb_filter.0 * ambience_on).clamp(0.0, 1.0);
 }
 
-/// Silence both buses (bevy `despawn_area_audio`).
+/// Silence both buses, dropping the current cues and timers (GML
+/// `MusCont/Other_5.gml:7-8` stops `song` and `amb` on room end).
 pub fn reset_area_audio(mut state: ResMut<AreaAudioState>) {
     *state = AreaAudioState::default();
 }
@@ -870,9 +870,9 @@ pub fn init_area_audio_resources(world: &mut World) {
     world.resource_mut::<MainVol>().step(dt);
 }
 
-/// Headless mirror of the bevy menu `UiAction` (variant shapes kept so
-/// the mapping below ports verbatim; the real menu slice owns the
-/// canonical enum later).
+/// Headless menu-action mirror (variant shapes kept so the mapping below
+/// ports the GML sites verbatim; the real menu slice owns the canonical enum
+/// later).
 #[derive(Clone, Debug)]
 pub enum UiAction {
     StartGame,
@@ -922,8 +922,8 @@ pub enum UiAction {
     SettingEraseProgress,
     SettingViewCredits,
     SettingOpenSubcategory(u8),
-    /// Open the run-stats panel (GML `DrawStats` parity over the main
-    /// menu; bevy left STATS inert).
+    /// Open the run-stats panel (GML `MainMenuButton/Other_10.gml:93,95`
+    /// creates `DrawStats` and plays `sndMenuStats`).
     ShowStats,
     /// Fire one PLAY-submenu row (GML `PlayButton` num 0 NORMAL, 1 DAILY,
     /// 2 WEEKLY, 3 HARD, 4 CUSTOM). NORMAL/HARD proceed to character
@@ -944,12 +944,12 @@ pub enum UiAction {
     RemapReset,
 }
 
-/// Bridged menu action (bevy `UiBridgeAction` message -> [`Queue`]).
+/// Bridged menu action (headless bridge message -> [`Queue`]).
 #[derive(Clone, Debug)]
 pub struct UiBridgeAction(pub UiAction);
 
-/// UI one-shot map (stems from bevy `app.rs`; every GML site behind
-/// these arms is a plain `snd_play(stem)` - gain 1.0, no pitch jitter).
+/// UI one-shot map; every GML site behind these arms is a plain
+/// `snd_play(stem)` - gain 1.0, no pitch jitter.
 /// Context-free actions only; character/skin/crown/mutation picks need
 /// site context (see the `*_sfx` helpers below) and sliders commit per
 /// change.

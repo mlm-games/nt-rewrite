@@ -1,10 +1,10 @@
-//! Combat hit pipeline. Ported from nt's `game/combat.rs` in `NtSimSet`
-/// order (Always → Input → Combat → Progression → Cleanup).
+//! Combat hit pipeline, run in [`NtSimSet`](crate::schedule::NtSimSet)
+//! order (Always → Input → Combat → Progression → Cleanup).
 ///
-/// Render writes (`Sprite.image/rect`, tint restore) stay out - the render
-/// phase resolves visuals from sim state. Effect sinks (`Trauma`,
-/// `FlashWhite`, audio cues, rumble, bursts, secrets) are ported alongside
-/// and asserted in tests.
+///Render writes (`image_index`/`image_xscale`, tint restore) stay out
+///- the render phase resolves visuals from sim state. Effect sinks
+///  (`Trauma`, `FlashWhite`, audio cues, rumble, bursts, secrets) are
+///  ported alongside and asserted in tests.
 use bevy_ecs::prelude::*;
 use rand::RngExt;
 use repame_fx::Trauma;
@@ -56,8 +56,8 @@ use crate::time::{GTimer, TimerMode};
 /// Hit-flash marker (game-utils `HitFlash` parity, renderer-resolved).
 /// Sim side only tracks liveness: the tint applies while the marker is
 /// present and restores when `tick_hit_flash` removes it. Colors are
-/// sRGB-authored display colors (bevy `Color::srgb` parity); the renderer
-/// linearizes them for the GPU.
+/// sRGB-authored display colors (GML draws `c_*`/`merge_color` straight to
+/// the backbuffer); the renderer linearizes them for the GPU.
 #[derive(Component, Clone, Debug)]
 pub struct HitFlash {
     pub color: [f32; 4],
@@ -149,8 +149,11 @@ pub fn tick_hit_flash(
 /// Enemy contact damage: overlapping enemies with a cooled melee timer
 /// hurt the player (unless invulnerable), knock back, flash, rumble,
 /// sting audio, spawn a burst, and optionally raise a shield.
-/// Sharp Teeth retaliates in 900px. Bevy parity throughout, including
-/// the unused `flash` parameter.
+/// GML `scrPlayerProcTakeDamage:6-26` spawns a `SharpTeeth` on every enemy
+/// inside the view rect at `damage = _amount * 2`; the fang bites once at
+/// `image_index >= 2` (`SharpTeeth/Step_2.gml:9-16`). The 900px radius here
+/// stands in for that view rect - the headless sim has none. `flash` is
+/// bound but never read.
 pub fn contact_damage(
     mut commands: Commands,
     mut trauma: ResMut<Trauma>,
@@ -258,8 +261,9 @@ pub fn contact_damage(
 
         HitFlash::apply(&mut commands, player_e, [1.0, 0.15, 0.1, 1.0], 0.18);
         trauma.add(0.35);
-        // Single-player build: rumble routing is platform-side, so the
-        // bevy per-gamepad fan-out collapses to one queued request.
+        // Rumble has no GML counterpart (GML shakes the screen with
+        // `scr_screenshake`); routing is platform-side, so one queued
+        // request stands in for a per-pad fan-out.
         rumble(&mut rumble_queue, 0.2, 0.8, 0.16);
         cues.push(AudioCue {
             name: crate::enemy_data::gml_race_hurt(race_state.race),
@@ -289,7 +293,7 @@ pub fn contact_damage(
     }
 }
 
-/// Timed area explosion (bevy `Explosion` parity).
+/// Timed area explosion (GML `Explosion` parity).
 #[derive(Component, Clone, Debug)]
 pub struct Explosion {
     pub timer: GTimer,
@@ -304,8 +308,13 @@ pub struct Explosion {
 pub struct ExplosionFeelApplied;
 
 /// GML lingering blast: the explosion re-scans every 1/30 s for 0.75 s,
-/// hitting each victim once (bevy `LingeringBlast` parity - walk-ins
-/// caught like GML).
+/// hitting each victim once, so walk-ins are caught like GML's mask
+/// overlap (`Explosion/Collision_hitme.gml:1`, `scr_hit.gml:172`).
+/// 0.75 s is the blast's own life: 9 frames at `image_speed = 0.4`
+/// (`Explosion/Create_0.gml:4`) is 22.5 ticks, and `Other_7.gml:1`
+/// destroys it there. The 64px `mskExplosion` mask GML bolts onto
+/// `PopoExplosion` variants (`scrPlayerProcTakeDamage:35,48`) is the
+/// port's radius stand-in.
 #[derive(Component, Clone, Debug)]
 pub struct LingeringBlast {
     pub duration: GTimer,
@@ -321,9 +330,9 @@ pub struct MaggotExplosionFx {
 
 /// One processed enemy death, handed from `resolve_enemy_deaths` to
 /// `resolve_death_drops`. The split exists because bevy_ecs caps
-/// systems at 16 params; iterating the record preserves the bevy
-/// per-death multiplicity exactly (including repeated TriggerFingers
-/// scaling with several deaths in one tick).
+/// systems at 16 params; iterating the record preserves the per-death
+/// multiplicity exactly (including repeated TriggerFingers scaling with
+/// several deaths in one tick).
 #[derive(Clone, Copy, Debug)]
 pub struct DeathEvent {
     pub pos: glam::Vec2,
@@ -1034,7 +1043,7 @@ pub fn resolve_enemy_deaths(
                 // GML `Exploder/Destroy_0`: 8 `EnemyBullet2` at 4 px/tick
                 // plus 8 `AcidStreak` at 8 px/tick on the same headings.
                 // (Fixed art strip; the renderer falls back to a tinted
-                // dot when the catalog lacks the strip, like bevy.)
+                // dot when the catalog lacks the strip.)
                 let anim = catalog
                     .def("sprBouncerBullet")
                     .map(|def| SpriteAnim::new("sprBouncerBullet", def));
@@ -1490,7 +1499,7 @@ pub fn corpse_hits(
 
 /// Death drops, run chained directly after [`resolve_enemy_deaths`].
 /// Split only because bevy_ecs caps systems at 16 params: iterating the
-/// [`DeathEvents`] record preserves bevy's per-death multiplicity exactly
+/// [`DeathEvents`] record preserves the per-death multiplicity exactly
 /// (including repeated TriggerFingers scaling with several deaths).
 pub fn resolve_death_drops(
     mut commands: Commands,
@@ -1526,8 +1535,10 @@ pub fn resolve_death_drops(
         deaths.0.clear();
         return;
     };
-    // Bevy passes the live player position (not the death spot) to the
-    // Throne campfire.
+    // The campfire anchors on the live player position, not the death
+    // spot. GML instead parks it on the map origin (10016, 10016) when
+    // the floor ends (`GenCont/Destroy_0.gml:222-223`,
+    // `scrCampfireMenuCreate.gml:2-3`).
     let player_pos_now = player_pos.0;
     let decide = crate::pickups::decide_ctx_for(
         &run,
@@ -2035,9 +2046,11 @@ pub fn move_projectiles(
             // Disc travel first (shared borrows end immediately) so the
             // plasma-size borrow below never overlaps it.
             let disc_dist = aux.p0().get(e).ok().map(|d| d.dist);
-            // Plasma shrink (bevy order: prop damage with NO re-hit
-            // gate, then unconditional shrink + burst + rollback, then
-            // despawn at <= 0.5 - never bounces).
+            // Plasma shrink (GML `scr_hit.gml:118-135` order: hit with
+            // no destroy and no re-hit gate, then the unconditional
+            // `image_xscale -= 0.1` plus the `x -= hspeed; y -= vspeed`
+            // rollback; it never bounces). The shell dies on its own
+            // Step at `image_xscale <= 0.5` (`PlasmaBall/Step_0.gml:6-8`).
             if let Ok(mut ps) = aux.p1().get_mut(e) {
                 if let Some((prop_e, center, true, _)) = hit_prop {
                     let dmg = ((p.damage as f32 * ps.0).floor() as i32).max(1);
@@ -2407,8 +2420,12 @@ pub fn move_projectiles(
     }
 }
 
-/// Chain-lightning arcs to nearby enemies (bevy parity, `Pos`-based).
-/// Arc length/angle ride the marker for the renderer.
+/// Chain-lightning arcs to nearby enemies (`Pos`-based). Arc length/angle
+/// ride the marker for the renderer. GML `scrLightningCreate.gml:16-46`:
+/// every segment picks `instance_nearest` from 80 px ahead, homes on it
+/// when within 120 px, and flips `+180` off a wall; the per-weapon
+/// `range`/`falloff` are port choices (GML segments all carry `Lightning`'s
+/// flat `damage = 7`, `Lightning/Create_0.gml:6`).
 #[allow(clippy::too_many_arguments)]
 fn chain_to_nearby_targets(
     mut commands: &mut Commands,
@@ -2668,9 +2685,10 @@ pub fn projectile_hits(
             continue;
         }
 
-        // Bevy reads/mutates the projectile `Transform` in place here
-        // (notably the plasma victim rollback writes back); keep the
-        // `&mut Pos` binding live - no Vec2 shadow copy.
+        // The projectile `Pos` is read and written in place here (GML
+        // `x -= hspeed; y -= vspeed` rolls a plasma victim back,
+        // `scr_hit.gml:128-129`); keep the `&mut Pos` binding live - no
+        // Vec2 shadow copy.
         let mut hit = false;
         let mut damaged = false;
         let mut hit_player = false;
@@ -2927,9 +2945,14 @@ pub fn projectile_hits(
                     Team::Enemy => "images/sprEnemyBulletHit.png",
                 };
                 let hit_angle = proj_vel.0.y.atan2(proj_vel.0.x);
-                // Bevy shape: `has`-gate, oneshot `1/(fps*1.5)` 0.2 s
-                // when stripped, static 0.15 s otherwise (same
-                // renderer-only caveat as the dust fallback above).
+                // Catalog gate: the animated strip when the catalog has it,
+                // a static 0.15 s dot otherwise (same renderer-only
+                // caveat as the dust fallback above). Both hit strips
+                // are 8 fps in the catalog, so `fps * 1.5` lands on GML
+                // `image_speed = 0.4` at 30 steps/s
+                // (`BulletHit/Create_0.gml:2`); the 0.2 s cap is
+                // port-only - GML waits out the strip in
+                // `BulletHit/Other_7.gml:1`.
                 if let Some(def) = catalog.def(hit_sprite) {
                     let mut anim = SpriteAnim::oneshot(hit_sprite, def);
                     anim.timer =
@@ -3078,14 +3101,16 @@ pub fn projectile_hits(
     }
 }
 
-// Projectile-tick battery: nt `game/combat.rs` Combat-set systems
-// (`tick_homing_projectiles` … `tick_shell_bonus`, `tick_hazard_clouds`,
-// `apply_explosions`), `Pos` for `Transform`, catalog paths for handles,
-// cue queues for audio.
+// Projectile-tick battery (`tick_homing_projectiles` …
+// `tick_shell_bonus`, `tick_hazard_clouds`, `apply_explosions`), `Pos`
+// for the GML `x`/`y` pair, catalog paths for handles, cue queues for
+// audio.
 
 /// Steer homing projectiles toward the nearest in-range target
 /// (player shots pick enemies, enemy shots track the player).
-/// Bevy `tick_homing_projectiles` parity.
+/// GML `Seeker/Step_0.gml:1-11`: the nearest enemy inside
+/// `scrTargetIsVisible(target, 32)` pulls the shot with
+/// `motion_add(mcr_target_direction, 1 + boost)`.
 pub fn tick_homing_projectiles(
     time: Res<SimTime>,
     mut q: Query<(&Team, &Pos, &mut Velocity, &Homing), With<Projectile>>,
@@ -3133,8 +3158,9 @@ pub fn tick_homing_projectiles(
     }
 }
 
-/// Armed sticky projectiles stop dead and ride their stuck target.
-/// Bevy `tick_sticky_projectiles` parity.
+/// Armed sticky projectiles stop dead and ride their stuck target
+/// (GML `Grenade/Collision_hitme.gml:1-19` `sticky` branch: `speed = 0`
+/// then `x = other.x + offx; y = other.y + offy`).
 pub fn tick_sticky_projectiles(
     mut q: Query<(&mut Pos, &mut Velocity, &Sticky), With<Projectile>>,
     targets: Query<&Pos, Without<Projectile>>,
@@ -3382,7 +3408,10 @@ fn has_line_of_sight(from: glam::Vec2, to: glam::Vec2, mask: &FloorMask) -> bool
     true
 }
 
-/// Expire spawn-grace markers (bevy `tick_spawn_grace` parity).
+/// Expire spawn-grace markers. The 2-step window keeps a fresh
+/// hits-all shot off its own creator; GML spaces that by distance
+/// instead, flipping `team = team_none` once the Disc is 24 px clear of
+/// `creator` (`Disc/Alarm_0.gml:1-8`).
 pub fn tick_spawn_grace(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -3412,8 +3441,12 @@ pub fn tick_flame_trails(
     }
 }
 
-/// Lightning arcs expire on their timer. Render split: the bevy alpha
-/// fade on `Sprite.color` is renderer-owned; the sim only drains liveness.
+/// Lightning arcs expire on their timer. Render split: the arc's
+/// alpha ramp (`(1 - frac) * 0.9`, renderer-side) is renderer-owned;
+/// the sim only drains liveness. GML has no fade - the segment
+/// sprites are drawn at `c_white, 1` and the head spark runs its
+/// strip out (`Lightning/Draw_0.gml:5`,
+/// `LightningHit/Create_0.gml:2`).
 pub fn tick_lightning_arcs(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -3707,8 +3740,9 @@ pub fn tick_shell_bonus(time: Res<SimTime>, mut q: Query<&mut ShellBonus>) {
 }
 
 /// Hit-effect oneshots (non-pickup `PickupLifetime` carriers: bullet-hit
-/// FX, dust, fades) expire on their timer. Render split: the bevy alpha
-/// fade in the last 0.12 s is renderer-owned.
+/// FX, dust, fades) expire on their timer. Render split: the 0.12 s
+/// alpha ramp at the tail is renderer-owned (GML just destroys the
+/// sprite when its strip ends, `BulletHit/Other_7.gml:1`).
 pub fn tick_hit_effects(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -3825,10 +3859,12 @@ const ELECTRIC_GUITAR_HIT_STEMS: [&str; 6] = [
 /// destroys typ 2 / redirects grenades, Blood/Lightning/Hammer extras. Life
 /// end = anim end (Other_7 destroy); BloodSlash misses self-hit 1.
 ///
-/// Render split: bevy oriented `Transform.rotation` along velocity and
-/// spawned the MeleeHitWall sprite; here the slash direction derives from
-/// `Velocity` (fallback +X once stopped) and the wall-hit FX is skipped -
-/// trauma/audio/latch carry the sim effect.
+/// Render split: there is no rotation channel, so the slash direction
+/// derives from `Velocity` (frozen in `slash.dir` once stopped, +X
+/// fallback) and the `MeleeHitWall` sprite
+/// (`Slash/Collision_Wall.gml:11-19`) is spawned at the wall with that
+/// heading instead of GML's wall-bbox bearing; trauma/audio/latch carry
+/// the sim effect.
 #[allow(clippy::too_many_arguments)]
 pub fn tick_slash_projectiles(
     time: Res<SimTime>,
@@ -3919,9 +3955,9 @@ pub fn tick_slash_projectiles(
     for (e, mut proj, mut vel, mut tpos, mut slash) in &mut slash_q {
         proj.life.tick(time.delta_secs);
         let slash_team = Team::Player;
-        // Bevy oriented the sprite along velocity (`tf.rotation`) and
-        // read the slash direction back from it, freezing when stopped;
-        // `slash.dir` latches that law without a rotation channel.
+        // GML's `image_angle` rides the sprite and the wall nudge reads it
+        // back (`Slash/Collision_Wall.gml:4-7`); `slash.dir` latches the
+        // same heading from velocity, frozen once stopped.
         if vel.0.length_squared() > 1e-6 {
             slash.dir = vel.0.normalize_or_zero();
         }
@@ -4161,7 +4197,7 @@ pub fn tick_slash_projectiles(
                 explosive,
                 proj.source,
                 run.loop_count,
-                // No player query fits: this system is already at bevy's
+                // No player query fits: this system is already at bevy_ecs'
                 // 16-system-param cap, so the Haste crown's rad-lifetime
                 // divisor cannot be read here.
                 false,
@@ -4213,9 +4249,10 @@ pub fn tick_slash_projectiles(
                     ));
                     hitstop.trigger(0.15, 0.05);
                 }
-                // MeleeHitWall sprite (bevy `sprMeleeHitWall` SwingFx
-                // 0.3 s at the wall pos, `wang` rotation); shake + sting
-                // + latch carry the sim effect.
+                // MeleeHitWall sprite (GML `Slash/Collision_Wall.gml:11-19`
+                // spawns it on the wall's bbox centre; the 0.3 s
+                // `SwingFx` and the `wang` heading are port-only). Shake
+                // + sting + latch carry the sim effect.
                 let hit_path = "images/sprMeleeHitWall.png";
                 let mut he = commands.spawn((
                     GameCleanup,
@@ -4413,9 +4450,9 @@ pub fn tick_throne_victory(
 /// Timed area explosion: trauma/chroma/hitstop/boom, player-team damage to
 /// enemies + destructible props (corpse/effect chain, secret entrances,
 /// snowman ambushes, gold/rad drops) + wall breaks, hits-player damage with
-/// Boiling Veins law, Death-crown chains. Bevy `apply_explosions` parity
-/// (`Pos` for `Transform`; prop marker options folded into one query to fit
-/// the 16-param system cap).
+/// Boiling Veins law, Death-crown chains. GML parity (`Pos` for the
+/// `x`/`y` pair; prop marker options folded into one query to fit the
+/// bevy_ecs 16-param system cap).
 #[allow(clippy::too_many_arguments)]
 pub fn apply_explosions(
     time: Res<SimTime>,
@@ -4487,9 +4524,9 @@ pub fn apply_explosions(
         boom.timer.tick(time.delta_secs);
         let fused = boom.timer.just_finished();
 
-        // Lingering state machine (bevy verbatim): without a lingering
-        // companion the fuse tick is the only scan; with one, re-scan
-        // every 1/30 s until the 0.75 s duration lapses.
+        // Lingering state machine: without a lingering companion the fuse
+        // tick is the only scan; with one, re-scan every 1/30 s until the
+        // 0.75 s duration lapses.
         let mut ling_guard = lingering_q.get_mut(e).ok();
         let mut hit_opt: Option<&mut Vec<Entity>> = None;
         match ling_guard.as_mut() {

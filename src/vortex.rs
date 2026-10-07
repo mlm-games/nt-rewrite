@@ -1,20 +1,18 @@
-//! Vortex spiral sim state: headless sim half of the bevy reference
-//! `game/vortex.rs` - the [`SpiralKind`] enum, the [`SpiralCtl`] angle-advance
-//! law, the deterministic per-seed random stream, and the snapshot the
-//! background pass consumes.
+//! Vortex spiral sim state: the headless half of the `SpiralCont` / `Spiral` /
+//! `SpiralDebris` / `SpiralStar` object set - the [`SpiralKind`] enum, the
+//! [`SpiralCtl`] angle-advance law, the deterministic per-seed random stream,
+//! and the snapshot the background pass consumes.
 //!
-//! bevy-render stays out: no `Handle<Image>`, no materials, no
-//! `sync_spiral_cpu_layer` GPU writes, no plugin. Star/vard dots and the
-//! retired-entity list were renderer-side (`ChildOf(camera)` entities), so
-//! stars/vards survive as data-only - positions still integrate, keeping the
-//! shared RNG stream and debris spawn cadence identical - while the entity
-//! handles drop.
+//! Port-only: no `Handle<Image>`, no materials, no GPU writes, no plugin.
+//! Star/vard dots are data-only - positions still integrate, keeping the
+//! shared RNG stream and debris spawn cadence identical - while the draw call
+//! lives in the background pass.
 //!
-//! Timing is fixed-step driven: `App::advance` calls [`SpiralCtl::step`] once
-//! per GML 30 Hz tick, like the bevy `vortex_tick` system. Area selection goes
-//! through [`gml_area_for_area`] (bevy `gml_area_for_bevy_area` by variant
-//! name) into [`SpiralKind::for_gml_area`]; `AreaId::Loop` maps to GML area 1,
-//! i.e. `Normal` - no loop-count branch in the reference.
+//! Timing is fixed-step driven: the shell calls [`SpiralCtl::step`] once per
+//! GML 30 Hz tick (`options/main/options_main.yy:18`,
+//! `"option_game_speed":30`). Area selection goes through
+//! [`gml_area_for_area`] into [`SpiralKind::for_gml_area`]; `AreaId::Loop`
+//! maps to GML area 1, i.e. `Normal` - GML has no loop-count branch.
 
 use crate::vortex_pass::{
     VARD_CELL_SIZES, VARD_FRAME_COUNTS, VORTEX_DEBRIS, VORTEX_VARDS, VORTEX_WISPS, VortexSnapshot,
@@ -51,10 +49,9 @@ pub const GUI_H: f32 = 240.0;
 /// Fallback look center + visible extent in wisp coord space: the 320x240 base
 /// view 1:1. The live snapshot overrides with the live GUI view
 /// (`view_w/2, 120, view_w, 240`) so a fullscreen quad maps screen px to GUI px
-/// like GML (`display_set_gui_size` = view size). The old 6x value
-/// (`[160, 120, 1920, 1440]`) mistranslated bevy's 6x WORLD-space mesh size:
-/// on a fullscreen quad it shrank every wisp 6x toward the center, so the
-/// vortex never filled the corners.
+/// like GML (`display_set_gui_size` = view size). The extent must stay 1:1:
+/// the shader reads it as the wisp coord -> GUI px mapping, so any scale here
+/// shrinks every wisp toward the center and leaves the corners bare.
 pub const VORTEX_VIEW: [f32; 4] = [160.0, 120.0, 320.0, 240.0];
 
 /// Spiral visual variant, selected by GML area.
@@ -68,9 +65,9 @@ pub enum SpiralKind {
 }
 
 impl SpiralKind {
-    /// GML area -> variant table (bevy `SpiralKind::for_gml_area`,
-    /// verbatim, including Jungle 105 falling through to `Normal` with
-    /// the crystal flag carried separately in `kindpacked`).
+    /// GML area -> variant table (GML `SpiralCont/Create_0.gml:24-32`
+    /// verbatim, including Jungle 105 falling through to `Normal`; the
+    /// crystal flag rides separately in `kindpacked`).
     pub fn for_gml_area(area: u8) -> Self {
         match area {
             100 => Self::Proto,
@@ -81,8 +78,9 @@ impl SpiralKind {
     }
 }
 
-/// Target `AreaId` -> GML area int (bevy `gml_area_for_bevy_area`, matched
-/// by variant name; target discriminants differ so this is NOT `as u8`).
+/// Target `AreaId` -> GML area int (GML `macros_general.gml:538-553`,
+/// matched by variant name; target discriminants differ so this is NOT
+/// `as u8`).
 pub fn gml_area_for_area(area: AreaId) -> u8 {
     match area {
         AreaId::Campfire => 0,
@@ -126,8 +124,8 @@ pub fn rewarm_view_spiral(world: &mut World, view_w: f32) {
     world.insert_resource(ctl);
 }
 
-/// Area-flavoured debris sprite pick (bevy `variant_debris_for_gml_area`,
-/// verbatim; the path is data here, upload stays renderer-side).
+/// Area-flavoured debris sprite pick (GML `SpiralDebris/Create_0.gml:14-25`
+/// verbatim; the strip upload stays renderer-side).
 fn variant_debris_for_gml_area(area: u8) -> Option<(&'static str, usize)> {
     match area {
         1 => Some(("images/sprBanditHurt.png", 1)),
@@ -141,7 +139,8 @@ fn variant_debris_for_gml_area(area: u8) -> Option<(&'static str, usize)> {
     }
 }
 
-/// Venuz starfield mote (data-only; the bevy entity handle was render).
+/// Venuz starfield mote (data-only; GML `SpiralStar` draws itself, here the
+/// background pass draws it from this state).
 #[derive(Clone, Copy, Debug)]
 pub struct Star {
     pub alive: bool,
@@ -156,7 +155,8 @@ pub struct Star {
     pub draw_y: f32,
 }
 
-/// Area-flavoured debris mote (data-only; the bevy entity handle was render).
+/// Area-flavoured debris mote (data-only; GML `SpiralDebris` draws itself,
+/// here the background pass draws it from this state).
 #[derive(Clone, Copy, Debug)]
 pub struct Vard {
     pub alive: bool,
@@ -294,9 +294,9 @@ impl Debris {
     }
 }
 
-/// Headless spiral control (bevy `SpiralCtl` minus the render-only `retired`
-/// entity list; `head`/`dhead` are `pub` so the write-only ring cursors never
-/// trip dead-code lints outside test builds).
+/// Headless spiral control (the `SpiralCont` owner state, minus the
+/// renderer-only retired-entity list; `head`/`dhead` are `pub` so the
+/// write-only ring cursors never trip dead-code lints outside test builds).
 ///
 /// GML notes (`objects/SpiralCont/Step_0.gml`, `objects/Spiral/Step_0.gml`,
 /// `objects/SpiralDebris/Step_0.gml`, `objects/SpiralStar/Step_0.gml`):
@@ -417,8 +417,10 @@ impl SpiralCtl {
         ctl
     }
 
-    /// Mark the spiral dead (bevy `mark_vortex_dead` / `teardown_vortex`):
-    /// births freeze and the per-wisp death time drives the drain law.
+    /// Mark the spiral dead: births freeze and the per-wisp death time drives
+    /// the drain law. GML drops the `SpiralCont` instance outright
+    /// (`GenCont/Destroy_0.gml:187`), which the remaining motes detect as
+    /// `!instance_exists(SpiralCont)` (`Spiral/Step_0.gml:16-22`).
     pub fn kill(&mut self) {
         if self.alive {
             self.alive = false;
@@ -639,8 +641,8 @@ impl SpiralCtl {
                             // GML `sprDebrisN` default arm: `image_index =
                             // random(image_number)` is float, but the ring packs
                             // `frame + xscale/32` and the shader splits with
-                            // `floor`/`fract` - so the frame MUST be integral (bevy
-                            // floors + clamps to 0..3 verbatim), else the frame
+                            // `floor`/`fract` - so the frame MUST be integral (the
+                            // port floors + clamps the roll to 0..3), else the frame
                             // fraction leaks into `fract` and newborns decode at
                             // xscale up to 32 (the "debris spawns massive" bug).
                             frame,
@@ -841,8 +843,8 @@ impl SpiralCtl {
         }
     }
 
-    /// Advance the accumulator by `dt_ticks` 30 Hz ticks (bevy `step`,
-    /// verbatim).
+    /// Advance the accumulator by `dt_ticks` 30 Hz ticks (the headless stand-in
+    /// for GML's per-step object events at `option_game_speed: 30`).
     pub fn step(&mut self, dt_ticks: f32) {
         self.acc += dt_ticks;
         while self.acc >= 1.0 {
@@ -851,14 +853,15 @@ impl SpiralCtl {
         }
     }
 
-    /// Kill-plane threshold: 2.5 alive, 3.0 while draining (bevy
-    /// `vortex_thresh`, verbatim).
+    /// Kill-plane threshold: 2.5 alive, 3.0 while draining (GML
+    /// `Spiral/Step_0.gml:16-22`: `_m = 2.5`, or `3` with no `SpiralCont`).
     pub fn thresh(&self) -> f32 {
         vortex_thresh(self.alive)
     }
 
     /// Shader variant pack: kind discriminant plus the Jungle-105 crystal
-    /// flag (bevy `vortex_tick`/`ensure_vortex_quad`, verbatim).
+    /// flag (port-only packing; GML picks the variant with `sprite_index`
+    /// in `SpiralCont/Step_0.gml:36-45`).
     pub fn kindpacked(&self) -> f32 {
         self.kind as u8 as f32 + if self.gml_area == 105 { 4.0 } else { 0.0 }
     }
@@ -874,12 +877,14 @@ impl SpiralCtl {
     /// Snapshot for the background pass: exactly what
     /// [`VortexPass`](crate::vortex_pass::VortexPass) consumes (converter, not
     /// engine change). `glob_a = (ticks, drain_bias, bg_r, bg_g)`,
-    /// `glob_b = (bg_b, bg_alpha, thresh, kindpacked)` with the bevy paddings
-    /// (`-1` wisps, `-1000` debris), plus each wisp's `lanim`/`langle` stream
-    /// (GML `Spiral` bolt clock) indexed like the ring. Background is always
-    /// black (bevy `background_color`); `bg_alpha` follows GML `scrDrawSpiral`
-    /// (opaque everywhere except the campfire title; see the `bg_alpha` match at
-    /// the `VortexPass` mount in `lib.rs`). Sound flags (`WispStream::sound_played`,
+    /// `glob_b = (bg_b, bg_alpha, thresh, kindpacked)` with the port's dead-slot
+    /// paddings (`-1` wisps, `-1000` debris), plus each wisp's `lanim`/`langle`
+    /// stream (GML `Spiral` bolt clock) indexed like the ring. Background is
+    /// always black (GML `scrDrawSpiral.gml:4,8-11` `draw_clear(c_black)` off
+    /// `Menu`); `bg_alpha` follows the same script (opaque everywhere except the
+    /// campfire title, whose `Menu/Draw_0.gml:4` call takes the `_is_menu` arm
+    /// that skips the clear; see the `bg_alpha` match at the `VortexPass` mount
+    /// in `lib.rs`). Sound flags (`WispStream::sound_played`,
     /// `Debris::sound_played`) stay sim-side - the snapshot carries no audio, the
     /// shell drains them directly (GML plays them inline in the draw script).
     pub fn snapshot(&self, bg_alpha: f32) -> VortexSnapshot {

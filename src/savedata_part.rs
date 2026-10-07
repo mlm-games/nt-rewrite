@@ -1,13 +1,15 @@
-//! Save-data items (keep semantics byte-identical).
-//! Sources: `src/save.rs` (`SAVE_VERSION`, `SaveData`, `SettingsData`,
-//! `default_*`, `Default` impls), `src/game/components.rs` (`RaceLoadout`),
-//! `src/game/generated/unlocks.rs` (`try_unlock_race`, `check_kill_unlocks`,
-//! `try_unlock_skin`, `try_unlock_skeleton`), `src/game/content.rs`
-//! (`PassiveKind`, `CharacterDef`, `character_def`).
-//! Transforms: `RaceId`/`EnemyKind`/`AbilityKind` -> `crate::data::*`,
-//! `WeaponId`/`PLAYABLE_RACES` -> `crate::data::*`,
-//! `Color::srgb(r,g,b)` -> `[r, g, b, 1.0f32]`.
-//! `SaveData` keeps `#[derive(Resource)]`: it becomes a sim resource.
+//! Save data: the persistent profile behind GML's flat `UberCont.saveData`
+//! map, which `scripts/scrSave.gml:1-5` writes to `NuclearThrone.sav` and
+//! `scripts/save_get_value.gml:5-7` / `scripts/save_set_value.gml:5-8`
+//! reach through `"<section>_<key>"` keys. The port keeps the same content
+//! (`SaveData` stats and unlocks, `SettingsData` options, per-race
+//! `RaceLoadout`) as typed structs behind `SAVE_VERSION`, in its own RON
+//! file - the section/key map and the `.sav` format are port-only.
+//! Race/skin/crown unlocks follow `scripts/scrUnlocks.gml` and
+//! `scripts/scrAchievements.gml`; the keymap defaults are GML
+//! `scripts/scrOptionsKeymaps.gml:4-21`. GML's in-progress run save
+//! (`scripts/scrSavegame.gml`, `savegame.dat`) is a separate file.
+//! `SaveData` is a sim resource.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -1316,13 +1318,16 @@ impl SaveData {
     }
 }
 
-/// Port crown id (save identity) to GML crown index: GML crowns are
-/// 1-based with an extra offset (bevy `content.rs` verbatim).
+/// Port crown id (save identity) to GML crown index. GML's table starts at
+/// `Random = 0` (`scrCrowns.gml:3-18`, `crownmax = 13` at `:91`), so the
+/// offset is +1 - except that `CrownKind` lists Risk before Luck where GML
+/// lists Luck first, so those two ids cross over.
 pub fn crown_port_to_gml(id: u8) -> u8 {
     if id == 0 { 1 } else { id + 1 }
 }
 
-/// GML crown index back to port id (bevy `content.rs` verbatim).
+/// GML crown index back to port id (`scrCrowns.gml:3-18`); see
+/// `crown_port_to_gml` for the two ids that cross over.
 pub fn crown_gml_to_port(id: u8) -> u8 {
     if id <= 1 { 0 } else { id - 1 }
 }

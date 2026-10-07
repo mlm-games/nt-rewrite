@@ -117,9 +117,11 @@ impl SecretTriggers {
     }
 }
 
-/// Snapshot the Desert floor's chest/enemy counts once per floor (bevy
-/// `observe_oasis_floor_start` parity). The per-floor reset rides on
-/// `reset_floor_flags` via the floor-advance path, same as bevy.
+/// Snapshot the Desert floor's chest/enemy counts once per floor. GML
+/// `WantBoss/Create_0.gml:2` reads the baseline `instance_number(enemy)` the
+/// moment the marker is created; this takes it at floor start instead, and
+/// the per-floor reset rides on `reset_floor_flags` in the floor-advance
+/// path (`progression.rs`).
 pub fn observe_oasis_floor_start(
     run: Res<Run>,
     mut triggers: ResMut<SecretTriggers>,
@@ -373,10 +375,13 @@ pub fn tick_can_oasis(
 }
 
 /// Carrying a cursed weapon through Crystal Caves queues the Cursed
-/// Caves (bevy `detect_cursed_caves` parity). GML
-/// `scrPlayerCountCursed` (`scripts/scrPlayerUncurse/scrPlayerUncurse.gml:3-15`)
-/// counts cursed weapon *slots*, and the trigger itself is
-/// `GameCont/Other_5:110-112` (`area == area_caves` plus a curse).
+/// Caves. GML `scrPlayerCountCursed`
+/// (`scripts/scrPlayerUncurse/scrPlayerUncurse.gml:3-15`) counts cursed weapon
+/// *slots* (`curse`, `bcurse`, one per `extra_weps_curse[i]`), and the trigger
+/// itself is `GameCont/Other_5:110-112` - `area == area_caves`
+/// (`scripts/macros_general/macros_general.gml:542`) plus any curse reroutes to
+/// `area_cursed_caves`. This checks the same two conditions a step earlier,
+/// as a detector, and only queues the route.
 pub fn detect_cursed_caves(
     run: Res<Run>,
     mut triggers: ResMut<SecretTriggers>,
@@ -460,9 +465,10 @@ pub fn tick_van_hq(
     crate::progression::spawn_portal(&mut commands, &catalog, &mut shots, ppos, 2);
 }
 
-/// Announce a queued secret route while the toast is idle (bevy
-/// `secret_debug_toast` parity; text via the existing `Toast`
-/// resource).
+/// Announce a queued secret route while the toast is idle. Port-only
+/// debug aid: GML has no secret-route announcement - it enters the area
+/// silently - so the name is just `SecretTarget::name()` printed into the
+/// existing [`Toast`] resource, which holds for 2.2 s (`Toast::show`).
 pub fn secret_debug_toast(triggers: Res<SecretTriggers>, mut toast: ResMut<Toast>) {
     if let Some(target) = triggers.queued()
         && toast.timer.is_finished()

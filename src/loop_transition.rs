@@ -1,7 +1,12 @@
-//! Throne-room loop transitions: pure helpers plus the campfire phase machine
-//! (bevy `loop_transition.rs` gameplay half). Ember/burst `Vfx` visuals stay
-//! renderer-side (skipped); the sim keeps every phase edge, toast, trauma hit and
-//! spawn. `try_apply_loop_portal_transition` lives in `progression.rs`.
+//! Throne-room loop transitions: pure helpers plus the campfire phase
+//! machine. GML runs the same stretch from the Throne corpse: the gate at
+//! `objects/Corpse/Alarm_0.gml:1-14`, the sting on
+//! `objects/Nothing2Appear/Create_0.gml:1-2`, then the boss itself in
+//! `objects/Nothing2Appear/Other_7.gml:1-11`. The port spells that chain
+//! out as named phases with explicit timers. Ember/burst `Vfx` visuals
+//! stay renderer-side (skipped); the sim keeps every phase edge, toast,
+//! trauma hit and spawn. `try_apply_loop_portal_transition` lives in
+//! `progression.rs`.
 
 use bevy_ecs::prelude::*;
 use rand::RngExt;
@@ -63,8 +68,11 @@ pub fn mark_throne_ii_defeated(toast: &mut Toast, trauma: &mut Trauma) {
     trauma.add(0.35);
 }
 
-/// The campfire waits while IDPD are alive or a raid warning is
-/// pending (bevy `campfire_needs_idpd_clear` parity).
+/// The campfire waits while IDPD are alive or a raid warning is pending.
+/// GML gates the same stretch on the whole enemy count
+/// (`objects/Corpse/Alarm_0.gml:2`, `scr_check_enemies`) and on no
+/// `IDPDSpawn` portal up (`:11`); the port narrows it to the four IDPD
+/// kinds.
 pub fn campfire_needs_idpd_clear(idpd_alive: usize) -> bool {
     idpd_alive > 0
 }
@@ -75,11 +83,15 @@ fn start_campfire_rising(campfire: &mut CampfireState, toast: &mut Toast, trauma
     trauma.add(0.18);
 }
 
-/// Advance campfire phases (bevy `tick_campfire` gameplay half). Rising spawns Throne
-/// II via [`PendingEnemySpawn`]; any living IDPD or pending raid parks the fire in
-/// `WaitingForIdpd` until the room stays clear 0.35 s. Ember/particle bursts are
-/// skipped (renderer-side); trauma, toasts, the `sndNothing2Appear` spawn sting (GML
-/// `Nothing2/Create_0:37`) and the spawn are verbatim.
+/// Advance campfire phases. Rising spawns Throne II via
+/// [`PendingEnemySpawn`]; any living IDPD or pending raid parks the fire
+/// in `WaitingForIdpd` until the room stays clear 0.35 s. GML runs this
+/// stretch off `BecomeNothing`'s alarms (`Create_0.gml:16-17`,
+/// `Alarm_4.gml:1`, `Alarm_6.gml:2`) and then
+/// `Nothing2Appear/Other_7.gml:1-11`; the phase names and their lengths
+/// are port-only. Ember/particle bursts are skipped (renderer-side);
+/// trauma, toasts, the `sndNothing2Appear` spawn sting (GML
+/// `Nothing2/Create_0.gml:37`) and the spawn are verbatim.
 #[allow(clippy::too_many_arguments)]
 pub fn tick_campfire(
     time: Res<SimTime>,
@@ -175,13 +187,14 @@ pub fn tick_campfire(
                 campfire.spawned_throne_ii = true;
                 transition.throne_ii_spawned();
 
-                // GML `Nothing2/Create_0:12-16`: every `Wall` with nothing at
-                // all on its four sides goes through `scrWallDestroy` - a real
-                // hole with rubble - before the boss's first step turns the rest
-                // invisible. `place_free` registers only `solid` instances, so
-                // the four probes see walls alone: the floor the wall ring hugs
-                // and the `Nothing2` mid-Create are both `solid = false` and
-                // never hold a wall back.
+                // GML `Nothing2/Create_0.gml:14-18`: every `Wall` with
+                // nothing at all on its four sides goes through
+                // `scrWallDestroy` - a real hole with rubble - before the
+                // boss's first step turns the rest invisible. `place_free`
+                // registers only `solid` instances, so the four probes see
+                // walls alone: the floor the wall ring hugs and the
+                // `Nothing2` mid-Create are both `solid = false` and never
+                // hold a wall back.
                 let wall_cells: std::collections::HashSet<(i32, i32)> =
                     walls.iter().map(|c| (c.0, c.1)).collect();
                 for cell in &wall_cells {

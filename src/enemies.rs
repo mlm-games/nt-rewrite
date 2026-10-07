@@ -1,16 +1,13 @@
-//! Enemy AI. Ported from the bevy reference `game/enemies.rs` (`enemy_ai`
-/// and its spawn/fire/tick helpers); positions as [`Pos`] (`Vec2`), not
-/// `Transform.translation` (`Vec3`). Sprite/rotation writes, hurt/fire strip
-/// swaps, `Juice::pop_in` and `VfxSpawner` bursts stay render-side; bevy played
-/// audio by direct asset load inside the 16-param system, here stems queue as
-/// [`AudioCue`]s through the [`Queue`].
-/// Timer adaptation: bevy `Timer` -> [`GTimer`]; `tick()` returns `()` then
-/// `just_finished()`/`finished()` are queried. bevy `ready_timer()` (finished
-/// from birth, silent until re-armed) has no direct `GTimer` equivalent -
-/// `GTimer::disarmed()` reports `just_finished()` on *every* tick - so
-/// [`ready_timer`] double-ticks a 10 ms `Once` timer into the same observable
-/// state (finished, not just-finished).
-/// `enemy_ai` carries 14 params, under the bevy_ecs 16-param cap; the Inspector
+//! Enemy AI. Positions as [`Pos`] (`Vec2`), not a 3-component transform.
+/// Sprite/rotation writes, hurt/fire strip swaps, `Juice::pop_in` and
+/// `VfxSpawner` bursts stay render-side. GML cues straight out of the
+/// actor's own alarm (`Bandit/Alarm_1.gml:9`); here the stem queues as an
+//! [`AudioCue`] through the [`Queue`] instead. [`GTimer`] stands in for
+/// GML's `alarm[n]` countdown over plain seconds at GML's 30 steps/s.
+/// [`ready_timer`] starts finished and stays silent until re-armed, which
+/// `GTimer::disarmed()` cannot express - it reports `just_finished()` on
+/// *every* tick - so it double-ticks a 10 ms `Once` timer instead.
+/// `enemy_ai` sits exactly at the bevy_ecs 16-param cap; the Inspector
 /// tail lives in [`tick_bigmaggot_inspector`].
 use std::collections::HashMap;
 
@@ -70,9 +67,11 @@ fn scarier_spawn_hp(kind: EnemyKind, base_hp: i32, loops: u32) -> i32 {
     (hp * 0.8).floor() as i32
 }
 
-/// Floor-scaled HP multiplier (bevy `world::difficulty_multiplier`
-/// parity: +5% per loop, +1.5% per route floor). Kept for the speed law
-/// only; HP follows the GML spawn law below (no within-loop scaling).
+/// Floor-scaled enemy speed multiplier: +5% per loop, +1.5% per route
+/// floor. Port-only - GML scales enemy speed by nothing; the only stat it
+/// ever folds in `GameCont.loops` is `max_hp` (`enemy/Create_0.gml:7`).
+/// Kept for the speed law only; HP follows the GML spawn law below (no
+/// within-loop scaling).
 pub fn difficulty_multiplier(floor: u32) -> f32 {
     let loop_n = ((floor.max(1) - 1) / 15) as f32;
     let rf = ((floor.max(1) - 1) % 15) as f32;
@@ -477,9 +476,12 @@ fn spawn_enemy_impl(
         }
         _ => {}
     }
-    // Bevy parity: every enemy carries its strip table (`EnemySprites`)
-    // plus the seeded idle `SpriteAnim`; the switch/hurt/fire systems
-    // resolve walk/hurt/fire strips from the table each tick.
+    // Every enemy carries its strip table (`EnemySprites`) plus the
+    // seeded idle `SpriteAnim`; the switch/hurt/fire systems resolve
+    // walk/hurt/fire strips from the table each tick. GML spells the same
+    // table as the per-object `spr_idle`/`spr_walk`/`spr_hurt`/`spr_dead`
+    // fields (`Bandit/Create_0.gml:6-9`) that `enemy/Step_0.gml:8-42`
+    // picks between each step.
     ec.insert(crate::comps_b::EnemySprites {
         idle: def.sprite,
         walk: derive_walk_path(def.sprite),
@@ -541,7 +543,8 @@ fn spawn_enemy_impl(
     e
 }
 
-/// Thin wrapper matching the bevy call-site order.
+/// Thin wrapper over [`spawn_enemy_with_context`] for the call sites that
+/// have no pending-birth record to apply.
 pub fn spawn_enemy_at(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
@@ -612,8 +615,10 @@ pub fn unstuck_enemies(mask: Res<FloorMask>, mut q: Query<(&mut Pos, &mut Veloci
     }
 }
 
-/// Random arena point at least `min_from_center` from the origin
-/// (bevy parity, including the corner fallback).
+/// Random arena point at least `min_from_center` from the origin, 64
+/// rejection tries, then the right-edge fallback. Port-only: GML has no
+/// such roll - it spawns on the `Floor` instances `scrMakeFloor` laid
+/// down (`scrPopEnemies.gml:2-5`).
 pub fn random_spawn_pos(rng: &mut impl RngExt, min_from_center: f32) -> glam::Vec2 {
     for _ in 0..64 {
         let x = rng.random_range(-ARENA_W / 2.0 + 80.0..ARENA_W / 2.0 - 80.0);
@@ -626,8 +631,9 @@ pub fn random_spawn_pos(rng: &mut impl RngExt, min_from_center: f32) -> glam::Ve
     glam::Vec2::new(ARENA_W / 2.0 - 80.0, 0.0)
 }
 
-/// Finished-from-birth, silent-until-re-armed timer (bevy `ready_timer`
-/// parity - see module docs for why `GTimer::disarmed()` is wrong here).
+/// Finished-from-birth, silent-until-re-armed timer - the shape GML
+/// gets for free from a spawn that never arms the alarm at all (see module
+/// docs for why `GTimer::disarmed()` is wrong here).
 fn ready_timer() -> GTimer {
     let mut t = GTimer::from_seconds(0.01, TimerMode::Once);
     t.tick(0.01);
@@ -635,11 +641,12 @@ fn ready_timer() -> GTimer {
     t
 }
 
-/// Enemy telegraph cue through the sim audio queue (GML `snd_play`/
-/// `snd_play_hit`/`snd_play_hit_big` all hand the instance
-/// `UberCont.opt_sndvol`, so the cue sits at 1.0 vol, 0.05 variance; the bevy
-/// build loaded `audio/{stem}.wav` directly to dodge the 16-param cap - the
-/// queue carries the stem name instead and the audio layer resolves it).
+/// Enemy telegraph cue through the sim audio queue. GML plays these
+/// straight out of the actor's alarm at gain 1.0 times the mix bus
+/// (`snd_play.gml:13-14`, `UberCont.opt_sndvol`), so the queue carries the
+/// stem name plus that 1.0 and the audio layer applies the bus; the 0.05
+/// pitch variance is port-only (`snd_play_hit.gml:11` jitters pitch by
+/// +/-0.1 instead).
 fn enemy_cue(cues: &mut Queue<AudioCue>, stem: &'static str) {
     cues.push(AudioCue {
         name: stem,
@@ -714,8 +721,11 @@ fn gml_fire_rearm_secs(kind: EnemyKind, rng: &mut impl RngExt) -> f32 {
     }
 }
 
-/// Wall-aware sight check (bevy parity: 8 px samples, 16 px tile-center
-/// recheck, arena-exterior samples ignored).
+/// Wall-aware sight check. GML traces the segment exactly:
+/// `collision_line(x, y, target.x, target.y, Wall, 0, 0) < 0`
+/// (`scrTargetIsVisible.gml:11`, `Bandit/Alarm_1.gml:5`). The port walks
+/// the segment in 8 px samples, rechecks each one against its 16 px tile
+/// centre, and ignores samples outside the arena.
 pub fn line_of_sight_public(from: glam::Vec2, to: glam::Vec2, mask: &FloorMask) -> bool {
     has_line_of_sight(from, to, mask)
 }
@@ -2334,8 +2344,9 @@ pub struct SnowBotFire {
     hurting: bool,
 }
 
-/// table-driven fire, per bevy `enemy_ai` top to bottom (bosses `continue`
-/// before their first timer tick - boss brains live elsewhere).
+/// Table-driven fire, run top to bottom over the per-kind table (bosses
+/// `continue` before their first timer tick - their brains live in
+/// `boss_ai.rs`).
 #[allow(clippy::too_many_arguments)]
 pub fn enemy_ai(
     time: Res<SimTime>,
@@ -2381,8 +2392,10 @@ pub fn enemy_ai(
     // GML `Smoke/Create_0.gml:15` self-gates on `UberCont.opt_prtcls`.
     let particles_on = save.settings.particles;
 
-    // Pre-move snapshot for separation (bevy parity: pushes use the
-    // snapshot, applied to the live position).
+    // Pre-move snapshot for separation: the overlap test reads the snapshot
+    // but the push lands on the live position, so one pass cannot feed its
+    // own push back in. GML's `enemy/Collision_enemy.gml:4-10` runs as a
+    // symmetric collision event and keeps no such snapshot.
     let positions: Vec<(Entity, glam::Vec2, i32, f32)> = enemies
         .iter()
         .map(|(e, enemy, _, _, pos, _, _, _, _, _, _)| {
@@ -5375,9 +5388,12 @@ pub fn tick_bigmaggot_inspector(
     }
 }
 
-/// Fire-strip swap for the render phase (bevy `play_fire` parity:
-/// repath the live anim to the `derive_fire_path` strip as a 0.25 s
-/// oneshot; skipped for hurting enemies or missing art).
+/// Fire-strip swap for the render phase: repath the live anim to the
+/// `derive_fire_path` strip as a 0.25 s oneshot, skipped for hurting
+/// enemies or missing art. GML holds `spr_fire` instead of switching -
+/// `enemy/Step_0.gml:17-25` only forces `spr_walk`/`spr_idle` back when
+/// `sprite_index` is neither `spr_hurt` nor `spr_fire` - so the fixed
+/// 0.25 s window is port-only.
 pub fn show_enemy_fire(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
@@ -5552,8 +5568,12 @@ fn fire_enemy_flak(
     ));
 }
 
-/// Single aimed enemy bullet with table spread (euphoria slows enemy
-/// shots to 80%, bevy parity).
+/// Single aimed enemy bullet with table spread. Euphoria scales enemy
+/// shot speed to 80%: GML spawns an `EuphoriaEffectDelay` next to every
+/// non-player projectile (`scr_projectile_create.gml:30-34`) which
+/// multiplies the target one step later
+/// (`EuphoriaEffectDelay/Step_0.gml:1`); the port folds the 0.8 in at
+/// spawn.
 #[allow(clippy::too_many_arguments)]
 pub fn fire_enemy_bullet(
     commands: &mut Commands,
@@ -5599,7 +5619,12 @@ pub fn fire_enemy_bullet(
     finish_enemy_bullet(&mut commands.entity(e), enemy.kind);
 }
 
-/// Only Jock rockets explode on contact (bevy parity).
+/// Only the Jock's rocket explodes on contact: `Jock/Alarm_1.gml:18` spawns
+/// `JockRocket`, a `Rocket` subclass whose inherited `Collision_hitme`
+/// destroys it, and `Rocket/Destroy_0.gml:5` throws the `Explosion`.
+/// `GoldSnowTank` fires the same object (`GoldSnowTank/Alarm_2.gml:3`) but
+/// never through this path, and `YVBoss` fires the plain `Rocket`
+/// (`YVBoss/Alarm_2.gml:50`).
 pub fn explosive_kind(kind: EnemyKind) -> bool {
     matches!(kind, EnemyKind::Jock)
 }
@@ -9393,7 +9418,10 @@ pub fn tick_proto_statues(
     }
 }
 
-/// Boss intro banner timing (bevy parity).
+/// Boss intro banner lifetime: the marker despawns when its timer
+/// lands. GML pauses the whole game for the banner and releases it from
+/// `UberCont`'s `alarm[2]`, armed to 40 steps (40/30 s) by
+/// `scrBossIntro.gml:22` and consumed in `UberCont/Alarm_2.gml:1-4`.
 pub fn tick_boss_intro(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -9420,8 +9448,10 @@ fn spawn_hit_warning(commands: &mut Commands, pos: glam::Vec2) {
     ));
 }
 
-/// Expire telegraph markers (bonus port - bevy `tick_hit_warnings`
-/// minus the anim-end branch, which has no headless equivalent).
+/// Expire telegraph markers. GML's `HitWarning` (`sprAssassinNotice`, spawned
+/// at `x, y - 16` by e.g. `Gator/Alarm_1.gml:9`) has no lifetime at all - its
+/// only other event is `HitWarning/Other_7.gml:1`, which destroys it when the
+/// room ends - so the 0.5 s window is port-only.
 pub fn tick_hit_warnings(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -9435,9 +9465,11 @@ pub fn tick_hit_warnings(
     }
 }
 
-/// PopoShield follower tracking (bonus port - bevy
-/// `tick_shield_followers` minus the rotation write, which the renderer
-/// derives from the owner's `gunangle`).
+/// PopoShield follower tracking. GML runs it the other way round: the shield is
+/// spawned on the owner (`Shielder/Alarm_1.gml:20,46`) and then drags the owner
+/// to itself (`PopoShield/Step_2.gml:4-9`), with no `gunangle` offset at all -
+/// so the 16 px offset along the owner's `gunangle` here is port-only. The
+/// rotation stays renderer-side.
 pub fn tick_shield_followers(
     mut commands: Commands,
     owners: Query<(Entity, &Pos, &EnemyBrain), With<Enemy>>,
@@ -9501,10 +9533,17 @@ fn separate(
     *vel = vel.clamp_length_max(16.0 * crate::SIM_HZ as f32);
 }
 
-/// Corpse slide + expiry (bevy `enemies.rs:2552` parity: `Corpse` life ticks,
-/// corpses drift with GML 0.4 friction, expiry despawns). `Transform.translation`
-/// is [`Pos`] here; corpses without [`Velocity`] (player-kill drops) only tick
-/// life.
+/// Corpse slide + expiry: `Corpse` life ticks, expiry despawns. GML spawns
+/// the husk with the dying enemy's direction and speed
+/// (`enemy/Destroy_0.gml:9-28`, which also adds `-hp/5`, caps at 16 and
+/// divides by `size`); it drifts on the husk's flat 0.4 friction
+/// (`Corpse/Create_0.gml:4`) and bounces off walls
+/// (`CorpseActive/Collision_Wall.gml:4-13`) until speed hits 0, when it
+/// changes back into a plain `Corpse` (`CorpseActive/Step_0.gml:4-14`).
+/// GML never despawns a corpse - the anim end parks the last frame and arms
+/// `alarm[0] = 30` for the settled-corpse portal (`Corpse/Other_7.gml:1-2,8`)
+/// - so the fixed life here is port-only. Corpses without [`Velocity`]
+/// (player-kill drops) only tick life.
 /// Also slides `GroundPhysics` gibs/debris: GML gives them flat friction and
 /// nothing else ticks them - without this they coast at full speed for their
 /// whole 0.9 s life and land ~144 px away.

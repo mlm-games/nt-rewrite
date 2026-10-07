@@ -1,28 +1,33 @@
-//! Headless menu/state-machine layer: state-only port of the former bevy app
-//! (`process_ui_actions`, `handle_pause_input`, `handle_mutation_keys`,
-//! `handle_death_restart`) and `src/menus/`. No rendering.
+//! Headless menu/state-machine layer: the menu and state laws GML spreads
+//! over `Menu`, `MenuGen`, `MenuOptions`, `PlayButton`, `LevCont`,
+//! `PauseButton`, `UberCont` and `Vlambeer`, gathered into one state-only
+//! layer. No rendering.
 //!
 //! [`tick_menus`] is the headless `Update` driver -- register it as an
 //! exclusive system before `handle_mutation_choice` so picks resolve the same
 //! tick. Actions ride the canonical [`crate::audio::UiAction`] +
 //! [`crate::audio::UiBridgeAction`] queue.
 //!
-//! Input map (bevy was mouse/key driven; several keys have no headless
-//! counterpart):
+//! Input map (GML is mouse/keyboard/gamepad driven; several keys have no
+//! headless counterpart):
 //! - Title: `cycle_weapon` moves the cursor over the visible pod roster
 //!   (wraps; GML `_char_list` order), `weapon_slot` jumps to a gml-id pod
 //!   (hidden-and-locked races sting `sndNoSelect`), `interact` confirms
 //!   (re-click starts loading), `spec` shuts the loadout panel when open.
-//! - Mutation: `weapon_slot` (Digit1-4) routes the bevy two-step
-//!   (`SelectMutation` highlight then `PickMutation` commit), `cycle_weapon`
-//!   moves the highlight, `interact` commits it.
+//! - Mutation: `weapon_slot` (Digit1-4) routes the two-step law GML's own
+//!   click has (`SkillIcon/Mouse_4.gml:7-17`, `UltraIcon/Mouse_4.gml:7-15`:
+//!   highlight, then commit) keyed by card instead of pointer;
+//!   `cycle_weapon` moves the highlight, `interact` commits it.
 //! - Pause: `interact` resumes, `spec` closes the top overlay,
-//!   `MenuEdge::pause_pressed` (Escape) toggles with bevy's confirm/
-//!   settings-stack laws.
+//!   `MenuEdge::pause_pressed` (Escape) toggles with GML's confirm /
+//!   settings-stack laws (`UberCont/Step_0.gml:47-65`,
+//!   `MenuOptions/KeyPress_8.gml:8-24`).
 //! - Game over: `MenuEdge::restart_pressed` (KeyR), MENU and RETRY are direct
 //!   actions; stray clicks do nothing.
-//! - Splash: any key/mouse edge advances (bevy `boot_intro`).
-//! - MainMenu: `interact` plays (bevy PLAY item).
+//! - Splash: any key/mouse/gamepad edge advances (GML
+//!   `Vlambeer/Draw_0.gml:4-8`).
+//! - MainMenu: `interact` plays (GML `MainMenuButton/Other_10.gml:6-57`,
+//!   image 0).
 //!
 //! Fidelity compromises (need shell/window services):
 //! - `KeyCode` has no Escape/KeyR, so those arrive as [`MenuEdge`] (shell
@@ -30,18 +35,23 @@
 //!   pulse.
 //! - Mouse hover (`title_hover_race`, `main_menu_hover`), portrait/text anim
 //!   timers and all drawing are render-phase (no state kept).
-//! - `SaveManager` disk writes become `SaveDirty(true)`; `flush_dirty_save*`
-//!   ownership unchanged.
+//! - Disk writes become `SaveDirty(true)` (GML `scrSave` /
+//!   `MenuOptions/Destroy_0.gml:1-3`); `flush_dirty_save*` ownership
+//!   unchanged.
 //! - No `LocaleResources` headless: `SetLanguage` applies
 //!   `SaveData.settings.language` directly and writes through even for
-//!   unknown codes, exactly like bevy (only the effective locale was gated).
-//! - bevy `unlock_popup.rs` is a placeholder and unlocks surface as toasts in
-//!   `apply_floor_reach_unlocks`; the headless queue
-//!   ([`MenuState::unlock_queue`]) has push/dismiss laws but no producer yet
-//!   (deferred with the toast bridge).
+//!   unknown codes, like GML, where the save write is unconditional
+//!   (`MenuOptions/Other_20.gml:629-633`) and only the live
+//!   `scrLanguageSet` is gated on the previous value
+//!   (`scrOptionsUpdate.gml:108-115`).
+//! - Crown/gold/cheat unlocks surface as `apply_floor_reach_unlocks`
+//!   toasts (GML `scrShowUnlockPopup`); race and skin unlocks go through
+//!   [`MenuState::unlock_queue`], fed by `savedata_part`'s unlock helpers
+//!   and drained one popup at a time.
 //! - Denied picks (locked race/crown/skin) have no variant in
 //!   [`crate::audio::ui_action_sfx`], so [`emit_denied`] pushes
-//!   `sndNoSelect` directly (bevy played `sndNoSelect`).
+//!   `sndNoSelect` directly - GML's denial stem
+//!   (`CharSelect/Mouse_4.gml:13`, `scrCampfireMenuCreate.gml:844`).
 
 use bevy_ecs::prelude::*;
 
@@ -59,11 +69,19 @@ use crate::savedata_part::{SAVE_VERSION, SaveData, crown_gml_to_port, crown_port
 use crate::state::{AppState, OverlayMenu, PendingUnpause, QuitRequested, goto_state};
 use crate::time::{GTimer, TimerMode};
 
-/// Language codes bevy offered (`LOCALES` in `app.rs` verbatim).
+/// Language codes this port offers. Port-only, not GML parity: GML builds
+/// its list at boot from the `lang/*.csv` column ids with `English` forced
+/// first (`scripts/Language/Language.gml:359-369`, called from
+/// `MakeGame/Create_0.gml:6-7`) plus any `*.loc` custom locale
+/// (`load_custom_locales.gml:16-37`), and `MenuOptions` draws one button
+/// per entry (`MenuOptions/Other_20.gml:613-641`). These seven two-letter
+/// codes are a hand-picked subset.
 pub const AVAILABLE_LANGUAGES: [&str; 7] = ["en", "es", "fr", "de", "ja", "zh", "pt"];
 
-/// Character pods in bevy `CHAR_SELECT_RACES` order (gml id =
-/// discriminant: Random 0 .. Cuz 16).
+/// Character pods in GML `Race` enum order
+/// (`scripts/scrRaces/scrRaces.gml:1-24`, the ascending loop
+/// `Menu/Create_0.gml:25-29` builds `_char_list` from): gml id =
+/// discriminant, Random 0 .. Cuz 16.
 pub const CHAR_SELECT_ORDER: [RaceId; 17] = [
     RaceId::Random,
     RaceId::Fish,
@@ -84,7 +102,8 @@ pub const CHAR_SELECT_ORDER: [RaceId; 17] = [
     RaceId::Cuz,
 ];
 
-/// Bevy `race_from_gml_id` verbatim over the headless roster.
+/// Gml id -> roster race, walking [`CHAR_SELECT_ORDER`] (the inverse of the
+/// `Race` enum index GML uses directly).
 pub fn race_from_gml_id(id: usize) -> Option<RaceId> {
     CHAR_SELECT_ORDER
         .iter()
@@ -146,8 +165,12 @@ pub fn crown_to_u8(crown: CrownKind) -> u8 {
     crown as u8
 }
 
-/// Bevy `CrownKind::cycle` verbatim: one step along `ALL` (any nonzero
-/// `dir` moves a single step; positive forward, negative back).
+/// One step along [`CrownKind::ALL`] (any nonzero `dir` moves a single
+/// step; positive forward, negative back). Port-only: GML points crowns in
+/// the loadout instead of stepping them
+/// (`scrCampfireMenuCreate.gml:819-823`), and its ids run 0..=`crownmax`
+/// with `Random` at 0 (`scrCrowns.gml:3-18`, `:91`), so the port ids are
+/// `gml id - 1` (`savedata_part::crown_port_to_gml`).
 pub fn crown_cycle(id: u8, dir: i8) -> u8 {
     const ALL: [u8; 13] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
     let current = ALL.iter().position(|&c| c == id).unwrap_or(0);
@@ -159,7 +182,9 @@ pub fn crown_cycle(id: u8, dir: i8) -> u8 {
     ALL[next]
 }
 
-/// Bevy `CrownKind::short_name` verbatim over port ids.
+/// Port-only short labels over the port ids. GML's table is
+/// `crown_name[]` in `scrCrowns.gml:20-` ("CROWN OF DEATH" and friends),
+/// read through `scr_crown_get_name`, not a short-form table.
 pub fn crown_short_name(id: u8) -> &'static str {
     match CrownKind::from_u8(id) {
         CrownKind::None => "NONE",
@@ -278,8 +303,12 @@ pub fn game_over_visible(world: &World) -> bool {
             .any(|entity| entity.contains::<Player>())
 }
 
-/// Snapshot the game-over screen (bevy `hud.rs` death-mutation law:
-/// count comes from the dead player's held mutations).
+/// Snapshot the game-over screen. The mutation list mirrors GML's
+/// `GameCont.skills` run list (`scrSkills.gml:214-221`, appended by
+/// `scr_skill_set` and only holding skills with a nonzero level), so the
+/// count comes from the dead player's held mutations. The game-over panel
+/// itself is drawn from `GameCont` at `GameOver/Draw_0.gml`; the port reads
+/// the same fields once per death.
 pub fn capture_game_over(world: &mut World) -> Option<GameOverScreen> {
     let over = world.get_resource::<Run>().is_some_and(|r| r.game_over);
     if !over {
@@ -330,21 +359,25 @@ pub fn capture_game_over(world: &mut World) -> Option<GameOverScreen> {
     Some(screen)
 }
 
-/// Canonical menu UI state (headless half of bevy `SharedUi`: every
-/// field the views will need, none of the pixels).
+/// Canonical menu UI state: every field the views will need, none of the
+/// pixels (GML keeps the same values on `Menu`, `MenuOptions`, `UberCont`,
+/// `LevCont` and `GameOver`).
 #[derive(Debug, Clone, Resource)]
 pub struct MenuState {
     /// Cursor into the visible pod roster ([`visible_roster`], GML
     /// `_char_list` order - a roster index, not a gml id).
     pub title_cursor: usize,
-    /// GO button armed (bevy `title_go_visible`).
+    /// GO button armed (GML `GoButton.visible`, revealed once by
+    /// `CharSelect/Mouse_4.gml:23-26`).
     pub title_go_visible: bool,
-    /// Loadout panel open (bevy `loadout_open`).
+    /// Loadout panel open (GML `Menu.loadout_open`).
     pub loadout_open: bool,
-    /// Highlighted mutation card (bevy `mutation_selected`).
+    /// Highlighted mutation card (GML `SkillIcon.selected` /
+    /// `UltraIcon.selected`; exclusive per offer).
     pub mutation_selected: Option<usize>,
-    /// Live mutation offer mirror (bevy `mutation_choices` half:
-    /// ultra-first precedence, length resets the highlight).
+    /// Live mutation offer mirror: ultra-first precedence, and a new offer
+    /// clears the highlight (GML rebuilds the icons from scratch per offer,
+    /// `LevCont/Create_0.gml:68-141`).
     pub mutation_count: usize,
     pub mutation_is_ultra: bool,
     pub mutation_appear: f32,
@@ -358,7 +391,9 @@ pub struct MenuState {
     pub mutation_skip_title_appear: bool,
     pub mutation_toast_offset: f32,
     pub mutation_toast_shift_pending: bool,
-    /// Pause quit/restart confirm (bevy `pause_confirm`: 0 quit, 1 restart).
+    /// Pause quit/restart confirm (GML swaps MENU/RETRY for
+    /// QUIT/RETRY2/BACK images on first click,
+    /// `PauseButton/Other_10.gml:18-41`: 0 quit, 1 restart).
     pub pause_confirm: Option<u8>,
     pub pause_cursor: usize,
     pub pause_splat: f32,
@@ -367,7 +402,8 @@ pub struct MenuState {
     /// Hardmode armed for the next run (GML PlayButton image 3; needs
     /// the loop-2 unlock).
     pub hardmode_selected: bool,
-    /// Settings page + drill stack (bevy `settings_page[_stack]`).
+    /// Settings page + drill stack (GML `MenuOptions.category` and
+    /// `MenuOptions.category_stack`, `scrOptionsMenu.gml:160-172`).
     pub settings_page: u8,
     pub settings_page_stack: Vec<u8>,
     /// Main-menu keyboard cursor over the 5 labels (GML `UberCont.gamepad_sel`
@@ -558,9 +594,13 @@ fn settings_splat_slot(menu: &mut MenuState, page: u8, row: usize) -> &mut f32 {
     &mut rows[row]
 }
 
-/// Bevy `handle_mutation_keys` routing verbatim: out-of-range digits
-/// are dropped; an already-highlighted card commits (`PickMutation`),
-/// otherwise it highlights (`SelectMutation`).
+/// Digit routing for the mutation offer: out-of-range digits are dropped;
+/// an already-highlighted card commits (`PickMutation`), otherwise it
+/// highlights (`SelectMutation`). GML drives both halves from the digit
+/// itself (`InputHandling.gml:283-291` arms `ParButton` index `i` and fires
+/// `ev_left_press`), so one press only ever selects; the split into
+/// select-then-confirm is this port's own, as is the digit on a card that
+/// GML only ever reaches with the pointer.
 pub fn route_mutation_digit(menu: &MenuState, idx: usize) -> Option<UiAction> {
     if idx >= menu.mutation_count {
         return None;
@@ -630,9 +670,14 @@ pub(crate) fn mutation_offer_key(
     key
 }
 
-/// Mutation offer mirror (bevy `hud.rs` sync half: ultra offers win,
-/// a length change clears the highlight, a stale highlight clamps to
-/// `None`). Headless keeps count + ultra flag (names render later).
+/// Mutation offer mirror: a new offer clears the highlight, a stale
+/// highlight clamps to `None`. Mirrors GML, where every offer builds a
+/// fresh icon set (`LevCont/Create_0.gml:68-141`) and the picked icons are
+/// destroyed on submit (`scrLevelUpScreenSubmit.gml:9-12`), with
+/// `selected` exclusive per icon (`SkillIcon/Mouse_4.gml:14-17`).
+/// Ultra-wins precedence is the port's own: GML picks crown, then skill,
+/// then ultra, in that order (`LevCont/Create_0.gml:37-105`). Headless
+/// keeps count + ultra flag (names render later).
 pub fn tick_mutation_mirror(
     menu: &mut MenuState,
     pending: Option<&PendingMutation>,
@@ -808,7 +853,8 @@ fn emit_cue(world: &mut World, action: &UiAction) {
     }
 }
 
-/// Emit a denial sting (locked pick; bevy `sndNoSelect` 0.5).
+/// Emit a denial sting (locked pick; `sndNoSelect` at full volume, matching
+/// GML's bare `snd_play(sndNoSelect)` on locked picks).
 /// `pub(crate)` so the shell click router (`lib.rs`) can sting
 /// disabled rows (CO-OP) that carry no [`UiAction`].
 pub(crate) fn emit_denied(world: &mut World) {
@@ -840,9 +886,11 @@ pub(crate) fn emit_hover_if_changed(world: &mut World, label: &str) {
     }
 }
 
-/// Emit the bevy `SettingsBack` pop one-shot (`sndClickBack` 1.0). The
-/// click cue comes from `ui_action_sfx` via `emit_cue` (both pop and
-/// close paths emit it, bevy parity).
+/// Extra pop-only one-shot (`sndClickBack` 1.0) on top of the
+/// `ui_action_sfx` cue `emit_cue` already sends on every `SettingsBack` arm
+/// - so the pop path queues `sndClickBack` twice. GML plays it once per
+/// non-editing back press, close or pop
+/// (`MenuOptions/KeyPress_8.gml:8-24`).
 fn emit_click_back(world: &mut World) {
     world.init_resource::<Queue<crate::audio::AudioCue>>();
     world
@@ -863,26 +911,27 @@ pub fn emit_sfx(world: &mut World, cue: crate::audio::AudioCue) {
         .push(cue);
 }
 
-/// Mark the save dirty (headless stand-in for bevy `SaveManager::save`;
-/// the existing `flush_dirty_save*` ownership is unchanged).
+/// Mark the save dirty (headless stand-in for GML's `scrSave`, which the
+/// options screen runs on destroy, `MenuOptions/Destroy_0.gml:1-3`; the
+/// existing `flush_dirty_save*` ownership is unchanged).
 fn mark_dirty(world: &mut World) {
     world.init_resource::<SaveDirty>();
     world.resource_mut::<SaveDirty>().0 = true;
 }
 
-/// Apply one menu action: every bevy `process_ui_actions` arm's state
-/// law, verbatim, minus rendering/audio-asset spawning (cues go to the
+/// Apply one menu action: the state law of the GML object whose click or
+/// key produced it, minus rendering/audio-asset spawning (cues go to the
 /// [`crate::audio::AudioCue`] queue) and minus disk writes (dirty flag).
 pub fn apply_menu_action(world: &mut World, action: UiAction) {
     match action {
         UiAction::StartGame => {
             if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
                 menu.title_go_visible = false;
-                // Fresh run: drop any stale mutation highlight (bevy
-                // `reset_hud_flags` clears `mutation_selected`; the mirror
+                // Fresh run: drop any stale mutation highlight (the mirror
                 // only resets on count change, so a same-length offer in
-                // the next run would otherwise inherit it and commit on
-                // one click).
+                // the next run would otherwise inherit it and commit on one
+                // click). GML has no such state to clear: every offer builds
+                // fresh icons (`LevCont/Create_0.gml:68-141`).
                 menu.mutation_selected = None;
             }
             emit_cue(world, &UiAction::StartGame);
@@ -1018,10 +1067,10 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             emit_cue(world, &UiAction::OpenCredits);
         }
         UiAction::CloseOverlay => {
-            // Bevy restores the saved locale here; headless applies the
-            // language immediately, so there is nothing to restore.
-            // Bevy never resets the settings page/stack here (that lives
-            // only in the `SettingsBack` close path).
+            // Nothing to restore: `SetLanguage` wrote through to
+            // `SaveData` immediately, so there is no staged locale. The
+            // settings page/stack reset lives only in the `SettingsBack`
+            // close path.
             world.init_resource::<crate::state::Paused>();
             let paused = world.resource::<crate::state::Paused>().0;
             world.init_resource::<OverlayMenu>();
@@ -1110,8 +1159,9 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             mark_dirty(world);
         }
         UiAction::SaveSettings => {
-            // Bevy copies the staged SharedUi into the save; headless
-            // writes through immediately, so this only persists + closes.
+            // Every option already wrote through to `SaveData`, so this only
+            // persists (GML does the same on destroy, `MenuOptions/
+            // Destroy_0.gml:1-3`) and closes.
             mark_dirty(world);
             world.init_resource::<crate::state::Paused>();
             let paused = world.resource::<crate::state::Paused>().0;
@@ -1138,8 +1188,10 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             emit_cue(world, &UiAction::NextLanguage);
         }
         UiAction::SetLanguage(lang) => {
-            // Bevy gates only the live locale; the save write is
-            // unconditional - mirrored here.
+            // GML gates only the live locale; the save write is
+            // unconditional - `MenuOptions/Other_20.gml:629-633` stores the
+            // pick, `scrOptionsUpdate.gml:108-115` applies it when it
+            // changed. Mirrored here.
             world.init_resource::<SaveData>();
             world.resource_mut::<SaveData>().settings.language = lang.clone();
             mark_dirty(world);
@@ -1398,8 +1450,10 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             world.init_resource::<SelectedCharacter>();
             let race = world.resource::<SelectedCharacter>().0;
             world.init_resource::<SaveData>();
-            // Bevy reads the raw row (not the sanitized `race_loadout`
-            // copy, which drops orphan stored guns on read).
+            // Port-only keyboard form of GML's two loadout weapon slots
+            // (starter + stored gun, `scrCampfireMenuCreate.gml:942-981`);
+            // this walks the raw row, not the sanitized `race_loadout`
+            // copy, which drops orphan stored guns on read.
             let touched = {
                 let mut save = world.resource_mut::<SaveData>();
                 let lo = save.race_loadout_mut(race);
@@ -1420,7 +1474,9 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             emit_cue(world, &action);
         }
         UiAction::CycleStoredWeapon(_) => {
-            // Bevy arm is an empty body; kept as an accepted no-op.
+            // Port-only slot with no GML counterpart (the stored gun is
+            // picked from the loadout panel, not cycled); kept as an
+            // accepted no-op.
         }
         UiAction::CycleCrown(dir) => {
             world.init_resource::<SelectedCharacter>();
@@ -1493,9 +1549,9 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 world.init_resource::<MutationChoice>();
                 world.resource_mut::<MutationChoice>().0 = Some(idx);
                 reset_mutation_offer(world);
-                // GML `scrLevelUpScreenSubmit:23`: the level-up commit saves
-                // the run, so closing the app from the offer resumes after it.
-                let _ = crate::run_save::save_run(world);
+                // No save here: GML `scrLevelUpScreenSubmit:23` writes the run
+                // after `SkillIcon/Other_10` spends the pick, and this layer
+                // runs first. `handle_mutation_choice` owns the write.
             } else {
                 set_mutation_selection(world, idx);
                 emit_sfx(world, hover_sfx());
@@ -1506,8 +1562,10 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             world.init_resource::<SaveData>();
             {
                 let mut save = world.resource_mut::<SaveData>();
-                // Bevy saves + clicks unconditionally (unknown keys only
-                // log a warning there).
+                // Stores through and clicks; GML gates the arm on
+                // `_opt.available` before storing and clicking
+                // (`MenuOptions/Other_10.gml:681-705`) - the view layer owns
+                // that gate here.
                 let _ = apply_setting_toggle(&mut save, key);
             }
             mark_dirty(world);
@@ -1517,8 +1575,8 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             world.init_resource::<SaveData>();
             {
                 let mut save = world.resource_mut::<SaveData>();
-                // Bevy saves + plays `sndSliderLetGo` unconditionally
-                // (unknown sliders only warn).
+                // Stores through and plays `sndSliderLetGo`, GML's release
+                // cue (`MenuOptions/Other_10.gml:697-701`, `:333-334`).
                 let _ = apply_setting_slider(&mut save, key, value);
             }
             mark_dirty(world);
@@ -1528,7 +1586,7 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             world.init_resource::<SaveData>();
             {
                 let mut save = world.resource_mut::<SaveData>();
-                // Bevy saves + clicks unconditionally (unknown keys warn).
+                // Stores through and clicks (`MenuOptions/Other_10.gml:681-705`).
                 let _ = apply_setting_cycle(&mut save, key, dir);
             }
             mark_dirty(world);
@@ -1538,7 +1596,7 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
             world.init_resource::<SaveData>();
             {
                 let mut save = world.resource_mut::<SaveData>();
-                // Bevy saves + clicks unconditionally (unknown keys warn).
+                // Stores through and clicks (`MenuOptions/Other_10.gml:681-705`).
                 let _ = apply_setting_input(&mut save, key, value);
             }
             mark_dirty(world);
@@ -1613,8 +1671,9 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
     }
 }
 
-/// Named-boolean toggle law (bevy `SettingToggle` arm verbatim;
-/// `false` = unknown key, ignored like bevy's warn-and-continue).
+/// Named-boolean toggle law: port-side name -> `SaveData` field dispatch
+/// over GML's `type: "switch"` rows, whose law is `_opt.value ^= 1`
+/// (`MenuOptions/Create_0.gml:158-160`). `false` = unknown key, ignored.
 fn apply_setting_toggle(save: &mut SaveData, key: &str) -> bool {
     let s = &mut save.settings;
     match key {
@@ -1663,7 +1722,10 @@ fn apply_setting_toggle(save: &mut SaveData, key: &str) -> bool {
     true
 }
 
-/// `cprefs_N` toggle law (bevy index-match verbatim).
+/// `cprefs_N` toggle law: the index order is GML's `cpref_list`
+/// (`scrOptionsUpdate.gml:75`), each index a `cprefs_*` switch row
+/// (`MenuOptions/Other_20.gml:751-780`) backed by the `opt_*` reads at
+/// `scrOptionsUpdate.gml:77-84`.
 fn apply_cprefs_toggle(save: &mut SaveData, idx: usize) -> bool {
     let s = &mut save.settings;
     match idx {
@@ -1693,8 +1755,13 @@ fn apply_setting_slider(save: &mut SaveData, key: &str, value: f32) -> bool {
     true
 }
 
-/// Cycle law (bevy `SettingCycle` arm verbatim: mod-4 wraps, 1-based
-/// `pixel_mode`).
+/// Cycle law: one step along the option's list, wrapping - GML's
+/// `type: "list"` (`MenuOptions/Create_0.gml:162-170`). Pixel mode is the
+/// 1-based `range(1, 4)` list and gamepad type wraps the four
+/// `gamepad_types` (`MenuOptions/Other_20.gml:159`,
+/// `scrOptionsUpdate.gml:149-155`); crosshair and sideart wrap 4 here,
+/// while GML sizes those two lists by sprite frame count
+/// (`MenuOptions/Other_20.gml:117,130`).
 fn apply_setting_cycle(save: &mut SaveData, key: &str, dir: i8) -> bool {
     let s = &mut save.settings;
     match key {
@@ -1711,7 +1778,9 @@ fn apply_setting_cycle(save: &mut SaveData, key: &str, dir: i8) -> bool {
     true
 }
 
-/// Text-input law (bevy `SettingInput` arm verbatim).
+/// Text-input law: store the string. GML's `type: "input"` arms a text
+/// field instead (`MenuOptions/Create_0.gml:172-180`,
+/// `MenuOptions/Other_13.gml:11`); the port commits the value directly.
 fn apply_setting_input(save: &mut SaveData, key: &str, value: &str) -> bool {
     match key {
         "player_color_hex" => save.settings.player_color_hex = value.to_string(),
@@ -2222,9 +2291,10 @@ fn approach(v: f32, target: f32, delta: f32) -> f32 {
 }
 
 fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
-    // Offer mirror (bevy `sync_hud` order: mirror before input handling;
-    // law shared with `tick_mutation_mirror` via `apply_mutation_mirror`
-    // - lens are copied out first for the `World` borrow checker).
+    // Offer mirror runs before input handling (a new offer must
+    // clear a stale highlight first); the law is shared with
+    // `tick_mutation_mirror` via `apply_mutation_mirror` - the lenses are
+    // copied out first for the `World` borrow checker).
     let choice_pending = world
         .get_resource::<MutationChoice>()
         .is_some_and(|choice| choice.0.is_some());
@@ -2375,11 +2445,14 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
         }
     }
 
-    // Escape toggles pause (bevy `handle_pause_input`; transitions never
-    // block headless - no `Transition` resource exists here). GML
-    // `UberCont/Step_1` swallows the pause request while a generation
-    // cover runs (`GenCont`/`LevCont` rooms: floor transition or
-    // mutation/ultra offer).
+    // Escape toggles pause. GML reads Escape/Backspace/Start into
+    // `press_paus` (`UberCont/Step_0.gml:35-44`) and toggles: paused
+    // activates the CONTINUE PauseButton, otherwise `scrGameCanPause()` gates
+    // the entry on GenCont/Credits/Cinematic/no Player/GameOver
+    // (`UberCont/Step_0.gml:47-65`, `scrGamePause.gml:84-87`).
+    // `generating` below is the port's own superset - it also blocks during a
+    // mutation/ultra offer, which GML locks only for player input, via
+    // `scrGameIsLockState` (`Player/Step_0.gml:98`).
     if edge.pause_pressed && !run_over {
         let generating = world
             .get_resource::<crate::comps_b::FloorTransition>()
@@ -2434,8 +2507,10 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
         }
     }
 
-    // Fresh run clears a stale snapshot (bevy rebuilds the panel per
-    // death; headless keeps it until the next death).
+    // Fresh run clears a stale snapshot. GML has nothing to clear:
+    // `GameOver` is created per death and destroyed with the room, and its
+    // anim state is re-seeded in `GameOver/Create_0.gml:44-47`. The headless
+    // snapshot survives until the next death.
     if !run_over
         && world
             .get_resource::<MenuState>()

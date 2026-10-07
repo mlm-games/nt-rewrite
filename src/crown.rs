@@ -1,8 +1,8 @@
 //! Crown effects. Port of all 10 GML crown scripts.
 //!
 //! Render split: ally/projectile/pickup spawns carry gameplay components only
-//! (`Ally`, `Projectile`, `Pos`, …); sprite/handle/text code from the bevy build
-//! is omitted (render/UI phase), never stubbed.
+//! (`Ally`, `Projectile`, `Pos`, …); sprite/handle/text code is omitted
+//! (render/UI phase), never stubbed.
 
 use std::collections::HashSet;
 
@@ -411,7 +411,10 @@ pub fn crown_name_text_gml(gml: u8) -> (&'static str, &'static str) {
     }
 }
 
-/// Toast label for a crown (bevy `crown_name` parity).
+/// Toast label for a crown - port-only: GML's `crown_name[]`
+/// (`scripts/scrCrowns.gml:21-86`) is already upper case, and shows up in
+/// the loadout and the unlock popup (`scrCrowns.gml:150-151`), never in a
+/// toast. Callers upper-case this one again.
 pub fn crown_name_for_toast(crown: CrownKind) -> &'static str {
     match crown {
         CrownKind::None => "No Crown",
@@ -596,8 +599,9 @@ pub fn tick_crown_object(
     }
 }
 
-/// Port id (save identity) for a crown: GML crowns are 1-based with an
-/// extra offset (`crown_port_to_gml` parity).
+/// GML crown index for a port crown id - same law as
+/// `savedata_part::crown_port_to_gml` (GML's table starts at `Random = 0`,
+/// `scripts/scrCrowns.gml:3-18`).
 pub fn crown_port_to_gml(id: u8) -> u8 {
     if id == 0 { 1 } else { id + 1 }
 }

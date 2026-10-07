@@ -1,6 +1,8 @@
 //! Player input state. `NtInput` is pure data with take-once pulse semantics;
-//! samplers fill it from keyboard/mouse/gamepad/touch, layering like bevy
-//! `sample_input`. Shells stage backend-neutral snapshots (`MouseState`,
+//! samplers fill it from keyboard/mouse/gamepad/touch, layering like GML
+//! `scrHandleInputsGeneral` (`scripts/InputHandling/InputHandling.gml:220`),
+//! which picks one backend per tick - gamepad `:266-268`, keyboard `:270`,
+//! mobile `:295`. Shells stage backend-neutral snapshots (`MouseState`,
 //! `GamepadState`, `TouchContact`); winit/web wiring is the only shell-side
 //! piece.
 
@@ -320,12 +322,18 @@ impl NtInput {
     }
 }
 
-/// Gamepad stick dead zone with rescaled response (bevy parity).
+/// Gamepad stick dead zone with rescaled response. Port-only: GML gates the
+/// left stick on `abs(_kh) != 0 || abs(_kv) != 0`
+/// (`scripts/InputHandling/InputHandling.gml:425`) with no magnitude ramp, and
+/// reads the right stick the same way at `:441`. The 0.22 gate is this crate's
+/// (`repame_input::dead_zone`).
 pub fn dead_zone(value: Vec2) -> Vec2 {
     repame_input::dead_zone(value)
 }
 
-/// Drop pulses at the end of every tick (bevy `clear_input_pulses`).
+/// Drop pulses at the end of every tick. GML's take-once equivalent is the
+/// `press_*`/`release_*` pair, which the backend poll overwrites each tick
+/// (`scripts/InputHandling/InputHandling.gml:235-262`).
 pub fn clear_input_pulses(mut input: ResMut<NtInput>) {
     input.clear_transient();
 }
@@ -342,9 +350,9 @@ fn drain_interact_pulse(state: &crate::state::AppState, input: &mut NtInput) {
     }
 }
 
-/// Backend-neutral key codes covering every key bevy `sample_input` /
+/// Backend-neutral key codes covering every key the samplers and
 /// `handle_mutation_choice` read. Shells map native codes onto these (no
-/// winit/bevy dependency). Physical winit `KeyCode` debug names map 1:1 here
+/// winit dependency). Physical winit `KeyCode` debug names map 1:1 here
 /// (`physical_key_name` in `repose-platform`), so games can poll
 /// layout-independent positions instead of characters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -438,9 +446,13 @@ pub fn keycode_for_physical(key: PhysicalKey) -> Option<KeyCode> {
 pub use repame_input::{GamepadState, MouseState, TouchContact, apply_stick};
 
 /// WASD/arrows move vector in world space. The world is y-down (GML: north is
-/// −y, see `worldgen::Maker::step_delta`), so W/Up is −y and S/Down +y - the
-/// bevy build's y-up signs flipped for [`Pos`](crate::spatial::Pos) space.
-/// Opposing pairs cancel, diagonals normalize.
+/// −y, see `worldgen::Maker::step_delta`), so W/Up is −y and S/Down +y, matching
+/// [`Pos`](crate::spatial::Pos) space. GML binds the same rows - `north` W,
+/// `south` S, `west` A, `east` D, plus arrows
+/// (`scripts/scrOptionsKeymaps.gml:15-18`,
+/// `scripts/InputHandling/InputHandling.gml:357-373`) - and derives the heading
+/// from `east - west` / `south - north` (`:453-454`). Opposing pairs cancel,
+/// diagonals normalize.
 pub fn keyboard_move(held: &HashSet<KeyCode>) -> Vec2 {
     let mut value = Vec2::ZERO;
 
@@ -460,15 +472,17 @@ pub fn keyboard_move(held: &HashSet<KeyCode>) -> Vec2 {
     value.normalize_or_zero()
 }
 
-/// Backend-neutral port of bevy `sample_input`'s keyboard+mouse path. `held`
-/// = keys down now, `just_pressed` = pressed-this-tick edges. Accumulation into
-/// `output` is bevy-verbatim: axes/held overwritten, pulses OR-ed so a shell
-/// can layer gamepad on top, weapon slot replaced only when a digit edge
-/// fires, cycle saturating-added. Mouse-cursor aim is not here (bevy computed
-/// it from a viewport ray in the render layer, never in `sample_input`, so
-/// keyboard/mouse leaves `aim_axis` zero just like bevy; the `App` hover block
-/// replicates it). Sticks/triggers/d-pad live in `sample_gamepad`, touch zones
-/// in `sample_touch`.
+/// Backend-neutral keyboard+mouse path. `held` = keys down now,
+/// `just_pressed` = pressed-this-tick edges. Accumulation into `output`:
+/// axes/held overwritten, pulses OR-ed so a shell can layer gamepad on top,
+/// weapon slot replaced only when a digit edge fires, cycle saturating-added.
+/// Rows come from GML `key_check` (`scripts/scrOptionsKeymaps.gml:66-106`):
+/// `fire` `mb_left`, `spec` `mb_right`, `swap` space, `pick` E, movement WASD
+/// + arrows. Mouse-cursor aim is not here - GML computes it in the same poll
+/// (`scripts/InputHandling/InputHandling.gml:464-470`, `dis_fire`/`dir_fire`
+/// from `mouse_x`/`mouse_y`); this port resolves the cursor ray in the `App`
+/// hover block, so keyboard/mouse leaves `aim_axis` zero. Sticks/triggers/
+/// d-pad live in `sample_gamepad`, touch zones in `sample_touch`.
 pub fn sample_keyboard(
     held: &HashSet<KeyCode>,
     just_pressed: &HashSet<KeyCode>,
@@ -813,16 +827,20 @@ fn entry_pressed(
     }
 }
 
-/// Backend-neutral port of bevy `sample_input`'s per-gamepad loop. Nonzero
-/// dead-zoned sticks overwrite the axes (left = move, right = aim); the
-/// remapped pad rows (default Fire/Swap = RightShoulder, Spec = LeftShoulder,
-/// Pick = South) OR into held/pulses; D-pad edges replace the weapon slot.
-/// Triggers keep their hardcoded bevy role (RT = fire, LT = spec/ability)
-/// alongside the rows. Returns this pad's cycle step (North = +1); the caller
-/// applies the bevy overwrite law (last pad wins, added once -
-/// `sample_gamepads`). Stick Y arrives screen-down (gilrs/SDL convention
-/// matches this port's y-down world), so unlike the y-up bevy build no flip
-/// applies: stick-up (−y) moves north.
+/// Backend-neutral per-gamepad pass. Nonzero dead-zoned sticks overwrite the
+/// axes (left = move, right = aim); GML gates both on a bare nonzero test
+/// (`scripts/InputHandling/InputHandling.gml:425,441`) and derives heading from
+/// `point_direction(0, 0, _kh, _kv)`. The remapped pad rows (default
+/// Fire/Swap = RightShoulder, Spec = LeftShoulder, Pick = South) OR into
+/// held/pulses; D-pad edges replace the weapon slot. Triggers keep a
+/// hardcoded role alongside the rows (RT = fire, LT = spec/ability), matching
+/// GML's default table `fire: gp_shoulderr` / `spec: gp_shoulderl`
+/// (`scripts/scrOptionsKeymaps.gml:7-8`) - `spec` is the ACTIVE button
+/// (`objects/MenuOptions/Other_20.gml:697`). Returns this pad's cycle step
+/// (North = +1); the caller applies the last-pad-wins overwrite, added once -
+/// `sample_gamepads`. Stick Y arrives screen-down (gilrs/SDL convention
+/// matches this port's y-down world), so stick-up (−y) moves north, the same
+/// sign GML reads off `gp_axisrv` (`:440`, `_kv < 0` = north at `:407-412`).
 pub fn sample_gamepad(
     pad: &GamepadState,
     keymap: Option<&crate::keymap::InputMapState>,
@@ -831,8 +849,8 @@ pub fn sample_gamepad(
     sample_gamepad_mapped(pad, keymap, output)
 }
 
-/// [`sample_gamepad`] with an explicit remap table (`None` = bevy
-/// hardcoded behavior verbatim). Pad-side `Pad` entries read the
+/// [`sample_gamepad`] with an explicit remap table (`None` = trigger-only
+/// defaults, the GML keymap rows absent). Pad-side `Pad` entries read the
 /// snapshot below; keyboard/mouse/axis entries on the pad side are
 /// inert here (they belong to the keyboard sampler).
 pub fn sample_gamepad_mapped(
@@ -899,10 +917,12 @@ pub fn sample_gamepad_mapped(
         cycle_weapon = 1;
     }
 
-    // Bevy `sample_input` layers the pad loop over the keyboard/mouse
-    // writes: axes overwritten above, held/pulses OR-accumulated,
-    // slot replaced on edge (the cycle step returns for the
-    // once-after-loop add).
+    // The pad pass layers over the keyboard/mouse writes: axes
+    // overwritten above, held/pulses OR-accumulated, slot replaced on
+    // edge (the cycle step returns for the once-after-loop add). GML
+    // runs one backend per tick instead
+    // (`scripts/InputHandling/InputHandling.gml:266-275`); local coop
+    // is the one two-pad case there (`:274`).
     output.fire_held |= fire_held;
     output.spec_held |= spec_held_now;
 
@@ -917,10 +937,12 @@ pub fn sample_gamepad_mapped(
     cycle_weapon
 }
 
-/// Bevy `sample_input` gamepad section verbatim: the per-pad body runs
-/// in query order sharing one `cycle_weapon` local (plain assignment,
-/// so the last pad with a North edge wins), and the step is
-/// `saturating_add`ed exactly once after the loop.
+/// Multi-pad fan-out, port-only: GML reads pad 0 only, with a separate
+/// `scrSetGamepadInputs(1)` for local co-op's second player
+/// (`scripts/InputHandling/InputHandling.gml:266-275`). The per-pad body
+/// runs in order sharing one `cycle_weapon` local (plain assignment, so
+/// the last pad with a North edge wins), and the step is `saturating_add`ed
+/// exactly once after the loop.
 pub fn sample_gamepads(pads: &[GamepadState], output: &mut NtInput) {
     sample_gamepads_mapped(pads, None, output)
 }
@@ -971,7 +993,7 @@ fn pad_pressed(entry: &repame_input::KeymapEntry, pad: &GamepadState) -> bool {
     }
 }
 
-/// Backend-neutral port of bevy `sample_input`'s touch zones. GML law
+/// Backend-neutral touch zones. GML law
 /// (`JoystickMove/Other_10`, `JoystickAttack/Other_10`,
 /// `ButtonAct/Swap/Active/Attack/Other_10`, `get_nearest_touch`,
 /// `scrStickRegions`):
@@ -1359,7 +1381,9 @@ pub fn sample_touch_full(
 }
 
 /// Drop everything when the sim isn't live (paused, overlay open, or out of
-/// game - bevy `clear_input_when_inactive` parity plus the overlay conjunct:
+/// game - port-only; GML gates the poll instead with `block_input_frames` /
+/// `block_input_fire` at `objects/UberCont/Step_0.gml:8-15`) plus the overlay
+/// conjunct:
 /// an overlay opened without the `Paused` flag must still swallow gameplay
 /// pulses like ability/spec). Menu states (Splash/Loading/MainMenu/Title)
 /// deliberately keep their advance edges: `feed_input` stages the tap into

@@ -1,32 +1,40 @@
-//! App states and run flags; mirrors the bevy `AppState` machine (the shell
-//! driver, not shown, transitions them; systems gate on them).
+//! App states and run flags. GML has no state enum
+//! - the boot is a room hop plus instance spawns (`MakeGame/Alarm_0.gml:7`
+//!   `room_goto(romGame)` then `Vlambeer/Create_0` picking MainMenu /
+//!   GenCont / LevCont), so [`AppState`] is this port's stand-in; the shell
+//!   driver, not shown here, transitions them and systems gate on them.
 //!
-//! transition laws only, no rendering (loading law in `screens/mod.rs`):
-//! - boot order Splash -> MainMenu -> Loading -> Title -> InGame
-//! - pause laws: `handle_pause_input`, `tick_pending_unpause`,
-//!   `reset_pause_on_exit`, `force_death_overlay_state`
-//! - splash (`ui_art.rs::boot_intro`): modes 0-3 advance on press or
-//!   `MODE_SECS` timeout, mode 4 plays logo gunfire, leaves on press
-//! - loading (`screens/mod.rs::tick_loading`): 1.2 s floor, then InGame via
-//!   `setup_run`
+//! transition laws only, no rendering:
+//! - boot order Splash -> MainMenu -> Title -> Loading -> InGame; a run
+//!   save on disk goes Splash -> Loading instead
+//! - pause laws: [`tick_escape_pause`], [`tick_pending_unpause`],
+//!   [`reset_pause_state`], [`force_death_overlay_state`]
+//! - splash ([`tick_splash`]): modes 0-3 advance on press or
+//!   [`SPLASH_MODE_SECS`] timeout, mode 4 plays the logo gun reel
+//! - loading ([`tick_loading`]): [`LOADING_MIN_SECS`] floor, then InGame
+//!   via `setup_run`
 //!
-//! Splash auto-advance is opt-in ([`SplashAutoAdvance`]): bevy parity is
-//! press-only; unattended boots (tests, kiosk) insert
-//! `SplashAutoAdvance(true)` to leave the logo ~1 s after the gun reel.
+//! The logo leaves on a press only, as in GML (`Logo/Draw_0.gml:7-8` ->
+//! `Logo/Mouse_53.gml:22-28`); [`SplashAutoAdvance`] opts unattended boots
+//! (tests, kiosk) into leaving it ~1 s after the gun reel.
 //!
-//! fidelity compromises (need shell/window services):
-//! - animated `Transition<AppState>` (fade/circle wipe, `block_input`)
-//!   deferred to the repose shell: `goto_state` transitions instantly,
-//!   `tick_escape_pause` keeps `block_input` for the shell to gate
-//! - `AssetsLoading` + `AssetServer` progress is headless-complete
-//!   (progress = 1.0); only the 1.2 s floor remains
-//! - splash shake/sprites are render; `tick_splash` emits the cues (GML
-//!   `Vlambeer/Create_0` `sndVlambeer`, `Vlambeer/Alarm_0` `sndRestart`,
-//!   `Logo/Alarm_0` gun steps); press path bevy-verbatim, timed
-//!   auto-advance requires [`SplashAutoAdvance`]
-//! - `QuitApp` sets `QuitRequested`; the shell polls it
-//! - `LocaleResources` is shell-side; gating uses `AVAILABLE_LANGUAGES`
-//!   in `menus` (bevy `LOCALES` codes)
+//! port-only compromises (need shell/window services):
+//! - no animated transition: [`goto_state`] swaps instantly and
+//!   [`TransitionBlock`] is the hook a shell fade/wipe would ride. GML
+//!   blocks input with a frame counter, not a flag
+//!   (`UberCont/Step_0.gml:8-15`)
+//! - no async asset load: `progress` is pinned to 1.0, so only the
+//!   [`LOADING_MIN_SECS`] floor remains. GML's loading screen is the
+//!   generation screen, which counts floors over the area goal
+//!   (`GenCont/Draw_0.gml:9-11`)
+//! - splash shake/sprites are render; [`tick_splash`] emits the cues (GML
+//!   `Vlambeer/Create_0:139` `sndVlambeer`, `Vlambeer/Alarm_0:13`
+//!   `sndRestart`, `Logo/Alarm_0:18` `sndMachinegun`)
+//! - [`QuitRequested`] stands in for GML's `game_end()`
+//!   (`MainMenuButton/Other_10.gml:100-104`); the shell polls it
+//! - no locale resources: GML builds per-language stores at boot
+//!   (`MakeGame/Create_0:6-7`, `scripts/Language/Language.gml`), the port
+//!   gates on `AVAILABLE_LANGUAGES` in `menus`
 
 use bevy_ecs::prelude::*;
 use repame_sim::SimTime;
@@ -39,8 +47,9 @@ use crate::time::{GTimer, TimerMode};
 #[path = "menus.rs"]
 pub mod menus;
 
-/// Top-level app state. Boot order: Splash -> MainMenu -> Loading ->
-/// Title -> InGame (same as the bevy build).
+/// Top-level app state. Boot order: Splash -> MainMenu -> Title ->
+/// Loading -> InGame (a run save on disk goes Splash -> Loading
+/// instead).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Resource)]
 pub enum AppState {
     #[default]
@@ -51,12 +60,14 @@ pub enum AppState {
     InGame,
 }
 
-/// Pause flag. Sim systems early-out while set (except `Always` sets,
-/// which mirror the bevy build's unticked-by-pause selection).
+/// Pause flag. Sim systems early-out while set; the `Always` set keeps
+/// ticking, standing in for the instance list GML keeps live under
+/// `instance_deactivate_all` (GML `UberCont/Step_1.gml:12-20`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Resource)]
 pub struct Paused(pub bool);
 
-/// Fixed-step frame counter (bevy `CurrentFrame` equivalent).
+/// Fixed-step frame counter (GML `UberCont/Step_0.gml:106`
+/// `current_frame ++` once per step at 30 steps/s).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Resource)]
 pub struct CurrentFrame(pub u64);
 
@@ -64,7 +75,10 @@ pub fn tick_current_frame(mut frame: ResMut<CurrentFrame>) {
     frame.0 = frame.0.wrapping_add(1);
 }
 
-/// Pause overlay selector (bevy `OverlayMenu` verbatim, minus rendering).
+/// Pause overlay selector: GML's pause rows are `PauseButton` images
+/// plus whatever instance sits over them (GML
+/// `scrMakePauseButtons.gml:10-33`,
+/// `PauseButton/Other_10.gml:62-68` for `MenuOptions`), minus rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Resource)]
 pub enum OverlayMenu {
     #[default]
@@ -72,19 +86,26 @@ pub enum OverlayMenu {
     Settings,
     Credits,
     Pause,
-    /// Run-stats panel over the main menu (GML `DrawStats` parity;
-    /// bevy left STATS inert, so this variant is port-only).
+    /// Run-stats panel over the main menu. GML's STATS row is live:
+    /// the main-menu button 3 spawns `DrawStats` (GML
+    /// `MainMenuButton/Other_10.gml:90-97`, drawn by
+    /// `DrawStats/Draw_0.gml:5`); the panel is created over the menu,
+    /// not the pause overlay.
     Stats,
 }
 
-/// Delayed unpause (bevy `PendingUnpause` verbatim law: 0.2 s `Once`
-/// timer armed by Resume/CloseOverlay/Escape, on expiry clears itself
-/// and unpauses; `GTimer` replaces bevy `Timer`).
+/// Delayed unpause: a 0.2 s `Once` timer armed by Resume/CloseOverlay/
+/// Escape, which clears itself and unpauses on expiry. The delay itself is
+/// port-only
+/// - GML unpauses inside the same event (GML
+///   `PauseButton/Other_10.gml:71-79` Continue, `scrGamePause.gml:36-53`)
+///   and instead swallows the repeat with `block_input_frames` (GML
+///   `UberCont/Step_0.gml:8-15`).
 #[derive(Debug, Clone, Default, Resource)]
 pub struct PendingUnpause(pub Option<GTimer>);
 
-/// Delay bevy arms before lifting pause (Resume, CloseOverlay on the
-/// pause overlay, Escape out of pause).
+/// Delay armed before lifting pause (Resume, CloseOverlay on the pause
+/// overlay, Escape out of pause) - port-only, see [`PendingUnpause`].
 pub const UNPAUSE_DELAY_SECS: f32 = 0.2;
 
 /// Tutorial steps (GML `TutCont/Create_0` `TutorialStep` verbatim:
@@ -356,9 +377,12 @@ pub fn tick_tutorial(world: &mut World, dt: f32) {
     });
 }
 
-/// Boot-intro state (bevy `BootState` mode/timer half in
-/// `game/ui_art.rs`; entities/sprites deferred to render, splash cues
-/// emitted by [`tick_splash`]).
+/// Boot-intro state: `Vlambeer`'s `mode` plus the per-mode alarm it
+/// re-arms (GML `Vlambeer/Create_0.gml:130-131`, `Alarm_0.gml:7-11`),
+/// with mode 4 standing for the `Logo` object GML spawns in place of
+/// `Vlambeer` (GML `Vlambeer/Alarm_0.gml:1-4`), whose `image_index`
+/// `guns` counts. Entities/sprites deferred to render, splash cues
+/// emitted by [`tick_splash`].
 #[derive(Debug, Clone, Resource)]
 pub struct SplashState {
     pub mode: u8,
@@ -478,12 +502,17 @@ pub fn tick_load_prompt(
     }
 }
 
-/// Per-mode auto-advance timeouts (GML `Vlambeer/Create_0` + `Alarm_0`:
-/// mode 0 runs 120 steps, then 60 per mode with +60 on mode 2, at
-/// 30 steps/s => [4, 2, 4, 2] s; bevy `MODE_SECS` verbatim).
+/// Per-mode auto-advance timeouts, verbatim: GML
+/// `Vlambeer/Create_0.gml:130` arms `alarm[0] = 120` for mode 0 and
+/// `Alarm_0.gml:8-11` re-arms 60 steps per mode with `+60` on mode 2,
+/// which at 30 steps/s (`options/main/options_main.yy:18`) is
+/// [4, 2, 4, 2] s.
 pub const SPLASH_MODE_SECS: [f32; 4] = [4.0, 2.0, 4.0, 2.0];
 
-/// Logo gunfire step times (bevy `STEP_T` verbatim, mode 4).
+/// Logo gunfire step times (mode 4), verbatim: GML `Logo/Create_0.gml:2`
+/// arms `alarm[0] = 30` for the first frame, then `Alarm_0.gml:17` re-arms
+/// 2 steps between frames except 20 after frame 6, and `:7-12` fires the
+/// finale on frame 7.
 pub const SPLASH_GUN_STEPS: [f32; 7] = [
     1.0,
     1.0 + 2.0 / 30.0,
@@ -494,13 +523,14 @@ pub const SPLASH_GUN_STEPS: [f32; 7] = [
     1.0 + 10.0 / 30.0 + 20.0 / 30.0,
 ];
 
-/// Headless hold after the gun sequence before auto-advancing (bevy
-/// has none - it waits for a press; applies only with
-/// [`SplashAutoAdvance`] set, see [`tick_splash`]).
+/// Headless hold after the gun sequence before auto-advancing (port-only
+/// - GML leaves the logo on a press only, `Logo/Draw_0.gml:7-8` ->
+///   `Logo/Mouse_53.gml:22-28`; applies only with [`SplashAutoAdvance`]
+///   set, see [`tick_splash`]).
 pub const SPLASH_LOGO_HOLD_SECS: f32 = 1.0;
 
 /// Opt-in unattended splash advance (tests, kiosk shells). Absent or
-/// `false` (the default): mode 4 is press-only, bevy parity. `true`:
+/// `false` (the default): mode 4 is press-only, as in GML. `true`:
 /// mode 4 also leaves ~[`SPLASH_LOGO_HOLD_SECS`] after the gun reel, so
 /// boots with no input source still reach the menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Resource)]
@@ -542,8 +572,10 @@ impl ActButton {
     }
 }
 
-/// Loading-screen state (bevy `LoadingTimer` half of
-/// `screens/mod.rs`; asset handles deferred, progress headless-1.0).
+/// Loading-screen state: the clock plus the tip GML picks once per floor
+/// (`GenCont/Create_0.gml:16` `scrTips()`). `progress` is port-only - the
+/// shell has no async asset load, and GML's generation screen reports
+/// floors built over the area goal instead (`GenCont/Draw_0.gml:9-11`).
 #[derive(Debug, Clone, Resource)]
 pub struct LoadingState {
     pub t: f32,
@@ -564,7 +596,11 @@ impl Default for LoadingState {
     }
 }
 
-/// Minimum loading-screen time (bevy `LoadingTimer(1.2 s)` verbatim).
+/// Minimum loading-screen time, port-only: GML has no such floor. Its
+/// generation screen ends when `FloorMaker` is gone
+/// (`GenCont/Step_0.gml:3`, `:14-15` arming `alarm[0] = 3` /
+/// `alarm[2] = 2`) or at the `alarm[5] = 600` safety break
+/// (`GenCont/Create_0.gml:41`, `GenCont/Alarm_5.gml:2`).
 pub const LOADING_MIN_SECS: f32 = 1.2;
 
 /// GML `MakeGame` boot flags verbatim (`Create_0` + `Alarm_0` + `Vlambeer`
@@ -686,29 +722,36 @@ pub fn discard_saved_run(world: &mut World) {
     flags.recontinued_times = 0;
 }
 
-/// Headless quit signal (bevy `AppExit::Success`; no window service
-/// headless, so the shell polls this).
+/// Headless quit signal. GML's main-menu QUIT restarts the room and calls
+/// `game_end()` (`MainMenuButton/Other_10.gml:100-104`); with no engine
+/// window service headless the port raises a flag and the shell polls it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Resource)]
 pub struct QuitRequested(pub bool);
 
-/// Scene-transition input block (bevy `Transition<AppState>.block_input`
-/// parity). The port flips states instantly (`goto_state`), so no system
-/// ever raises this - it exists so `gameplay_active` keeps the bevy
-/// gate shape instead of silently dropping a conjunct.
+/// Scene-transition input block, port-only. The port flips states
+/// instantly (`goto_state`), so no system ever raises this - it exists so
+/// `gameplay_active` keeps the gate shape instead of silently dropping a
+/// conjunct, and so a shell-driven fade can hold input. GML blocks input
+/// with a frame countdown instead (GML `UberCont/Step_0.gml:8-15`,
+/// armed at `PauseButton/Other_10.gml:76`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Resource)]
 pub struct TransitionBlock(pub bool);
 
-/// Instant state transition with bevy `reset_pause_on_exit` side effects
-/// (paused/overlay/pending cleared; `Run::game_over` cleared when leaving
-/// InGame or entering a menu state; menu transients cleared). Replaces
-/// bevy `NextState` + animated `Transition` (shell, see module docs).
+/// Instant state transition with pause teardown side effects (paused/
+/// overlay/pending cleared; `Run::game_over` cleared when leaving InGame or
+/// entering a menu state; menu transients cleared). GML has no animated
+/// state transition to defer
+/// - a state swap is a `room_goto` / `room_restart`
+///   (`MakeGame/Alarm_0.gml:7`, `scrRunStart.gml:75`); see the module docs
+///   for the shell hook.
 ///
 /// GML room-restart parity: entering `MainMenu` from anywhere rebuilds the
 /// logo room and `Title` the campfire room (blanket teardown + campfire
 /// `Run` reset live in `setup_title_campfire`; calling it here as well as
-/// in the action arms keeps direct `goto_state` callers - tests, splash
-/// timeout - on the same clean-room law, and it is idempotent). Both skip
-/// when the world already reads as a fresh campfire room.
+/// in the action arms keeps direct `goto_state` callers
+/// - tests, splash timeout
+/// - on the same clean-room law, and it is idempotent). Both skip when the
+///   world already reads as a fresh campfire room.
 pub fn goto_state(world: &mut World, next: AppState) {
     let prev = world
         .get_resource::<AppState>()
@@ -741,13 +784,15 @@ pub fn goto_state(world: &mut World, next: AppState) {
             ensure_menu_room(world);
         }
         AppState::Loading => {
-            // GML `room_restart` parity (bevy `teardown_game` on InGame
-            // exit): the generating room starts empty - `GenCont` draws
-            // only spiral + GENERATING + roadmap; otherwise the stale
-            // Title camp (fresh runs) or dead run (RETRY) renders through
-            // the whole 1.2 s load. `setup_run` re-teardowns at load end;
-            // both idempotent. Run/MenuState survive (setup_run resets
-            // them) - only session entities + the floor mask go.
+            // GML `room_restart` parity on an InGame exit
+            // (`scrGameRestart.gml:24` `scrCleanupSessionInstances()`): the
+            // generating room starts empty
+            // - `GenCont` draws only spiral + GENERATING + roadmap;
+            //   otherwise the stale Title camp (fresh runs) or dead run
+            //   (RETRY) renders through the whole 1.2 s load. `setup_run`
+            //   re-teardowns at load end; both idempotent. Run/MenuState
+            //   survive (setup_run resets them)
+            // - only session entities + the floor mask go.
             crate::setup::teardown_session_entities(world);
             world.init_resource::<crate::comps_a::FloorMask>();
             *world.resource_mut::<crate::comps_a::FloorMask>() =
@@ -822,9 +867,11 @@ fn ensure_menu_room(world: &mut World) {
     }
 }
 
-/// Bevy `reset_pause_on_exit` verbatim (pause/overlay/pending/menu
-/// transients cleared; caller owns the `Run::game_over` edge, see
-/// `goto_state`).
+/// Pause teardown on a state swap (pause/overlay/pending/menu transients
+/// cleared; caller owns the `Run::game_over` edge, see `goto_state`). GML
+/// clears the same flags from the save event and the unpause path
+/// (`UberCont/Other_5.gml:5-6` `want_pause`/`want_restart = 0`,
+/// `scrGamePause.gml:46-48` `paused = false`, `want_pause = 0`).
 pub fn reset_pause_state(world: &mut World) {
     world.init_resource::<Paused>();
     world.init_resource::<OverlayMenu>();
@@ -859,9 +906,9 @@ pub fn reset_pause_state(world: &mut World) {
     }
 }
 
-/// Splash tick (bevy `boot_intro` state half verbatim, plus the opt-in
-/// logo-hold auto-advance for unattended boots). `pressed` = any key/mouse
-/// edge this tick. Only runs in `Splash`; finishing enters `MainMenu`.
+/// Splash tick (the mode timers plus the opt-in logo-hold auto-advance
+/// for unattended boots). `pressed` = any key/mouse edge this tick. Only
+/// runs in `Splash`; finishing enters `MainMenu`.
 ///
 /// GML splash cues per event: `sndVlambeer` once at reel creation
 /// (`Vlambeer/Create_0:139`, the fresh-boot `else` branch; quit-to-menu
@@ -933,8 +980,10 @@ pub fn tick_splash(world: &mut World, dt: f32, pressed: bool) {
             }
             if pressed {
                 if splash.guns == 0 {
-                    // Bevy fast-forward: jump near the sequence start.
-                    splash.t = splash.t.max(1.0 - 10.0 / 30.0);
+                    // GML fast-forward: still on frame 0, a press clamps
+                    // the pending alarm to 10 steps (GML
+                    // `Logo/Mouse_53.gml:30-32`), so pull `t` to 10 steps
+                    // short of the first `SPLASH_GUN_STEPS` entry.
                     false
                 } else {
                     true
@@ -961,9 +1010,9 @@ pub fn tick_splash(world: &mut World, dt: f32, pressed: bool) {
     }
 }
 
-/// Loading tick (bevy `tick_loading` law: assets at headless-1.0, wait
-/// out the 1.2 s floor, then InGame through the existing `setup_run`
-/// entry - never duplicated here). Only runs in `Loading`.
+/// Loading tick (no asset wait - `progress` stays at 1.0, port's
+/// [`LOADING_MIN_SECS`] floor, then InGame through the existing
+/// `setup_run` entry - never duplicated here). Only runs in `Loading`.
 pub fn tick_loading(world: &mut World, dt: f32) {
     if world
         .get_resource::<AppState>()
@@ -1008,16 +1057,34 @@ pub fn tick_loading(world: &mut World, dt: f32) {
             let _ = crate::run_save::save_run(world);
         }
         reset_pause_state(world);
+        // A continued run can come back holding an owed pick (GML
+        // `Vlambeer/Create_0:98-105` opens LevCont on a just-loaded room start
+        // too), so the reset above must not leave that offer running unpaused.
+        let holds_offer = world
+            .get_resource::<crate::comps_a::PendingMutation>()
+            .is_some()
+            || world
+                .get_resource::<crate::comps_a::PendingUltra>()
+                .is_some();
+        if holds_offer {
+            if let Some(mut paused) = world.get_resource_mut::<Paused>() {
+                paused.0 = true;
+            }
+        }
     }
 }
 
-/// Escape-pause tick (bevy `handle_pause_input` verbatim, minus engine
-/// key reads: the shell passes `escape_pressed`). Gated to InGame,
-/// `block_input` (transition animation, shell-owned), live runs
-/// (game-over swallows Escape, bevy parity) and non-generating rooms:
-/// GML `UberCont/Step_1` honors `want_pause` only when no `GenCont`
-/// exists, so Escape during a floor transition or mutation/ultra offer
-/// is swallowed.
+/// Escape-pause tick (minus engine key reads: the shell passes
+/// `escape_pressed` where GML polls `vk_escape`/`vk_backspace`/ `gp_start`
+/// into a per-index `KeyCont.press_paus` latch, GML
+/// `UberCont/Step_0.gml:35-65`). Gated to InGame, `block_input` (transition
+/// animation, shell-owned), live runs and non-generating rooms, matching
+/// GML's `scrGameCanPause` gate (`GenCont`, `Credits`, `Cinematic`, no
+/// `Player`, `GameOver`, `want_pause`, `romInit`, GML
+/// `scrGamePause.gml:84-87`) plus `UberCont/Step_1.gml:3-24`, which only
+/// honours `want_pause` with a live `Player` and no `GenCont` or `GameOver`
+/// - so Escape during a floor transition or a mutation/ultra offer, and on
+///   the game-over screen, is swallowed.
 pub fn tick_escape_pause(
     paused: &mut Paused,
     overlay: &mut OverlayMenu,
@@ -1048,7 +1115,12 @@ pub fn tick_escape_pause(
         }
         OverlayMenu::Pause => {
             if menu.pause_confirm.is_some() {
-                // Bevy: Escape dismisses the quit/restart confirm first.
+                // Port-only: GML's Escape looks for the Continue button
+                // (`image_index == 3`) and finds nothing while the
+                // confirm rows (QUIT 5 / RETRY 6 / BACK 4,
+                // GML `PauseButton/Other_10.gml:19-41`,
+                // `UberCont/Step_0.gml:52-60`), so the press is swallowed
+                // and only the BACK row clears the confirm.
                 menu.pause_confirm = None;
                 menu.pause_cursor = 0;
                 menu.pause_appear = [1.0, 2.0, 3.0, 3.0];
@@ -1094,8 +1166,8 @@ pub fn tick_escape_pause(
     }
 }
 
-/// Pending-unpause tick (bevy `tick_pending_unpause` verbatim over
-/// `SimTime`).
+/// Pending-unpause tick over `SimTime`: on expiry the arm clears itself
+/// and the pause lifts (port-only delay, see [`PendingUnpause`]).
 pub fn tick_pending_unpause(
     time: Res<SimTime>,
     mut pending: ResMut<PendingUnpause>,
@@ -1111,8 +1183,12 @@ pub fn tick_pending_unpause(
     }
 }
 
-/// Death overlay guard (bevy `force_death_overlay_state` verbatim:
-/// game-over forces unpaused + no overlay + no pending while InGame).
+/// Death overlay guard: while InGame a dead run holds no pause flag, no
+/// overlay and no pending unpause. GML keeps the same shape by building
+/// the game-over rows directly into the pause overlay (GML
+/// `GameOver/Create_0.gml:21-28` two `PauseButton`s, MENU and RETRY, no
+/// Continue) and only spawning them unpaused (GML `TopCont/Step_2.gml:27`
+/// `!UberCont.paused && !instance_exists(GameOver)`).
 pub fn force_death_overlay_state(
     state: Res<AppState>,
     run: Option<Res<crate::comps_a::Run>>,
@@ -1133,8 +1209,11 @@ pub fn force_death_overlay_state(
     }
 }
 
-/// Channel sync (bevy `sync_shared_ui` audio half verbatim:
-/// master/sfx/music follow settings every tick).
+/// Channel sync: master/sfx/music follow the save settings every tick. GML
+/// applies them per category from `UberCont.opt_*` in `scrVolume.gml:1-25`
+/// (master gain, music stems, ambient loops), which `scrOptionsUpdate`
+/// re-reads from the save file (`scrOptionsUpdate.gml:13-16`, `:89`); the
+/// port tracks one triple continuously instead of re-reading per event.
 pub fn sync_audio_channels(
     save: Res<crate::savedata_part::SaveData>,
     mut channels: ResMut<crate::audio::AudioChannels>,
@@ -1144,9 +1223,12 @@ pub fn sync_audio_channels(
     channels.music = save.settings.music_volume;
 }
 
-/// Save sanitize (bevy `sanitize_save` headless law: version mismatch
-/// sanitizes loadouts and stamps; covers both the migrate and the
-/// added-save arms without engine change detection).
+/// Save sanitize (headless law: version mismatch sanitizes loadouts and
+/// stamps; covers both the migrate and the added-save arms without engine
+/// change detection). The version stamp itself is port-only
+/// - GML persists a flat key/value blob (`scrSave.gml:4-5` `savepath = ...
+///   .sav`, `:40-42` per-key writes) plus a versionless buffer for the run
+///   save (`scripts/scrSavegame/scrSavegame.gml:9-22`).
 pub fn tick_sanitize_save(mut save: ResMut<crate::savedata_part::SaveData>) {
     if save.version != crate::savedata_part::SAVE_VERSION {
         save.sanitize_loadouts();

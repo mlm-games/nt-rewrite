@@ -1,8 +1,7 @@
 //! Sprite animation state + switching. Sim-side only: systems advance `frame`
 //! and select `path`; the render phase maps `(path, frame)` to atlas uvs through
-//! `repame-anim`. No sprite handles here (bevy wrote `Sprite.image/rect` inline,
-//! which belongs to rendering). Ported from nt's `game/anim.rs` (frame laws
-//! byte-identical).
+//! `repame-anim`. No sprite handles here - `(path, frame)` is all the sim
+//! carries, pixels belong to rendering.
 
 use bevy_ecs::prelude::*;
 use rand::RngExt;
@@ -127,8 +126,10 @@ impl SpriteAnim {
     }
 }
 
-/// Advance every live animation one fixed step (bevy `animate_sprites`
-/// parity: loop wraps, oneshot clamps on the last frame and parks).
+/// Advance every live animation one fixed step, standing in for GML's
+/// native `image_index += image_speed` each step: a looping strip wraps
+/// at `image_number`, and a one-shot parks on its last frame the way
+/// `Corpse/Other_7.gml:1-2` parks with `image_speed = 0`.
 pub fn animate_sprites(time: Res<SimTime>, mut q: Query<&mut SpriteAnim>) {
     let mut rng = rand::rng();
     for mut anim in &mut q {
@@ -297,9 +298,10 @@ pub fn play_hurt(
     });
 }
 
-/// HP-drop edge detection for enemies + the player (bevy
-/// `hurt_on_damage` state half): on a fresh HP loss, switch to the
-/// hurt strip via [`play_hurt`]. Image/rect/anchor writes and the
+/// HP-drop edge detection for enemies + the player: on a fresh HP loss,
+/// switch to the hurt strip via [`play_hurt`], the way GML forces
+/// `sprite_index = spr_hurt` / `image_index = 0` on any damage
+/// (`scripts/scr_hit.gml:17-23`). Image/rect/anchor writes and the
 /// `FireAnim` removal happen renderer-side from the new path.
 pub fn hurt_on_damage(
     mut commands: Commands,
@@ -362,9 +364,9 @@ pub fn hurt_on_damage(
     }
 }
 
-/// HP-drop edge detection for destructible props (bevy
-/// `prop_hurt_on_damage` state half). The `flip_x` force and anchor
-/// write happen renderer-side.
+/// HP-drop edge detection for destructible props (the same
+/// `scripts/scr_hit.gml:17-23` law as [`hurt_on_damage`]). The
+/// `flip_x` force and anchor write happen renderer-side.
 pub fn prop_hurt_on_damage(
     mut commands: Commands,
     catalog: Res<AnimCatalog>,
@@ -478,9 +480,10 @@ pub fn tick_hurt_anims(
 }
 
 /// Interrupt with the muzzle-flash strip (oneshot, 0.25 s approximation:
-/// GML uses per-enemy alarm periods - Guardian 12 steps, Wolf ~30+rand,
-/// Crab 1-frame re-fire loop - not a global duration; 0.25 s keeps the
-/// bevy parity until per-enemy alarm data is modeled).
+/// GML uses per-enemy alarm periods - Guardian 12 steps
+/// (`Guardian/Alarm_1.gml:15`), Wolf ~30+rand (`Wolf/Alarm_1.gml:1`),
+/// Crab 1-frame re-fire loop (`Crab/Alarm_2.gml:20`) - not a global
+/// duration, so 0.25 s stands in until per-enemy alarm data is modeled).
 pub fn play_fire(
     commands: &mut Commands,
     entity: Entity,
@@ -524,8 +527,11 @@ pub fn tick_fire_anims(
     }
 }
 
-/// Death-knell drain (bevy `anim.rs:1059` parity: the `PlayerDying`
-/// timer ticks and the husk despawns on lapse - pure logic, no strips).
+/// Death-knell drain: the `PlayerDying` timer ticks and the husk despawns
+/// on lapse - pure logic, no strips. GML hands the body to a
+/// `CorpseActive` husk (`Player/Destroy_0.gml:70-82`) and
+/// `TopCont/Step_2.gml:14,31` raises `GameOver` once no `Player` is left;
+/// the 0.85 s linger is port-only.
 pub fn tick_player_dying(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -558,9 +564,10 @@ pub fn backfill_spawn_anims(world: &mut World) {
         )>();
         q.iter(world)
             .filter_map(|(e, enemy, sprites, anim, orbit)| {
-                // Hyper orbit crystals are bevy-parity visual markers (tinted
-                // sprite, no strip table or anim); giving them `EnemySprites`
-                // would drag them into the enemy anim/hurt queries.
+                // Hyper orbit crystals are pure visual markers
+                // (tinted sprite, no strip table or anim); giving them
+                // `EnemySprites` would drag them into the enemy
+                // anim/hurt queries.
                 orbit
                     .is_none()
                     .then(|| (e, enemy.kind, sprites.is_some(), anim.is_some()))

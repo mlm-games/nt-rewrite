@@ -1,7 +1,7 @@
-//! 2D space: positions, arena bounds, collision push-outs.
-//! Bevy carried positions in `Transform.translation` (`Vec3`); the port stores
-//! plain [`Pos`] (`Vec2`). Laws byte-identical to `world.rs` (`clamp_to_arena`,
-//! `resolve_prop_collision`).
+//! 2D space: positions, arena bounds, collision push-outs. A body is a plain
+//! [`Pos`] (`glam::Vec2`, y-down GameMaker convention) - the sim's only
+//! position state; `clamp_to_arena` / `resolve_prop_collision` are the
+//! port's own push-out helpers.
 
 use bevy_ecs::prelude::*;
 use glam::Vec2;

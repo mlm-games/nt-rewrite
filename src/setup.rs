@@ -1,17 +1,19 @@
 //! Floor setup: mask building + entity spawning from plans.
 //!
-//! Loadout run setup (bevy `setup_run`) resolves the save loadout (character
-//! stats, `start_crown` stamp, skins, starting weapons via `sanitize_weapon_id`
-//! + `starting_ammo_for`) in `resolve_run_loadout` / `starting_ammo_for` /
-//! `build_player_bundle`; `setup_run` / `setup_run_with_seed` stay headless so
-//! tests never touch disk or RNG.
+//! Loadout run setup mirrors GML `scripts/scrRunStart.gml:1-42`
+//! (`random_set_seed`, `scrCreatePlayers`, the crown roll, then
+//! `scrAmmoUpdateTypeStats`): it resolves the save loadout (character
+//! stats, `start_crown` stamp, skins, starting weapons via
+//! `sanitize_weapon_id` + `starting_ammo_for`) in `resolve_run_loadout` /
+//! `starting_ammo_for` / `build_player_bundle`; `setup_run` /
+//! `setup_run_with_seed` stay headless so tests never touch disk or RNG.
 //!
 //! Headless adaptations, render/UI only: no sprites (`PlayerAnim` path
 //! strings, `hurt` via `derive_hurt_path`); no camera; no `UiBridge` /
 //! `OverlayMenu` / `PendingUnpause` (`AppState::InGame` + `Paused(false)`
 //! carry state); the `spawn_level` sim half (walls, props, chests, enemies,
 //! throne extras, mines) runs here so headless `setup_run` is playable;
-//! timers are disarmed `GTimer`s (bevy `ready_timer` parity: finished from
+//! timers are disarmed `GTimer`s (the GML `-1` alarm stand-in: finished from
 //! birth, silent until re-armed).
 
 use bevy_ecs::prelude::*;
@@ -48,8 +50,9 @@ use crate::time::GTimer;
 use crate::weapon_runtime::{sanitize_weapon_id, weapon_ammo};
 use crate::worldgen::{self, ChestSpawn, LevelPlan, PopulationEvent, PropKind, is_screen_end_wall};
 
-/// Floor mask from a generated plan (bevy parity: cells verbatim,
-/// dims from the arena constants).
+/// Floor mask from a generated plan (cells verbatim - GML keeps no grid
+/// either, only the `Floor` instances `FloorMaker` stamps; dims come from
+/// the arena constants).
 pub fn build_floor_mask(plan: &LevelPlan) -> FloorMask {
     FloorMask {
         cells: plan.floor_cells.iter().copied().collect(),
@@ -59,11 +62,14 @@ pub fn build_floor_mask(plan: &LevelPlan) -> FloorMask {
     }
 }
 
-/// Player spawn with default Fish stats (byte-identical: the enemy-phase
-/// test dummies use this as a targeting stand-in). Loadout spawns go
-/// through `spawn_player_loaded`. Tag is `GameCleanup` only (bevy parity):
-/// the player survives portal floor swaps (`tick_portal_suck` despawns
-/// `LevelCleanup`) and dies with the run (`teardown_session_entities`).
+/// Player spawn with default Fish stats (GML `Player/Create_0.gml:3-5,6`;
+/// the enemy-phase test dummies use this as a targeting stand-in). Loadout
+/// spawns go through `spawn_player_loaded`. Tag is `GameCleanup` only: GML
+/// keeps `Player` across the floor swap (`GenCont/Destroy_0.gml` never
+/// destroys it; only `MakeGame/Draw_0.gml:160` does, on restart-to-title),
+/// so the player survives portal floor swaps (`tick_portal_suck` despawns
+/// `LevelCleanup`) and dies with the run (`teardown_session_entities`,
+/// GML `scrCleanupSessionInstances.gml:1-11`).
 pub fn spawn_player(commands: &mut Commands, pos: glam::Vec2) -> Entity {
     commands
         .spawn((
@@ -117,7 +123,8 @@ pub fn spawn_enemy(
 }
 
 /// Hurt-sprite path for a player idle sprite. Delegates to the full
-/// bevy `anim.rs` table in [`crate::anim`] (B/C skin variants included);
+/// skin table in [`crate::anim`] (B/C variants included, GML
+/// `scrPlayerCreate.gml:63` picks `spr_hurt` by race + skin letter);
 /// kept here for setup call-site compatibility.
 pub fn derive_hurt_path(idle: &'static str) -> &'static str {
     crate::anim::derive_hurt_path(idle)
@@ -190,11 +197,12 @@ pub struct RunLoadout {
     pub weapon_slots: usize,
 }
 
-/// Resolve a run loadout from the save (bevy `setup_run` lines
-/// 99-128, plus the GML `scrCreatePlayers` race rules bevy skips:
-/// a golden-frog-pistol start forces Frog, a locked Skeleton falls back
-/// to Melting, and an empty start falls back to the race starter from
-/// `scrRaceGetStarterWeapon` - not bare revolver).
+/// Resolve a run loadout from the save (GML
+/// `scripts/PlayerInstance/PlayerInstance.gml:271-281,299-326`): the
+/// `cwep == wep_golden_frog_pistol` start forces Frog, a locked Skeleton
+/// plays Melting instead, and an empty start falls back to the race
+/// starter (`scrRaces.gml:226` `scrRaceGetStarterWeapon`) - not bare
+/// revolver.
 pub fn resolve_run_loadout(save: &SaveData, race: RaceId) -> RunLoadout {
     // GML `scrCreatePlayers`: `cwep == wep_golden_frog_pistol` forces Frog
     // (skin/crown then come from the Frog loadout below).
@@ -297,9 +305,10 @@ pub fn roll_random_crown(save: &SaveData, race: RaceId, rng: &mut StdRng) -> Cro
     CrownKind::None
 }
 
-/// Player components for a race + loadout (bevy `setup_run` lines
-/// 130-182 verbatim, minus sprites/camera: character stats, BigDog
-/// ammo override, crown spawn application).
+/// Player components for a race + loadout (GML `scrPlayerCreate.gml:6-27`
+/// plus `scrPlayerRaceChange` stats, minus sprites/camera: character
+/// stats, BigDog ammo override at `scrPlayerCreate.gml:103-104`, crown
+/// spawn application).
 pub struct PlayerBundle {
     pub player: Player,
     pub race_state: RaceState,
@@ -388,8 +397,8 @@ pub fn build_player_bundle(race: RaceId, loadout: &RunLoadout) -> PlayerBundle {
 
 /// Spawn a loadout-built player (tags + aim + position, shared with
 /// `setup_run`). `GameCleanup` only, same portal-survival reason as
-/// [`spawn_player`]. Bevy parity: the idle `SpriteAnim` must ride along or
-/// the `&mut SpriteAnim` queries (`player_anim_switch`/`hurt_on_damage`)
+/// [`spawn_player`]. The idle `SpriteAnim` must ride along or the
+/// `&mut SpriteAnim` queries (`player_anim_switch`/`hurt_on_damage`)
 /// never fire and the player sticks on render fallback frame 0.
 pub fn spawn_player_loaded(
     commands: &mut Commands,
@@ -588,6 +597,14 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
             run.won = false;
             run.tutorial = tutorial;
             run.blood_crown = false;
+            // `Run` outlives a RETRY (only the Title/MainMenu path rebuilds
+            // `Run::default()`), so every per-run latch has to be cleared here
+            // or the new run inherits the dead one's.
+            run.can_oasis = false;
+            run.tried_hq = false;
+            run.queued_secret = None;
+            run.patient = false;
+            run.patiencepick = false;
             run.waypoints.clear();
             run.push_waypoint();
         }
@@ -595,9 +612,8 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
         *world.resource_mut::<Toast>() = Toast::default();
         *world.resource_mut::<crate::state::AppState>() = crate::state::AppState::InGame;
         world.resource_mut::<DeferredFloorGen>().0 = false;
-        // Entering a run clears menu transients (pause/overlay/pending
-        // mirror the bevy `setup_run` + `reset_pause_on_exit` flow) but
-        // preserves the title cursor.
+        // Entering a run clears menu transients (pause/overlay/pending,
+        // port-only UI state) but preserves the title cursor.
         *world.resource_mut::<crate::state::OverlayMenu>() = crate::state::OverlayMenu::None;
         world.resource_mut::<crate::state::PendingUnpause>().0 = None;
         {
@@ -621,9 +637,10 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
         world.resource_mut::<Euphoria>().0 = false;
         world.resource_mut::<OpenMind>().0 = false;
         world.resource_mut::<HeavyHeart>().0 = false;
-        // Spiral background state (bevy inserts `SpiralCtl` at run
-        // setup; the ambience duck keys off its presence). Streams roll
-        // from the run seed so equal seeds snapshot identically.
+        // Spiral background state (GML builds the cont at run start,
+        // `MakeGame/Alarm_0.gml:94` `instance_create(0, 0, SpiralCont)`,
+        // warmed by `SpiralCont/Create_0.gml:36-47`). Streams roll from
+        // the run seed so equal seeds snapshot identically.
         let area = world.resource::<Run>().area;
         world.insert_resource(crate::vortex::SpiralCtl::warmed_up_for_area_seeded(
             area, seed,
@@ -823,58 +840,55 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
         }
     }
 
-    if resume.is_some() {
-        // GML `Vlambeer/Create_0:87-105`: a just-loaded run re-runs the
-        // level-entry decision, and a banked Patience pick suppresses the
-        // skill arm (`_can_skill`) so it is not re-offered on the resumed
-        // floor. `grant_patience_pick` runs after the decision, matching the
-        // GML order (GenCont's create block is what follows LevCont's).
-        let offer = {
-            let player_e = {
-                let mut q = world.query_filtered::<Entity, With<crate::comps_a::Player>>();
-                q.iter(world).next()
-            };
-            let race = player_e
-                .and_then(|e| world.get::<RaceState>(e))
-                .map_or(RaceId::Chicken, |r| r.race);
-            player_e.and_then(|e| {
-                world.resource_scope(|world, mut run: Mut<Run>| {
-                    let mut player = world.get_mut::<Player>(e)?;
-                    if crate::state::choose_level_entry(
-                        player.mutation_picks_owed,
-                        0,
-                        u32::from(player.ultra_pick_owed),
-                        run.patiencepick,
-                    ) != crate::state::LevelEntry::LevCont
-                    {
-                        return None;
-                    }
-                    Some(crate::progression::level_entry_draft(
-                        &mut run,
-                        &mut player,
-                        race,
-                    ))
-                })
-            })
+    // GML `Vlambeer/Create_0:87-118`: every level entry re-runs the level-entry
+    // decision, `GenCont/Create_0:47-52` then banks Patience's free pick, and
+    // the run save is written unless this was a just-loaded continue (that arm
+    // saved the bumped counter already). A banked pick suppresses the skill
+    // arm on a just-loaded floor (`_can_skill`), so the decision has to run
+    // before the grant.
+    let level_entry = {
+        let player_e = {
+            let mut q = world.query_filtered::<Entity, With<Player>>();
+            q.iter(world).next()
         };
+        player_e.and_then(|e| {
+            let race = world.get::<RaceState>(e)?.race;
+            world.resource_scope(|world, mut run: Mut<Run>| {
+                let mut player = world.get_mut::<Player>(e)?;
+                let entry = crate::state::choose_level_entry(
+                    player.mutation_picks_owed,
+                    0,
+                    u32::from(player.ultra_pick_owed),
+                    resume.is_some() && run.patiencepick,
+                );
+                if entry != crate::state::LevelEntry::LevCont {
+                    return Some((entry, None));
+                }
+                let offer = crate::progression::level_entry_draft(&mut run, &mut player, race);
+                Some((entry, Some(offer)))
+            })
+        })
+    };
+    let (entry, offer) = level_entry.unwrap_or((crate::state::LevelEntry::GenCont, None));
+    if let Some(offer) = offer {
         match offer {
-            Some(crate::progression::DraftOffer::Ultra(choices)) => {
+            crate::progression::DraftOffer::Ultra(choices) => {
                 world.insert_resource(PendingUltra { choices });
                 world.resource_mut::<crate::state::Paused>().0 = true;
             }
-            Some(crate::progression::DraftOffer::Mutation(choices)) => {
+            crate::progression::DraftOffer::Mutation(choices) => {
                 world.insert_resource(PendingMutation { choices });
                 world.resource_mut::<crate::state::Paused>().0 = true;
             }
-            Some(crate::progression::DraftOffer::None) | None => {}
+            crate::progression::DraftOffer::None => {}
         }
     }
 
-    {
-        // GML `GenCont/Create_0:47-52` for the run-start generation pass, so a
-        // resumed run banks Patience's pick the same way a floor advance does.
+    if entry == crate::state::LevelEntry::GenCont {
+        // GML reaches `GenCont/Create_0` only when `LevCont` was not chosen,
+        // so a drafted floor banks nothing.
         let player_e = {
-            let mut q = world.query_filtered::<Entity, With<crate::comps_a::Player>>();
+            let mut q = world.query_filtered::<Entity, With<Player>>();
             q.iter(world).next()
         };
         if let Some(e) = player_e {
@@ -893,8 +907,9 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
     }
 }
 
-/// Seeded position hash (bevy `world::wall_hash` verbatim: splitmix64
-/// over seed ^ wall coords ^ salt).
+/// Seeded position hash: splitmix64 over seed ^ wall coords ^ salt.
+/// Port-only stand-in for GML's one `RNGStates.Generation` stream, whose
+/// per-position rolls have no seed-addressable counterpart.
 fn wall_hash(seed: u64, wx: i32, wy: i32, salt: u64) -> u64 {
     let mut x = seed
         ^ ((wx as i64 as u64) << 32)
@@ -923,8 +938,8 @@ fn prop_hash_flip(seed: u64, pos: glam::Vec2, salt: u64) -> bool {
 }
 
 /// Empty animation catalog for headless setup: entity spawns record
-/// art paths but attach no strips (spawn fns skip missing defs, bevy
-/// `catalog.has` parity via `catalog.def(...).is_some()`).
+/// art paths but attach no strips (spawn fns skip missing defs via
+/// `catalog.def(...).is_some()`). Port-only; GML has no atlas.
 pub fn empty_anim_catalog() -> repame_anim::AnimCatalog {
     repame_anim::AnimCatalog::from_ron(
         "{}",
@@ -1141,8 +1156,12 @@ fn prop_stats(kind: PropKind, styleb: bool, loop_count: u32) -> PropStats {
     }
 }
 
-/// Per-route-floor ground-decal art (bevy `area_sprites` 6th column
-/// verbatim: the `GroundDecal` prop draws the area top-decal strip).
+/// Per-route-floor ground-decal art: the `GroundDecal` prop draws the route
+/// area's top-decal strip. GML picks the decal per area at prop-spawn time
+/// (`scripts/scrPopProps/scrPopProps.gml:48,63,73,85,94,109,126,130`) and
+/// rolls its frame in `objects/TopDecalDesert/Create_0.gml:3`
+/// (`image_index = random(image_number)`); the floor -> strip index here is
+/// port-only (GML has no route table).
 pub fn ground_decal_for_floor(floor: u32) -> &'static str {
     let rf = ((floor.max(1) - 1) % 15) + 1;
     match rf {
@@ -1325,7 +1344,7 @@ pub fn spawn_prop_sim(
         return None;
     }
     if kind == PropKind::GroundDecal {
-        // Bevy draws the route floor's top-decal strip here (gray tint
+        // Draws the route floor's top-decal strip here (gray tint
         // renderer-side), falling back to detail art when the catalog
         // lacks it.
         let decal = ground_decal_for_floor(run.floor);
@@ -1883,11 +1902,14 @@ fn spawn_wall_tiles(
     }
 }
 
-/// Floor entity spawn from a generated plan (bevy `world::spawn_level` sim
-/// half: mask rebuild via [`build_floor_mask`], wall bodies, props, secret
-/// entrances, chests, enemies, boss extras, throne carpet, crown-vault
-/// pedestal). Floor/wall/decal/bone/detail `Sprite`s, transition quads and
-/// anchors are renderer-owned. `crown` / `ultra` are the live player's:
+/// Floor entity spawn from a generated plan (sim half: mask rebuild via
+/// [`build_floor_mask`], wall bodies, props, secret entrances, chests,
+/// enemies, boss extras, throne carpet, crown-vault pedestal). GML drives
+/// the same pass from `objects/GenCont/Create_0.gml:43-45` (the first
+/// `FloorMaker`) through `FloorMaker/Step_0.gml:69-86` and
+/// `scripts/scrPopulate/scrPopulate.gml`. Floor/wall/decal/bone/detail
+/// `Sprite`s, transition quads and anchors are renderer-owned. `crown` /
+/// `ultra` are the live player's:
 /// GML resolves chest art variants, the Crown of Curses roll and the
 /// Steroids gates off `GameCont.crown` and `scr_ultra_get` at chest
 /// `Create_0` time.
@@ -2473,10 +2495,10 @@ fn reset_menu_room_resources(world: &mut World) {
     world.resource_mut::<crate::comps_a::OpenMind>().0 = false;
     world.init_resource::<crate::comps_a::HeavyHeart>();
     world.resource_mut::<crate::comps_a::HeavyHeart>().0 = false;
-    // `LoopTransition` stays present but defaulted: bevy systems take
-    // it as a bare `Res`/`ResMut` param (ungated `Always` set), so
-    // removing it panics the schedule every tick on menu rooms. Stale
-    // loop-portal flags must still not leak, hence the default write.
+    // `LoopTransition` stays present but defaulted: the port's systems take
+    // it as a bare `Res`/`ResMut` param (ungated `Always` set), so removing
+    // it panics the schedule every tick on menu rooms. Stale loop-portal
+    // flags must still not leak, hence the default write.
     world.init_resource::<crate::comps_b::LoopTransition>();
     *world.resource_mut::<crate::comps_b::LoopTransition>() =
         crate::comps_b::LoopTransition::default();

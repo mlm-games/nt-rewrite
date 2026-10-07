@@ -1,8 +1,11 @@
 //! Player-death resolution, third leg of the death pipeline after
 //! `resolve_death_drops`: revives first (headless, strong spirit, melting
-//! skeleton), else game over with corpse, drops and save writes. Split in two
-//! systems only because bevy_ecs caps systems at 16 params; order matches the
-//! bevy function top to bottom.
+//! skeleton), else game over with corpse, drops and save writes. Split in
+//! two systems only because bevy_ecs caps systems at 16 params; the revive
+//! leg tries headless, then strong spirit, then the melting skeleton, and
+//! each hit ends that death (no GML single chain: the headless bank is
+//! `Player/Step_0.gml:244-248`, the spirit refill
+//! `scrStrongSpiritRefill.gml:1-12`).
 
 use bevy_ecs::prelude::*;
 use rand::RngExt;
@@ -25,7 +28,7 @@ use crate::spatial::Pos;
 use crate::time::{GTimer, TimerMode};
 
 /// Headless / strong-spirit / melting-skeleton revives. Each returns
-/// early like the bevy branch chain.
+/// early: one revive per death, in that order.
 pub fn resolve_player_revives(
     mut commands: Commands,
     mut save: ResMut<SaveData>,
@@ -252,7 +255,9 @@ pub fn resolve_player_gameover(
     });
 
     let pos = player_pos.0;
-    // Bevy `face_aim` law for the dying flip: live aim.x, else velocity.
+    // Dying flip law: GML `Player/Step_0.gml:441-445` sets `right = -1`
+    // only when `gunangle` points left of the screen, else `1`, and the
+    // husk inherits that scalar. Here live aim, else the last velocity.
     let player_flip_at_death = aim_opt
         .map(|a| a.0)
         .filter(|a| a.length_squared() > 0.001)
@@ -283,7 +288,7 @@ pub fn resolve_player_gameover(
             size: 1,
             life: GTimer::from_seconds(12.0, TimerMode::Once),
             pos,
-            // Bevy preserves the dying sprite's flip on the husk.
+            // GML `Player/Destroy_0.gml:79` hands that flip to the husk.
             flip_x: player_flip_at_death,
         },
         Pos(pos),
@@ -456,8 +461,7 @@ pub fn resolve_player_gameover(
 }
 
 /// Blood-gib marker: positionally spawned gore the renderer draws as
-/// red dots (bevy carried a tinted `Sprite`; the tint lives here so no
-/// render handle is needed).
+/// red dots (the tint lives here, so no render handle is needed).
 #[derive(bevy_ecs::prelude::Component, Clone, Copy, Debug)]
 pub struct Gib {
     pub color: [f32; 4],

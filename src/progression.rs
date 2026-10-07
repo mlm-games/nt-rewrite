@@ -897,6 +897,12 @@ pub fn handle_mutation_choice(
 
         ultra.choices.clear();
         commands.remove_resource::<PendingUltra>();
+        // GML `scrLevelUpScreenSubmit:23`, reached from
+        // `UltraIcon/Other_10:17`: the run is saved once the pick is spent, not
+        // when the offer is armed.
+        commands.queue(|world: &mut World| {
+            let _ = crate::run_save::save_run(world);
+        });
 
         if let Ok((mut player, mut health, _, race_state)) = player_q.single_mut() {
             player.ultra_pick_owed = false;
@@ -954,6 +960,12 @@ pub fn handle_mutation_choice(
 
     pending.choices.clear();
     commands.remove_resource::<PendingMutation>();
+    // GML `scrLevelUpScreenSubmit:23`, reached from `SkillIcon/Other_10:7`
+    // after `skillpoints --` and `scr_skill_set`: the write has to see the
+    // spent pick, so it lands here rather than at the commit that armed it.
+    commands.queue(|world: &mut World| {
+        let _ = crate::run_save::save_run(world);
+    });
 
     if let Ok((mut player, mut health, _, race_state)) = player_q.single_mut() {
         player.mutation_picks_owed = player.mutation_picks_owed.saturating_sub(1);

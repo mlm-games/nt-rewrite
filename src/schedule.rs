@@ -1,12 +1,21 @@
-//! Headless sim schedule: bevy `FixedUpdate` order without the engine.
+//! Headless sim schedule.
 //!
-//! Mirrors bevy `game/mod.rs` (`NtSimSet::Always` → `Input` → `Combat`
-//! → `Progression` → `Cleanup`) as one chained tuple, so bevy
-//! `.before()`/`.after()` edges hold by position (`update_carpet_occupancy`
-//! before `boss_ai`, `handle_throne_room_props` after `move_projectiles`).
-//! `gameplay_active` gates the same subsets bevy gates; `Update`-set UI
-//! systems stay out (shell phase), as do the deferred render/UI systems
-//! (sprite strips, toasts-as-text, HUD bridge).
+//! GML has no scheduler: every object runs its own `Step` events in
+//! instance/depth order, and the one cross-object ordering law is the input
+//! driver that has to go first each frame
+//! - GML `UberCont/Step_0.gml:6-15` calls `input_tick()` then
+//!   `scrHandleInputsGeneral`, which re-derives the keyboard/gamepad
+//!   press/hold/release latches in one place (`InputHandling.gml:234-262`).
+//!   Nearly every other event opens with `if lockstep_stop exit`
+//!   (`GameCont/Step_0.gml:1-2`, `enemy/Step_0.gml:1-2`), GML's freeze law.
+//!
+//! [`NtSimSet`] (`Always` → `Input` → `Combat` → `Progression` → `Cleanup`)
+//! and the edges between the sets are this port's own construction: one
+//! chained tuple, so every edge holds by position
+//! (`update_carpet_occupancy` before `boss_ai`, `handle_throne_room_props`
+//! after `move_projectiles`). `gameplay_active` gates the gameplay subsets;
+//! shell-phase UI systems and the deferred render/UI systems (sprite
+//! strips, toasts-as-text, HUD bridge) stay out.
 
 use bevy_ecs::prelude::*;
 
@@ -14,8 +23,8 @@ use crate::comps_a::{PendingMutation, PendingUltra, Run};
 use crate::comps_b::FloorTransition;
 use crate::state::{AppState, Paused, TransitionBlock};
 
-/// Sim schedule sets, bevy `NtSimSet` parity (documentation value: the
-/// chain order below is what actually sequences systems).
+/// Sim schedule sets, port-only (GML has no set concept; documentation
+/// value: the chain order below is what actually sequences systems).
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NtSimSet {
     Always,
@@ -25,9 +34,16 @@ pub enum NtSimSet {
     Cleanup,
 }
 
-/// Gameplay gate (bevy `gameplay_active` parity, including the
-/// `TransitionBlock` conjunct - the port flips states instantly so the
-/// resource stays false, but the gate keeps bevy's shape).
+/// Gameplay gate. GML gates play by deactivating instances, not by a
+/// predicate
+/// - so gameplay `Step` events just stop firing
+///   (`UberCont/Step_1.gml:12-20`: `instance_deactivate_all` plus the
+///   explicit re-activate list), with the pause key latched in
+///   `UberCont/Step_0.gml:35-65` before `scrGamePause` (or the pause menu's
+///   `Continue`, which unpauses at `PauseButton/Other_10.gml:78`).
+///   Collapsing that into one bool every gameplay system reads is
+///   port-only, as is the `TransitionBlock` conjunct: the port flips states
+///   instantly, so nothing raises it.
 pub fn gameplay_active(
     state: Res<AppState>,
     paused: Res<Paused>,
@@ -58,37 +74,46 @@ pub fn gameplay_active(
         && !unlock_open
 }
 
-/// In-game gate for the cleanup tail (bevy `in_state(InGame)` parity).
+/// In-game gate for the cleanup tail, port-only: one app-state compare. GML
+/// spells the play-room predicate as an instance list instead
+/// - no `GenCont`, a `Player`, no `GameOver`, not `romInit`
+///   (`GameCont/Step_0.gml:4-6`).
 pub fn in_game(state: Res<AppState>) -> bool {
     *state == AppState::InGame
 }
 
-/// Build the fixed-step sim schedule in bevy order.
+/// Build the fixed-step sim schedule.
 ///
-/// Cross-set edges carried over from bevy: environment sim (`tick_motes`,
-/// `tick_native_motion`, `tick_ground_flames`) after `player_move` /
-/// `enemy_ai`; `recenter_prop_corpse` and `tick_environment_hazards`
-/// after `apply_explosions`; `tick_campfire` before
-/// `flush_pending_enemy_spawns`. `environment::tick_fog` is in `Always`
-/// but self-gates on pause.
+/// Cross-set edges are port-only
+/// - GML orders per-object `Step` events, not systems
+/// - and are this port's own construction: environment sim (`tick_motes`,
+///   `tick_native_motion`, `tick_ground_flames`) after `player_move` /
+///   `enemy_ai`; `recenter_prop_corpse` and `tick_environment_hazards`
+///   after `apply_explosions`; `tick_campfire` before
+///   `flush_pending_enemy_spawns`. `environment::tick_fog` is in `Always`
+///   but self-gates on pause.
 ///
-/// NOT registered (audited gaps): presentation-only systems with no sim state -
-/// `face_aim` flip, `blink_player` alpha and `animate_environment` alpha all resolve
-/// renderer-side (the last from `SurfacePulse` via the same wave law;
-/// `sprite_from_candidates` records its pick in `PulseSprite` at spawn) - and the
-/// `Update`-set HUD systems, except the area music/ambience trio, which is
-/// registered in the transient-FX tail.
+/// NOT registered (audited gaps): presentation-only systems with no sim
+/// state
+/// - `face_aim` flip, `blink_player` alpha and `animate_environment` alpha
+///   all resolve renderer-side (the last from `SurfacePulse` via the same
+///   wave law; `sprite_from_candidates` records its pick in `PulseSprite`
+///   at spawn)
+/// - and the `Update`-set HUD systems, except the area music/ambience trio,
+///   which is registered in the transient-FX tail.
 ///
-/// `sample_input` IS ported (keyboard/mouse/gamepad/touch samplers feed
-/// `NtInput` through the `App` shell staging). `hurt_on_damage` /
-/// `prop_hurt_on_damage` ARE registered (state half only - image/rect/
-/// anchor/flip resolve renderer-side); `ensure_weapon_visual` /
-/// `tick_weapon_visuals` ARE registered (entity + wkick/wep state;
+/// Input sampling IS ported, but it runs in the shell phase, not here:
+/// `input::sample_keyboard_mapped` / `sample_gamepads_mapped` /
+/// `sample_touch_full` fill [`NtInput`](crate::input::NtInput) from the
+/// staged snapshots [`App::feed_input`](crate::App::feed_input) drains.
+/// `hurt_on_damage` / `prop_hurt_on_damage` ARE registered (state half only
+/// - image/rect/anchor/flip resolve renderer-side); `ensure_weapon_visual`
+/// and `tick_weapon_visuals` ARE registered (entity + wkick/wep state;
 /// pose/art resolve renderer-side).
 ///
-/// `combat::tick_hit_flash` is sim-side only (no bevy counterpart): rides in
-/// `Always` as the `HitFlash` marker drain, with the transient-FX tail
-/// behind it (muzzle expiry, then particle/number/trauma/flash stepping).
+/// `combat::tick_hit_flash` is sim-side only: rides in `Always` as the
+/// `HitFlash` marker drain, with the transient-FX tail behind it (muzzle
+/// expiry, then particle/number/trauma/flash stepping).
 pub fn build_sim_schedule() -> Schedule {
     use crate::anim;
     use crate::audio;
@@ -111,10 +136,10 @@ pub fn build_sim_schedule() -> Schedule {
     use crate::walls;
 
     let mut sched = Schedule::default();
-    // bevy_ecs 0.19 caps config tuples at 20 nodes, so the bevy order
-    // is split into chained groups; the outer chain keeps the total
-    // order (Always → Input → Combat → Progression → Cleanup), which is
-    // what satisfies bevy's `.before()`/`.after()` edges by position.
+    // bevy_ecs 0.19 caps config tuples at 20 nodes, so the set order is
+    // split into chained groups; the outer chain keeps the total order
+    // (Always → Input → Combat → Progression → Cleanup), which is what
+    // satisfies the cross-set edges by position.
     sched.add_systems(
         (
             audio::init_area_audio_resources.in_set(NtSimSet::Always),
@@ -631,12 +656,16 @@ pub fn build_sim_schedule() -> Schedule {
                 progression::flush_dirty_save
                     .in_set(NtSimSet::Cleanup)
                     .run_if(in_game),
-                // Bevy `Update clear_input_when_inactive`: drops sampled
-                // pulses/axes when paused or out of game, after all consumers ran,
-                // which subsumes `OnExit(InGame) clear_input_pulses`. Live play
-                // drains the peek-only interact pulse here too (`collect_pickups` /
-                // `tick_throne_sit` peek it, nothing takes it - an E tap would
-                // latch forever).
+                // Drops sampled pulses/axes when paused or out of game,
+                // after all consumers ran. GML has no per-frame sweep:
+                // pause deactivates the instances outright
+                // (`UberCont/Step_1.gml:12-20`), so nothing consumes the
+                // pulses while paused, and unpause clears the fire latch
+                // explicitly (`scrGamePause.gml:39,57-58`). Live play
+                // drains the peek-only interact pulse here too
+                // (`collect_pickups` / `tick_throne_sit` peek it, nothing
+                // takes it
+                // - an E tap would latch forever).
                 crate::input::clear_input_when_inactive.in_set(NtSimSet::Cleanup),
             )
                 .chain(),

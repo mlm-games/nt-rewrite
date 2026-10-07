@@ -28,8 +28,8 @@ pub fn flash_white(flash: &mut FlashWhite, duration: f32) {
     flash.timer = GTimer::from_seconds(duration, TimerMode::Once);
 }
 
-/// Rumble request for the platform layer (all pads; nt is single-player
-/// so per-pad targeting from the bevy build is intentionally dropped).
+/// Rumble request for the platform layer (all pads; nt is single-player,
+/// so there is no per-pad targeting). Port-only: GML has no rumble at all.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RumbleRequest {
     pub weak: f32,

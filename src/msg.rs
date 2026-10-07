@@ -1,15 +1,14 @@
-//! Tick message queues. The bevy build used `Message` events
-//! (`FloorStarted`, `UiBridgeAction`, `GamepadRumbleRequest`); here each channel
-//! is a drained `Vec` resource - same single-tick delivery, no engine events
-//! needed.
+//! Tick message queues - port-only: GML has no event bus, callers write
+//! straight into the owner instance. Each channel is a drained `VecDeque`
+//! resource, FIFO, one drain per tick.
 //! Concrete payloads land with their owner modules (areas, audio, ui); this file
-//! owns the queue mechanics both sides share.
+//! owns the queue mechanics every channel shares.
 
 use bevy_ecs::prelude::*;
 use std::collections::VecDeque;
 
 /// One message channel. Writers push during systems; exactly one
-/// consumer drains per tick (FIFO, bevy `MessageReader` parity).
+/// consumer drains per tick (FIFO).
 #[derive(Resource, Debug)]
 pub struct Queue<T: Send + Sync + 'static> {
     pending: VecDeque<T>,
