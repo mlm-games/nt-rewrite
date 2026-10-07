@@ -364,7 +364,11 @@ impl WgpuCallback for ShadowPass {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
                     },
-                    depth_slice: Some(0),
+                    // The mask is a plain 2D texture; `depth_slice` is only
+                    // legal on a 3D or array view and wgpu rejects it here
+                    // ("Depth slice was provided but the color attachment's
+                    // view is not 3D").
+                    depth_slice: None,
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &gpu.depth,
