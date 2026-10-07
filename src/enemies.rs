@@ -6640,7 +6640,7 @@ fn breach_bandit(
     commands.spawn((
         GameCleanup,
         BossIntro {
-            timer: gml_alarm(BOSS_INTRO_FRAMES),
+            timer: GTimer::from_seconds(BOSS_INTRO_FRAMES / 30.0, TimerMode::Once),
         },
     ));
     toast.show("BIG BANDIT");

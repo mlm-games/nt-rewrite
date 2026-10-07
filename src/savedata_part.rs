@@ -1568,7 +1568,8 @@ pub fn parse_save(text: &str) -> Result<SaveData, String> {
         ));
     }
     if save.version < SAVE_VERSION {
-        migrate_save_on_load(&mut save, save.version);
+        let from = save.version;
+        migrate_save_on_load(&mut save, from);
         save.version = SAVE_VERSION;
     } else {
         save.sanitize_loadouts();
@@ -1601,7 +1602,8 @@ pub fn load_save_from_file(path: &Path) -> Result<SaveData, String> {
         .ok_or_else(|| format!("save unavailable: {:?}", result.status))?;
     let legacy_text = std::str::from_utf8(&legacy_bytes).map_err(|e| e.to_string())?;
     let mut save: SaveData = serde_json::from_str(legacy_text).map_err(|e| e.to_string())?;
-    migrate_save_on_load(&mut save, save.version);
+    let from = save.version;
+    migrate_save_on_load(&mut save, from);
     save.version = SAVE_VERSION;
     store_save_to_file(&save, path)?;
     Ok(save)
