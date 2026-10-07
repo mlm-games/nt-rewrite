@@ -4309,7 +4309,7 @@ impl App {
             view.modifier = view.modifier.hit_passthrough();
             view
         });
-        let shadow_view = stamps.is_empty().then(|| {
+        let shadow_view = split_shad.then(|| {
             let box_dp = self.gml_frame().box_dp;
             Embedded(
                 Modifier::new()

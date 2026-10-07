@@ -35,6 +35,19 @@ use repose_render_wgpu::{CallbackRenderPass, CallbackResources, ScreenDescriptor
 /// group and instance buffer instead of rebuilding pipelines every frame.
 const MASK_BATCH_ID: &str = "nt.shad.mask";
 
+/// The mask surface is always single-sample, which is also what GML's one
+/// `shad` surface held: the stamps are alpha-1 coverage read back 1:1.
+///
+/// It deliberately ignores `screen.sample_count`. On the WebGL2 backend the
+/// SURFACE's MSAA rides the canvas default framebuffer
+/// (`renderbufferStorageMultisample`), but an immutable multisample TEXTURE
+/// needs `texStorage2DMultisample`, which glow's web backend does not
+/// implement and panics on ("Tex storage 2D multisample is not supported").
+/// Firefox's WebGPU-over-GL adapter reports X4 for the surface format, so
+/// allocating at the surface count killed the frame. Repose's own offscreen
+/// passes are `sample_count: 1` for the same reason.
+const MASK_SAMPLES: u32 = 1;
+
 /// Per-frame snapshot of the `shad` surface: the coverage stamps, the camera
 /// that places them, and the area's shadow color. Plain data - the pass reads
 /// no wall or floor state of its own.
@@ -58,16 +71,18 @@ pub struct ShadowSnapshot {
 /// so it survives across frames and is reallocated only on a size, format, or
 /// sample-count change.
 struct MaskGpu {
-    /// Multisampled when the surface is; `resolve` is then the samplable copy.
+    /// Always single-sample - see [`ensure_mask`] - so it is directly samplable
+    /// and there is no resolve copy.
     view: wgpu::TextureView,
-    resolve: Option<wgpu::TextureView>,
     /// The sprite batch's pipelines all declare `Depth24PlusStencil8` with
     /// `depth_write_enabled: false` (batch.rs), so the mask pass has to
     /// attach one of a matching format or wgpu rejects the draw.
     depth: wgpu::TextureView,
     size: [u32; 2],
     format: wgpu::TextureFormat,
-    samples: u32,
+    /// Sample count of the SURFACE pass the composite runs inside, which is
+    /// what `gpu.pipeline` must declare - not the mask's own count.
+    composite_samples: u32,
     pipeline: wgpu::RenderPipeline,
     uniforms: wgpu::Buffer,
     bind: wgpu::BindGroup,
@@ -113,17 +128,19 @@ fn uniform_words(color: [f32; 3], alpha: f32, target_px: [u32; 2]) -> [u8; 32] {
     out
 }
 
+/// Builds the mask surface and the composite that reads it. `composite_samples`
+/// is the count of the SURFACE pass the composite draws into, not the mask's.
 fn ensure_mask(
     device: &wgpu::Device,
     size: [u32; 2],
     format: wgpu::TextureFormat,
-    samples: u32,
+    composite_samples: u32,
     existing: Option<MaskGpu>,
 ) -> MaskGpu {
     if let Some(gpu) = existing
         && gpu.size == size
         && gpu.format == format
-        && gpu.samples == samples
+        && gpu.composite_samples == composite_samples
     {
         return gpu;
     }
@@ -137,7 +154,7 @@ fn ensure_mask(
         label: Some("nt.shad.mask"),
         size: extent,
         mip_level_count: 1,
-        sample_count: samples,
+        sample_count: MASK_SAMPLES,
         dimension: wgpu::TextureDimension::D2,
         format,
         usage,
@@ -151,29 +168,13 @@ fn ensure_mask(
             label: Some("nt.shad.mask.depth"),
             size: extent,
             mip_level_count: 1,
-            sample_count: samples,
+            sample_count: MASK_SAMPLES,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Depth24PlusStencil8,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
-    // A multisampled attachment is not samplable, so the mask resolves into a
-    // single-sample copy that the composite reads.
-    let resolve = (samples > 1).then(|| {
-        device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some("nt.shad.mask.resolve"),
-                size: extent,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage,
-                view_formats: &[],
-            })
-            .create_view(&wgpu::TextureViewDescriptor::default())
-    });
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("nt.shad.sampler"),
         // Nearest, like the atlas: the mask is canvas-sized and the composite
@@ -257,7 +258,7 @@ fn ensure_mask(
             bias: wgpu::DepthBiasState::default(),
         }),
         multisample: wgpu::MultisampleState {
-            count: samples,
+            count: composite_samples,
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
@@ -270,7 +271,6 @@ fn ensure_mask(
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    let sampled = resolve.as_ref().unwrap_or(&view);
     let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("nt.shad.bg"),
         layout: &bind_layout,
@@ -281,7 +281,7 @@ fn ensure_mask(
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: wgpu::BindingResource::TextureView(sampled),
+                resource: wgpu::BindingResource::TextureView(&view),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
@@ -293,11 +293,10 @@ fn ensure_mask(
     // uniform buffer is written every frame, so it is held directly.
     MaskGpu {
         view,
-        resolve,
         depth,
         size,
         format,
-        samples,
+        composite_samples,
         pipeline,
         uniforms,
         bind,
@@ -326,11 +325,18 @@ impl WgpuCallback for ShadowPass {
         for stamp in snap.stamps.iter() {
             batch.push_sprite(stamp);
         }
+        // The batch builds its pipelines from the descriptor's sample count
+        // (`batch.rs`), and it draws into the 1-sample mask, so the count is
+        // forced here rather than taken from the surface.
+        let mask_screen = ScreenDescriptor {
+            sample_count: MASK_SAMPLES,
+            ..*screen
+        };
         let buffers = batch.prepare_with_uploads(
             device,
             queue,
             encoder,
-            screen,
+            &mask_screen,
             resources,
             self.uploads.as_ref(),
         );
@@ -353,7 +359,7 @@ impl WgpuCallback for ShadowPass {
                 label: Some("nt.shad.mask.pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &gpu.view,
-                    resolve_target: gpu.resolve.as_ref(),
+                    resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
