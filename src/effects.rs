@@ -47,14 +47,16 @@ pub fn rumble(queue: &mut Queue<RumbleRequest>, weak: f32, strong: f32, duration
     });
 }
 
-/// One-shot colored burst (game-utils `VfxSpawner::spawn_burst` parity): `count`
-/// dots, uniform directions, `speed_range` px/s, 3–7 px size, 0.4–0.9 s life. `rng`
-/// is caller-supplied so tests seed it (the bevy build used thread rng).
+/// One-shot colored burst (game-utils `VfxSpawner::spawn_burst` parity):
+/// `count` dots, uniform directions, `speed_range` px/s, 3–7 px size,
+/// 0.4–0.9 s life. `rng` is caller-supplied so each caller owns the stream
+/// it draws from.
 ///
-/// GML parity (`BloodStreak` friction 0.4, `Dust` 0.3, `Smoke` 0.1 - all flat
-/// px/step² decays): bursts carry exponential drag so dots settle near the corpse
-/// instead of coasting at full speed for their whole life. 4/s halves a dot every
-/// ~0.17 s, matching the feel of GML's flat friction over a ~0.6 s life.
+/// GML parity (`BloodStreak` friction 0.4, `Dust` 0.3, `Smoke` 0.1
+/// - all flat px/step² decays): bursts carry exponential drag so dots
+///   settle near the corpse instead of coasting at full speed for their
+///   whole life. 4/s halves a dot every ~0.17 s, matching the feel of GML's
+///   flat friction over a ~0.6 s life.
 pub fn spawn_burst(
     commands: &mut Commands,
     rng: &mut impl rand::RngExt,
@@ -126,12 +128,16 @@ pub fn tick_fired_weapons(mut commands: Commands, mut q: Query<(Entity, &mut Fir
 
 /// Step tick-based FX state once per sim tick (Always tail).
 ///
-/// `repame-fx` steps on 100 Hz ticks while the sim runs 30 Hz, so
-/// `ticks = round(delta * 100)` (3 per steady tick; 0 pauses, matching the
-/// `ticks <= 0` no-op in the fx step fns). `Trauma` previously never decayed
-/// sim-side and `FlashWhite.timer` was never ticked, so both stuck at peak until
-/// now; this is the bevy `2d_screen_shake` 1.5/s decay and the game-utils flash
-/// fade.
+/// `repame-fx` steps on 100 Hz ticks while the sim runs 30 Hz, so `ticks =
+/// round(delta * 100)` (3 per steady tick; 0 pauses, matching the `ticks <=
+/// 0` no-op in the fx step fns). `Trauma` previously never decayed sim-side
+/// and `FlashWhite.timer` was never ticked, so both stuck at peak until
+/// now; the decay is `repame-fx`'s own [`Trauma::decay_per_sec`] default of
+/// 1.5/s (port-only
+/// - GML's shake is a scalar on `BackCont`, decayed by `*= power(0.8,
+///   timescale)` above 10 and `-= timescale` otherwise,
+///   `objects/BackCont/Step_0.gml:120-128`), and the fade is the game-utils
+///   one.
 pub fn step_fx(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -211,8 +217,11 @@ impl Default for HitStop {
 impl HitStop {
     pub fn trigger(&mut self, scale: f32, recover_secs: f32) {
         use crate::time::TimerMode;
-        // Bevy `HitStop::trigger` weakest-wins guard: a live stop keeps
-        // the strongest dip (lowest scale); weaker triggers defer.
+        // Weakest-wins guard (port-only law): a live stop keeps the
+        // strongest dip (lowest scale); weaker triggers defer. GML has no
+        // time-stop to arbitrate
+        // - `scrGameFreeze` is a render-time blur of the backbuffer, not a
+        //   paused clock.
         let scale = scale.clamp(0.01, 1.0);
         if self.active && scale >= self.scale {
             return;

@@ -1,29 +1,35 @@
-//! Weapon runtime definitions: pure-data port of `weapon_runtime.rs` game
-//! data, plus the `WeaponDef` / `MeleeDef` structs and the legacy
-//! `weapon_def` table from bevy `content.rs` (~lines 832-1223). Pure
-//! data/logic only: zero ECS imports, zero bevy imports.
-//! Sim-side conventions: bevy `Color::srgb(r, g, b)` -> `[f32; 3]` (values
-//! untouched); `Color::srgba` maps component-wise onto `HazardDef`/`SplitDef`'s
-//! `[f32; 4]`; bevy `Vec2 size` -> `glam::Vec2`; `WeaponId` is
-//! `crate::data::WeaponId(pub u8)` whose `.0` indexes `WEAPONS`.
-//! `weapon_runtime_def` is the key API the firing phase will call:
-//! `WeaponId -> WeaponDef` with all profile layers applied in the same
-//! order as bevy (legacy-or-family base -> exact -> variant -> normalize).
+//! Weapon runtime definitions: the `WeaponDef` / `MeleeDef` structs and
+//! the port's own per-weapon firing table, transcribed from GML
+//! `scripts/scrWeapons/scrWeapons.gml` (the id-keyed `wep_*` arrays, `maxwep = 128`)
+//! and `scripts/scrFire/scrFire.gml` (per-weapon `case` arms). Pure data/logic
+//! only: zero ECS imports, zero render-engine imports.
+//! Conventions: colours are plain `[f32; 3]`, `HazardDef`/`SplitDef` carry
+//! `[f32; 4]`; `Vec2 size` is `glam::Vec2`; `WeaponId` is
+//! `crate::data::WeaponId(pub u8)` whose `.0` indexes `WEAPONS`. GML's
+//! px-per-frame numbers are scaled x30 here (30 steps/s), and per-step
+//! `alarm[n]` counts become `GTimer` seconds.
+//! `weapon_runtime_def` is the key API the firing phase calls:
+//! `WeaponId -> WeaponDef` with all profile layers applied in order
+//! (legacy-or-family base -> exact -> variant -> normalize).
 
 use glam::Vec2;
 
 use crate::data::{AmmoKind, HazardDef, HazardKind, SplitDef, WeaponId, WeaponKind};
 use crate::weapons_data::{AmmoType, WEAPONS, WeaponData};
 
-/// Melee arc definition (bevy `content.rs::MeleeDef` verbatim).
+/// Melee arc definition. GML has no such struct: the arc is the slash
+/// projectile's mask plus `scr_projectile_shift` spread
+/// (`scripts/scrFire/scrFire.gml:193-204` for the shovel's 3-pellet 60-degree fan).
 #[derive(Clone, Copy, Debug)]
 pub struct MeleeDef {
     pub range: f32,
     pub arc: f32,
 }
 
-/// Full per-weapon firing definition (bevy `content.rs::WeaponDef`
-/// verbatim, except `color: Color -> [f32; 3]` and `Vec2` -> `glam::Vec2`).
+/// Full per-weapon firing definition. Flattens GML's `wep_*` row
+/// (`scripts/scrWeapons/scrWeapons.gml:12-25`) with the shot itself: projectile object
+/// fields, `scr_weapon_post` push/shake/recoil
+/// (`scripts/scr_screenshake/scr_screenshake.gml:13-25`) and the `scrFire` `case` arm.
 #[derive(Clone, Copy, Debug)]
 pub struct WeaponDef {
     pub name: &'static str,
@@ -1166,10 +1172,10 @@ fn apply_family_profile(def: &mut WeaponDef, family: WeaponFamily, meta: &Weapon
     }
 }
 
-// NOTE: the trailing `"HEAVY CROSSBOW" | "HEAVY AUTO CROSSBOW"` arm is
-// shadowed by the two earlier single-name arms above it; it is dead in the
-// bevy source too and is kept verbatim for table fidelity (the allow keeps
-// the build warning-free).
+// NOTE: the trailing `"HEAVY CROSSBOW" | "HEAVY AUTO CROSSBOW"` arm in
+// `apply_variant_tuning` is shadowed by the two earlier single-name arms in
+// `apply_exact_profile`; it is dead but kept for table fidelity (the allow
+// keeps the build warning-free).
 #[allow(unreachable_patterns)]
 fn apply_exact_profile(def: &mut WeaponDef, meta: &WeaponData) {
     let name = base_weapon_name(meta.wep_name);
@@ -2854,8 +2860,11 @@ fn normalize_def(def: &mut WeaponDef, meta: &WeaponData) {
     }
 }
 
-/// Legacy per-kind base table (bevy `content.rs::weapon_def` verbatim;
-/// `Color -> [f32; 3]`, `frames(f) = f / 30.0` inlined).
+/// Legacy per-kind base table: the port's own transcription of GML
+/// `scripts/scrWeapons/scrWeapons.gml` (metadata rows, `wep_load` steps converted with
+/// `f / 30.0`, `wep_type == 0` marking a melee weapon at `:1409-1411`).
+/// The shot numbers per kind come from the projectile objects and the
+/// `scrFire` `case` arms, not from `scrWeapons` itself.
 pub fn weapon_def(kind: WeaponKind) -> WeaponDef {
     match kind {
         WeaponKind::None => WeaponDef {
@@ -3164,8 +3173,10 @@ pub fn sanitize_weapon_id(id: WeaponId) -> WeaponId {
     }
 }
 
-/// Ammo kind for a weapon id (bevy `content.rs::weapon_ammo` verbatim:
-/// full `WEAPONS`-table lookup, `None` for melee/empty).
+/// Ammo kind for a weapon id: GML `scr_weapon_get_type` reads `wep_type[]`
+/// and returns `Ammo.None` for anything invalid
+/// (`scripts/scr_weapon_get_type/scr_weapon_get_type.gml:11-14`), so `None` covers both melee
+/// and empty.
 pub fn weapon_ammo(id: WeaponId) -> AmmoKind {
     if id == WeaponId::NONE {
         return AmmoKind::None;
@@ -3181,9 +3192,10 @@ pub fn weapon_ammo(id: WeaponId) -> AmmoKind {
     }
 }
 
-/// Display name for a weapon id (bevy `content.rs::weapon_id_name`
-/// verbatim: `"NONE"` for empty, otherwise the table name; out-of-range
-/// ids clamp to the empty row via `weapon_meta`, same as bevy).
+/// Display name for a weapon id: `"NONE"` for empty, otherwise the
+/// `wep_name[]` row. GML returns `"WEAPON" + string(_weapon)` for an
+/// invalid id (`scripts/scr_weapon_get_type/scr_weapon_get_type.gml:6-9`); out-of-range ids
+/// clamp to the empty row via `weapon_meta` instead.
 pub fn weapon_id_name(id: WeaponId) -> &'static str {
     if id == WeaponId::NONE {
         return "NONE";

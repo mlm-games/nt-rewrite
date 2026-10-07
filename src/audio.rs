@@ -2,7 +2,7 @@
 //! Systems here output DATA and the platform layer (repame-audio) plays it:
 //! * one-shots ([`AudioCue`]) queue with stem + volume + pitch variance; the
 //!   pitch is sampled at play time, as GML does inside the play script
-//!   (GML `scripts/snd_play_hit.gml:11`), and the backend resolves stems
+//!   (GML `scripts/snd_play_hit/snd_play_hit.gml:11`), and the backend resolves stems
 //!   against its own asset store.
 //! * area music/ambience ([`sync_area_audio`]) resolves the GML `MusCont`
 //!   selection law to bare GML stems in [`AreaAudioState`], polled by the

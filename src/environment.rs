@@ -1490,7 +1490,7 @@ fn step_fire_traps(
         if emit {
             trap.alarm -= steps;
             if trap.alarm <= 0.0 {
-                // GML `Alarm_0.gml:1-4`.
+                // GML `Trap/Alarm_0.gml:1-4`.
                 trap.side = !trap.side;
                 trap.alarm = 90.0;
                 trap.fire = 45;

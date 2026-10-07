@@ -8102,8 +8102,8 @@ pub fn tick_ice_flowers(
 
     for (entity, mut pos, mut feed) in &mut flowers {
         if inited.insert(entity) {
-            // GML `Create_0.gml:7-10`: sit on the nearest floor tile, then
-            // push clear of anything solid.
+            // GML `IceFlower/Create_0.gml:7-10`: sit on the nearest floor
+            // tile, then push clear of anything solid.
             let cell = mask.world_to_cell(pos.0);
             let seated = mask.cell_center(cell);
             let mut at = glam::Vec2::new(seated.x - 16.0, seated.y - 16.0);
@@ -9448,10 +9448,10 @@ fn spawn_hit_warning(commands: &mut Commands, pos: glam::Vec2) {
     ));
 }
 
-/// Expire telegraph markers. GML's `HitWarning` (`sprAssassinNotice`, spawned
-/// at `x, y - 16` by e.g. `Gator/Alarm_1.gml:9`) has no lifetime at all - its
-/// only other event is `HitWarning/Other_7.gml:1`, which destroys it when the
-/// room ends - so the 0.5 s window is port-only.
+/// Expire telegraph markers. GML's `HitWarning` (`sprAssassinNotice`,
+/// spawned at `x, y - 16` by e.g. `Gator/Alarm_1.gml:9`) has no lifetime
+/// at all - its only other event is `HitWarning/Other_7.gml:1`, which
+/// destroys it when the room ends - so the 0.5 s window is port-only.
 pub fn tick_hit_warnings(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -9465,11 +9465,11 @@ pub fn tick_hit_warnings(
     }
 }
 
-/// PopoShield follower tracking. GML runs it the other way round: the shield is
-/// spawned on the owner (`Shielder/Alarm_1.gml:20,46`) and then drags the owner
-/// to itself (`PopoShield/Step_2.gml:4-9`), with no `gunangle` offset at all -
-/// so the 16 px offset along the owner's `gunangle` here is port-only. The
-/// rotation stays renderer-side.
+/// PopoShield follower tracking. GML runs it the other way round: the
+/// shield is spawned on the owner (`Shielder/Alarm_1.gml:20,46`) and then
+/// drags the owner to itself (`PopoShield/Step_2.gml:4-9`), with no
+/// `gunangle` offset at all - so the 16 px offset along the owner's
+/// `gunangle` here is port-only. The rotation stays renderer-side.
 pub fn tick_shield_followers(
     mut commands: Commands,
     owners: Query<(Entity, &Pos, &EnemyBrain), With<Enemy>>,

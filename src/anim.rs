@@ -301,7 +301,7 @@ pub fn play_hurt(
 /// HP-drop edge detection for enemies + the player: on a fresh HP loss,
 /// switch to the hurt strip via [`play_hurt`], the way GML forces
 /// `sprite_index = spr_hurt` / `image_index = 0` on any damage
-/// (`scripts/scr_hit.gml:17-23`). Image/rect/anchor writes and the
+/// (`scripts/scr_hit/scr_hit.gml:17-23`). Image/rect/anchor writes and the
 /// `FireAnim` removal happen renderer-side from the new path.
 pub fn hurt_on_damage(
     mut commands: Commands,
@@ -365,7 +365,7 @@ pub fn hurt_on_damage(
 }
 
 /// HP-drop edge detection for destructible props (the same
-/// `scripts/scr_hit.gml:17-23` law as [`hurt_on_damage`]). The
+/// `scripts/scr_hit/scr_hit.gml:17-23` law as [`hurt_on_damage`]). The
 /// `flip_x` force and anchor write happen renderer-side.
 pub fn prop_hurt_on_damage(
     mut commands: Commands,

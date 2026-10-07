@@ -1,14 +1,14 @@
 //! Level-generation core: the headless floor walk GML runs in
 //! `FloorMaker` - one maker per stamp, 32px steps, `goal` floor cells
 //! (`objects/FloorMaker/Step_0.gml:69-87`, `FloorMaker/Create_0.gml:1-9`),
-//! stamping `Floor`s through `scripts/scrMakeFloor.gml` - the 16px wall
-//! ring around each tile (`scripts/macros_general.gml:49-62`), and the
+//! stamping `Floor`s through `scripts/scrMakeFloor/scrMakeFloor.gml` - the 16px wall
+//! ring around each tile (`scripts/macros_general/macros_general.gml:49-62`), and the
 //! population pass (`scrPopulate`, `scrPopEnemies`, `scrPopChests`,
 //! `scrPopProps`). `is_secret_area` follows GML
 //! `objects/GameCont/Other_5.gml:54` (`area >= 100`).
 //!
 //! Per-area seeding mirrors GML `objects/GameCont/Create_0.gml:95`
-//! (`levseed = global.seed`) over `scripts/scrRngStatesReset.gml:3-17`;
+//! (`levseed = global.seed`) over `scripts/scrRngStatesReset/scrRngStatesReset.gml:3-17`;
 //! the port draws one `StdRng` per phase off `run.gen_seed` instead of
 //! re-seeding the one GameMaker stream, so its exact sequences still differ
 //! (see `phase_rng`).
@@ -22,11 +22,11 @@ use crate::comps_a::Run;
 use crate::comps_b::ChestKind;
 use crate::data::{AreaId, EnemyKind};
 
-// `TILE` is GML's 32px floor stamp (`scripts/scrMakeFloor.gml`, `x + 32`
+// `TILE` is GML's 32px floor stamp (`scripts/scrMakeFloor/scrMakeFloor.gml`, `x + 32`
 // offsets); `WALL_PX` is the 16px probe lattice `mcr_floor_make_walls` puts
-// walls on (`scripts/macros_general.gml:50-61`) - GML's own wall mask is
+// walls on (`scripts/macros_general/macros_general.gml:50-61`) - GML's own wall mask is
 // 24x24 (`objects/Wall/Create_0.gml:13-14`, narrowed to 20 by
-// `mcr_wall_update_lrwh` at `scripts/macros_general.gml:75-80`), which this
+// `mcr_wall_update_lrwh` at `scripts/macros_general/macros_general.gml:75-80`), which this
 // port does not model. Both grid the `wall_cell_at` / `cell_center_*`
 // helpers below.
 pub const WALL_PX: f32 = 16.0;
@@ -1232,7 +1232,8 @@ fn generate_campfire(run: &Run) -> LevelPlan {
 }
 
 /// GML `objects/GenCont/Alarm_2.gml:28-105` verbatim: an ordinary area-107
-/// maker run (`goal = 20`, `scrAreaGetGenerationGoal.gml:129`) plus the two
+/// maker run (`goal = 20`, `scrArea.gml:129` in `scrAreaGetGenerationGoal`)
+/// plus the two
 /// hand-laid slabs. `FloorMaker/Step_0.gml:82-86` sets `alarm[0] = 3` and
 /// `alarm[2] = 2` in one step, so `Alarm_2` fires BEFORE `Alarm_0` -- the slab
 /// floors land in the cell list `mcr_floor_make_walls`/`scrPopulate` walk.
@@ -2687,7 +2688,7 @@ fn boss_for_run(run: &Run, area: i32, is_last: bool) -> Option<EnemyKind> {
         return None;
     }
     // GML `scrPopulate.gml:325-372`, keyed on the `area_*` macros
-    // (`scripts/macros_general.gml:538-553`): scrapyards 3, city 5,
+    // (`scripts/macros_general/macros_general.gml:538-553`): scrapyards 3, city 5,
     // sewers 2, caves 4 / cursed_caves 104, labs 6 -- the last three all
     // gated on `_loops > 0`. Palace (7) and HQ (106) get no `scrPopulate`
     // boss; their arenas are built by `FloorMaker` instead.

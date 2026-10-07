@@ -1,6 +1,6 @@
 //! Floor setup: mask building + entity spawning from plans.
 //!
-//! Loadout run setup mirrors GML `scripts/scrRunStart.gml:1-42`
+//! Loadout run setup mirrors GML `scripts/scrRunStart/scrRunStart.gml:1-42`
 //! (`random_set_seed`, `scrCreatePlayers`, the crown roll, then
 //! `scrAmmoUpdateTypeStats`): it resolves the save loadout (character
 //! stats, `start_crown` stamp, skins, starting weapons via
@@ -3482,12 +3482,13 @@ mod verbatim_title_to_first_level {
         assert!(!is_cover && !opaque && kind == Some(MenuOverlay::Title));
     }
 
-    /// Reported bug: the loading screen must show the vortex, not the previous
-    /// room. GML `room_restart` hands `GenCont` a fresh room, so GENERATING
-    /// draws over spiral + black only. Entering Loading tears down session
-    /// entities + the floor mask up front (bevy `teardown_game` on InGame exit);
-    /// `setup_run` rebuilds at the end of the load. Covers fresh-run and RETRY
-    /// after death.
+    /// Reported bug: the loading screen must show the vortex, not the
+    /// previous room. GML `room_restart` hands `GenCont` a fresh room, so
+    /// GENERATING draws over spiral + black only. Entering Loading tears
+    /// down session entities + the floor mask up front (the port's
+    /// `teardown_session_entities` on InGame exit, GML
+    /// `scrCleanupSessionInstances.gml:1-11`); `setup_run` rebuilds at the
+    /// end of the load. Covers fresh-run and RETRY after death.
     #[test]
     fn loading_enter_clears_stale_world() {
         use crate::state::{AppState, goto_state};

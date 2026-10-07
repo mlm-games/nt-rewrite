@@ -1,5 +1,5 @@
 //! Game data ids and tables. `AreaId` discriminants are route identity,
-//! not GML's `area_*` values (`scripts/macros_general.gml:538-553`;
+//! not GML's `area_*` values (`scripts/macros_general/macros_general.gml:538-553`;
 //! convert with `crate::worldgen::gml_area_from_run`). `EnemyKind`,
 //! `MutationId` and `UltraMutationId` live in `ids_part.rs`. Colour fields
 //! are plain portable types (linear `[f32; 4]`, glam `Vec2`); values are

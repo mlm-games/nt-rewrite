@@ -6924,10 +6924,13 @@ pub fn settings_hot_rows(page: u8, vw: f32) -> Vec<SettingHotRow> {
             rows
         }
         16 => {
-            // GML `Controls_Experimental` (`Other_20.gml:786`): `options_keyboard`,
-            // `controls_stickregions`, `controls_hiddensticks` (hidden while regions are
-            // on: the repositioning sticks never sit at home). Regions-on gate = text
-            // layer + `settings_row_available`; hot rows keep every row (index agreement).
+            // GML `MenuOptions/Other_20.gml:785-786` (the
+            // `Controls_Experimental` region): `options_keyboard`,
+            // `controls_stickregions`, `controls_hiddensticks` (hidden
+            // while regions are on: the repositioning sticks never sit at
+            // home). Regions-on gate = text layer +
+            // `settings_row_available`; hot rows keep every row (index
+            // agreement).
             vec![
                 tog(48.0, SettingHotOp::Toggle("keyboard_enabled")),
                 tog(66.0, SettingHotOp::Toggle("stick_regions")),
@@ -12249,10 +12252,11 @@ mod remap_page_tests {
         }
     }
 
-    /// GML `Controls_Experimental` parity (`Other_20.gml:786`): no WIP
-    /// placeholder - KEYBOARD MODE + STICK REGIONS + HIDE JOYSTICKS,
-    /// text rows and hot rows agreeing. Hide-joysticks hides while
-    /// stick regions are on (`Other_20.gml:806`).
+    /// GML `MenuOptions/Other_20.gml:785-786` (`Controls_Experimental`
+    /// region): no WIP placeholder
+    /// - KEYBOARD MODE + STICK REGIONS + HIDE JOYSTICKS, text rows and hot
+    ///   rows agreeing. Hide-joysticks hides while stick regions are on
+    ///   (`Other_20.gml:806`).
     #[test]
     fn experimental_page_has_three_switches_no_wip() {
         let mut world = World::new();

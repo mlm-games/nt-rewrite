@@ -9,16 +9,18 @@
 //! - `ally_ai`, `tick_hold_abilities` (Eyes/Horror/Frog hold), weapon
 //!   visuals (`ensure_weapon_visual`, `tick_weapon_visuals`,
 //!   `held_weapon_angle`) - render or a separate slice; not ported.
-//! - `move_swing_fx` has no hitbox motion in bevy (slash hitboxes ride
-//!   `Velocity` integration in `move_projectiles`); only the `SwingFx`
-//!   lifetime tick is kept, so the marker cannot leak.
+//! - `move_swing_fx` only retires the [`SwingFx`] marker (port-only render
+//!   state, no GML object); slash hitboxes ride `Velocity` integration in
+//!   `move_projectiles`, so the marker has no hitbox motion to drive.
 //!
-//! Headless adaptations (no bevy engine):
+//! Headless adaptations (no render engine):
 //! - `Transform` -> [`Pos`]; `Timer` -> [`GTimer`]; `Time<Fixed>` ->
 //!   [`SimTime`]; thread rng -> `rand::rng()`.
 //! - Audio spawns -> [`AudioCue`]s pushed into [`Queue`] (the platform
-//!   layer plays them). Stems mirror the bevy names (`shoot`,
-//!   `shotgun`, `empty`, …).
+//!   layer plays them). Stems keep the GML sound names (`sndEmpty`,
+//!   `sndShotgun`, `sndMeleeFlip`, …); GML plays these through
+//!   `snd_play` / `snd_play_gun` (`scripts/scrEmpty/scrEmpty.gml:20`,
+//!   `scripts/snd_play_gun/snd_play_gun.gml:4`).
 //! - `VfxSpawner` bursts -> [`spawn_burst`]; damage numbers ->
 //!   `repame_fx::spawn_number`; trauma/hitstop/slow-mo/rumble keep their
 //!   sim-side sinks.
@@ -27,10 +29,12 @@
 //! - Projectile art (catalog strips, anchors, anims) is renderer-side here
 //!   (see `spawns.rs`); spawns carry sim markers only (`ProjectileTyp`,
 //!   `ProjectileFade` paths, `PlasmaSize`, …).
-//! - Slash anim length is catalog data in bevy; headless slashes use the
-//!   3-frame default (`slash_life_secs(3)`).
-//! - `ProjectileArchetype` (bevy `projectile_archetypes.rs`) is re-expressed
-//!   minimally as [`FireArch`]: only the fields the fire path branches on.
+//! - Slash life is the fired strip's frame count at GML's `image_speed 0.4`
+//!   (`Slash/Create_0.gml:2`, `Shank/Create_0.gml:2`); headless slashes
+//!   fall back to the 3-frame default (`slash_life_secs(3)`).
+//! - The per-weapon projectile quirks the fire path branches on live in
+//!   [`FireArch`] (port-only table; GML keeps them as `case` arms of
+//!   `scripts/scrFire/scrFire.gml`).
 
 use crate::anim::SpriteAnim;
 use bevy_ecs::prelude::*;
@@ -86,8 +90,9 @@ use crate::worldgen::WALL_PX;
 
 // Small local helpers
 
-/// Push a fire-and-forget cue (bevy `GameAudio::play_*` parity for the
-/// weapon stems that the headless `GameAudio` bank does not own yet).
+/// Push a fire-and-forget cue for a weapon stem the headless `GameAudio`
+/// bank does not own yet. GML plays these through `snd_play`
+/// (`scripts/scrPlayerGunReloadFX/scrPlayerGunReloadFX.gml:9-10`).
 fn cue(cues: &mut Queue<AudioCue>, name: &'static str, volume: f32, variance: f32) {
     cues.push(AudioCue {
         name,
@@ -96,8 +101,9 @@ fn cue(cues: &mut Queue<AudioCue>, name: &'static str, volume: f32, variance: f3
     });
 }
 
-/// Ammo kind for a weapon id (same rule as the bevy build: `AmmoType`
-/// maps 1:1 onto `AmmoKind`).
+/// Ammo kind for a weapon id: GML `scr_weapon_get_type` reads `wep_type[]`
+/// (`scripts/scr_weapon_get_type/scr_weapon_get_type.gml:11-14`) and `AmmoType` maps 1:1 onto
+/// `AmmoKind` (`scripts/scrAmmoInit/scrAmmoInit.gml:1-9`).
 fn weapon_ammo(id: WeaponId) -> AmmoKind {
     match weapon_meta(id).wep_type {
         AmmoType::None => AmmoKind::None,
@@ -161,12 +167,12 @@ pub fn gun_reload_fx(
 }
 
 /// Steroids second slot: single shared definition in `crate::player`
-/// (bevy-verbatim body); reused by the fire path.
+/// (GML `Player/Step_0.gml:416-438`); reused by the fire path.
 use crate::player::steroids_secondary_slot;
 
-// Projectile archetype (minimal headless `ProjectileArchetype`)
+// Projectile archetype (minimal headless table)
 
-/// Headless beam spec (bevy `BeamSpec` with `Color` -> `[f32; 4]`).
+/// Headless beam spec (`Color` -> `[f32; 4]`).
 #[derive(Clone, Copy, Debug)]
 pub struct BeamShot {
     pub length: f32,
@@ -178,8 +184,9 @@ pub struct BeamShot {
     pub color: [f32; 4],
 }
 
-/// Only the archetype fields the fire path branches on (bevy
-/// `ProjectileArchetype` parity, minus art).
+/// The archetype fields the fire path branches on. Port-only table: GML
+/// spells the same quirks out as `case` arms and instance fields inside
+/// `scripts/scrFire/scrFire.gml` (e.g. sticky at `:216-223`).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FireArch {
     pub homing: Option<Homing>,
@@ -219,8 +226,9 @@ pub struct SpinSpawn {
     pub ultra_spin: bool,
 }
 
-/// Archetype lookup by (base) weapon name, mirroring bevy
-/// `projectile_archetype` (GOLDEN/ULTRA/CURSED prefixes strip to base).
+/// Archetype lookup by (base) weapon name; GOLDEN/ULTRA/CURSED prefixes
+/// strip to base the way GML shares `case` arms across a family
+/// (`scripts/scrFire/scrFire.gml:167-168`).
 fn projectile_arch(id: WeaponId) -> FireArch {
     let full = weapon_meta(id).wep_name;
     if full == "ULTRA GRENADE LAUNCHER" {
@@ -456,8 +464,8 @@ fn projectile_arch(id: WeaponId) -> FireArch {
     }
 }
 
-// Chained records (deaths.rs pattern): the fire chain takes >16 params in
-// bevy, so systems pack them into these two records instead.
+// Chained records (deaths.rs pattern): the fire chain takes >16 params,
+// so systems pack them into these two records instead.
 
 /// Feel sinks + toast shared by the whole fire chain.
 pub struct FireFx<'a> {
@@ -468,8 +476,9 @@ pub struct FireFx<'a> {
     pub toast: &'a mut Toast,
     pub shake_scale: f32,
     pub underwater: bool,
-    /// Strip catalog (bevy `AssetCatalog`): slash life reads the fired
-    /// strip's frame count, never a constant.
+    /// Strip catalog: slash life reads the fired strip's frame count
+    /// (GML runs that strip at `image_speed = 0.4`,
+    /// `Slash/Create_0.gml:2`), never a per-kind constant.
     pub catalog: &'a repame_anim::AnimCatalog,
     pub mainvol: &'a mut MainVol,
 }
@@ -1480,7 +1489,8 @@ fn tick_dog_spin_attacks(
             commands.entity(e).despawn();
             continue;
         };
-        // GML `Alarm_0.gml:6-16`: the body rides the creator's position.
+        // GML `PortalStrike/Alarm_0.gml:1-18`: the blast spawns at
+        // `explo_x/explo_y` off the strike, tagged `team_none`.
         pos.0 = owner.0;
         spin.alarm.tick(dt);
         if !spin.alarm.just_finished() {
@@ -1596,8 +1606,8 @@ fn melee_attack(
     let player_pos = shot.pos;
     let aim_angle = shot.aim.y.atan2(shot.aim.x);
     // GML `scrFire` melee arms all do `instance_create(x, y, Dust)` at
-    // the player on every swing; the puff re-anchors the eye at the
-    // swing origin (bevy never ported it).
+    // the player on every swing (12 arms, e.g. `scripts/scrFire/scrFire.gml:902`
+    // for black sword); the port spawns its dust burst here instead.
     {
         let mut rng = rand::rng();
         crate::effects::spawn_burst(
@@ -1610,8 +1620,9 @@ fn melee_attack(
         );
     }
 
-    // Bevy reads the fired strip (`anim_opt.def.frames`, mega sprite
-    // when applicable), defaulting to 3 - never a per-kind constant.
+    // Slash life reads the fired strip's frame count (GML swaps in the
+    // mega strip on the mega variant, `scripts/scrFire/scrFire.gml:907-908`),
+    // defaulting to 3 - never a per-kind constant.
     let slash_path = if mega {
         spec.mega_sprite.unwrap_or(spec.sprite)
     } else {
@@ -1629,8 +1640,12 @@ fn melee_attack(
         let dir = Vec2::new(ang.cos(), ang.sin());
         let spawn_pos = player_pos + dir * (longarms * 20.0);
         let speed = (spec.speed_f + longarms * 3.0) * 30.0;
-        // GML mask hitbox (mskSlash 64x48 / mskMegaSlash 96x72); Shank
-        // uses its own sprite bbox. Values are bevy-verbatim.
+        // GML mask hitbox (`mskSlash` 64x48, `mskMegaSlash` 96x72 -
+        // `sprites/mskSlash/mskSlash.yy:39,206`,
+        // `sprites/mskMegaSlash/mskMegaSlash.yy:39,204`); Shank carries
+        // no mask and collides on its own sprite bbox
+        // (`objects/Shank/Shank.yy:39`). The three numbers below are the
+        // port's headless stand-in for that mask.
         let (slash_reach, slash_back, slash_half) = if mega {
             (71.0, 24.0, 36.0)
         } else if spec.shank {
@@ -2003,8 +2018,10 @@ pub fn spawn_player_projectile_with_source(
         }
     }
     if let Some(w) = weapon {
-        // Bevy gates on ids 7/44 (plain + golden launcher only):
-        // grenade shotguns/rifles/ultras keep their shell behavior.
+        // Gated on the four launcher names only, so the grenade shotgun /
+        // rifle / ultra arms keep their own shell behavior: those spawn
+        // `SmallGrenade` (`scripts/scrFire/scrFire.gml:637-647`) or a `NadeBurst`
+        // (`:648-653`), never base `Grenade`.
         let full = weapon_meta(w).wep_name;
         // GML `scrFire` spawns base `Grenade` for the grenade launcher
         // (`Grenade/Create_0.gml:10-11` -> friction 0.1, `alarm[1] = 6`), the sticky
@@ -2687,7 +2704,7 @@ pub fn refresh_cuz_ammo_max(player: &mut Player) {
     player.cuz_ammo_max = cuz_ammo_max_for(player.back_muscle, cuz_emotional_level(player.ultra));
 }
 
-/// GML `scrRobotEat` core (`scrPowers.gml:621-662`), shared by the active and
+/// GML `scrRobotEat` core (`scrPowers.gml:621-659`), shared by the active and
 /// portal auto-collect paths: golden weapon → `repeat(4+throne_butt)` HP-or-ammo
 /// (`random(max_hp)>hp` and not life-crown → HP else ammo); Regurgitate 43% →
 /// love-crown ? AmmoChest : hurt && `random(3)<2` ? HealthChest :
@@ -2898,7 +2915,9 @@ pub struct AbilityFeel<'w> {
 
 /// One-shot racial abilities. Visual bursts are omitted; every sim effect
 /// (timers, damage, spawns, ammo/hp costs, unlocks) is kept. Steroids has
-/// no tap ability (bevy early-return parity).
+/// no tap ability: GML's `switch (race)` has no `Race.Steroids` arm
+/// (`scripts/scrPowers/scrPowers.gml:12-457`) - its spec is the hold-to-swap second
+/// slot in `Player/Step_0.gml:416-438`.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn player_ability(
     mut input: ResMut<NtInput>,
@@ -3498,10 +3517,12 @@ pub fn player_ability(
                 return;
             }
             player.rogue_ammo = player.rogue_ammo.saturating_sub(1);
-            // GML `scrPowers.gml:352-358`: the strike spawns on the cursor, or
-            // 64px along the fire direction on gamepad/touch. `Create_0.gml:3-7`
-            // then primes `explo_x` back by `size * 0.5 * (ammo - 0.5)` so the
-            // five blasts straddle the aim point rather than all trailing it.
+            // GML `scrPowers.gml:352-358`: the strike spawns on the cursor,
+            // or 64px along the fire direction on gamepad/touch.
+            // `PortalStrike/Create_0.gml:3-7` then primes `explo_x` back by
+            // `size * 0.5 * (ammo
+            // - 0.5)` so the five blasts straddle the aim point rather than
+            //   all trailing it.
             let heading = aim_v.normalize_or_zero();
             let target = pos + heading * 64.0;
             let size = PORTAL_STRIKE_SIZE;

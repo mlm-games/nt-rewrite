@@ -1,8 +1,10 @@
-//! Headless HUD state. Pure-state port of the bevy reference `game/hud.rs`
-//! (`sync_hud`, `reset_hud_flags`): the same sim values are derived, but
-//! instead of writing through a `UiBridge` resource into drawn widgets they are
-//! collected into a plain [`HudState`] that the repose-canvas UI polls after
-//! each tick. No drawing, no bevy engine imports.
+//! Headless HUD state: the values GML's HUD draw scripts read, but
+//! collected into a plain [`HudState`] the repose-canvas UI polls after
+//! each tick instead of being pushed straight into widgets. The laws come
+//! from `scripts/scrDrawPlayerHUD/scrDrawPlayerHUD.gml`, `scripts/scrDrawMiscHUD/scrDrawMiscHUD.gml`,
+//! `objects/TopCont/Draw_0.gml` (fog, fainted bars),
+//! `objects/TopCont/Draw_64.gml` and `objects/GameOver/Draw_0.gml`.
+//! No drawing, no render-engine imports.
 
 use bevy_ecs::prelude::*;
 
@@ -17,9 +19,11 @@ use crate::spatial::Pos;
 use crate::weapon_runtime::{weapon_id_name, weapon_meta};
 use crate::worldgen::floor_in_world;
 
-/// Pollable HUD snapshot. Field-for-field coverage of what bevy `sync_hud`
-/// wrote into `SharedUi` for the in-game HUD (menu/settings/loadout fields
-/// and the transient `mutation_selected` cursor stay UI-phase owned).
+/// Pollable HUD snapshot. Field-for-field coverage of the in-game rows of
+/// `scripts/scrDrawPlayerHUD/scrDrawPlayerHUD.gml` (health, weapons+ammo, exp bar, ammo
+/// icons), `scripts/scrDrawMiscHUD/scrDrawMiscHUD.gml` (clock, map name, skill/ultra icon
+/// rows) and `objects/TopCont/Draw_0.gml:85-109` (fainted bars); menu,
+/// settings and loadout fields stay UI-phase owned.
 #[derive(Clone, Debug, PartialEq, Resource)]
 pub struct HudBars {
     /// GML `lsthealth` ghost-fill persistence for the health bar
@@ -55,8 +59,9 @@ pub struct HudState {
     /// Per-slot curse parallel to `weapons` (GML `c_curse` fog).
     pub weapon_cursed: Vec<bool>,
     pub ammo: [i32; 6],
-    /// Per-visible-slot ammo for the weapon icons (-1 = melee / no slot,
-    /// bevy `weapon_ammo` law).
+    /// Per-visible-slot ammo for the weapon icons (-1 = melee / no slot:
+    /// GML only prints an ammo number when `_type != Ammo.None`,
+    /// `scripts/scrDrawPlayerHUD/scrDrawPlayerHUD.gml:150-166`).
     pub weapon_ammo: Vec<i32>,
     pub ability: String,
     pub ability_ready: bool,
@@ -70,17 +75,21 @@ pub struct HudState {
     pub score: u32,
     pub high_score: u32,
     pub best_floor: u32,
-    /// Lifetime kills (save accumulation, bevy `SharedUi.total_kills`).
+    /// Lifetime kills (save accumulation; GML folds the run total into the
+    /// save at the end of a run -
+    /// `scripts/scrPlayerUpdateBestRunStats/scrPlayerUpdateBestRunStats.gml:37`
+    /// `UberCont.ctot_kill[race] += GameCont.kills`).
     pub total_kills: u32,
-    /// This run's kills (`Run.total_kills`; bevy never surfaced it in
-    /// `SharedUi`, but the task's kill-count parity needs it headless).
+    /// This run's kills (GML `GameCont.kills`, incremented per enemy death
+    /// at `objects/enemy/Destroy_0.gml:2`).
     pub kills: u32,
     pub boss_hp: u32,
     pub boss_max: u32,
     pub boss_name: String,
-    /// An IDPD raid wave is queued (warning toast pending/flying). The bevy
-    /// build surfaced this only as the "IDPD INCOMING" toast; headless gets
-    /// the explicit bit so the canvas can draw the warning badge.
+    /// An IDPD raid wave is queued (warning toast pending/flying).
+    /// Port-only warning badge: GML has no IDPD "incoming" HUD row (its
+    /// HUD scripts are `scrDrawPlayerHUD` / `scrDrawMiscHUD`, above), so
+    /// the bit exists purely for the canvas.
     pub toast: String,
     pub toast_timer: f32,
     /// GML run clock `M:SS.CC` (from `Run.tottimer` steps).
@@ -96,7 +105,10 @@ pub struct HudState {
 }
 
 impl Default for HudState {
-    /// Mirrors bevy `SharedUi::default` for the covered subset.
+    /// Defaults for the covered subset (`hp = 10`, `max_rads = 60` per
+    /// `objects/GameCont/Create_0.gml:24`, `crown = NONE` per
+    /// `scripts/scrCrowns/scrCrowns.gml:3-18`); the rest are the "no player yet"
+    /// state, since GML reads these off the Player instance directly.
     fn default() -> Self {
         Self {
             game_over: false,
@@ -160,9 +172,8 @@ pub const AMMO_GAUGE_ICONS: [(&str, &str); 5] = [
 /// keyboard "E" pill, subimage 1 the other-key/gamepad plate.
 pub const PICKUP_BUTTON_ART: &str = "images/sprEPickup.png";
 
-/// Cleared flags (bevy `reset_hud_flags` parity: game over off,
-/// mutation picks/toast/boss/loop cleared IN PLACE - hp, weapons,
-/// ammo, level and the rest are preserved).
+/// Cleared flags (game over off, mutation picks/toast/boss/loop cleared IN
+/// PLACE - hp, weapons, ammo, level and the rest are preserved).
 pub fn reset_hud_state(hud: &mut HudState) {
     hud.game_over = false;
     hud.mutation_choices.clear();
@@ -282,8 +293,7 @@ fn apply_loop_suffix(base: String, lp: u32, hardmode: bool) -> String {
     }
 }
 
-/// Derive the HUD snapshot from sim state (bevy `sync_hud` state
-/// computation, `UiBridge` writes removed). Reads `&World` so the UI can
+/// Derive the HUD snapshot from sim state. Reads `&World` so the UI can
 /// poll it without a mutable borrow.
 pub fn sync_hud_state(world: &World) -> HudState {
     let mut hud = HudState::default();
@@ -314,7 +324,8 @@ pub fn sync_hud_state(world: &World) -> HudState {
             });
         }
 
-        // Boss bar: highest-max-HP boss (bevy `max_by_key(health.max)`).
+        // Boss bar: highest-max-HP boss, ties to the later entity (`>=`).
+        // Port-only: no GML HUD script draws a boss bar.
         if let (Some(enemy), Some(health)) = (entity_ref.get::<Enemy>(), entity_ref.get::<Health>())
             && entity_ref.contains::<BossBrain>()
             && boss_best
@@ -329,8 +340,10 @@ pub fn sync_hud_state(world: &World) -> HudState {
             ));
         }
 
-        // Player panel: bevy used `single()`; first player entity wins
-        // and headless sims spawn exactly one.
+        // Player panel: first Player entity with Health + Inventory wins;
+        // headless sims spawn exactly one. GML passes one player in per
+        // call (`objects/TopCont/Draw_64.gml:20` ->
+        // `scripts/scrDrawPlayerHUD/scrDrawPlayerHUD.gml:1`).
         if !fields_seen
             && let (Some(player), Some(health), Some(inv)) = (
                 player,
@@ -383,8 +396,8 @@ pub fn sync_hud_state(world: &World) -> HudState {
     }
 
     let Some(run) = world.get_resource::<Run>() else {
-        // Bevy early-return: run-scoped fields back to defaults, the
-        // fainted markers collected above survive.
+        // No `Run`: run-scoped fields back to defaults, the fainted markers
+        // collected above survive.
         let mut fresh = HudState::default();
         fresh.fainted_bars = hud.fainted_bars;
         return fresh;
@@ -457,8 +470,9 @@ pub fn sync_hud_state(world: &World) -> HudState {
     };
     hud.mutation_choices = choices;
     hud.mutation_choice_ids = ids;
-    // Bevy also maintained the `mutation_selected` cursor here (reset when the
-    // choice list changed length / emptied); cursor state is UI-phase owned and
+    // GML keeps the choice cursor on each icon object (`selected` bumped in
+    // `objects/SkillIcon/Draw_0.gml:62-64`,
+    // `objects/UltraIcon/Draw_0.gml:18`), so it is UI-phase owned here too:
     // the canvas resets its own from `mutation_choices.len()`.
     // Death-mutation ids were collected in the walk above (first Player); they
     // only surface on the game-over screen.
@@ -469,7 +483,10 @@ pub fn sync_hud_state(world: &World) -> HudState {
     hud
 }
 
-/// Ability display name (bevy `content.rs::ability_name` verbatim).
+/// Ability display name. Port-only table: GML's ability descriptions come
+/// from the localized `loc("Races", race, ...)` tokens
+/// (`scripts/scrCampfireMenuCreate/scrCampfireMenuCreate.gml:468-469`), so there is no single
+/// English name string to mirror.
 pub fn ability_name(kind: AbilityKind) -> &'static str {
     match kind {
         AbilityKind::Flip => "Flip",
@@ -491,7 +508,10 @@ pub fn ability_name(kind: AbilityKind) -> &'static str {
     }
 }
 
-/// Short crown label for the HUD icon row (bevy `CrownKind::short_name`).
+/// Short crown label for the HUD snapshot. GML's `crown_name[]` entries are
+/// the long forms - "NO CROWN", "CROWN OF DEATH", …
+/// (`scripts/scrCrowns/scrCrowns.gml:21-89`) and neither `scrDrawPlayerHUD` nor
+/// `scrDrawMiscHUD` reads them, so these short caps labels are port-only.
 pub fn crown_short_name(kind: CrownKind) -> &'static str {
     match kind {
         CrownKind::None => "NONE",
@@ -510,7 +530,9 @@ pub fn crown_short_name(kind: CrownKind) -> &'static str {
     }
 }
 
-/// Skill-icon id for a mutation (bevy `mutation_skill_index` verbatim).
+/// Skill-icon id for a mutation, i.e. the GML `skill` id used as the
+/// subimage of `sprSkillIconHUD` (`scripts/scrDrawMiscHUD/scrDrawMiscHUD.gml:104`);
+/// `maxskill = 29` (`scripts/scrSkills/scrSkills.gml:154`).
 pub fn mutation_skill_index(id: crate::data::MutationId) -> u8 {
     use crate::data::MutationId::*;
     match id {
@@ -546,7 +568,11 @@ pub fn mutation_skill_index(id: crate::data::MutationId) -> u8 {
     }
 }
 
-/// Skill-icon id for an ultra mutation (bevy `ultra_skill_index` verbatim).
+/// Skill-icon id for an ultra mutation, i.e. the `sprEGIconHUD` subimage
+/// GML pushes onto `ultra_hud`: `race * 3 + ultra - 1`
+/// (`scripts/scrUltras/scrUltras.gml:231`, drawn at `scripts/scrDrawMiscHUD/scrDrawMiscHUD.gml:76`).
+/// Cuz reuses 1-3 because it owns a third ultra
+/// (`scripts/scrUltras/scrUltras.gml:42`).
 pub fn ultra_skill_index(id: crate::data::UltraMutationId) -> u8 {
     use crate::data::UltraMutationId::*;
     match id {

@@ -188,11 +188,13 @@ pub fn spawn_idpd_spawn(
 pub struct IdpdVanDeployed;
 
 /// GML `objects/Van` deploy bookkeeping. `right` is stamped at spawn
-/// (`Create_0.gml:14-23`) because `Alarm_1` places its payload at
-/// `x - 55 * right` / `x - 50 * right`; `frames` counts `alarm[0] = 40`
-/// (`Create_0.gml:28`) plus `Alarm_0`'s `alarm[1] = 10` down to the one-shot
-/// deploy, and `inert` re-arms once `Alarm_2` (15) + `Alarm_3` (20) have parked
-/// the van for good.
+/// (`Van/Create_0.gml:14-23`) because `Van/Alarm_1` places its payload at
+/// `x
+/// - 55 * right` / `x
+/// - 50 * right`; `frames` counts `alarm[0] = 40` (`Van/Create_0.gml:28`)
+///   plus `Van/Alarm_0.gml:3`'s `alarm[1] = 10` down to the one-shot
+///   deploy, and `inert` re-arms once `Alarm_2` (15) + `Alarm_3` (20) have
+///   parked the van for good.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct IdpdVanDeploy {
     pub right: f32,
@@ -203,9 +205,9 @@ pub struct IdpdVanDeploy {
     pub inert: f32,
 }
 
-/// GML `Van/Create_0.gml:28` + `Alarm_0.gml:3`: 40 + 10 frames.
+/// GML `Van/Create_0.gml:28` + `Van/Alarm_0.gml:3`: 40 + 10 frames.
 pub const VAN_DEPLOY_FRAMES: f32 = 50.0;
-/// GML `Van/Alarm_2.gml:2` + `Alarm_3.gml:2`: 15 + 20 frames.
+/// GML `Van/Alarm_2.gml:2` + `Van/Alarm_3.gml:2`: 15 + 20 frames.
 pub const VAN_INERT_FRAMES: f32 = 35.0;
 
 /// GML `objects/IDPDChest/Destroy_0.gml` verbatim:
@@ -364,13 +366,14 @@ pub fn tick_idpd_spawns(
             pos.0 = idpd_spawn_site(&mut popo, player_pos, mask);
             portal.placed = true;
         }
-        // `Alarm_0.gml:1-3` and `Alarm_1` run back to back: the close
-        // strip is 14 frames at `image_speed = 0.4` (35 steps) while the
-        // wave lands 12 steps in, so both counters advance together.
+        // `IDPDSpawn/Alarm_0.gml:1-3` and `IDPDSpawn/Alarm_1` run back to
+        // back: the close strip is 14 frames at `image_speed = 0.4` (35
+        // steps) while the wave lands 12 steps in, so both counters advance
+        // together.
         if portal.close > 0.0 {
             portal.close -= steps;
             if portal.close <= 0.0 {
-                // GML `Other_7.gml:3`
+                // GML `IDPDSpawn/Other_7.gml:3`
                 commands.entity(entity).despawn();
                 continue;
             }
@@ -383,11 +386,12 @@ pub fn tick_idpd_spawns(
             continue;
         }
         portal.alarm0 -= steps;
-        // GML `Step_0.gml:4-9`: while the portal wears the charge strip it
-        // sheds motes that converge on the player, each living for its own
-        // travel time. The strip covers exactly the `alarm0` window
-        // (`Create_0.gml:28` arms it and `Alarm_0` swaps the art on the
-        // same frame it opens the close strip).
+        // GML `IDPDSpawn/Step_0.gml:4-9`: while the portal wears the charge
+        // strip it sheds motes that converge on the player, each living for
+        // its own travel time. The strip covers exactly the `alarm0` window
+        // (`IDPDSpawn/Create_0.gml:28` arms it and
+        // `IDPDSpawn/Alarm_0.gml:2` swaps the art on the same frame it
+        // opens the close strip).
         if portal.alarm0 > 0.0 && portal.close <= 0.0 && portal.alarm1 <= 0.0 {
             let at = pos.0 + glam::Vec2::new(popo.float(96.0) - 48.0, popo.float(96.0) - 48.0);
             let to_player = player_pos - at;
@@ -436,7 +440,8 @@ pub fn tick_idpd_spawns(
             },
             Pos(at),
         ));
-        // GML `Alarm_1.gml:3-6`: deep loops skip the dir table entirely.
+        // GML `IDPDSpawn/Alarm_1.gml:3-6`: deep loops skip the dir table
+        // entirely.
         if run
             .loop_count
             .saturating_sub(u32::from(run.area == AreaId::Campfire))
@@ -728,8 +733,8 @@ pub fn tick_idpd_vans(
     let context = enemy_spawn_context(&run, scarier.0, heavy_heart.0);
     for (entity, pos, mut van) in vans.iter_mut() {
         if van.inert > 0.0 {
-            // GML `Alarm_2.gml:2` then `Alarm_3.gml:2`: `can_hq = 0`,
-            // parked on `sprVanDeactivated` for good.
+            // GML `Van/Alarm_2.gml:2` then `Van/Alarm_3.gml:2`: `can_hq =
+            // 0`, parked on `sprVanDeactivated` for good.
             van.inert -= steps;
             if van.inert <= 0.0 {
                 commands.entity(entity).remove::<IdpdShieldUnit>();
@@ -744,7 +749,7 @@ pub fn tick_idpd_vans(
             }
         }
 
-        // GML `Alarm_1.gml:1-5`
+        // GML `Van/Alarm_1.gml:1-5`
         if van.freak {
             commands.entity(entity).despawn();
             van_destroy(
@@ -759,7 +764,7 @@ pub fn tick_idpd_vans(
             continue;
         }
 
-        // GML `Alarm_1.gml:14-15`
+        // GML `Van/Alarm_1.gml:14-15`
         let mut rng = rand::rng();
         let back = pos.0 + glam::Vec2::new(-55.0 * van.right, 0.0);
         for _ in 0..3 + run.loop_count {

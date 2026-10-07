@@ -1,14 +1,14 @@
 //! Save data: the persistent profile behind GML's flat `UberCont.saveData`
-//! map, which `scripts/scrSave.gml:1-5` writes to `NuclearThrone.sav` and
-//! `scripts/save_get_value.gml:5-7` / `scripts/save_set_value.gml:5-8`
+//! map, which `scripts/scrSave/scrSave.gml:1-5` writes to `NuclearThrone.sav` and
+//! `scripts/save_get_value/save_get_value.gml:5-7` / `scripts/save_set_value/save_set_value.gml:5-8`
 //! reach through `"<section>_<key>"` keys. The port keeps the same content
 //! (`SaveData` stats and unlocks, `SettingsData` options, per-race
 //! `RaceLoadout`) as typed structs behind `SAVE_VERSION`, in its own RON
 //! file - the section/key map and the `.sav` format are port-only.
-//! Race/skin/crown unlocks follow `scripts/scrUnlocks.gml` and
-//! `scripts/scrAchievements.gml`; the keymap defaults are GML
-//! `scripts/scrOptionsKeymaps.gml:4-21`. GML's in-progress run save
-//! (`scripts/scrSavegame.gml`, `savegame.dat`) is a separate file.
+//! Race/skin/crown unlocks follow `scripts/scrUnlocks/scrUnlocks.gml` and
+//! `scripts/scrAchievements/scrAchievements.gml`; the keymap defaults are GML
+//! `scripts/scrOptionsKeymaps/scrOptionsKeymaps.gml:4-21`. GML's in-progress run save
+//! (`scripts/scrSavegame/scrSavegame.gml`, `savegame.dat`) is a separate file.
 //! `SaveData` is a sim resource.
 
 use std::collections::BTreeMap;

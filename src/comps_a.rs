@@ -237,8 +237,8 @@ impl FloorMask {
             || self.opened.contains(&self.world_to_wall_cell(p))
     }
 
-    /// Push-out from unwalkable cells. Port adaptation: bevy carried 2D positions
-    /// in `Vec3` (`Transform.translation`), so the dead `z` channel is gone.
+    /// Push-out from unwalkable cells. 2D only: positions are [`Pos`], so
+    /// there is no third channel to carry.
     pub fn resolve_circle(&self, pos: &mut Vec2, radius: f32) {
         let p = *pos;
         if self.is_walkable(p) {
@@ -1029,11 +1029,12 @@ impl DamageSource {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct ProjectileFriction(pub f32);
 
-/// GML `Rocket/Create_0.gml:12-15` + `Step_0.gml:4-5`: once `active` (set by
-/// `alarm[1]`) the body runs `motion_add_m(direction, accel, maxspeed)` every
-/// step - accelerate along the current heading, then clamp total speed to `max`.
-/// `arm` is the `alarm[1]` countdown, `finished()` only once the alarm has
-/// actually fired, so acceleration starts on the next step.
+/// GML `Rocket/Create_0.gml:12-15` + `Rocket/Step_0.gml:4-5`: once `active`
+/// (set by `alarm[1]`) the body runs `motion_add_m(direction, accel,
+/// maxspeed)` every step, accelerating along the current heading and then
+/// clamping total speed to `max`. `arm` is the `alarm[1]` countdown and
+/// `finished()` only once the alarm has actually fired, so acceleration
+/// starts on the next step.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct ProjectileAccel {
     /// px/step added per step.
@@ -1101,9 +1102,10 @@ pub struct SlashProjectile {
     pub reach: f32,
     pub back: f32,
     pub half_width: f32,
-    /// Last nonzero move direction (bevy `Transform.rotation`
-    /// equivalent: bevy freezes rotation when the slash stops, so
-    /// post-wall ticks keep testing the frozen direction).
+    /// Last nonzero move direction, held while the slash coasts: GML keeps
+    /// the frozen `image_angle` after the wall hit
+    /// (`Slash/Collision_Wall.gml:5-6,17`), so post-wall ticks keep testing
+    /// that direction.
     pub dir: Vec2,
 }
 
@@ -1233,9 +1235,9 @@ pub struct ChainLightning {
 #[derive(Component, Debug)]
 pub struct LightningArc {
     pub timer: Timer,
-    /// Port adaptation: bevy carried these in the `Sprite` (custom
-    /// size) and `Transform` rotation; the renderer needs them
-    /// explicitly, so they live on the marker.
+    /// Arc length + bearing, carried on the marker because the sim owns
+    /// them and the renderer only draws (GML builds the same pair at draw
+    /// time, `scrLightningCreate.gml`).
     pub len: f32,
     pub angle: f32,
 }

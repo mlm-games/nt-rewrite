@@ -445,14 +445,15 @@ pub fn keycode_for_physical(key: PhysicalKey) -> Option<KeyCode> {
 
 pub use repame_input::{GamepadState, MouseState, TouchContact, apply_stick};
 
-/// WASD/arrows move vector in world space. The world is y-down (GML: north is
-/// −y, see `worldgen::Maker::step_delta`), so W/Up is −y and S/Down +y, matching
-/// [`Pos`](crate::spatial::Pos) space. GML binds the same rows - `north` W,
-/// `south` S, `west` A, `east` D, plus arrows
-/// (`scripts/scrOptionsKeymaps.gml:15-18`,
-/// `scripts/InputHandling/InputHandling.gml:357-373`) - and derives the heading
-/// from `east - west` / `south - north` (`:453-454`). Opposing pairs cancel,
-/// diagonals normalize.
+/// WASD/arrows move vector in world space. The world is y-down (GML: north
+/// is −y, see `worldgen::Maker::step_delta`), so W/Up is −y and S/Down +y,
+/// matching [`Pos`](crate::spatial::Pos) space. GML binds the same rows
+/// - `north` W, `south` S, `west` A, `east` D, plus arrows
+///   (`scripts/scrOptionsKeymaps/scrOptionsKeymaps.gml:15-18`,
+///   `scripts/InputHandling/InputHandling.gml:357-373`)
+/// - and derives the heading from `east
+/// - west` / `south
+/// - north` (`:453-454`). Opposing pairs cancel, diagonals normalize.
 pub fn keyboard_move(held: &HashSet<KeyCode>) -> Vec2 {
     let mut value = Vec2::ZERO;
 
@@ -475,14 +476,17 @@ pub fn keyboard_move(held: &HashSet<KeyCode>) -> Vec2 {
 /// Backend-neutral keyboard+mouse path. `held` = keys down now,
 /// `just_pressed` = pressed-this-tick edges. Accumulation into `output`:
 /// axes/held overwritten, pulses OR-ed so a shell can layer gamepad on top,
-/// weapon slot replaced only when a digit edge fires, cycle saturating-added.
-/// Rows come from GML `key_check` (`scripts/scrOptionsKeymaps.gml:66-106`):
-/// `fire` `mb_left`, `spec` `mb_right`, `swap` space, `pick` E, movement WASD
-/// + arrows. Mouse-cursor aim is not here - GML computes it in the same poll
-/// (`scripts/InputHandling/InputHandling.gml:464-470`, `dis_fire`/`dir_fire`
-/// from `mouse_x`/`mouse_y`); this port resolves the cursor ray in the `App`
-/// hover block, so keyboard/mouse leaves `aim_axis` zero. Sticks/triggers/
-/// d-pad live in `sample_gamepad`, touch zones in `sample_touch`.
+/// weapon slot replaced only when a digit edge fires, cycle
+/// saturating-added. Rows come from GML `key_check`
+/// (`scripts/scrOptionsKeymaps/scrOptionsKeymaps.gml:66-106`): `fire`
+/// `mb_left`, `spec` `mb_right`, `swap` space, `pick` E, movement WASD +
+/// arrows. Mouse-cursor aim is not here
+/// - GML computes it in the same poll
+///   (`scripts/InputHandling/InputHandling.gml:464-470`,
+///   `dis_fire`/`dir_fire` from `mouse_x`/`mouse_y`); this port resolves
+///   the cursor ray in the `App` hover block, so keyboard/mouse leaves
+///   `aim_axis` zero. Sticks/triggers/ d-pad live in `sample_gamepad`,
+///   touch zones in `sample_touch`.
 pub fn sample_keyboard(
     held: &HashSet<KeyCode>,
     just_pressed: &HashSet<KeyCode>,
@@ -827,20 +831,22 @@ fn entry_pressed(
     }
 }
 
-/// Backend-neutral per-gamepad pass. Nonzero dead-zoned sticks overwrite the
-/// axes (left = move, right = aim); GML gates both on a bare nonzero test
-/// (`scripts/InputHandling/InputHandling.gml:425,441`) and derives heading from
-/// `point_direction(0, 0, _kh, _kv)`. The remapped pad rows (default
-/// Fire/Swap = RightShoulder, Spec = LeftShoulder, Pick = South) OR into
-/// held/pulses; D-pad edges replace the weapon slot. Triggers keep a
-/// hardcoded role alongside the rows (RT = fire, LT = spec/ability), matching
-/// GML's default table `fire: gp_shoulderr` / `spec: gp_shoulderl`
-/// (`scripts/scrOptionsKeymaps.gml:7-8`) - `spec` is the ACTIVE button
-/// (`objects/MenuOptions/Other_20.gml:697`). Returns this pad's cycle step
-/// (North = +1); the caller applies the last-pad-wins overwrite, added once -
-/// `sample_gamepads`. Stick Y arrives screen-down (gilrs/SDL convention
-/// matches this port's y-down world), so stick-up (−y) moves north, the same
-/// sign GML reads off `gp_axisrv` (`:440`, `_kv < 0` = north at `:407-412`).
+/// Backend-neutral per-gamepad pass. Nonzero dead-zoned sticks overwrite
+/// the axes (left = move, right = aim); GML gates both on a bare nonzero
+/// test (`scripts/InputHandling/InputHandling.gml:425,441`) and derives
+/// heading from `point_direction(0, 0, _kh, _kv)`. The remapped pad rows
+/// (default Fire/Swap = RightShoulder, Spec = LeftShoulder, Pick = South)
+/// OR into held/pulses; D-pad edges replace the weapon slot. Triggers keep
+/// a hardcoded role alongside the rows (RT = fire, LT = spec/ability),
+/// matching GML's default table `fire: gp_shoulderr` / `spec: gp_shoulderl`
+/// (`scripts/scrOptionsKeymaps/scrOptionsKeymaps.gml:7-8`)
+/// - `spec` is the ACTIVE button (`objects/MenuOptions/Other_20.gml:697`).
+///   Returns this pad's cycle step (North = +1); the caller applies the
+///   last-pad-wins overwrite, added once
+/// - `sample_gamepads`. Stick Y arrives screen-down (gilrs/SDL convention
+///   matches this port's y-down world), so stick-up (−y) moves north, the
+///   same sign GML reads off `gp_axisrv` (`:440`, `_kv < 0` = north at
+///   `:407-412`).
 pub fn sample_gamepad(
     pad: &GamepadState,
     keymap: Option<&crate::keymap::InputMapState>,
@@ -1365,7 +1371,8 @@ pub fn sample_touch_full(
         if attack_lifted {
             output.fire_held = false;
             if last_dis / TOUCH_STICK_RADIUS > ATTACK_BUTTON_DEADZONE {
-                output.fire_released = true; // GML `press_fire`, `Other_10.gml:115-124`
+                output.fire_released = true; // GML `press_fire`, set per frame in
+                // `InputHandling.gml:236`
             }
         }
     }

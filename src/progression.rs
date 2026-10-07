@@ -7,13 +7,13 @@
 //! via the `MutationChoice` resource.
 //!
 //! Deferred, with reason:
-//! - `setup_run`: needs save-loadout (`race_loadout`, skins) + weapons table
-//!   + world spawn; lands with the save phase.
+//! - `setup_run`: needs save-loadout (`race_loadout`, skins) + weapons
+//!   table + world spawn; lands with the save phase.
 //! - `starting_ammo_for`: needs the `WEAPONS` ammo table; lands with the
 //!   weapons phase (ammo mapping now rides `weapon_runtime`).
-//! - `tick_floor_transition` stage 2 runs the full bevy law: fresh plan +
+//! - `tick_floor_transition` stage 2 runs the whole rebuild: fresh plan +
 //!   Open Mind bonus + `setup::spawn_level` entity spawn.
-//! - Save writes: the sim has no `SaveManager`, so `flush_dirty_save*` only
+//! - Save writes: the sim owns no save manager, so `flush_dirty_save*` only
 //!   manage the `SaveDirty` flag (the write lands with the save phase).
 
 use bevy_ecs::prelude::*;
@@ -50,7 +50,10 @@ use crate::spatial::Pos;
 use crate::state::{AppState, Paused};
 use crate::time::{GTimer, TimerMode};
 
-// Mutation data (byte-exact tables from bevy `content.rs`).
+// Mutation data. Port-side tables transcribed from GML `scrSkills.gml` (the
+// skill list) and `scrUltras.gml`; the point awards follow
+// `GameCont/Step_0.gml:86-93` (`ultrapoints ++` on the tenth level,
+// `skillpoints ++` below it).
 
 pub const ALL_MUTATIONS: [MutationId; 28] = [
     MutationId::RhinoSkin,
@@ -352,9 +355,11 @@ pub fn ultra_pick_stem(id: UltraMutationId) -> Option<&'static str> {
     })
 }
 
-// Small local helpers (pure ports of bevy helpers owned by other phases).
+// Small local helpers (shared with the other phases' systems).
 
-/// Deferred floor generation flag (bevy `DeferredFloorGen` parity).
+/// Deferred floor generation flag. GML generates inside `FloorMaker`
+/// (`objects/FloorMaker/Step_0.gml`) and has no deferral; the flag is
+/// port-only, standing in for that room's own step work.
 #[derive(Resource, Default)]
 pub struct DeferredFloorGen(pub bool);
 
@@ -374,7 +379,10 @@ pub struct IceFlowerSeed(pub bool);
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct IceFlowerFeed(pub u8);
 
-/// Floor-seed hash (bevy `derive_floor_seed` verbatim).
+/// Floor-seed hash. GML re-seeds one stream per generation instead
+/// (`objects/GenCont/Destroy_0.gml:18`
+/// `random_set_seed(GameCont.levseed)`), so this chaining is the port's own
+/// way to keep floors independent.
 fn derive_floor_seed(prev: u64, floor: u32, area: u8, loop_count: u32) -> u64 {
     let mut x = prev
         .wrapping_add(floor as u64)
@@ -389,7 +397,8 @@ fn derive_floor_seed(prev: u64, floor: u32, area: u8, loop_count: u32) -> u64 {
     x ^ (x >> 31)
 }
 
-/// Secret-area display name (bevy `SecretTarget::name` parity).
+/// Secret-area display name (GML `scripts/scrArea/scrArea.gml` `scrAreaGetName`,
+/// with the 100+ secret areas falling through to its `AREA<n>` default).
 fn secret_name(target: SecretTarget) -> &'static str {
     target.name()
 }
@@ -431,8 +440,9 @@ fn target_for_secret_area(area: AreaId) -> Option<SecretTarget> {
     }
 }
 
-/// Secret/normal floor advance on portal exit (bevy
-/// `apply_secret_transition` verbatim, minus engine types).
+/// Secret/normal floor advance on portal exit. GML resolves it in the
+/// generation-end event (`objects/GameCont/Other_5.gml:54` `area >= 100` is
+/// a secret, then the crib/return branch at `:56-62`).
 fn apply_secret_transition(
     run: &mut Run,
     triggers: &mut crate::secrets::SecretTriggers,
@@ -549,8 +559,9 @@ fn apply_secret_transition(
     None
 }
 
-/// Loop-portal transition (bevy `try_apply_loop_portal_transition`
-/// verbatim, minus engine types). Loop 1 starts at floor 16.
+/// Loop-portal transition. GML bumps `GameCont.loops` in the same
+/// generation-end event (`objects/GameCont/Other_5.gml:38-44`) and re-rooms
+/// through `room_restart`. Loop 1 starts at floor 16.
 fn try_apply_loop_portal_transition(
     run: &mut Run,
     transition: &mut LoopTransition,
@@ -583,9 +594,10 @@ fn try_apply_loop_portal_transition(
 // Level-ups and mutations.
 
 /// Spend banked rads into levels (cap 10; level 10 owes an ultra pick,
-/// lower levels owe a mutation pick each), toasting + feedback on any
-/// gain. `health`/`inv`/`race` are unused in the bevy body, so they are
-/// not parameters here.
+/// lower levels owe a mutation pick each), toasting + feedback on any gain.
+/// `health`/`inv`/`race` take no part in the award, so they are not
+/// parameters here. GML raises the banked point in
+/// `GameCont/Step_0.gml:86-93`.
 pub fn check_level_up(
     commands: &mut Commands,
     trauma: &mut Trauma,
@@ -654,9 +666,10 @@ pub fn grant_patience_pick(run: &mut Run, player: &mut Player) {
     player.mutation_picks_owed = player.mutation_picks_owed.saturating_add(1);
 }
 
-/// Queue the loading-screen floor transition (bevy
-/// `try_start_pending_floor_gen` parity, including the per-area vortex
-/// `SpiralCtl` re-warm the ambience duck keys off).
+/// Queue the loading-screen floor transition, including the per-area vortex
+/// `SpiralCtl` re-warm the ambience duck keys off. GML re-rooms here
+/// (`objects/GameCont/Other_5.gml` -> `room_restart`), so the queue itself
+/// is port-only.
 pub fn try_start_pending_floor_gen(commands: &mut Commands, run: &Run) {
     let tip = pick_loading_tip(run);
     commands.insert_resource(FloorTransition {
@@ -814,9 +827,9 @@ pub struct MutationFlagSet<'w> {
     pub crib: Option<ResMut<'w, crate::CribTrip>>,
 }
 
-/// Screen-feel sinks shared by level-up paths.
-/// Route bookkeeping consumed by the room-end hop. Bundled because
-/// `tick_portal_suck` is already at Bevy's 16-parameter cap.
+/// Screen-feel sinks shared by level-up paths. Route bookkeeping consumed
+/// by the room-end hop. Bundled because `tick_portal_suck` already sits at
+/// `bevy_ecs`' 16-parameter cap.
 #[derive(bevy_ecs::system::SystemParam)]
 pub struct RouteBookkeeping<'w> {
     pub triggers: ResMut<'w, crate::secrets::SecretTriggers>,
@@ -1004,9 +1017,9 @@ pub fn handle_mutation_choice(
     }
 }
 
-/// Apply a mutation's stat effects (bevy `apply_mutation` verbatim,
-/// minus sprite code - there was none - and minus the `Commands` param;
-/// the GML `SkillIcon/Other_10` select sound rides `cues` instead).
+/// Apply a mutation's stat effects. GML spends the point in
+/// `SkillIcon/Other_10.gml:3-7` (`skillpoints --`, `scr_skill_set`) and
+/// plays the select sound there, which rides `cues`.
 pub fn apply_mutation(
     player_q: &mut Query<(&mut Player, &mut Health, &mut Inventory, &RaceState), With<Player>>,
     flags: &mut MutationFlagSet,
@@ -1158,8 +1171,8 @@ pub fn apply_mutation(
     });
 }
 
-/// Apply an ultra mutation's stat effects (bevy verbatim; same
-/// `Commands` adaptation as `apply_mutation`).
+/// Apply an ultra mutation's stat effects (GML `UltraIcon/Other_10.gml`;
+/// same `Commands` adaptation as [`apply_mutation`]).
 pub fn apply_ultra_mutation(
     player_q: &mut Query<(&mut Player, &mut Health, &mut Inventory, &RaceState), With<Player>>,
     flags: &mut MutationFlagSet,
@@ -1516,10 +1529,11 @@ pub fn portal_check(
     chromatic_pulse(&mut chroma, 0.25);
 }
 
-/// Portal vortex drag: pulls the player and loose weapon pickups toward
-/// an idle portal (axis-separated, walkability-gated). Never touches
-/// `Velocity` (bevy parity). Wall line-of-sight from the bevy build is
-/// omitted (walls phase).
+/// Portal vortex drag: pulls the player and loose weapon pickups toward an
+/// idle portal (axis-separated, walkability-gated). Never touches
+/// `Velocity`. GML's attract helper (`Portal/Create_0.gml:26-56`) moves the
+/// pulled instances directly and only reaches the player once they are
+/// inside the half-distance, so no velocity write is needed here either.
 pub fn portal_attract(
     time: Res<SimTime>,
     mut player_q: Query<
@@ -2587,7 +2601,7 @@ pub fn tick_portal_suck(
     player_pos.0 = glam::Vec2::new(10000.0, 10000.0);
 }
 
-/// GML `scrUnlocksWinOrLoop` (`scripts/scrUnlocks.gml:243-245`): holding
+/// GML `scrUnlocksWinOrLoop` (`scripts/scrUnlocks/scrUnlocks.gml:243-245`): holding
 /// a crown through a loop or a win unlocks it for the race, and a fresh
 /// unlock earns CROWN LIFE. Crowns are *not* unlocked when the pedestal
 /// is taken (`CrownPickup/Collision_Player` has no unlock); VAULT_RAIDER
@@ -2743,8 +2757,11 @@ pub fn tick_throne_sit(
 }
 
 /// Loading-screen floor transition: stage 1 fills the progress bar, stage 2
-/// runs after a 4-tick beat. Bevy stage-2 law verbatim. Bundled because
-/// `tick_floor_transition` sits at Bevy's 16-parameter cap.
+/// runs after a 4-tick beat. The beat is port-only
+/// - GML's generation screen ends when `FloorMaker` is gone
+///   (`GenCont/Step_0.gml:3,14-15`, with an `alarm[5] = 600` backstop at
+///   `GenCont/Create_0.gml:41`). Bundled because `tick_floor_transition`
+///   sits at `bevy_ecs`' 16-parameter cap.
 #[derive(bevy_ecs::system::SystemParam)]
 pub struct RoomEntry<'w, 's> {
     pub open_mind: Res<'w, OpenMind>,
@@ -2975,7 +2992,8 @@ pub fn tick_floor_transition(
     }
 }
 
-/// Random loading-screen tip (bevy `pick_loading_tip` verbatim).
+/// Random loading-screen tip (GML `scripts/scrTips/scrTips.gml`: a weighted
+/// `choose` over tip types, falling back to type 0 with no `Player`).
 pub fn pick_loading_tip(_run: &Run) -> String {
     const TIPS: &[&str] = &[
         "KILL ENEMIES TO LEVEL UP",
@@ -3067,9 +3085,11 @@ pub fn animate_portal(
             }
         }
 
-        // Bevy gates Spawn on the spawn-strip oneshot finishing
-        // (`finished || frame + 1 >= frames`; no strip → immediately),
-        // then swaps the anim to the looping idle strip.
+        // GML swaps strips on the animation-end event, not on a timer:
+        // `Portal/Other_7.gml:1-11` moves the spawn strip to the idle one
+        // (picking the popo/proto variant by `type`) and starts the loop
+        // sound. This port gates on the strip finishing instead, with a
+        // missing strip counting as immediately done.
         if st.phase == PortalPhase::Spawn {
             let finished = anim_opt
                 .as_ref()
@@ -3097,8 +3117,8 @@ pub fn animate_portal(
             continue;
         }
 
-        // Bevy gates Disappear on the disappear-strip oneshot the
-        // same way (no strip → immediately).
+        // Same gate on the disappear strip (`Portal/Other_7.gml:12-13`
+        // picks the level-up branch); a missing strip finishes at once.
         if st.phase == PortalPhase::Disappear {
             let done = anim_opt
                 .as_ref()
