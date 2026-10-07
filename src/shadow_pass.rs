@@ -245,7 +245,17 @@ fn ensure_mask(
             compilation_options: Default::default(),
         }),
         primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: None,
+        // ERR SRC: The pass we composite into always carries the surface's depth
+        // attachment, and a pipeline may not omit the state when the pass
+        // provides one - match it and never write, exactly like the sprite
+        // batch's own pipelines.
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth24PlusStencil8,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::Always),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
         multisample: wgpu::MultisampleState {
             count: samples,
             mask: !0,
