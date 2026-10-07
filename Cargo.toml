@@ -55,29 +55,29 @@ getrandom = { version = "0.4", features = ["wasm_js"] }
 [patch.crates-io]
 # Sibling checkouts win over the published crates above; their versions must
 # satisfy the requirements above.
-# game-utils = { path = "../Repos/game-utils/crates/game-utils" }
-# rlobkit-app-events = { path = "../Repos/rlobkit/rlobkit-app-events" }
-# repame-anim = { path = "../Repos/repame/crates/repame-anim" }
-# repame-atlas = { path = "../Repos/repame/crates/repame-atlas" }
-# repame-audio = { path = "../Repos/repame/crates/repame-audio" }
-# repame-fx = { path = "../Repos/repame/crates/repame-fx" }
-# repame-input = { path = "../Repos/repame/crates/repame-input" }
-# repame-shell = { path = "../Repos/repame/crates/repame-shell" }
-# repame-sim = { path = "../Repos/repame/crates/repame-sim" }
-# repame-sprite = { path = "../Repos/repame/crates/repame-sprite" }
-# repose-core = { path = "../Repos/repose/crates/repose-core" }
-# repose-ui = { path = "../Repos/repose/crates/repose-ui" }
-# repose-canvas = { path = "../Repos/repose/crates/repose-canvas" }
-# repose-render-wgpu = { path = "../Repos/repose/crates/repose-render-wgpu" }
-# repose-text = { path = "../Repos/repose/crates/repose-text" }
-# repose-app = { path = "../Repos/repose/crates/repose-app" }
-# repose-platform = { path = "../Repos/repose/crates/repose-platform" }
-# repose-tree = { path = "../Repos/repose/crates/repose-tree" }
-# repose-devtools = { path = "../Repos/repose/crates/repose-devtools" }
-# repose-navigation = { path = "../Repos/repose/crates/repose-navigation" }
-# repose-material = { path = "../Repos/repose/crates/repose-material" }
-# repose-docking = { path = "../Repos/repose/crates/repose-docking" }
-# repose-macros = { path = "../Repos/repose/crates/repose-macros" }
+# game-utils = { path = "../../../../Repos/game-utils/crates/game-utils" }
+# rlobkit-app-events = { path = "../../../../Repos/rlobkit/rlobkit-app-events" }
+# repame-anim = { path = "../../../../Repos/repame/crates/repame-anim" }
+# repame-atlas = { path = "../../../../Repos/repame/crates/repame-atlas" }
+# repame-audio = { path = "../../../../Repos/repame/crates/repame-audio" }
+# repame-fx = { path = "../../../../Repos/repame/crates/repame-fx" }
+# repame-input = { path = "../../../../Repos/repame/crates/repame-input" }
+# repame-shell = { path = "../../../../Repos/repame/crates/repame-shell" }
+# repame-sim = { path = "../../../../Repos/repame/crates/repame-sim" }
+# repame-sprite = { path = "../../../../Repos/repame/crates/repame-sprite" }
+# repose-core = { path = "../../../../Repos/repose/crates/repose-core" }
+# repose-ui = { path = "../../../../Repos/repose/crates/repose-ui" }
+# repose-canvas = { path = "../../../../Repos/repose/crates/repose-canvas" }
+# repose-render-wgpu = { path = "../../../../Repos/repose/crates/repose-render-wgpu" }
+# repose-text = { path = "../../../../Repos/repose/crates/repose-text" }
+# repose-app = { path = "../../../../Repos/repose/crates/repose-app" }
+# repose-platform = { path = "../../../../Repos/repose/crates/repose-platform" }
+# repose-tree = { path = "../../../../Repos/repose/crates/repose-tree" }
+# repose-devtools = { path = "../../../../Repos/repose/crates/repose-devtools" }
+# repose-navigation = { path = "../../../../Repos/repose/crates/repose-navigation" }
+# repose-material = { path = "../../../../Repos/repose/crates/repose-material" }
+# repose-docking = { path = "../../../../Repos/repose/crates/repose-docking" }
+# repose-macros = { path = "../../../../Repos/repose/crates/repose-macros" }
 
 [lib]
 name = "nt_rewrite"
