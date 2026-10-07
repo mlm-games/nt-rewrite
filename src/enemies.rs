@@ -1,8 +1,9 @@
 //! Enemy AI. Positions as [`Pos`] (`Vec2`), not a 3-component transform.
+
 /// Sprite/rotation writes, hurt/fire strip swaps, `Juice::pop_in` and
 /// `VfxSpawner` bursts stay render-side. GML cues straight out of the
 /// actor's own alarm (`Bandit/Alarm_1.gml:9`); here the stem queues as an
-//! [`AudioCue`] through the [`Queue`] instead. [`GTimer`] stands in for
+/// [`AudioCue`] through the [`Queue`] instead. [`GTimer`] stands in for
 /// GML's `alarm[n]` countdown over plain seconds at GML's 30 steps/s.
 /// [`ready_timer`] starts finished and stays silent until re-armed, which
 /// `GTimer::disarmed()` cannot express - it reports `just_finished()` on
@@ -28,7 +29,7 @@ use crate::comps_a::{
     DogGuardianPose, Euphoria, FireCooldown, FloorMask, GameCleanup, Health, HeavyHeart, Hitbox,
     Homing, LevelCleanup, NextHurt, Player, Projectile, ProjectileFade, ProjectileFriction,
     ProjectileTyp, ProjectileVisual, Run, ScarierFace, ShellWallBounce, SplitOnDeath, Team, Toast,
-    Velocity, WallCell, WallTile, apply_gml_friction, gml_motion_add_clamp,
+    Velocity, WallCell, WallTile, BOSS_INTRO_FRAMES, apply_gml_friction, gml_motion_add_clamp,
 };
 use crate::comps_b::{
     BigGuardianBullet, BossBrain, Corpse, CorpseCollision, CrownPedestal, EliteBlocker, Enemy,
