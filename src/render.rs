@@ -5402,13 +5402,62 @@ pub const CREDIT_SECTIONS: &[&[&str]] = &[
     &["@wNUCLEAR THRONE"],
 ];
 
-/// GML `TutCont/Draw_64` instruction text (keyboard variant, `text[]` index 1
-/// per `is_keyboard(global.index)`). Key names resolve from the live keymap
-/// (the `move` quartet on Walking, the step action otherwise), `keymap_get`
-/// parity.
-/// NOT ported: `text[]` index 0 (touch) / 2 (gamepad), the pulsing lime
-/// touch-highlight circle, the red chest pointer, the 36px bottom letterbox
-/// bar GML draws behind the text.
+/// Readable name for a bound pad control, standing in for GML's drawn
+/// `gamepad_icon_small` glyph (`gamepad_key_to_nt_text`). Non-pad bindings
+/// (an unbound action, or an axis row) have no glyph in GML either - it
+/// returns `-1` and `draw_gamepad_button` draws nothing - so they name the
+/// action instead.
+fn pad_control_name(entry: &repame_input::KeymapEntry) -> String {
+    use repose_core::input::{GamepadAxis, GamepadButton};
+    match entry {
+        repame_input::KeymapEntry::Pad(b) => match b {
+            GamepadButton::South => "A",
+            GamepadButton::East => "B",
+            GamepadButton::West => "X",
+            GamepadButton::North => "Y",
+            GamepadButton::LeftShoulder => "LEFT BUMPER",
+            GamepadButton::RightShoulder => "RIGHT BUMPER",
+            GamepadButton::LeftStick => "LEFT STICK",
+            GamepadButton::RightStick => "RIGHT STICK",
+            GamepadButton::DPadUp => "D-PAD UP",
+            GamepadButton::DPadDown => "D-PAD DOWN",
+            GamepadButton::DPadLeft => "D-PAD LEFT",
+            GamepadButton::DPadRight => "D-PAD RIGHT",
+            GamepadButton::Start => "START",
+            GamepadButton::Select => "SELECT",
+        }
+        .to_string(),
+        repame_input::KeymapEntry::Axis { axis, .. } => match axis {
+            GamepadAxis::LeftStickX | GamepadAxis::LeftStickY => "LEFT STICK",
+            GamepadAxis::RightStickX | GamepadAxis::RightStickY => "RIGHT STICK",
+            GamepadAxis::LeftTrigger => "LEFT TRIGGER",
+            GamepadAxis::RightTrigger => "RIGHT TRIGGER",
+        }
+        .to_string(),
+        _ => "UNBOUND".to_string(),
+    }
+}
+
+/// GML `TutCont/Draw_64` instruction text. `TutCont/Create_0.gml:58-81` holds
+/// three variants per step - `text[]` index 0 touch, 1 keyboard, 2 gamepad -
+/// and `Draw_64.gml:20-27` picks one from the live device, which the port
+/// reads through the shared `input::gml_input_device` law so the text cannot
+/// disagree with the touch chrome drawn under it. Touch strings are pre-baked
+/// and taken verbatim; keyboard ones format `%N` with key names
+/// (`Draw_64:39-50`); gamepad ones name the bound pad control
+/// (`Draw_64:51-70`).
+///
+/// PORT-ONLY, gamepad only: GML substitutes drawn `gamepad_icon_small` glyphs
+/// (`gamepad_key_to_nt_text` -> a `@(sprite,index)` inline-icon token), and
+/// the port's text pass drops such tokens without drawing anything, so the
+/// control is named instead. Two GML strings are also half-written - the
+/// gamepad Walking row keeps a bare `%` (`Draw_64:34` uses `loc`, which does
+/// not format) and Power's is missing its `@1(` prefix - so both are filled
+/// in here rather than reproduced broken.
+///
+/// NOT ported: the pulsing lime touch-highlight circle, the red chest pointer,
+/// and the 36px bottom letterbox bar GML draws behind the text
+/// (`Draw_64.gml:77-126`).
 pub fn tutorial_texts(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
     let step = world
         .get_resource::<crate::state::TutorialState>()
@@ -5421,6 +5470,18 @@ pub fn tutorial_texts(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
         return Vec::new();
     }
     let vw = gml_view_size(canvas_dp)[0];
+    // GML `Draw_64:20-27`: keyboard wins over gamepad, and neither is touch.
+    let save = world
+        .get_resource::<crate::savedata_part::SaveData>()
+        .cloned();
+    let (is_keyboard, is_gamepad) = crate::input::gml_input_device(save.as_ref());
+    let variant = if is_keyboard {
+        1
+    } else if is_gamepad {
+        2
+    } else {
+        0
+    };
     // GML `scrKeyName` parity: single letters upper-case, Space wider.
     // `keymap_get` returns the raw row value; the port formats the
     // debug `KeymapEntry` instead, so normalize the common shapes.
@@ -5439,8 +5500,54 @@ pub fn tutorial_texts(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
             .replace("Space", "SPACE")
             .to_ascii_uppercase()
     };
-    let text = match step {
-        crate::state::TutorialStep::Walking => {
+    // GML `Draw_64:52-69` names the bound pad control per step; the two
+    // stick rows stand in for `gp_stickl` / `gp_stickr`.
+    let pad_name = |action: &str| {
+        world
+            .get_resource::<crate::keymap::InputMapState>()
+            .and_then(|m| {
+                crate::keymap::NtAction::from_name(action).map(|a| {
+                    pad_control_name(&m.session.map.active(&a, true))
+                })
+            })
+            .unwrap_or_else(|| action.to_ascii_uppercase())
+    };
+    let text = match (step, variant) {
+        // Touch: pre-baked, no substitution (`Draw_64:34` passes them to
+        // `loc` untouched).
+        (crate::state::TutorialStep::Walking, 0) => {
+            "WALK USING @wMOVEMENT STICK".to_string()
+        }
+        (crate::state::TutorialStep::PickingUp, 0) => {
+            "PICK UP NEW WEAPON USING THE @wINTERACT BUTTON".to_string()
+        }
+        (crate::state::TutorialStep::Shooting, 0) => {
+            "AIM USING THE @wATTACK JOYSTICK@s#TOUCHING THEN RELEASING WILL FIRE".to_string()
+        }
+        (crate::state::TutorialStep::Swapping, 0) => {
+            "SWAP WEAPONS USING THE @wSWAP BUTTON#TRY IT A FEW TIMES!".to_string()
+        }
+        (crate::state::TutorialStep::Power, 0) => {
+            "@wABILITY BUTTON@s USES YOUR SPECIAL SKILL#@wGIVE IT A GO!".to_string()
+        }
+        // Gamepad (`Draw_64:51-70`).
+        (crate::state::TutorialStep::Walking, 2) => {
+            "WALK USING @wLEFT JOYSTICK".to_string()
+        }
+        (crate::state::TutorialStep::PickingUp, 2) => {
+            format!("PICK UP NEW WEAPON WITH @w{}@s BUTTON", pad_name("pick"))
+        }
+        (crate::state::TutorialStep::Shooting, 2) => {
+            format!("AIM USING @wRIGHT STICK@s, @w{}@s FIRES", pad_name("fire"))
+        }
+        (crate::state::TutorialStep::Swapping, 2) => {
+            format!("SWAP WEAPONS WITH @w{}@s#TRY IT A FEW TIMES!", pad_name("swap"))
+        }
+        (crate::state::TutorialStep::Power, 2) => {
+            format!("{}@s USES YOUR ABILITY#GIVE IT A GO!", pad_name("spec"))
+        }
+        // Keyboard (`Draw_64:39-50`).
+        (crate::state::TutorialStep::Walking, _) => {
             format!(
                 "WALK USING @w{}, {}, {}, {}#@s OR THE @wARROW KEYS",
                 key_name("north"),
@@ -5449,22 +5556,23 @@ pub fn tutorial_texts(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
                 key_name("east")
             )
         }
-        crate::state::TutorialStep::PickingUp => {
+        (crate::state::TutorialStep::PickingUp, _) => {
             format!("PICK UP A NEW WEAPON WITH @w{}@s", key_name("pick"))
         }
-        crate::state::TutorialStep::Shooting => {
+        (crate::state::TutorialStep::Shooting, _) => {
             "AIM USING THE MOUSE, @wLEFT BUTTON@s FIRES".to_string()
         }
-        crate::state::TutorialStep::Swapping => {
+        (crate::state::TutorialStep::Swapping, _) => {
             format!(
                 "SWAP WEAPONS WITH @w{}@s#TRY IT A FEW TIMES!",
                 key_name("swap")
             )
         }
-        crate::state::TutorialStep::Power => {
+        // Fin has one string for every device (`Create_0.gml:83`).
+        (crate::state::TutorialStep::Power, _) => {
             "@wRIGHT MOUSE BUTTON@s USES YOUR ABILITY#GIVE IT A GO!".to_string()
         }
-        crate::state::TutorialStep::Fin => "COOL, WE'RE DONE HERE!".to_string(),
+        (crate::state::TutorialStep::Fin, _) => "COOL, WE'RE DONE HERE!".to_string(),
     };
     gui_texts_dp(
         canvas_dp,
