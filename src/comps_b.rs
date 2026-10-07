@@ -57,6 +57,10 @@ pub struct PlasmaBurst {
     pub knockback: f32,
     pub color: [f32; 4],
     pub size: Vec2,
+    /// GML `image_xscale` floor at which the shot dies: `PlasmaBall` 0.5
+    /// (`PlasmaBall/Step_0.gml:6`), `PlasmaBig` and `PlasmaHuge` 0.4
+    /// (`PlasmaBig/Step_0.gml:3`, `PlasmaHuge/Step_0.gml:3`).
+    pub death_scale: f32,
 }
 
 #[derive(Component, Clone, Debug)]

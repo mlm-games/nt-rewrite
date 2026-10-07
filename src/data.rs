@@ -362,9 +362,9 @@ pub enum CrownKind {
     Blood = 6,
     Destiny = 7,
     Love = 8,
-    Risk = 9,
+    Luck = 9,
     Curses = 10,
-    Luck = 11,
+    Risk = 11,
     Protection = 12,
 }
 
@@ -379,9 +379,9 @@ impl CrownKind {
         CrownKind::Blood,
         CrownKind::Destiny,
         CrownKind::Love,
-        CrownKind::Risk,
-        CrownKind::Curses,
         CrownKind::Luck,
+        CrownKind::Curses,
+        CrownKind::Risk,
         CrownKind::Protection,
     ];
 
@@ -395,9 +395,9 @@ impl CrownKind {
             6 => CrownKind::Blood,
             7 => CrownKind::Destiny,
             8 => CrownKind::Love,
-            9 => CrownKind::Risk,
+            9 => CrownKind::Luck,
             10 => CrownKind::Curses,
-            11 => CrownKind::Luck,
+            11 => CrownKind::Risk,
             12 => CrownKind::Protection,
             _ => CrownKind::None,
         }

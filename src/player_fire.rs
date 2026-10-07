@@ -379,6 +379,7 @@ fn projectile_arch(id: WeaponId) -> FireArch {
                 knockback: 24.0,
                 color: [0.35, 1.0, 0.42, 1.0],
                 size: Vec2::splat(7.0),
+                death_scale: 0.5,
             }),
             ..FireArch::default()
         },
@@ -392,6 +393,7 @@ fn projectile_arch(id: WeaponId) -> FireArch {
                 knockback: 24.0,
                 color: [0.3, 1.0, 0.38, 1.0],
                 size: Vec2::splat(7.0),
+                death_scale: 0.5,
             }),
             ..FireArch::default()
         },
@@ -405,6 +407,7 @@ fn projectile_arch(id: WeaponId) -> FireArch {
                 knockback: 16.0,
                 color: [0.32, 1.0, 0.4, 1.0],
                 size: Vec2::splat(6.0),
+                death_scale: 0.5,
             }),
             ..FireArch::default()
         },
@@ -418,6 +421,7 @@ fn projectile_arch(id: WeaponId) -> FireArch {
                 knockback: 40.0,
                 color: [0.36, 1.0, 0.45, 1.0],
                 size: Vec2::splat(8.0),
+                death_scale: 0.4,
             }),
             ..FireArch::default()
         },
@@ -431,6 +435,7 @@ fn projectile_arch(id: WeaponId) -> FireArch {
                 knockback: 48.0,
                 color: [0.38, 1.0, 0.48, 1.0],
                 size: Vec2::splat(9.0),
+                death_scale: 0.5,
             }),
             ..FireArch::default()
         },

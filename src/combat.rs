@@ -2093,7 +2093,7 @@ pub fn move_projectiles(
                     (20.0, 60.0),
                 );
                 tpos.0 -= vel.0 * dt;
-                if ps.0 <= 0.5 {
+                if ps.0 <= plasma_burst.map_or(0.5, |b| b.death_scale) {
                     on_projectile_removed(
                         &mut commands,
                         &catalog,
@@ -2917,7 +2917,7 @@ pub fn projectile_hits(
             if is_plasma {
                 if let Ok(mut ps) = aux.p1().get_mut(proj_e) {
                     ps.0 -= 0.1;
-                    if ps.0 <= 0.5 {
+                    if ps.0 <= plasma_burst.map_or(0.5, |b| b.death_scale) {
                         plasma_died = true;
                     }
                 }

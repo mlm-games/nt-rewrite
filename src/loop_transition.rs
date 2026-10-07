@@ -20,7 +20,6 @@ use crate::comps_b::{
     CampfirePhase, CampfireProp, CampfireState, CuzStrip, Enemy, LoopTransition, YungCuz, YvCouch,
 };
 use crate::data::EnemyKind;
-use crate::idpd::is_idpd_kind;
 use crate::msg::Queue;
 use crate::spatial::Pos;
 
@@ -68,13 +67,14 @@ pub fn mark_throne_ii_defeated(toast: &mut Toast, trauma: &mut Trauma) {
     trauma.add(0.35);
 }
 
-/// The campfire waits while IDPD are alive or a raid warning is pending.
-/// GML gates the same stretch on the whole enemy count
-/// (`objects/Corpse/Alarm_0.gml:2`, `scr_check_enemies`) and on no
-/// `IDPDSpawn` portal up (`:11`); the port narrows it to the four IDPD
-/// kinds.
-pub fn campfire_needs_idpd_clear(idpd_alive: usize) -> bool {
-    idpd_alive > 0
+/// The campfire waits while anything is left alive or a raid portal is up.
+/// GML gates on the whole enemy count minus vans
+/// (`scripts/scr_check_enemies.gml:3-5`, called at
+/// `objects/Corpse/Alarm_0.gml:2`) and on no `IDPDSpawn`
+/// (`objects/Corpse/Alarm_0.gml:11`), so a lone Bandit parks the fire just
+/// as an IDPD wave does.
+pub fn campfire_needs_idpd_clear(enemies_alive: usize, portal_up: bool) -> bool {
+    enemies_alive > 0 || portal_up
 }
 
 fn start_campfire_rising(campfire: &mut CampfireState, toast: &mut Toast, trauma: &mut Trauma) {
@@ -84,7 +84,8 @@ fn start_campfire_rising(campfire: &mut CampfireState, toast: &mut Toast, trauma
 }
 
 /// Advance campfire phases. Rising spawns Throne II via
-/// [`PendingEnemySpawn`]; any living IDPD or pending raid parks the fire
+/// [`PendingEnemySpawn`]; any living enemy (vans aside) or an open raid
+/// portal parks the fire
 /// in `WaitingForIdpd` until the room stays clear 0.35 s. GML runs this
 /// stretch off `BecomeNothing`'s alarms (`Create_0.gml:16-17`,
 /// `Alarm_4.gml:1`, `Alarm_6.gml:2`) and then
@@ -102,16 +103,17 @@ pub fn tick_campfire(
     mut toast: ResMut<Toast>,
     mut cues: ResMut<Queue<AudioCue>>,
     enemies: Query<&Enemy>,
+    portals: Query<Entity, With<crate::idpd::IdpdSpawnPortal>>,
     mut campfires: Query<(Entity, &Pos, &mut CampfireState), With<CampfireProp>>,
     walls: Query<&WallCell>,
 ) {
     let dt = time.delta_secs;
-    let idpd_alive = enemies
+    let enemies_alive = enemies
         .iter()
-        .filter(|enemy| is_idpd_kind(enemy.kind))
+        .filter(|enemy| enemy.kind != EnemyKind::IdpdVan)
         .count();
 
-    let needs_idpd_clear = campfire_needs_idpd_clear(idpd_alive);
+    let needs_idpd_clear = campfire_needs_idpd_clear(enemies_alive, !portals.is_empty());
 
     for (entity, camp_pos, mut campfire) in campfires.iter_mut() {
         let anchor = camp_pos.0;
@@ -122,7 +124,7 @@ pub fn tick_campfire(
                     if !campfire.idpd_gate_armed {
                         campfire.arm_idpd_gate();
 
-                        if idpd_alive > 0 {
+                        if enemies_alive > 0 {
                             toast.show("CLEAR THE IDPD");
                         }
 

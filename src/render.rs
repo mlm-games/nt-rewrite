@@ -3522,10 +3522,10 @@ pub fn world_instances_cached(
     // over the last `flash_at` ticks before the blast (`objects/Grenade/
     // Draw_0.gml:4-5`, `alarm[0] % 5 > 2 ? c_black : c_white`, with
     // `alarm[0] = 60` and `flash_at = 10` at `objects/Grenade/
-    // Create_0.gml:11-12`). The port drives the window off the fuse's
-    // 6-tick `alarm[1]` (`objects/Grenade/Create_0.gml:10`), so its
-    // strobe window is shorter than GML's 10 ticks. The "solid white
-    // once the friction switch armed" tail is port-only - GML's
+    // Create_0.gml:11-12`). The window reads the blast countdown itself
+    // (`Projectile.life`, the per-variant `alarm[0]`), so a cluster
+    // nade's shorter fuse strobes over the same last 10 ticks. The "solid
+    // white once the friction switch armed" tail is port-only - GML's
     // non-strobe branch is a plain `draw_self()`.
     {
         let mut q = world.query::<(
@@ -3594,7 +3594,7 @@ pub fn world_instances_cached(
             };
             let tint = match fuse {
                 Some(f) => {
-                    let remaining = f.alarm1.remaining_secs();
+                    let remaining = proj.life.remaining_secs();
                     if remaining <= 0.334 && remaining > 0.01 {
                         let phase = (remaining * 30.0) as i32 % 5;
                         if phase <= 2 {

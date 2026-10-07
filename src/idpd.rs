@@ -37,16 +37,6 @@ use crate::msg::Queue;
 use crate::spatial::Pos;
 use crate::time::{GTimer, TimerMode};
 
-/// True for the four IDPD kinds a raid puts on the floor: `Grunt`,
-/// `Shielder`, the dir-1 `EliteGrunt` elite and `Van` (GML
-/// `IDPDSpawn/Alarm_1.gml:18-27`, `VanSpawn/Alarm_1.gml:5`).
-pub fn is_idpd_kind(kind: EnemyKind) -> bool {
-    matches!(
-        kind,
-        EnemyKind::IdpdGrunt | EnemyKind::IdpdShield | EnemyKind::IdpdElite | EnemyKind::IdpdVan
-    )
-}
-
 /// GML `IDPDSpawn/Create_0` elite law: 1-in-5 once loops are deep
 /// enough (`loops > 1` on area 0 = campfire, any loop past it).
 pub fn idpd_elite_roll(loop_count: u32, area: AreaId) -> bool {

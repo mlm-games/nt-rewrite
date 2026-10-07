@@ -399,6 +399,11 @@ impl LastDamageTaken {
     }
 }
 
+/// GML `scrBossIntro.gml:22` `alarm[2] = 40`, the only release: `UberCont`'s
+/// `Alarm_2` ends the banner and unpauses (`objects/UberCont/Alarm_2.gml:1-4`).
+/// The name-splat slide in `objects/UberCont/Draw_0.gml:29-36` is visual only.
+pub const BOSS_INTRO_FRAMES: f32 = 40.0;
+
 #[derive(Component)]
 pub struct BossIntro {
     pub timer: Timer,

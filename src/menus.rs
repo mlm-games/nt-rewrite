@@ -886,22 +886,6 @@ pub(crate) fn emit_hover_if_changed(world: &mut World, label: &str) {
     }
 }
 
-/// Extra pop-only one-shot (`sndClickBack` 1.0) on top of the
-/// `ui_action_sfx` cue `emit_cue` already sends on every `SettingsBack` arm
-/// - so the pop path queues `sndClickBack` twice. GML plays it once per
-/// non-editing back press, close or pop
-/// (`MenuOptions/KeyPress_8.gml:8-24`).
-fn emit_click_back(world: &mut World) {
-    world.init_resource::<Queue<crate::audio::AudioCue>>();
-    world
-        .resource_mut::<Queue<crate::audio::AudioCue>>()
-        .push(crate::audio::AudioCue {
-            name: "sndClickBack",
-            volume: 1.0,
-            variance: 0.0,
-        });
-}
-
 /// Push a raw one-shot stem for site-context picks (character, skin,
 /// crown, mutation highlight).
 pub fn emit_sfx(world: &mut World, cue: crate::audio::AudioCue) {
@@ -1252,7 +1236,6 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 emit_cue(world, &UiAction::SettingsBack);
             } else {
                 emit_cue(world, &UiAction::SettingsBack);
-                emit_click_back(world);
             }
         }
         UiAction::ShowPauseConfirm(kind) => {
@@ -1759,14 +1742,14 @@ fn apply_setting_slider(save: &mut SaveData, key: &str, value: f32) -> bool {
 /// `type: "list"` (`MenuOptions/Create_0.gml:162-170`). Pixel mode is the
 /// 1-based `range(1, 4)` list and gamepad type wraps the four
 /// `gamepad_types` (`MenuOptions/Other_20.gml:159`,
-/// `scrOptionsUpdate.gml:149-155`); crosshair and sideart wrap 4 here,
-/// while GML sizes those two lists by sprite frame count
-/// (`MenuOptions/Other_20.gml:117,130`).
+/// `scrOptionsUpdate.gml:149-155`); crosshair and sideart wrap their sprite
+/// frame counts (9 and 10), which GML sizes at runtime by
+/// `sprite_get_number` (`MenuOptions/Other_20.gml:117,130`).
 fn apply_setting_cycle(save: &mut SaveData, key: &str, dir: i8) -> bool {
     let s = &mut save.settings;
     match key {
-        "crosshair" => s.crosshair = (s.crosshair as i16 + dir as i16).rem_euclid(4) as u8,
-        "sideart" => s.sideart = (s.sideart as i16 + dir as i16).rem_euclid(4) as u8,
+        "crosshair" => s.crosshair = (s.crosshair as i16 + dir as i16).rem_euclid(9) as u8,
+        "sideart" => s.sideart = (s.sideart as i16 + dir as i16).rem_euclid(10) as u8,
         "pixel_mode" => {
             s.pixel_mode = ((s.pixel_mode as i16 - 1 + dir as i16).rem_euclid(4) + 1) as u8;
         }

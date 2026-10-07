@@ -24,7 +24,25 @@ use crate::comps_a::{Health, Inventory, Player, RaceState, Run};
 use crate::data::{AreaId, CrownKind, MutationId, RaceId, SkinLetter, WeaponId};
 use crate::keymap::KeyBindings;
 
-pub const SAVE_VERSION: u32 = 5;
+pub const SAVE_VERSION: u32 = 6;
+
+/// Save-version migrations applied on load, oldest first.
+///
+/// v5 -> v6: `CrownKind`'s discriminants now follow the GML `Crown` enum
+/// (`scrCrowns.gml:3-18`), which put `Luck` before `Curses` and `Risk`.
+/// v5 had `Risk = 9, Curses = 10, Luck = 11`, so a stored `start_crown`
+/// of 9 or 11 named the other crown.
+fn migrate_save(save: &mut SaveData, from: u32) {
+    if from < 6 {
+        for lo in save.races.values_mut() {
+            lo.start_crown = match lo.start_crown {
+                9 => 11,
+                11 => 9,
+                other => other,
+            };
+        }
+    }
+}
 
 /// GML `save_get_value("etc", "protowep", wep_rusty_revolver)`
 /// (`PlayButton/Other_10.gml:11`, `scrInit.gml:154`).
@@ -1545,6 +1563,7 @@ pub fn parse_save(text: &str) -> Result<SaveData, String> {
         ));
     }
     if save.version < SAVE_VERSION {
+        migrate_save(&mut save, save.version);
         save.version = SAVE_VERSION;
     }
     Ok(save)
@@ -1575,7 +1594,9 @@ pub fn load_save_from_file(path: &Path) -> Result<SaveData, String> {
         .ok_or_else(|| format!("save unavailable: {:?}", result.status))?;
     let legacy_text = std::str::from_utf8(&legacy_bytes).map_err(|e| e.to_string())?;
     let mut save: SaveData = serde_json::from_str(legacy_text).map_err(|e| e.to_string())?;
+    let from = save.version;
     save.sanitize_loadouts();
+    migrate_save(&mut save, from);
     save.version = SAVE_VERSION;
     store_save_to_file(&save, path)?;
     Ok(save)

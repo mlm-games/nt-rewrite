@@ -47,7 +47,7 @@ use crate::comps_a::{
     BossIntro, BouncesLeft, DamageSource, FloorMask, GameCleanup, Health, Hitbox, LevelCleanup,
     NextHurt, PendingWallBreak, Player, Projectile, ProjectileAccel, ProjectileFade,
     ProjectileFriction, ProjectileTyp, RaceState, Run, ShellWallBounce, Team, Toast, TopSmalls,
-    Velocity, WallCell, WallTile, gml_motion_add_clamp,
+    Velocity, WallCell, WallTile, BOSS_INTRO_FRAMES, gml_motion_add_clamp,
 };
 use crate::comps_b::{
     Beam, BigGenerator, BossBrain, BossPhase, CustomExplosion, Enemy, EnemyBrain, HitWarning,
@@ -1108,7 +1108,7 @@ fn big_bandit_ai(
                     commands.spawn((
                         GameCleanup,
                         BossIntro {
-                            timer: GTimer::from_seconds(1.1, TimerMode::Once),
+                            timer: gml_alarm(BOSS_INTRO_FRAMES),
                         },
                     ));
                 }
@@ -1427,7 +1427,7 @@ fn lil_hunter_ai(
                         commands.spawn((
                             GameCleanup,
                             BossIntro {
-                                timer: GTimer::from_seconds(1.1, TimerMode::Once),
+                                timer: gml_alarm(BOSS_INTRO_FRAMES),
                             },
                         ));
                     }
@@ -2202,7 +2202,7 @@ fn throne_ii_ai(
         commands.spawn((
             GameCleanup,
             BossIntro {
-                timer: GTimer::from_seconds(1.1, TimerMode::Once),
+                timer: gml_alarm(BOSS_INTRO_FRAMES),
             },
         ));
     }
@@ -2492,7 +2492,7 @@ fn hyper_ai(
         commands.spawn((
             GameCleanup,
             BossIntro {
-                timer: GTimer::from_seconds(1.1, TimerMode::Once),
+                timer: gml_alarm(BOSS_INTRO_FRAMES),
             },
         ));
         state.alarm3 = gml_alarm_off();
@@ -2740,7 +2740,7 @@ fn frog_queen_ai(
                     commands.spawn((
                         GameCleanup,
                         BossIntro {
-                            timer: GTimer::from_seconds(1.1, TimerMode::Once),
+                            timer: gml_alarm(BOSS_INTRO_FRAMES),
                         },
                     ));
                 }
@@ -2869,7 +2869,7 @@ fn technomancer_ai(
         commands.spawn((
             GameCleanup,
             BossIntro {
-                timer: GTimer::from_seconds(1.1, TimerMode::Once),
+                timer: gml_alarm(BOSS_INTRO_FRAMES),
             },
         ));
     }
@@ -3230,7 +3230,7 @@ fn captain_ai(
         commands.spawn((
             GameCleanup,
             BossIntro {
-                timer: GTimer::from_seconds(1.1, TimerMode::Once),
+                timer: gml_alarm(BOSS_INTRO_FRAMES),
             },
         ));
     }
@@ -3393,7 +3393,7 @@ fn yv_boss_ai(
             commands.spawn((
                 GameCleanup,
                 BossIntro {
-                    timer: GTimer::from_seconds(1.1, TimerMode::Once),
+                    timer: gml_alarm(BOSS_INTRO_FRAMES),
                 },
             ));
         }
@@ -3453,7 +3453,7 @@ fn yv_boss_ai(
                             commands.spawn((
                                 GameCleanup,
                                 BossIntro {
-                                    timer: GTimer::from_seconds(1.1, TimerMode::Once),
+                                    timer: gml_alarm(BOSS_INTRO_FRAMES),
                                 },
                             ));
                         }
