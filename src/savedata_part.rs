@@ -44,6 +44,12 @@ fn migrate_save(save: &mut SaveData, from: u32) {
     }
 }
 
+/// Migrate then sanitize, the order every load path must use.
+pub fn migrate_save_on_load(save: &mut SaveData, from: u32) {
+    migrate_save(save, from);
+    save.sanitize_loadouts();
+}
+
 /// GML `save_get_value("etc", "protowep", wep_rusty_revolver)`
 /// (`PlayButton/Other_10.gml:11`, `scrInit.gml:154`).
 pub fn default_protowep() -> WeaponId {
@@ -691,8 +697,8 @@ impl Versioned for SaveData {
         self.version = version;
     }
 
-    fn migrate(&mut self, _from: u32, _to: u32) {
-        self.sanitize_loadouts();
+    fn migrate(&mut self, from: u32, _to: u32) {
+        migrate_save_on_load(self, from);
     }
 }
 
@@ -1555,7 +1561,6 @@ pub fn serialize_save(save: &SaveData) -> Result<String, String> {
 /// Parse a RON save and sanitize loadouts.
 pub fn parse_save(text: &str) -> Result<SaveData, String> {
     let mut save: SaveData = ron::from_str(text).map_err(|e| e.to_string())?;
-    save.sanitize_loadouts();
     if save.version > SAVE_VERSION {
         return Err(format!(
             "save version {} is newer than supported version {}",
@@ -1563,8 +1568,10 @@ pub fn parse_save(text: &str) -> Result<SaveData, String> {
         ));
     }
     if save.version < SAVE_VERSION {
-        migrate_save(&mut save, save.version);
+        migrate_save_on_load(&mut save, save.version);
         save.version = SAVE_VERSION;
+    } else {
+        save.sanitize_loadouts();
     }
     Ok(save)
 }
@@ -1594,9 +1601,7 @@ pub fn load_save_from_file(path: &Path) -> Result<SaveData, String> {
         .ok_or_else(|| format!("save unavailable: {:?}", result.status))?;
     let legacy_text = std::str::from_utf8(&legacy_bytes).map_err(|e| e.to_string())?;
     let mut save: SaveData = serde_json::from_str(legacy_text).map_err(|e| e.to_string())?;
-    let from = save.version;
-    save.sanitize_loadouts();
-    migrate_save(&mut save, from);
+    migrate_save_on_load(&mut save, save.version);
     save.version = SAVE_VERSION;
     store_save_to_file(&save, path)?;
     Ok(save)

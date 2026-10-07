@@ -1231,7 +1231,8 @@ pub fn sync_audio_channels(
 ///   save (`scripts/scrSavegame/scrSavegame.gml:9-22`).
 pub fn tick_sanitize_save(mut save: ResMut<crate::savedata_part::SaveData>) {
     if save.version != crate::savedata_part::SAVE_VERSION {
-        save.sanitize_loadouts();
+        let from = save.version;
+        crate::savedata_part::migrate_save_on_load(&mut save, from);
         save.version = crate::savedata_part::SAVE_VERSION;
     }
 }
