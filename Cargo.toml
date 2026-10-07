@@ -7,13 +7,13 @@ description = "Nuclear Throne recreation on repame + repose (no bevy)"
 [dependencies]
 # Engine; [patch.crates-io] below redirects these to the sibling checkouts.
 repame-sim = "0.3"
-repame-shell = "0.3"
+repame-shell = "0.3.11"
 repame-anim = "0.3"
 repame-sprite = "0.3"
 repame-atlas = "0.3"
 repame-fx = "0.3"
 repame-input = "0.3"
-repame-audio = "0.3"
+repame-audio = "0.3.11"
 # PNG decode for atlas uploads (repame ships no image dep; games decode
 # their own pixels per repame-atlas docs). Pinned to the cached 0.25 line.
 image = "0.25"

@@ -68,6 +68,16 @@ impl AudioHost {
         }
     }
 
+    /// Re-arm every device the browser autoplay gate left suspended.
+    ///
+    /// Both engines open their own `AudioContext`, so both need the nudge.
+    pub fn unlock_all(&self) {
+        self.sfx.unlock();
+        if let Some(amb) = &self.amb {
+            amb.unlock();
+        }
+    }
+
     pub fn pump(&mut self, dt_secs: f32, app: &mut App) {
         self.sfx.update(dt_secs);
         self.sfx.take_finished();

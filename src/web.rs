@@ -3,47 +3,11 @@
 //! installs it into [`assetfs`](crate::assetfs), then boots the same
 //! desktop frame loop on `repame_shell::run_web`.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use web_time::Duration;
 
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 
 use crate::{App, root_view};
-
-/// Set by the first real gesture on this document; the frame loop reads it to
-/// decide when the audio device may be built.
-///
-/// Chrome/Brave only let an `AudioContext` start from a user gesture, and
-/// `game.html` is reached by NAVIGATING from the start page, which clears the
-/// activation the PLAY click granted. cpal opens the context and calls
-/// `resume()` while `AudioHost::new` runs, which is not a gesture, so the
-/// context comes up suspended and stays that way - every later `play()` is
-/// silent for the rest of the session. Building the device only after a
-/// gesture lands in this document is what lets it start.
-static AUDIO_GESTURE: AtomicBool = AtomicBool::new(false);
-
-/// Listen for the first gesture. The closure is leaked into the page on
-/// purpose (`into_js_value`): the listener has to outlive this call, and it
-/// stays registered for the page's life - the store is a no-op once set, and
-/// the loop builds the device at most once.
-fn arm_audio_unlock() {
-    let global = js_sys::global();
-    let Ok(add) = js_sys::Reflect::get(&global, &JsValue::from_str("addEventListener")) else {
-        return;
-    };
-    let Some(add) = add.dyn_ref::<js_sys::Function>() else {
-        return;
-    };
-    let handler = Closure::wrap(Box::new(|| {
-        AUDIO_GESTURE.store(true, Ordering::SeqCst);
-    }) as Box<dyn FnMut()>)
-    .into_js_value();
-    for event in ["pointerdown", "touchstart", "keydown"] {
-        let _ = add.call2(&global, &JsValue::from_str(event), &handler);
-    }
-}
 
 fn boot_status(message: &str, failed: bool) {
     let global = js_sys::global();
@@ -87,10 +51,17 @@ fn run() -> anyhow::Result<()> {
         save_path.display(),
         save.version
     );
-    // Built on the first gesture, not here: see `AUDIO_GESTURE`. `pump` reads
-    // the wanted stem off live app state every frame, so the deferred device
-    // still starts the right music on the frame it appears.
-    let mut audio: Option<crate::audio_host::AudioHost> = None;
+    let audio = std::rc::Rc::new(std::cell::RefCell::new(
+        crate::audio_host::AudioHost::new(),
+    ));
+    // The browser only lets an `AudioContext` start from a gesture, and
+    // `game.html` is reached by navigating from the start page, which drops
+    // the activation the PLAY click granted - so the device opens suspended
+    // and stays silent. The cell is what lets the gesture callback and the
+    // frame loop share the one device; the callback fires between frames, so
+    // it never contends with `pump`.
+    let on_gesture = audio.clone();
+    repame_shell::on_first_user_gesture(move || on_gesture.borrow().unlock_all());
     let mut poller = repame_shell::GamepadPoller::new();
     let mut bank = repame_shell::PadBank::default();
     let mut last = web_time::Instant::now();
@@ -102,13 +73,8 @@ fn run() -> anyhow::Result<()> {
         let now = web_time::Instant::now();
         let dt = now.duration_since(last).min(Duration::from_secs_f32(0.25));
         last = now;
-        if audio.is_none() && AUDIO_GESTURE.load(Ordering::SeqCst) {
-            audio = Some(crate::audio_host::AudioHost::new());
-        }
         let view = root_view(sched, ctx, &mut app, dt);
-        if let Some(audio) = audio.as_mut() {
-            audio.pump(dt.as_secs_f32(), &mut app);
-        }
+        audio.borrow_mut().pump(dt.as_secs_f32(), &mut app);
         view
     })
     .map_err(|e| anyhow::anyhow!("{e:?}"))?;
@@ -117,9 +83,6 @@ fn run() -> anyhow::Result<()> {
 
 #[wasm_bindgen(start)]
 pub fn start() {
-    // Armed before the assets await so a gesture made while the game is still
-    // loading still counts - the flag outlives any early input.
-    arm_audio_unlock();
     wasm_bindgen_futures::spawn_local(async {
         boot_status("loading assets", false);
         let zip = match shell_assets().await {
