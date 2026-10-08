@@ -1520,7 +1520,12 @@ pub fn collect_pickups(
         ),
         Without<Player>,
     >,
-    mut proto_q: Query<(Entity, &mut ProtoChestState)>,
+    // `bevy_ecs` caps a system at 16 params: the chest states and the
+    // death-cause bookkeeping share one slot.
+    mut proto_and_cause: ParamSet<(
+        Query<(Entity, &mut ProtoChestState)>,
+        ResMut<crate::comps_a::LastDamageTaken>,
+    )>,
     mut toast: ResMut<Toast>,
     mut tut: Option<ResMut<crate::state::TutorialState>>,
 ) {
@@ -1530,7 +1535,7 @@ pub fn collect_pickups(
         return;
     };
 
-    arm_proto_chests(&mut commands, &mut proto_q, &run);
+    arm_proto_chests(&mut commands, &mut proto_and_cause.p0(), &run);
     let player_pos = player_pos.0;
     let dt = time.delta_secs;
     // The weapon arm below peeks the shared pulse (see its note);
@@ -1721,6 +1726,11 @@ pub fn collect_pickups(
             //   below), so it is excluded here to avoid the double trigger.
             if chest != ChestKind::Proto && player.crown == CrownKind::Hatred && health.hp > 0 {
                 if health.invuln.is_finished() {
+                    // GML `scrChestOpened.gml:16` `scr_hit_self(1,
+                    // HitId.CrownOfHatred)`: the burn is a named death.
+                    proto_and_cause
+                        .p1()
+                        .note(Some(crate::comps_a::HitId::CrownOfHatred), None);
                     health.hp -= 1;
                     health.invuln = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
                 }
@@ -2105,12 +2115,17 @@ pub fn collect_pickups(
                     // `scrChestOpened()`.
                     if player.crown == CrownKind::Hatred && health.hp > 0 {
                         if health.invuln.is_finished() {
+                            // GML `ProtoChest/Collision_Player.gml:15`
+                            // `scr_hit_self(1, HitId.CrownOfHatred)`.
+                            proto_and_cause
+                                .p1()
+                                .note(Some(crate::comps_a::HitId::CrownOfHatred), None);
                             health.hp -= 1;
                             health.invuln = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
                         }
                         spawn_hatred_rads(&mut commands, &catalog, player_pos, 16, loops);
                     }
-                    let (weapon, cursed) = match proto_q.get(pickup_e) {
+                    let (weapon, cursed) = match proto_and_cause.p0().get(pickup_e) {
                         Ok((_, &ProtoChestState::Armed { weapon, cursed })) => (weapon, cursed),
                         _ => (run.protowep, run.protocurse),
                     };

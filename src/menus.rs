@@ -252,6 +252,11 @@ pub fn deathcause_sprite_for_hit(
         Some(HitId::Explosion(_)) => Some("images/sprExplosion.png"),
         Some(HitId::Toxic) => Some("images/sprToxicGas.png"),
         Some(HitId::Fire) | Some(HitId::Trap) => Some("images/sprTrapGameover.png"),
+        Some(HitId::CurseEat) => Some("images/sprCurse.png"),
+        Some(HitId::BloodGamble) => Some("images/sprKillsIcon.png"),
+        Some(HitId::CrownOfHatred) => Some("images/sprCrown6Idle.png"),
+        Some(HitId::IceFlower) => Some("images/sprIceFlowerIdle.png"),
+        Some(HitId::BloodHammer) => Some("images/sprBloodHammer.png"),
         _ => None,
     }
 }

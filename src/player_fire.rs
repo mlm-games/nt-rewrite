@@ -2934,7 +2934,14 @@ pub fn player_ability(
     mut pop_q: Query<&mut PopPopCharges>,
     corpses: Query<(Entity, &Pos, &Corpse, Option<&SpriteAnim>), With<Corpse>>,
     portals: Query<Entity, With<Portal>>,
-    mut persist: ParamSet<(ResMut<SaveData>, ResMut<SaveDirty>, Res<Run>)>,
+    // `bevy_ecs` caps a system at 16 params, so the death-cause bookkeeping
+    // rides the existing persist set rather than taking a slot of its own.
+    mut persist: ParamSet<(
+        ResMut<SaveData>,
+        ResMut<SaveDirty>,
+        Res<Run>,
+        ResMut<crate::comps_a::LastDamageTaken>,
+    )>,
     catalog: Res<repame_anim::AnimCatalog>,
     mut tut: Option<ResMut<crate::state::TutorialState>>,
     mut player_q: Query<
@@ -3347,7 +3354,11 @@ pub fn player_ability(
                 persist.p2().gen_seed,
             );
             if was_cursed {
-                // GML curse eat: self-hit 7 + 10 `Curse` motes.
+                // GML `scrPowers.gml:191` `scr_hit_self(7, HitId.CurseEat)`:
+                // self-hit 7 + 10 `Curse` motes, and the curse owns the death.
+                persist
+                    .p3()
+                    .note(Some(crate::comps_a::HitId::CurseEat), None);
                 health.hp -= 7;
                 let mut rng = rand::rng();
                 for _ in 0..10 {
@@ -3674,6 +3685,10 @@ pub fn player_ability(
             let proc = rng.random_range(0..amount) < cost;
             let tb_gate = !player.throne_butt || rng.random_range(0..3) < 2;
             if proc && tb_gate {
+                // GML `scrPowers.gml:408` `scr_hit_self(1, HitId.BloodGamble)`.
+                persist
+                    .p3()
+                    .note(Some(crate::comps_a::HitId::BloodGamble), None);
                 health.hp -= 1;
                 player.skeleton_gamble = 0;
             }

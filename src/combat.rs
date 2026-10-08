@@ -3945,9 +3945,15 @@ pub fn tick_slash_projectiles(
                 Without<Projectile>,
             ),
         >,
+        ResMut<LastDamageTaken>,
     )>,
     mut secrets: ResMut<SecretTriggers>,
-    mut all_health: Query<&mut Health, Without<Enemy>>,
+    // `bevy_ecs` caps a system at 16 params, so the owner and the player
+    // share one slot; `scr_hit` only writes the death cause for the Player.
+    mut charged: ParamSet<(
+        Query<&mut Health, Without<Enemy>>,
+        Query<Entity, (With<Player>, Without<Enemy>)>,
+    )>,
     run: Res<Run>,
 ) {
     let oasis = run.area == AreaId::Oasis;
@@ -4287,10 +4293,20 @@ pub fn tick_slash_projectiles(
 
         if proj.life.just_finished() {
             if slash.blood && !slash.hit {
-                if let Some(src) = proj.source
-                    && let Ok(mut h) = all_health.get_mut(src.owner)
-                {
-                    h.hp -= 1;
+                if let Some(src) = proj.source {
+                    // GML `BloodSlash/Other_7.gml:2` `if (!hit)
+                    // scr_hit(_creator, 1, HitId.BloodHammer)`, and `scr_hit`'s
+                    // death-cause write sits inside its `instance_is(self,
+                    // Player)` arm - so only the player books one. The player
+                    // probe runs before the mutable borrow: a `ParamSet` allows
+                    // one live borrow at a time.
+                    let is_player = charged.p1().get(src.owner).is_ok();
+                    if let Ok(mut h) = charged.p0().get_mut(src.owner) {
+                        if is_player {
+                            projs.p2().note(Some(HitId::BloodHammer), None);
+                        }
+                        h.hp -= 1;
+                    }
                 }
                 audio.play_hit(&mut cues);
             }

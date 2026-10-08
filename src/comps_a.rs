@@ -386,6 +386,11 @@ impl LastDamageTaken {
             (Some(HitId::Explosion(_)), _) => "EXPLOSION".into(),
             (Some(HitId::Weapon(_)), _) => "BULLET".into(),
             (Some(HitId::Crown), _) => "CROWN".into(),
+            (Some(HitId::CurseEat), _) => "CURSE EAT".into(),
+            (Some(HitId::BloodGamble), _) => "BLOOD GAMBLE".into(),
+            (Some(HitId::CrownOfHatred), _) => "CROWN OF HATRED".into(),
+            (Some(HitId::IceFlower), _) => "ICE FLOWER".into(),
+            (Some(HitId::BloodHammer), _) => "BLOOD HAMMER".into(),
             (Some(HitId::Other(_)), _) => "???".into(),
             _ => "???".into(),
         };
@@ -992,6 +997,15 @@ pub enum HitId {
     Toxic,
     Trap,
     Crown,
+    /// Player hurts that GML books through `scr_hit_self` with a cause of
+    /// its own (`scripts/scrDeathCauses.gml`): the curse a weapon ate, the
+    /// blood-ammo gamble, the Crown of Hatred burn, the ice flower, and the
+    /// blood slash that connected with nothing.
+    CurseEat,
+    BloodGamble,
+    CrownOfHatred,
+    IceFlower,
+    BloodHammer,
     Other(u16),
 }
 

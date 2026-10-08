@@ -8097,6 +8097,7 @@ pub fn tick_ice_flowers(
     >,
     mut enemy_shots: Query<(Entity, &Team), With<Projectile>>,
     mut enemies: Query<(Entity, &mut Health), With<Enemy>>,
+    mut last_damage: ResMut<LastDamageTaken>,
     mut inited: Local<std::collections::HashSet<Entity>>,
 ) {
     if flowers.is_empty() {
@@ -8127,7 +8128,9 @@ pub fn tick_ice_flowers(
 
         if pressed && dist < 40.0 {
             // GML `Player/Collision_IceFlower.gml:6-19`, in draw order: one
-            // damage tick, the blood fan, then `feed++`.
+            // damage tick, the blood fan, then `feed++`. Line 5 is
+            // `scr_hit_self(1, HitId.IceFlower)`, so the flower owns the death.
+            last_damage.note(Some(HitId::IceFlower), None);
             php.hp -= 1;
             let mut dir = rng.random_range(0.0..std::f32::consts::TAU);
             for _ in 0..2 + rng.random_range(0..3) {
