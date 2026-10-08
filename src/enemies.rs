@@ -26,10 +26,11 @@ use crate::combat::{
 };
 use crate::comps_a::{
     ARENA_H, ARENA_W, BossIntro, BouncesLeft, CurrentFrame, DamageSource, DogGuardianLeap,
-    DogGuardianPose, Euphoria, FireCooldown, FloorMask, GameCleanup, Health, HeavyHeart, Hitbox,
-    Homing, LevelCleanup, NextHurt, Player, Projectile, ProjectileFade, ProjectileFriction,
-    ProjectileTyp, ProjectileVisual, Run, ScarierFace, ShellWallBounce, SplitOnDeath, Team, Toast,
-    Velocity, WallCell, WallTile, BOSS_INTRO_FRAMES, apply_gml_friction, gml_motion_add_clamp,
+    DogGuardianPose, Euphoria, FireCooldown, FloorMask, GameCleanup, Health, HeavyHeart, HitId,
+    Hitbox, Homing, LastDamageTaken, LevelCleanup, NextHurt, Player, Projectile, ProjectileFade,
+    ProjectileFriction, ProjectileTyp, ProjectileVisual, Run, ScarierFace, ShellWallBounce,
+    SplitOnDeath, Team, Toast, Velocity, WallCell, WallTile, BOSS_INTRO_FRAMES,
+    apply_gml_friction, gml_motion_add_clamp,
 };
 use crate::comps_b::{
     BigGuardianBullet, BossBrain, Corpse, CorpseCollision, CrownPedestal, EliteBlocker, Enemy,
@@ -7030,6 +7031,7 @@ pub fn tick_toxic_gas(
     mask: Res<FloorMask>,
     props: Query<(Entity, &Prop, &Pos), With<Prop>>,
     frame: Res<CurrentFrame>,
+    mut last_damage: ResMut<LastDamageTaken>,
     mut sets: ParamSet<(
         Query<
             (
@@ -7213,6 +7215,12 @@ pub fn tick_toxic_gas(
         }
         if target_team == Team::Player {
             target_health.invuln = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
+            // GML `ToxicGas/Collision_hitme.gml:7-9` books the hit through
+            // `scr_hit`, and `scr_hit.gml:12` is the only writer of
+            // `GameCont.deathcause` - without it the cloud killed you and the
+            // game-over splat still named the last enemy that touched you.
+            // `ToxicGas/Create_0.gml:18` `hitid = HitId.Toxin`.
+            last_damage.note(Some(HitId::Toxic), None);
         }
         // GML `ToxicGas/Create_0.gml` inherits `damagesource/Create_0.gml:4`.
         target_health.hp -= 3;
