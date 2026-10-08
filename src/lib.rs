@@ -1764,7 +1764,7 @@ impl App {
     /// the `cursor_img` cache. GML draws the raw strip cell at GUI mouse
     /// (`Draw_75`, no lerp, alpha 1) with the catalog-origin hotspot (crosshair
     /// strips center on (8,8)). Missing assets clear the payload and callers
-    /// fall back to `Hidden`.
+    /// fall back to the OS arrow.
     ///
     /// Size law: GML draws the cell at scale 1 in GUI space
     /// (`device_mouse_x_to_gui`, GUI stretched over the window), so the 16px
@@ -3944,13 +3944,13 @@ impl App {
             // the cursor-hidden half; deliberately no per-screen kind list (the
             // old 5-kind gate left keyboard gameplay cursorless). Menus are NOT
             // a carve-out: `UberCont` stays active while a menu is up, so GML
-            // draws the crosshair over it. `!paused` is not a cursor rule either -
-            // it stands in for `instance_deactivate_all(true)` in
-            // `UberCont/Step_1`, which deactivates `UberCont` itself and so stops
-            // `Draw_75` until the run resumes. Pixels decode once per (frame, tint)
+            // draws the crosshair over it. `Paused` is not a cursor rule either:
+            // it is the port's sim freeze, which the mutation/ultra offer sets
+            // where GML keeps `LevCont` running - gating on it hid the crosshair
+            // behind the mutation chrome - and the pause menu still needs the
+            // pointer to click its rows. Pixels decode once per (frame, tint)
             // into `cursor_img`; the runner caches the OS handle by content hash.
-            let menu_crosshair = keyboard_mode && !paused;
-            cursor_req = if menu_crosshair {
+            cursor_req = if keyboard_mode {
                 let frame = self
                     .sim
                     .world
@@ -4484,11 +4484,13 @@ impl App {
         // `UberCont/Step_0:175-183`: keyboard mode hides the OS cursor,
         // menus/mouse mode shows it. With live cursor art (`cursor_img`,
         // same gate as the decode above) the OS composites the crosshair
-        // itself - topmost, zero lag, no sprite needed.
+        // itself - topmost, zero lag, no sprite needed. Artless boot
+        // (no assets yet) keeps the OS arrow: hiding the pointer with no
+        // crosshair to replace it strands the menu rows.
         sched.cursor_override = Some(if hide_os_cursor {
             match &self.cursor_img {
                 Some(img) => repose_core::CursorIcon::Custom(img.clone()),
-                None => repose_core::CursorIcon::Hidden,
+                None => repose_core::CursorIcon::Default,
             }
         } else {
             repose_core::CursorIcon::Default
