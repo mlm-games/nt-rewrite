@@ -222,44 +222,58 @@ fn wall_break_sound(gml_area: i32) -> &'static str {
     }
 }
 
-/// Queue breaks for every wall in `radius` of `pos`. Port-only: GML has no
-/// radius break, it destroys one wall per collision
+/// Queue breaks for every wall whose box is within `radius` of `pos`. Port-only:
+/// GML has no radius break, it destroys one wall per collision
 /// (`BanditBoss/Collision_Wall.gml:4-6` and `Van/Collision_Wall.gml:4` both
 /// call `scrWallDestroy(other.id)`), so the radius is the port's batch
 /// stand-in.
 /// Walls arrive as a `(center, cell)` snapshot so callers don't thread
 /// queries through helpers (same convention as `boss_ai`).
+///
+/// `radius` is the mover's body radius and the test is circle-vs-wall-box, like
+/// the GML event it stands in for: a `Wall` is a 16x16 solid, so contact starts
+/// at `radius + WALL_PX * 0.5` from the wall centre (`+ radius + 8 * sqrt(2)`
+/// at a corner). Measuring centre-to-centre instead left that whole band
+/// unbroken, so a charging boss visibly pressed through a wall and left it
+/// standing.
 pub fn queue_wall_breaks_in_radius(
     commands: &mut Commands,
     walls: &[(glam::Vec2, (i32, i32))],
     pos: glam::Vec2,
     radius: f32,
 ) {
+    let half = glam::Vec2::splat(WALL_PX * 0.5);
     for (wpos, cell) in walls {
-        if wpos.distance(pos) <= radius {
-            commands.spawn((
-                GameCleanup,
-                LevelCleanup,
-                PendingWallBreak {
-                    cell: *cell,
-                    pos: *wpos,
-                    spawn_floor: true,
-                },
-            ));
+        let closest = glam::Vec2::new(
+            pos.x.clamp(wpos.x - half.x, wpos.x + half.x),
+            pos.y.clamp(wpos.y - half.y, wpos.y + half.y),
+        );
+        if pos.distance(closest) > radius {
+            continue;
         }
+        commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            PendingWallBreak {
+                cell: *cell,
+                pos: *wpos,
+                spawn_floor: true,
+            },
+        ));
     }
 }
 
 /// Queue breaks along a segment by stamping the radius helper every
 /// `WALL_PX * 0.5` px (8 px). Port-only, same law as the radius helper:
 /// GML's charge only breaks the wall it collides with
-/// (`BanditBoss/Collision_Wall.gml:4-6`).
+/// (`BanditBoss/Collision_Wall.gml:4-6`). The stamp radius is the body
+/// radius, so the sweep covers the same walls a stepped circle would.
 pub fn queue_wall_breaks_along_segment(
     commands: &mut Commands,
     walls: &[(glam::Vec2, (i32, i32))],
     from: glam::Vec2,
     to: glam::Vec2,
-    half_width: f32,
+    radius: f32,
 ) {
     let delta = to - from;
     let len = delta.length().max(1.0);
@@ -267,7 +281,7 @@ pub fn queue_wall_breaks_along_segment(
     let steps = (len / (WALL_PX * 0.5)).ceil() as i32;
     for i in 0..=steps {
         let p = from + dir * (i as f32 * WALL_PX * 0.5);
-        queue_wall_breaks_in_radius(commands, walls, p, half_width);
+        queue_wall_breaks_in_radius(commands, walls, p, radius);
     }
 }
 

@@ -23,8 +23,9 @@
 //!   a distance cap and with the precise / solid-only flags set
 //!   (`scrTargetIsVisible.gml:7-13`). Headless traces the segment against
 //!   the `(center, cell)` wall snapshot (`segment_hits_wall_legacy`). Wall
-//!   *breaking* during charges still queues [`PendingWallBreak`]s against
-//!   the wall entities.
+//!   *breaking* during charges still queues
+//!   [`PendingWallBreak`](crate::comps_a::PendingWallBreak)s against the
+//!   wall entities.
 //!
 //! `Collision_Wall` adaptation: the GML event fires on mask overlap after
 //! motion, so `boss_wall_law` is a response-only pass
@@ -45,7 +46,7 @@ use crate::audio::{AudioCue, GameAudio};
 use crate::combat::{queue_enemy_spawn, queue_enemy_spawn_no_kill};
 use crate::comps_a::{
     BossIntro, BouncesLeft, DamageSource, FloorMask, GameCleanup, Health, Hitbox, LevelCleanup,
-    NextHurt, PendingWallBreak, Player, Projectile, ProjectileAccel, ProjectileFade,
+    NextHurt, Player, Projectile, ProjectileAccel, ProjectileFade,
     ProjectileFriction, ProjectileTyp, RaceState, Run, ShellWallBounce, Team, Toast, TopSmalls,
     Velocity, WallCell, WallTile, BOSS_INTRO_FRAMES, gml_motion_add_clamp,
 };
@@ -216,7 +217,7 @@ fn boss_wall_law(
         EnemyKind::BigBandit | EnemyKind::BigDog | EnemyKind::Captain => (),
         // `Nothing/Collision_Wall.gml:4-5` and `TechnoMancer/Collision_Wall.gml:1`.
         EnemyKind::Throne | EnemyKind::Technomancer => {
-            crate::walls::queue_wall_breaks_in_radius(commands, walls, *pos, radius + 8.0);
+            crate::walls::queue_wall_breaks_in_radius(commands, walls, *pos, radius);
             if kind == EnemyKind::Throne {
                 boss_bounce_solid(pos, vel, radius, props, mask);
             }
@@ -231,42 +232,6 @@ fn boss_wall_law(
         // `move_bounce_solid(true)`, so no slide.
         _ => {
             boss_bounce_solid(pos, vel, radius, props, mask);
-        }
-    }
-}
-
-/// Queue wall breaks along a charge segment, over the `(center, cell)`
-/// snapshot in `WALL_PX`-half steps (`src/worldgen.rs:22`). GML has no
-/// segment sweep: the charge just calls `scrWallDestroy` per mask
-/// overlap (`Nothing/Collision_Wall.gml:4-5`), and one wall's death
-/// cascades through the 24x24 wall mask by bbox overlap
-/// (`Wall/Create_0.gml:13-14`, `scrWallDestroy.gml:7-14`) - not a radius.
-fn queue_wall_breaks_along_segment(
-    commands: &mut Commands,
-    walls: &[(glam::Vec2, (i32, i32))],
-    from: glam::Vec2,
-    to: glam::Vec2,
-    half_width: f32,
-) {
-    const WALL_PX: f32 = 16.0;
-    let delta = to - from;
-    let len = delta.length().max(1.0);
-    let dir = delta / len;
-    let steps = (len / (WALL_PX * 0.5)).ceil() as i32;
-    for i in 0..=steps {
-        let p = from + dir * (i as f32 * WALL_PX * 0.5);
-        for (wpos, cell) in walls {
-            if wpos.distance(p) <= half_width {
-                commands.spawn((
-                    GameCleanup,
-                    LevelCleanup,
-                    PendingWallBreak {
-                        cell: *cell,
-                        pos: *wpos,
-                        spawn_floor: true,
-                    },
-                ));
-            }
         }
     }
 }
@@ -1133,7 +1098,7 @@ fn big_bandit_ai(
     if boss.phase == BossPhase::Charging || boss.aux == 0.0 {
         let before = pos.0;
         pos.0 += vel.0 * dt;
-        queue_wall_breaks_along_segment(commands, walls, before, pos.0, def.radius * 0.9);
+        crate::walls::queue_wall_breaks_along_segment(commands, walls, before, pos.0, def.radius);
     } else {
         move_bounce_solid(
             &mut pos.0,
@@ -1975,19 +1940,7 @@ fn throne_ai(
     // timers that would otherwise reset the charge every tick).
     if boss.attack_timer.just_finished() && boss.phase != BossPhase::Telegraph {
         // GML wall-clear: overlapping walls are destroyed outright.
-        for (wpos, cell) in walls {
-            if wpos.distance(epos) < radius + 8.0 {
-                commands.spawn((
-                    GameCleanup,
-                    LevelCleanup,
-                    PendingWallBreak {
-                        cell: *cell,
-                        pos: *wpos,
-                        spawn_floor: true,
-                    },
-                ));
-            }
-        }
+        crate::walls::queue_wall_breaks_in_radius(commands, walls, epos, radius);
         brain.walk = 0.0;
         boss.attack_timer = GTimer::from_seconds(130.0 / 30.0, TimerMode::Once);
         if frac <= 0.4 {
@@ -3240,7 +3193,7 @@ fn captain_ai(
     if boss.phase == BossPhase::Charging {
         let before = pos.0;
         pos.0 += vel.0 * dt;
-        queue_wall_breaks_along_segment(commands, walls, before, pos.0, def.radius * 0.9);
+        crate::walls::queue_wall_breaks_along_segment(commands, walls, before, pos.0, def.radius);
     } else {
         move_bounce_solid(
             &mut pos.0,
