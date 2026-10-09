@@ -457,8 +457,11 @@ mod tests {
             .collect();
         assert!(leftovers.is_empty(), "quarantined: {leftovers:?}");
 
+        // `bb79473` made every later save overwrite in place, so the file on
+        // disk now holds the rewrite's floor 8 and this block re-checks the
+        // rewritten save end to end rather than the first one.
         let loaded = load_run_in(&dir).expect("load");
-        assert_eq!(loaded.session.run.floor, 7);
+        assert_eq!(loaded.session.run.floor, 8);
         assert_eq!(loaded.session.run.area, crate::data::AreaId::City);
         assert_eq!(loaded.session.run.loop_count, 2);
         assert_eq!(loaded.session.run.gen_seed, 0xDEAD_BEEF);

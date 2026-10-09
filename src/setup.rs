@@ -753,6 +753,17 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
             world.resource_mut::<crate::comps_a::Run>().horror = true;
         }
     }
+    // GML `GenCont/Alarm_0:32-37`, which runs after `scrPopulate` and so after
+    // `scrPopChests`: `scrReplacePropWithChest` has just built the level's one
+    // weapon / ammo / rad chest out of props, and the `TutCont` branch then
+    // destroys every `chestprop` and `RadChest`. The tutorial floor therefore
+    // starts with no chest at all; the gun arrives only when the PickingUp
+    // step starts (`TutCont/Alarm_0:19-53`), which `state.rs` already raises.
+    if world.get_resource::<Run>().is_some_and(|r| r.tutorial) {
+        plan.chests.clear();
+        plan.population_events
+            .retain(|event| !matches!(event, worldgen::PopulationEvent::Chest(_)));
+    }
     // Level entities spawn here (same plan, same order as the mask
     // build): `Run` leaves the world as an owned value because the
     // spawn call reads it while `Commands` holds `&mut World`.

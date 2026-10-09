@@ -1737,7 +1737,11 @@ pub fn apply_chest_permutations(plan: &mut LevelPlan, ctx: ChestPermuteCtx) -> C
     // GML `scrPopChests.gml:35-58`: `do { destroy the chest nearest
     // 10016 + orandom(250) } until instance_number(kind) <= _tot + _bonus`.
     // The body always runs once, so a kind holding exactly `_tot` chests
-    // comes out empty. The tutorial never reaches this pass.
+    // comes out empty. The tutorial reaches this pass in GML but
+    // `populate` has already emptied the port's chest list, so every
+    // `instance_exists` gate is false, the loops consume nothing, and the
+    // guard only records that the tutorial's chest law ends with the
+    // `GenCont/Alarm_0:32-37` scrub in `setup`.
     if !ctx.tutorial {
         trim_chest_kind(&mut weapons, 1 + wb, &mut rng);
         trim_chest_kind(&mut rads, 1 + rb, &mut rng);
