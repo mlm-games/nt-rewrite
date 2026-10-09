@@ -2125,8 +2125,8 @@ fn throne_ii_ai(
     // one frame early would strand those breaks with nothing left to break.
     if boss.aux != 0.0 {
         for w in walls {
-            commands.entity(*w).remove::<WallTile>();
-            commands.entity(*w).insert(InvisiWall);
+            commands.entity(*w).try_remove::<WallTile>();
+            commands.entity(*w).try_insert(InvisiWall);
         }
     }
 

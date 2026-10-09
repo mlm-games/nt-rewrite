@@ -22,7 +22,7 @@ use repame_fx::Trauma;
 use repame_sim::SimTime;
 
 use crate::audio::{AudioCue, GameAudio};
-use crate::combat::queue_enemy_spawn;
+use crate::combat::queue_enemy_spawn_birth;
 use crate::comps_a::{
     Euphoria, FloorMask, FloorStarted, GameCleanup, Health, HeavyHeart, Inventory, LevelCleanup,
     MutationChoice, OpenMind, PendingMutation, PendingUltra, Player, Projectile, RaceState, Run,
@@ -1632,18 +1632,135 @@ pub(crate) struct ChestLootCtx {
     pub cursed_count: u32,
 }
 
-/// GML `prop/Destroy_0.gml:12` `if (raddrop > 0) scrRadDrop(x, y,
-/// raddrop)`, reached from a portal shock through
-/// `PortalShock/Collision_prop.gml`'s `other.hp = 0` (every `RadChest`
-/// descendant).
-fn shock_rad_drop(
+/// GML `prop/Step_1.gml:12` `if (hp <= 0) instance_destroy()`, applied to the
+/// three chest kinds whose GML parent is `prop`. Their `Destroy_0` chain is
+/// the same whether the chest was shot open, opened by the player
+/// (`RadChest/Collision_Player.gml:3` `hp = 0`) or popped by a portal shock
+/// (`PortalShock/Collision_prop.gml:4` `other.hp = 0`) - all three only ever
+/// set `hp = 0` and let this run.
+pub fn tick_destroyed_rad_chests(
+    mut commands: Commands,
+    catalog: Res<repame_anim::AnimCatalog>,
+    audio: Res<GameAudio>,
+    mut cues: ResMut<Queue<AudioCue>>,
+    save: Res<SaveData>,
+    mut run: ResMut<Run>,
+    player_q: Query<&Player, With<Player>>,
+    // A chest the player opened is `OpenedChest` (that flip is what stops
+    // the collection arm re-paying it); one a bullet, a beam, a blast or a
+    // portal shock emptied is still a `Pickup`.
+    dead_chests: Query<
+        (Entity, &Pos, &Health, Option<&OpenedChest>, Option<&Pickup>),
+        Without<Player>,
+    >,
+) {
+    let hasted = player_q
+        .single()
+        .is_ok_and(|p| crate::pickups::haste_crown(p) > 0);
+    let particles = save.settings.particles;
+    let mut dead = Vec::new();
+    for (e, pos, health, opened, pickup) in &dead_chests {
+        if health.hp > 0 {
+            continue;
+        }
+        let kind = match (opened.map(|o| o.0), pickup.map(|p| p.kind)) {
+            (Some(kind @ (ChestKind::Rad | ChestKind::RadBig | ChestKind::RadMaggot)), _) => {
+                kind
+            }
+            (
+                None,
+                Some(PickupKind::Chest(
+                    kind @ (ChestKind::Rad | ChestKind::RadBig | ChestKind::RadMaggot),
+                )),
+            ) => kind,
+            _ => continue,
+        };
+        dead.push((e, pos.0, kind));
+    }
+    for (e, pos, kind) in dead {
+        rad_chest_destroyed(
+            &mut commands,
+            &catalog,
+            &audio,
+            &mut cues,
+            &mut run,
+            pos,
+            kind,
+            hasted,
+            particles,
+        );
+        commands.entity(e).try_despawn();
+    }
+}
+
+/// GML `RadChest/Destroy_0.gml` in full, plus `RadChestBig`'s inherited run
+/// (`raddrop = 45`) and `RadMaggotChest/Destroy_0.gml:1-3`'s
+/// `RadMaggotExplosion`, which `Alarm_0.gml:1-4` turns into 20 `RadMaggot`
+/// eight ticks later.
+fn rad_chest_destroyed(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
+    audio: &GameAudio,
+    cues: &mut Queue<AudioCue>,
+    run: &mut Run,
     pos: glam::Vec2,
-    amount: u32,
-    run: &Run,
+    kind: ChestKind,
     hasted: bool,
+    particles: bool,
 ) {
+    let mut rng = rand::rng();
+    if kind == ChestKind::RadMaggot {
+        // `RadMaggotChest/Destroy_0.gml:1-3`: 6 `Smoke` on a 60-degree ring,
+        // then 3 `AcidStreak` at 120 degrees, then `alarm[0] = 8` releases
+        // the 20 maggot spawns.
+        let mut dir = rng.random_range(0.0..std::f32::consts::TAU);
+        for _ in 0..6 {
+            crate::environment::spawn_native_smoke_mote(
+                commands,
+                particles,
+                pos,
+                glam::Vec2::from_angle(dir),
+                4.0 + rng.random_range(0.0..1.0),
+            );
+            dir += 60.0_f32.to_radians();
+        }
+        dir = rng.random_range(0.0..std::f32::consts::TAU);
+        for _ in 0..3 {
+            crate::environment::spawn_native_streak(commands, particles, pos, dir, 8.0);
+            dir += 120.0_f32.to_radians();
+        }
+        for _ in 0..20 {
+            let at = pos
+                + glam::Vec2::new(
+                    rng.random_range(0.0..8.0) - 4.0,
+                    rng.random_range(0.0..8.0) - 4.0,
+                );
+            let ang = rng.random_range(0.0..std::f32::consts::TAU);
+            queue_enemy_spawn_birth(
+                commands,
+                crate::data::EnemyKind::RadMaggot,
+                at,
+                1.0,
+                run.loop_count,
+                true,
+                Some(glam::Vec2::from_angle(ang) * rng.random_range(0.0..5.0) * 30.0),
+                false,
+            );
+        }
+    }
+    // `RadMaggotChest/Destroy_0.gml:5-11` runs the whole `RadChest/Destroy_0`
+    // body itself and THEN calls `event_inherited()`, which runs it a second
+    // time - so a maggot chest gets two bursts and two `sndEXPChest` where
+    // `RadChest` and `RadChestBig` get one.
+    let runs = if kind == ChestKind::RadMaggot { 2 } else { 1 };
+    // `RadChest/Destroy_0.gml:4-12` + `:16`: 4 `Smoke`, an `ExploderExplo`
+    // (6 more `Smoke` and 6 shake, no damage), `sndEXPChest`, then
+    // `event_inherited()` -> `prop/Destroy_0.gml:12` `scrRadDrop`.
+    for _ in 0..runs {
+        crate::environment::spawn_rad_chest_burst(commands, particles, pos);
+        audio.play_exp_chest(cues);
+    }
+    let amount = if kind == ChestKind::RadBig { 45 } else { 25 };
     crate::pickups::scr_rad_drop(
         commands,
         catalog,
@@ -1654,6 +1771,7 @@ fn shock_rad_drop(
         true,
         true,
     );
+    run.noradch = 0;
 }
 
 /// GML `event_perform(ev_collision, Player)` on `WeaponChest`,
@@ -1867,6 +1985,7 @@ pub fn tick_portal_shock(
             &Pickup,
             Option<&crate::pickups::ChestCurse>,
             Option<&crate::comps_b::DropSeed>,
+            Option<&mut Health>,
         ),
         (Without<OpenedChest>, Without<Player>),
     >,
@@ -1942,12 +2061,26 @@ pub fn tick_portal_shock(
             commands.entity(prop_e).despawn();
         }
 
-        for (chest_e, chest_pos, pickup, chest_curse, drop_seed) in &mut chests {
+        for (chest_e, chest_pos, pickup, chest_curse, drop_seed, mut chest_hp) in &mut chests {
             let PickupKind::Chest(kind) = pickup.kind else {
                 continue;
             };
             let cpos = chest_pos.0;
             if center.distance(cpos) > shock.radius {
+                continue;
+            }
+
+            // `PortalShock/Collision_prop.gml:4` is only `other.hp = 0`;
+            // `prop/Step_1.gml:12` runs the shared `Destroy_0` chain in
+            // `tick_destroyed_rad_chests`. Opening it here as well would
+            // double the `raddrop`.
+            if matches!(
+                kind,
+                ChestKind::Rad | ChestKind::RadBig | ChestKind::RadMaggot
+            ) {
+                if let Some(hp) = chest_hp.as_deref_mut() {
+                    hp.hp = 0;
+                }
                 continue;
             }
 
@@ -2046,43 +2179,15 @@ pub fn tick_portal_shock(
                         );
                     }
                 }
-                // The rad chests are `prop` descendants in GML, so the
-                // shock only sets `hp = 0` and `Destroy_0` pays the
-                // `raddrop` (`RadChest` 25, `RadChestBig` 45, the maggot
-                // chest inherits RadChest's 25).
-                ChestKind::Rad => shock_rad_drop(&mut commands, &catalog, cpos, 25, &run, hasted),
-                ChestKind::RadBig => {
-                    shock_rad_drop(&mut commands, &catalog, cpos, 45, &run, hasted)
-                }
-                ChestKind::RadMaggot => {
-                    // `RadMaggotChest/Destroy_0.gml:1-3`: a
-                    // `RadMaggotExplosion`, whose Alarm_0 raises 20
-                    // `RadMaggot` 8 ticks later.
-                    shock_rad_drop(&mut commands, &catalog, cpos, 25, &run, hasted);
-                    for _ in 0..20 {
-                        let mut rng = rand::rng();
-                        let a = rng.random_range(0.0..std::f32::consts::TAU);
-                        let d = glam::Vec2::new(a.cos(), a.sin());
-                        let s = rng.random_range(0.0..5.0) * 30.0;
-                        let jitter = glam::Vec2::new(
-                            rng.random_range(-4.0..4.0),
-                            rng.random_range(-4.0..4.0),
-                        );
-                        queue_enemy_spawn(
-                            &mut commands,
-                            crate::data::EnemyKind::RadMaggot,
-                            cpos + jitter + d * s * 0.05,
-                            1.0,
-                            run.loop_count,
-                        );
-                    }
-                }
                 ChestKind::Weapon
                 | ChestKind::Gold
                 | ChestKind::CursedBig
                 | ChestKind::BigWeapon
                 | ChestKind::Idpd
-                | ChestKind::Proto => {}
+                | ChestKind::Proto
+                | ChestKind::Rad
+                | ChestKind::RadBig
+                | ChestKind::RadMaggot => {}
             }
         }
 

@@ -718,7 +718,7 @@ fn gml_fire_rearm_secs(kind: EnemyKind, rng: &mut impl RngExt) -> f32 {
         EnemyKind::CrownGuardian => 12.0 / 30.0,
         _ => {
             let def = enemy_def(kind);
-            def.attack_cooldown + rng.random_range(0.0..def.attack_jitter / 30.0)
+            def.attack_cooldown + rnd(rng, def.attack_jitter / 30.0)
         }
     }
 }
@@ -1320,7 +1320,7 @@ fn gml_chance(rng: &mut (impl RngExt + ?Sized), n: f32) -> bool {
 /// `random(4) < 3` (three in four) or `random(3) < 2`.
 #[inline]
 fn gml_roll(rng: &mut (impl RngExt + ?Sized), n: f32, k: f32) -> bool {
-    rng.random_range(0.0..n) < k
+    rnd(rng, n) < k
 }
 
 /// GML `random_angle` (`random(360)`), radians.
@@ -1447,23 +1447,25 @@ impl GmlDecide<'_> {
     }
 }
 
-/// GML `random(n)`, in degrees.
+/// GML `random(n)`, in degrees: one draw scaled by `n`, so `n <= 0` still
+/// costs the RNG value GML spends and yields 0 (`random_range` panics on a
+/// zero-width range).
 #[inline]
 fn rnd<R: RngExt + ?Sized>(rng: &mut R, n: f32) -> f32 {
-    rng.random_range(0.0..n)
+    rng.random_range(0.0..1.0) * n
 }
 
-/// GML `random(n) + half`, then negated: the `(random(80) - 40)` shape
-/// without a second draw, so a +/- spread costs one RNG value like GML.
+/// GML `random(n) - n/2` and `random(n) + n/2` as one `[-n, n]` draw.
+#[inline]
+fn sym<R: RngExt + ?Sized>(rng: &mut R, n: f32) -> f32 {
+    rnd(rng, n * 2.0) - n
+}
+
+/// GML `orandom(n)`: one draw in `±n/2`, i.e. the `(random(80) - 40)`
+/// shape the sources write, so a +/- spread costs one RNG value like GML.
 #[inline]
 fn spread<R: RngExt + ?Sized>(rng: &mut R, n: f32) -> f32 {
     rnd(rng, n) - n * 0.5
-}
-
-/// GML `orandom(n)`: `±n/2` degrees.
-#[inline]
-fn ornd<R: RngExt + ?Sized>(rng: &mut R, n: f32) -> f32 {
-    rng.random_range(-n * 0.5..n * 0.5)
 }
 
 /// GML `objects/<kind>/Alarm_2` for the objects whose decide only staged a
@@ -1490,7 +1492,7 @@ fn gml_alarm_2_volley(
             if brain.ammo > 0 {
                 brain.walk = 0.0;
                 for side in [-20.0_f32, 20.0] {
-                    let ang = gunangle + (side + ornd(rng, 3.0)).to_radians();
+                    let ang = gunangle + (side + spread(rng, 3.0)).to_radians();
                     let e = spawn_enemy_projectile(
                         commands,
                         entity,
@@ -1826,7 +1828,7 @@ fn rat_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
         let jitter = if d.kind == EnemyKind::FastRat {
             rnd(rng, 20.0) - 10.0
         } else {
-            ornd(rng, 10.0)
+            spread(rng, 10.0)
         };
         d.direction(d.toward() + jitter.to_radians());
         d.speed(0.4);
@@ -1850,7 +1852,7 @@ fn wolf_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
             d.arm2(10.0);
             d.arm(30.0);
         } else {
-            d.direction(d.toward() + ornd(rng, 15.0).to_radians());
+            d.direction(d.toward() + spread(rng, 15.0).to_radians());
             if gml_chance(rng, 4.0) {
                 d.speed(0.0);
                 d.brain.walk = 0.0;
@@ -2183,7 +2185,7 @@ fn super_fireballer_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Siz
     d.arm(20.0 + rnd(rng, 10.0));
     if d.sees {
         if rnd(rng, 5.0) >= 4.0 {
-            d.direction(d.toward() + ornd(rng, 10.0).to_radians());
+            d.direction(d.toward() + spread(rng, 10.0).to_radians());
             d.brain.walk = 0.0;
             return;
         }
@@ -2326,7 +2328,7 @@ fn dog_guardian_alarm_1(
             leap.pose = DogGuardianPose::Charge;
             d.speed(0.0);
             leap.dist = d.dist * 1.1;
-            leap.dir = d.toward() + ornd(rng, 20.0).to_radians();
+            leap.dir = d.toward() + spread(rng, 20.0).to_radians();
             d.arm2(10.0);
             d.arm(300.0);
         } else {
@@ -5588,7 +5590,7 @@ pub fn fire_enemy_bullet(
     euphoria: bool,
 ) {
     let base = dir.y.atan2(dir.x);
-    let angle = base + rng.random_range(-def.projectile_spread..def.projectile_spread);
+    let angle = base + sym(rng, def.projectile_spread);
     let shot_dir = glam::Vec2::new(angle.cos(), angle.sin());
     let speed = def.projectile_speed * if euphoria { 0.8 } else { 1.0 };
     if enemy.kind == EnemyKind::CrownGuardian {
@@ -5771,7 +5773,7 @@ pub fn fire_enemy_shot(
     let (offsets, spread) = gml_fan(enemy.kind, total, def.fan_spread);
     for i in 0..total {
         let offset = offsets.get(i).copied().unwrap_or(0.0);
-        let angle = base + offset + rng.random_range(-spread..spread);
+        let angle = base + offset + sym(rng, spread);
         let shot_dir = glam::Vec2::new(angle.cos(), angle.sin());
         // `Molesarge/Alarm_1` re-rolls `10 + random(2)` per pellet.
         let speed = if enemy.kind == EnemyKind::Molesarge {
@@ -6966,7 +6968,7 @@ pub fn tick_scrap_missiles(
             state.hurt_timer.tick(dt);
             if state.hurt_timer.just_finished() {
                 state.hurt = false;
-                commands.entity(entity).remove::<HurtAnim>();
+                commands.entity(entity).try_remove::<HurtAnim>();
             }
         }
         if health.hp <= 0 {
@@ -9388,31 +9390,24 @@ pub fn tick_elite_blockers(
     }
 }
 
-/// Verbatim `objects/ProtoStatue` law (`Step_0`): rad snapshots the
-/// player's rads on placement; past 24 rads the statue charges (halves
-/// its own HP, +2 IDPD portals); past 30% damage it phases (+2 IDPD
-/// portals, once). Portals roll the GML `IDPDSpawn` table.
+/// Verbatim `objects/ProtoStatue` law (`Step_0`): fed rads past 24 charge
+/// the statue (halves its own HP, +2 IDPD portals); past 30% damage it
+/// phases (+2 IDPD portals, once). Portals roll the GML `IDPDSpawn` table.
 pub fn tick_proto_statues(
     mut commands: Commands,
     mut run: ResMut<Run>,
-    player_q: Query<(&Player, &Pos), (With<Player>, Without<Enemy>)>,
+    mut cues: ResMut<Queue<AudioCue>>,
     mut q: Query<(Entity, &Enemy, &mut Health, &Pos, &mut ProtoGuardian), With<Enemy>>,
 ) {
-    let Ok((player, player_pos)) = player_q.single() else {
-        return;
-    };
     for (_, enemy, mut health, pos, mut statue) in &mut q {
         if enemy.kind != EnemyKind::ProtoStatue {
             continue;
-        }
-        if !statue.init {
-            statue.init = true;
-            statue.rad = player.rads;
         }
         let mut waves = 0;
         if statue.rad > 24 && !statue.charged {
             statue.charged = true;
             health.hp = (health.hp / 2).max(1);
+            enemy_cue(&mut cues, "sndStatueCharge");
             waves += 2;
         }
         if !statue.phased && (health.hp as f32) < (health.max as f32) * 0.7 && health.hp > 0 {
@@ -9426,7 +9421,6 @@ pub fn tick_proto_statues(
                 queue_enemy_spawn(&mut commands, kind, pos.0, 1.0, run.loop_count);
             }
         }
-        let _ = player_pos;
     }
 }
 
@@ -9886,7 +9880,7 @@ mod gml_rorand_tests {
         let mut rng = rand::rng();
         for n in [1.0_f32, 3.0, 10.0, 15.0, 16.0] {
             for _ in 0..256 {
-                let v = ornd(&mut rng, n);
+                let v = spread(&mut rng, n);
                 assert!(
                     (-n * 0.5..=n * 0.5).contains(&v),
                     "orandom({n}) sampled {v}, outside -n/2..+n/2"

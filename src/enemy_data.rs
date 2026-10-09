@@ -615,7 +615,11 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             hp: 100,
             speed: 80.0,
             accel: 1000.0,
-            radius: 26.0,
+            // GML `BanditBoss.yy` `spriteMaskId: mskBanditBoss`, and that
+            // mask is a 32x32 sprite (`sprites/mskBanditBoss/*.png`), so the
+            // melee / dash contact radius is 16 - same convention as
+            // `mskBandit` 24x24 -> 12 on `Bandit`.
+            radius: 16.0,
             size: 52.0,
             color: [0.95, 0.25, 0.12, 1.0],
             sprite: "images/sprBanditBossIdle.png",

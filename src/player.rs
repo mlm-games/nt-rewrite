@@ -669,6 +669,11 @@ pub fn tick_hold_abilities(
             let cost = (time_val + 1.0).floor() as u32;
             if player.rads >= cost && cost > 0 {
                 player.rads -= cost;
+                // GML `scrPowers.gml:290-292` re-arms the 40-step
+                // `horrornorad` window on every step the beam is held AND
+                // paid for, which is what suspends the `Rad/Step_0.gml:20`
+                // player arm. It decays in `Player/Step_0.gml:749-751`.
+                player.horrornorad = 40;
                 if player.rads == 0 {
                     cues.push(AudioCue {
                         name: "sndHorrorEmpty",
@@ -925,6 +930,12 @@ pub fn tick_loop_sfx(
         // GML Horror hold (`scrPowers:296-298`).
         let horror =
             race_state.race == RaceId::Horror && player.ability == AbilityKind::HorrorBeam && held;
+        // GML `Player/Step_0.gml:749-751` `if horrornorad { horrornorad -=
+        // timescale }`. Armed only by the paid beam in `tick_horror_charge`
+        // (`scrPowers.gml:292`).
+        if !horror && player.horrornorad > 0 {
+            player.horrornorad -= 1;
+        }
         if horror != player.horror_loop_on {
             player.horror_loop_on = horror;
             push_loop_cue(

@@ -12,7 +12,7 @@ use repame_sim::SimTime;
 use crate::time::{GTimer, TimerMode};
 
 use crate::comps_a::{Inventory, Player, Run, Toast};
-use crate::comps_b::{Enemy, Pickup, PickupKind, RadChestContainer};
+use crate::comps_b::{ChestKind, Enemy, OpenedChest, Pickup, PickupKind, RadChestContainer};
 use crate::data::{AreaId, EnemyKind, SecretTarget};
 use crate::spatial::Pos;
 
@@ -37,7 +37,6 @@ pub struct SecretTriggers {
     /// the floor even after the window itself lapses.
     pub oasis_subarea_promoted: bool,
 
-    pub oasis_floor_chests_initial: u32,
     pub oasis_floor_enemies_initial: u32,
     pub oasis_snapshot_done: bool,
 
@@ -58,7 +57,6 @@ impl Default for SecretTriggers {
             damage_taken_this_floor: false,
             oasis_chests_ready: false,
             oasis_subarea_promoted: false,
-            oasis_floor_chests_initial: 0,
             oasis_floor_enemies_initial: 1,
             oasis_snapshot_done: false,
             vaults_entered: 0,
@@ -108,7 +106,6 @@ impl SecretTriggers {
         self.oasis_chests_ready = false;
         self.oasis_subarea_promoted = false;
         self.oasis_snapshot_done = false;
-        self.oasis_floor_chests_initial = 0;
         self.oasis_floor_enemies_initial = 1;
     }
 
@@ -125,7 +122,6 @@ impl SecretTriggers {
 pub fn observe_oasis_floor_start(
     run: Res<Run>,
     mut triggers: ResMut<SecretTriggers>,
-    pickups_q: Query<&Pickup>,
     enemies_q: Query<&Enemy>,
 ) {
     if triggers.oasis_snapshot_done || !triggers.oasis_eligible {
@@ -134,10 +130,6 @@ pub fn observe_oasis_floor_start(
     if run.area != AreaId::Desert || run.floor_in_area > 3 {
         return;
     }
-    triggers.oasis_floor_chests_initial = pickups_q
-        .iter()
-        .filter(|p| matches!(p.kind, PickupKind::Chest(_)))
-        .count() as u32;
     // GML `WantBoss/Create_0.gml:2` `enemies = instance_number(enemy)` counts
     // every enemy instance, bandits included.
     triggers.oasis_floor_enemies_initial = enemies_q.iter().count() as u32;
@@ -169,6 +161,7 @@ pub fn detect_oasis_eligibility(
     mut triggers: ResMut<SecretTriggers>,
     pickups_q: Query<&Pickup>,
     rad_chests_q: Query<(), With<RadChestContainer>>,
+    opened_q: Query<&OpenedChest>,
     enemies_q: Query<&Enemy>,
 ) {
     if triggers.oasis_chests_ready
@@ -188,10 +181,20 @@ pub fn detect_oasis_eligibility(
     if chests_left > 0 {
         return;
     }
-    // GML `instance_exists(ChestOpen)`: only a `chestprop` chest leaves one
-    // behind when it opens, so a floor whose only chest is a rad chest can
-    // never raise the marker.
-    if triggers.oasis_floor_chests_initial == 0 {
+    // GML `WantBoss/Step_0.gml:20` `instance_exists(ChestOpen)`: the gate is a
+    // chest that was actually OPENED, not one that merely stood on the floor.
+    // Only eleven chest kinds spawn that corpse from their `Destroy_0`
+    // (Weapon / BigWeapon / CursedBig / Ammo / Mystery / Idpd / Gold / Health
+    // / Rogue). `RadChest`, `RadChestBig` and `RadMaggotChest` burn down to
+    // Smoke plus an `ExploderExplo` and `ProtoChest` leaves nothing behind, so
+    // shooting the floor's last rad chest open never raises the marker - the
+    // rad chest only has to be GONE, which `chests_left` above already covers.
+    if !opened_q.iter().any(|opened| {
+        !matches!(
+            opened.0,
+            ChestKind::Rad | ChestKind::RadBig | ChestKind::RadMaggot | ChestKind::Proto
+        )
+    }) {
         return;
     }
 

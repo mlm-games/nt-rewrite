@@ -325,7 +325,7 @@ pub fn hurt_on_damage(
 ) {
     for (entity, health) in &internal {
         last_enemy_hp.insert(entity, health.hp);
-        commands.entity(entity).remove::<MaggotSpawnInternalDrain>();
+        commands.entity(entity).try_remove::<MaggotSpawnInternalDrain>();
     }
     for (e, health, sprites, mut anim) in &mut damaged {
         let last = last_enemy_hp.get(&e).copied().unwrap_or(health.max);

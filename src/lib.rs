@@ -4916,6 +4916,7 @@ fn init_schedule_resources(world: &mut World) {
     world.insert_resource(PortalCarriedWeapons::default());
     world.init_resource::<crate::pickups::WeaponLabel>();
     world.init_resource::<crate::pickups::GunDecideCache>();
+    world.init_resource::<crate::pickups::RadMagnetTargets>();
     world.insert_resource(FloorTransition::default());
     world.init_resource::<NtInput>();
     world.init_resource::<crate::state::Paused>();

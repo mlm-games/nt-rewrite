@@ -12,16 +12,15 @@ use repame_sim::SimTime;
 
 use crate::anim::SpriteAnim;
 use crate::audio::{AudioCue, GameAudio};
-use crate::combat::queue_enemy_spawn_birth;
 use crate::comps_a::{
     FloorMask, GameCleanup, Health, Hitbox, Inventory, LevelCleanup, MAX_WEAPON_SLOTS, Player,
     RaceState, Run, Team, Toast,
 };
 use crate::comps_b::{
-    ChestArt, ChestKind, CursedAmmoBlink, DropSeed, Enemy, FlungWeapon, GmlImage, GroundPhysics,
-    NativeDepth, NativeMotion, NativeWallMotion, OpenedChest, Pickup, PickupCurse, PickupKind,
-    PickupLifetime, Portal, PortalCarriedWeapons, PortalClear, Prop, PropSprites,
-    RadChestContainer, Telekinesis, WepPickupAmmo,
+    ChestArt, ChestKind, CursedAmmoBlink, DropSeed, Enemy, EnemyBrain, FlungWeapon, GmlImage,
+    GroundPhysics, NativeDepth, NativeMotion, NativeWallMotion, OpenedChest, Pickup, PickupCurse,
+    PickupKind, PickupLifetime, Portal, PortalCarriedWeapons, PortalClear, Prop, PropSprites,
+    ProtoGuardian, RadChestContainer, Telekinesis, WepPickupAmmo,
 };
 use crate::data::{
     AmmoKind, CrownKind, EnemyKind, MutationId, RaceId, UltraMutationId, WeaponId,
@@ -147,6 +146,9 @@ const WEP_PICKUP_MASK_HALF: f32 = 14.0;
 const PICKUP_MASK_HALF: f32 = 5.0;
 const RAD_MASK_HALF: f32 = 4.0;
 const CHEST_SPRITE_HALF: f32 = 8.0;
+/// `sprPortal` is 64x64 on origin 32,32 - the box `place_meeting` tests
+/// when `Rad/Step_0.gml:30` pays a rad out against a portal.
+const PORTAL_MASK_HALF: f32 = 32.0;
 
 pub struct MaskSpan {
     pub x: (f32, f32),
@@ -390,6 +392,9 @@ pub fn spawn_pickup(
                     * if rng.random_bool(0.5) { 1.0 } else { -1.0 },
             });
         }
+        // Chests never reach here: every one goes out through
+        // `spawn_chest_frames`, which owns the `Health` / `Hitbox` /
+        // `Team::None` insert for the three `prop`-parented rad kinds.
         PickupKind::Chest(_) => {}
         // GML `Curse` motes drift without a lifetime/physics setup.
         PickupKind::Curse => {}
@@ -693,6 +698,36 @@ pub fn spawn_chest_frames(
         GmlImage::ramped(art.idle, frames, 0.4, first_jitter),
         Pos(pos),
     ));
+    // `RadChest`, `RadChestBig` and `RadMaggotChest` are the only chests whose
+    // GML parent is `prop`, not `chestprop` - and they are the only ones that
+    // set `max_hp` (4 / 20 / 8) and then re-run `hp = max_hp`, because
+    // `prop/Create_0.gml:4` already spent the parent's. So they carry `Health`,
+    // take projectile damage through `scr_hit`, and die at `hp <= 0` via
+    // `prop/Step_1.gml:12`. Every other chest inherits `chestprop`, which has
+    // no `hp` at all, so none of them can be shot open.
+    let hp = match kind {
+        ChestKind::Rad => Some(4),
+        ChestKind::RadBig => Some(20),
+        ChestKind::RadMaggot => Some(8),
+        _ => None,
+    };
+    if let Some(hp) = hp {
+        ec.insert((
+            Health {
+                hp,
+                max: hp,
+                invuln: GTimer::from_seconds(0.0, TimerMode::Once),
+            },
+            // GML `hitme`'s box is the 16x16 origin-8 sprite bbox; the rad
+            // chests draw `size = 2` art over it.
+            Hitbox {
+                radius: CHEST_SPRITE_HALF,
+            },
+            // `RadChest/Create_0.gml:5` `team = 0`, so `scr_can_hit` admits
+            // both the player and enemy bullets.
+            Team::None,
+        ));
+    }
     if kind == ChestKind::Proto {
         ec.insert(ProtoChestState::pending());
     }
@@ -1405,9 +1440,223 @@ pub fn tick_cursed_ammo(
     }
 }
 
+/// GML `Rad/Step_0.gml:10-23` target snapshot.
+///
+/// `collect_pickups` holds `&mut Pos` and `&mut Health` on `Pickup`, and the
+/// statue / horror / portal arms need `&Pos` / `&Health` / `&Hitbox` on
+/// components the rad loop then writes through - `bevy_ecs` rejects that pair
+/// at schedule-init time, and this system is already at its 16-param cap. So
+/// the reads happen here, alone and read-only, and the magnet consumes owned
+/// copies.
+#[derive(Resource, Default, Clone)]
+pub struct RadMagnetTargets {
+    /// `(entity, pos, hp, max_hp)` per `ProtoStatue`.
+    pub statues: Vec<(Entity, glam::Vec2, i32, i32)>,
+    /// `(entity, pos, mask radius)` per un-charged `HostileHorror`.
+    pub horrors: Vec<(Entity, glam::Vec2, f32)>,
+    pub portals: Vec<glam::Vec2>,
+    pub player: glam::Vec2,
+    /// GML `Rad/Step_0.gml:18` `d = 80 + (60 * scr_skill_get(mut_plutonium_hunger))`.
+    pub player_range: f32,
+    /// GML `Rad/Step_0.gml:20` `!p.horrornorad`.
+    pub player_blocked: bool,
+    /// GML `Rad/Step_0.gml:20` `instance_exists(Portal)` overrides the range.
+    pub any_portal: bool,
+}
+
+pub fn gather_rad_magnet_targets(
+    mut targets: ResMut<RadMagnetTargets>,
+    player_q: Query<(&Pos, &Player), With<Player>>,
+    statues: Query<(Entity, &Pos, &Health, &ProtoGuardian), (With<ProtoGuardian>, Without<Prop>)>,
+    horrors: Query<(Entity, &Pos, &Hitbox, &Health, &Enemy, &EnemyBrain), With<Enemy>>,
+    portals: Query<&Pos, (With<Portal>, Without<Pickup>)>,
+) {
+    targets.statues.clear();
+    targets.horrors.clear();
+    targets.portals.clear();
+    for (e, pos, health, _) in &statues {
+        targets.statues.push((e, pos.0, health.hp, health.max));
+    }
+    for (e, pos, hitbox, _, enemy, brain) in &horrors {
+        // GML `Rad/Step_0.gml:15-16` only takes a horror that is not already
+        // charging.
+        if enemy.kind == EnemyKind::HostileHorror && brain.charge <= 0.0 {
+            targets.horrors.push((e, pos.0, hitbox.radius));
+        }
+    }
+    targets.portals.extend(portals.iter().map(|p| p.0));
+    targets.any_portal = !targets.portals.is_empty();
+    let Ok((pos, player)) = player_q.single() else {
+        return;
+    };
+    targets.player = pos.0;
+    targets.player_range = 80.0
+        + if player.mutations.contains(&MutationId::PlutoniumHunger) {
+            60.0
+        } else {
+            0.0
+        };
+    // GML `scrPowers.gml:292` holds `horrornorad = 40` while the beam runs.
+    targets.player_blocked = player.horrornorad > 0;
+}
+
+/// GML `Rad/Step_0.gml` verbatim: the three target arms in order, the
+/// `speed > 0` gate that keeps a dropped rad coasting, the wall bounce from
+/// `Rad/Collision_Wall.gml` (`BigRad`'s bounces), and the portal payout at
+/// `:30`.
+pub fn tick_rad_magnet(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mask: Res<FloorMask>,
+    audio: Res<GameAudio>,
+    mut cues: ResMut<Queue<AudioCue>>,
+    targets: Res<RadMagnetTargets>,
+    mut player_q: Query<&mut Player, With<Player>>,
+    mut rad_q: Query<
+        (Entity, &mut Pos, &Pickup, Option<&mut GroundPhysics>),
+        (With<Pickup>, Without<Player>),
+    >,
+    mut statues: Query<&mut ProtoGuardian>,
+    mut horrors: Query<(&mut Enemy, &EnemyBrain)>,
+) {
+    let dt = time.delta_secs;
+    let statue_reach = RAD_MASK_HALF + crate::enemy_data::enemy_def(EnemyKind::ProtoStatue).radius;
+    for (rad_e, mut pos, pickup, mut ground) in &mut rad_q {
+        let PickupKind::Rad(amount) = pickup.kind else {
+            continue;
+        };
+        let big = amount >= 10;
+        let here = pos.0;
+        // GML `Rad/Step_0.gml:6` `if (speed > 0) exit` - a rad still coasting
+        // from its drop kick neither homes nor pays out.
+        let coasting = ground
+            .as_ref()
+            .is_some_and(|g| g.vel.length() > crate::comps_a::PLAYER_RADIUS * 0.0625);
+        if let Some(gp) = ground.as_deref_mut() {
+            let speed = gp.vel.length();
+            if speed > 0.5 {
+                // GML `Rad/Collision_Wall.gml` is `move_bounce_solid(false)`
+                // and `BigRad`'s is `move_bounce_solid(true)` - a plain rad
+                // slides along the wall, a big one bounces off it.
+                crate::spatial::move_bounce_solid(
+                    &mut pos.0,
+                    &mut gp.vel,
+                    RAD_MASK_HALF,
+                    dt,
+                    &[],
+                    Some(&mask),
+                    big,
+                );
+                gp.vel *= 0.4_f32.powf(dt * crate::SIM_HZ as f32);
+            } else {
+                gp.vel = glam::Vec2::ZERO;
+            }
+        }
+
+        let mut goal = None::<glam::Vec2>;
+        // GML `Rad/Step_0.gml:10` reads `distance_to_object(ProtoStatue)`,
+        // `ProtoStatue.hp` and the `collision_line` off the SAME nearest
+        // statue: a full-HP statue that happens to be closest fails the whole
+        // arm and the rad falls through to the next one.
+        let statue = targets
+            .statues
+            .iter()
+            .min_by(|a, b| {
+                a.1.distance_squared(here)
+                    .total_cmp(&b.1.distance_squared(here))
+            })
+            .filter(|(_, p, hp, max)| {
+                p.distance(here) < 170.0
+                    && *hp > 0
+                    && (*hp as f32) < (*max as f32) * 0.7
+                    && !crate::walls::segment_hits_wall(here, *p, &mask)
+            });
+        if let Some((statue_e, statue_pos, _, _)) = statue {
+            let statue_e = *statue_e;
+            if !coasting && statue_pos.distance(here) <= statue_reach {
+                // `Rad/Collision_ProtoStatue.gml:4-10` (`BigRad:5` is
+                // `other.rad += 10`): a settled rad pays the statue, which
+                // spends `rad > 24` on charging.
+                if let Ok(mut guardian) = statues.get_mut(statue_e) {
+                    guardian.rad += if big { 10 } else { 1 };
+                }
+                audio.play_statue_xp(&mut cues);
+                commands.entity(rad_e).try_despawn();
+                continue;
+            }
+            goal = Some(*statue_pos);
+        } else {
+            // GML `Rad/Step_0.gml:15-17`.
+            let horror = targets
+                .horrors
+                .iter()
+                .filter(|(_, p, _)| p.distance(here) < 170.0)
+                .filter(|(_, p, _)| !crate::walls::segment_hits_wall(here, *p, &mask))
+                .min_by(|a, b| a.1.distance_squared(here).total_cmp(&b.1.distance_squared(here)));
+            if let Some((horror_e, horror_pos, radius)) = horror {
+                let horror_e = *horror_e;
+                if !coasting && horror_pos.distance(here) <= RAD_MASK_HALF + radius {
+                    // `Rad/Collision_HostileHorror.gml:4-11`: the rad feeds the
+                    // boss's bullet pool and the boss is destroyed WITHOUT
+                    // `Destroy_0` - no corpse, no score, no `PortalClear`, no
+                    // `raddrop += 25`. It bypasses `resolve_enemy_deaths`, the
+                    // port's only hp-based death path.
+                    if let Ok((mut enemy, _)) = horrors.get_mut(horror_e) {
+                        enemy.rad_drop += if big { 10 } else { 1 };
+                    }
+                    audio.play_rad_pickup(&mut cues);
+                    commands.entity(horror_e).try_despawn();
+                    commands.entity(rad_e).try_despawn();
+                    continue;
+                }
+                goal = Some(*horror_pos);
+            }
+        }
+        // GML `Rad/Step_0.gml:19-23`.
+        if goal.is_none()
+            && (targets.any_portal
+                || (!targets.player_blocked && here.distance(targets.player) < targets.player_range))
+        {
+            goal = Some(targets.player);
+        }
+        // GML `Rad/Step_0.gml:26-27`
+        // `mp_potential_step(target.x, target.y, 12, 0)` - 12 px PER STEP.
+        if !coasting
+            && let Some(goal) = goal
+        {
+            crate::spatial::potential_step_solid(
+                &mut pos.0,
+                goal,
+                12.0 * crate::SIM_HZ as f32 * dt,
+                RAD_MASK_HALF,
+                &[],
+                Some(&mask),
+            );
+        }
+        // GML `Rad/Step_0.gml:30-31`: the payout fires when the rad meets the
+        // PLAYER or a PORTAL, and the portal arm is what drains the floor once
+        // a level-end portal opens. The player half rides `collect_pickups`.
+        // The amount is object identity (`object_index == BigRad`), not the
+        // rad's own value.
+        if !coasting
+            && targets
+                .portals
+                .iter()
+                .any(|p| mask_overlap(pos.0, *p, RAD_MASK_HALF + PORTAL_MASK_HALF))
+        {
+            if let Ok(mut player) = player_q.single_mut() {
+                player.rads += if big { 10 } else { 1 };
+            }
+            audio.play_rad_pickup(&mut cues);
+            commands.entity(rad_e).try_despawn();
+        }
+    }
+}
+
 /// Loose-pickup drift: weapons near the portal get carried through,
-/// rads slide toward the player once a portal exists, ammo/medkits
-/// drift at the GML rate inside pickup range (mask-gated per axis).
+/// ammo/medkits drift at the GML rate inside pickup range (mask-gated
+/// per axis). Rads are NOT here - `Rad/Step_0.gml:10-30` walks them
+/// 12 px/step itself, portal included, in `tick_rad_magnet`.
 pub fn tick_pickup_drag(
     time: Res<SimTime>,
     mut commands: Commands,
@@ -1434,18 +1683,6 @@ pub fn tick_pickup_drag(
                 if portal_pos.is_some_and(|pp| ppos.distance(pp) < 20.0) {
                     carried.0.push(w);
                     commands.entity(e).try_despawn();
-                }
-            }
-            PickupKind::Rad(_) => {
-                if portal_pos.is_none() {
-                    continue;
-                }
-
-                let dir = (player_pos - ppos).normalize_or_zero();
-                pos.0 += dir * 360.0 * dt;
-
-                if ppos.distance(portal_pos.unwrap_or(player_pos)) < 20.0 {
-                    pos.0 = player_pos;
                 }
             }
             PickupKind::Ammo(..) | PickupKind::Medkit(_) => {
@@ -1517,11 +1754,14 @@ pub fn collect_pickups(
             Option<&PickupCurse>,
             Option<&ChestCurse>,
             Option<&DropSeed>,
+            Option<&mut crate::comps_a::Health>,
         ),
         Without<Player>,
     >,
-    // `bevy_ecs` caps a system at 16 params: the chest states and the
-    // death-cause bookkeeping share one slot.
+    // `bevy_ecs` caps a system at 16 params, and every one of them is a
+    // `Pickup`-side access that would conflict with the statue / horror /
+    // portal reads `Rad/Step_0.gml:10-23` needs - those live in
+    // `RadMagnetTargets`, filled by `gather_rad_magnet_targets`.
     mut proto_and_cause: ParamSet<(
         Query<(Entity, &mut ProtoChestState)>,
         ResMut<crate::comps_a::LastDamageTaken>,
@@ -1603,18 +1843,17 @@ pub fn collect_pickups(
         pickup_curse,
         chest_curse,
         drop_seed,
+        mut chest_hp,
     ) in &mut pickups
     {
         let pickup_pos_value = pickup_pos.0;
-        let dist = player_pos.distance(pickup_pos_value);
-        // GML `Rad/Step_0.gml:6`: `if (speed > 0) exit` - a rad still
-        // coasting from its drop kick does not home yet. Read before the
-        // ground-physics slide below consumes `ground`.
-        let rad_coasting = ground
-            .as_ref()
-            .is_some_and(|g| g.vel.length() > crate::comps_a::PLAYER_RADIUS * 0.0625);
 
-        if let Some(mut gp) = ground {
+        if let Some(mut gp) = ground
+            // Rads run their own slide + magnet in `tick_rad_magnet`: GML
+            // `Rad/Collision_Wall.gml` bounces them off walls (BigRad) where
+            // every other pickup just drifts.
+            && !matches!(pickup.kind, PickupKind::Rad(_))
+        {
             let speed = gp.vel.length();
             if speed > 0.5 {
                 pickup_pos.0 += gp.vel * dt;
@@ -1651,17 +1890,7 @@ pub fn collect_pickups(
         if is_weapon || is_chest || is_rad || is_supply {
             telek_drag(&mut pickup_pos, pickup_pos_value);
         }
-        if is_rad {
-            // GML `Rad/Step_0.gml:18-22`: `d = 80 + 60 *
-            // scr_skill_get(mut_plutonium_hunger)`, then
-            // `mp_potential_step(target, 12, 0)` - 12 px/step.
-            let has_hunger = player.mutations.contains(&MutationId::PlutoniumHunger);
-            let rad_range = 80.0 + if has_hunger { 60.0 } else { 0.0 };
-            if !rad_coasting && dist < rad_range {
-                let dir = (player_pos - pickup_pos_value).normalize_or_zero();
-                pickup_pos.0 += dir * 12.0 * 30.0 * dt;
-            }
-        }
+        // Rads home and are eaten in `tick_rad_magnet`.
 
         // GML `Player/Collision_WepPickup:90-104` verbatim: the weapon
         // pickup's ammo payout sits OUTSIDE the pick if/else, so plain
@@ -1710,7 +1939,29 @@ pub fn collect_pickups(
         }
 
         if let PickupKind::Chest(chest) = pickup.kind {
+            // Each `chestprop` descendant's `Destroy_0.gml` plays `FXChestOpen`
+            // (e.g. `WeaponChest/Destroy_0.gml:5`); `RogueChest` is the only
+            // chest with no open FX.
+            if chest != ChestKind::Rogue {
+                spawn_fx_chest_open(&mut commands, &catalog, pickup_pos_value, underwater);
+            }
+            // The rad chests are `prop` descendants, so their
+            // `Collision_Player` is `hp = 0` - the press and a bullet share
+            // one `Destroy_0` chain and must not both pay out. `open_chest`
+            // drops `Pickup` (the chest stops being collected) and
+            // `tick_destroyed_rad_chests` reads the `Health` and pays.
+            let is_prop_chest = matches!(
+                chest,
+                ChestKind::Rad | ChestKind::RadBig | ChestKind::RadMaggot
+            );
+            if is_prop_chest && let Some(hp) = chest_hp.as_deref_mut() {
+                run.noradch = 0;
+                hp.hp = 0;
+            }
             open_chest(&mut commands, pickup_e, chest);
+            if is_prop_chest {
+                continue;
+            }
             let ctx = decide_ctx_for(&run, &player, race, &inv, u32::from(race == RaceId::Robot));
             let seed = drop_seed.map_or(0, |s| s.0);
 
@@ -1735,12 +1986,6 @@ pub fn collect_pickups(
                     health.invuln = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
                 }
                 spawn_hatred_rads(&mut commands, &catalog, player_pos, 16, loops);
-            }
-
-            // GML `Destroy_0` spawns `FXChestOpen` for every chest kind
-            // except `RogueChest` (the only chest with no FX).
-            if chest != ChestKind::Rogue {
-                spawn_fx_chest_open(&mut commands, &catalog, pickup_pos_value, underwater);
             }
 
             match chest {
@@ -1825,152 +2070,8 @@ pub fn collect_pickups(
                     );
                     audio.play_ammo_chest_open(&mut cues, underwater);
                 }
-                ChestKind::Rad => {
-                    // GML `RadChest/Collision_Player.gml`:
-                    // `if !scrChestOpened() { GameCont.noradch = 0; hp = 0 }`, then
-                    // `RadChest/Destroy_0.gml:4-12` throws 4 x `Smoke`
-                    // (`motion_add(random_angle, random(3))`), an `ExploderExplo`
-                    // and `sndEXPChest`, and its own `event_inherited()` lands on
-                    // `prop/Destroy_0.gml:12` to turn the inherited `raddrop =
-                    // 25` (`RadChest/Create_0.gml:20`) into 25 rads.
-                    run.noradch = 0;
-                    crate::environment::spawn_rad_chest_burst(
-                        &mut commands,
-                        true,
-                        pickup_pos_value,
-                    );
-                    scr_rad_drop(
-                        &mut commands,
-                        &catalog,
-                        pickup_pos_value,
-                        25,
-                        loops,
-                        haste > 0,
-                        true,
-                        true,
-                    );
-                    audio.play_exp_chest(&mut cues);
-                }
-                ChestKind::RadBig => {
-                    // GML `RadChestBig` overrides only `Create_0`
-                    // (`raddrop = 45`, `max_hp = 20`), so it runs the
-                    // inherited `RadChest/Destroy_0` body verbatim.
-                    crate::environment::spawn_rad_chest_burst(
-                        &mut commands,
-                        true,
-                        pickup_pos_value,
-                    );
-                    scr_rad_drop(
-                        &mut commands,
-                        &catalog,
-                        pickup_pos_value,
-                        45,
-                        loops,
-                        haste > 0,
-                        true,
-                        true,
-                    );
-                    audio.play_exp_chest(&mut cues);
-                }
-                ChestKind::RadMaggot => {
-                    // GML `RadMaggotChest/Destroy_0.gml:1-13`, in order:
-                    //   `:1-3`  `if hp <= 0 instance_create(x, y, RadMaggotExplosion)`
-                    //   `:5-8`  4 x `Smoke`, `motion_add(random_angle, random(3))`
-                    //   `:10`   `instance_create(x, y, ExploderExplo)`
-                    //   `:11`   `snd_play(sndEXPChest)`
-                    //   `:13`   `event_inherited()` -> `RadChest/Destroy_0.gml`, which
-                    //           repeats the same 4 x `Smoke` + `ExploderExplo` +
-                    //           `sndEXPChest` before its own `event_inherited()`
-                    //           reaches `prop/Destroy_0.gml:12`
-                    //           `if (raddrop > 0) scrRadDrop(x, y, raddrop)`.
-                    // `RadMaggotChest.yy`'s `parentObjectId` is `RadChest`, so
-                    // `Create_0`'s `event_inherited()` runs `RadChest/Create_0.gml:20`
-                    // and the maggot cache INHERITS `raddrop = 25` (it never overrides
-                    // it) - 25 rads, scattered by `scrRadDrop`.
-                    // `ExploderExplo/Create_0.gml` is 6 x `Smoke` plus
-                    // `BackCont.shake += 6` - no `damage`, no `Collision_Player`, so
-                    // opening a maggot cache deals 0.
-                    // `RadMaggotExplosion/Create_0.gml:1-14` fires the ring: 6
-                    // `Smoke` at `motion_add(dir, 4 + random(1))` stepping
-                    // `dir += 360 / 6`, then 3 `AcidStreak` at `motion_add(dir, 8)`
-                    // stepping `dir += 120`.
-                    let mut rng = rand::rng();
-                    let mut dir = rng.random_range(0.0..std::f32::consts::TAU);
-                    for _ in 0..6 {
-                        let speed = 4.0 + rng.random_range(0.0..1.0);
-                        crate::environment::spawn_native_smoke_mote(
-                            &mut commands,
-                            true,
-                            pickup_pos_value,
-                            glam::Vec2::from_angle(dir),
-                            speed,
-                        );
-                        dir += 360.0_f32.to_radians() / 6.0;
-                    }
-                    dir = rng.random_range(0.0..std::f32::consts::TAU);
-                    for _ in 0..3 {
-                        crate::environment::spawn_native_streak(
-                            &mut commands,
-                            true,
-                            pickup_pos_value,
-                            dir,
-                            8.0,
-                        );
-                        dir += 120.0_f32.to_radians();
-                    }
-                    // `RadMaggotExplosion/Alarm_0.gml:1-4`: `repeat(20) {
-                    // with instance_create(x + random(8)
-                    // - 4, y + random(8)
-                    // - 4, RadMaggot) motion_add(random_angle, random(5))
-                    //   }` A VELOCITY of 0-5 px/step, not a spawn offset.
-                    //   `alarm[0] = 8`
-                    //   (`RadMaggotExplosion/Create_0.gml:3`) is the
-                    //   eight-frame wind-up.
-                    for _ in 0..20 {
-                        let at = pickup_pos_value
-                            + glam::Vec2::new(
-                                rng.random_range(0.0..8.0) - 4.0,
-                                rng.random_range(0.0..8.0) - 4.0,
-                            );
-                        let ang = rng.random_range(0.0..std::f32::consts::TAU);
-                        let speed = rng.random_range(0.0..5.0);
-                        queue_enemy_spawn_birth(
-                            &mut commands,
-                            EnemyKind::RadMaggot,
-                            at,
-                            1.0,
-                            loops,
-                            true,
-                            Some(glam::Vec2::from_angle(ang) * speed * 30.0),
-                            false,
-                        );
-                    }
-                    // `RadChest/Destroy_0.gml:4-12` repeats 4 x `Smoke` +
-                    // `ExploderExplo` + `sndEXPChest`, then its own
-                    // `event_inherited()` at `:16` reaches
-                    // `prop/Destroy_0.gml:12` (`scrRadDrop`).
-                    crate::environment::spawn_rad_chest_burst(
-                        &mut commands,
-                        true,
-                        pickup_pos_value,
-                    );
-                    audio.play_exp_chest(&mut cues);
-                    crate::environment::spawn_rad_chest_burst(
-                        &mut commands,
-                        true,
-                        pickup_pos_value,
-                    );
-                    scr_rad_drop(
-                        &mut commands,
-                        &catalog,
-                        pickup_pos_value,
-                        25,
-                        loops,
-                        haste > 0,
-                        true,
-                        true,
-                    );
-                    audio.play_exp_chest(&mut cues);
+                ChestKind::Rad | ChestKind::RadBig | ChestKind::RadMaggot => {
+                    unreachable!("rad chests return early: their loot is prop/Destroy_0")
                 }
                 ChestKind::Health => {
                     // GML `HealthChest/Collision_Player.gml`: banked

@@ -179,6 +179,12 @@ impl GameAudio {
         Self::cue(cues, "sndRadPickup", 1.0, 0.0);
     }
 
+    /// GML `Rad/Collision_ProtoStatue.gml:6` (and `BigRad`'s `:6`)
+    /// `snd_play(sndStatueXP)` - the statue eating a rad.
+    pub fn play_statue_xp(&self, cues: &mut Queue<AudioCue>) {
+        Self::cue(cues, "sndStatueXP", 1.0, 0.0);
+    }
+
     /// GML `HPPickup/Collision_Player.gml:18`
     /// `scr_skill_get(mut_second_stomach) ? sndHPPickupBig : sndHPPickup`.
     pub fn play_hp_pickup(&self, cues: &mut Queue<AudioCue>, big: bool) {

@@ -1019,8 +1019,10 @@ fn projectile_art(
         }
     }
     match team {
-        Team::Player => "images/sprBullet1.png",
         Team::Enemy => "images/sprEnemyBullet1.png",
+        // `team_none` never fires a projectile; the player art is the sane
+        // default.
+        Team::Player | Team::None => "images/sprBullet1.png",
     }
 }
 

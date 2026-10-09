@@ -88,7 +88,7 @@ impl HitFlash {
     pub fn apply(commands: &mut Commands, entity: Entity, color: [f32; 4], duration_secs: f32) {
         commands
             .entity(entity)
-            .insert(Self::new(color, duration_secs));
+            .try_insert(Self::new(color, duration_secs));
     }
 }
 
@@ -141,7 +141,7 @@ pub fn tick_hit_flash(
     for (e, mut flash) in &mut q {
         flash.timer.tick(time.delta_secs);
         if flash.timer.just_finished() {
-            commands.entity(e).remove::<HitFlash>();
+            commands.entity(e).try_remove::<HitFlash>();
         }
     }
 }
@@ -1457,7 +1457,7 @@ pub fn corpse_hits(
                 if !collision.settled {
                     HitFlash::apply(&mut commands, target_entity, [1.0, 0.4, 0.4, 1.0], 0.12);
                     let idle = enemy_def(enemy.kind).sprite;
-                    commands.entity(target_entity).insert(HurtAnim {
+                    commands.entity(target_entity).try_insert(HurtAnim {
                         idle,
                         walk: crate::anim::derive_walk_path(idle),
                         hurt: crate::anim::derive_hurt_path(idle),
@@ -2442,6 +2442,7 @@ fn chain_to_nearby_targets(
             Option<&mut BigDogMissileState>,
             Option<&DogGuardianLeap>,
             Option<&Enemy>,
+            Option<&Pickup>,
         ),
         Without<Projectile>,
     >,
@@ -2462,7 +2463,7 @@ fn chain_to_nearby_targets(
 
     for _ in 0..jumps {
         let mut best: Option<(Entity, glam::Vec2, f32)> = None;
-        for (target_e, target_pos, target_team, _, _, _, _, _, missile, _, _) in targets.iter() {
+        for (target_e, target_pos, target_team, _, _, _, _, _, missile, _, _, _) in targets.iter() {
             if missile.is_some() || *target_team != Team::Enemy || visited.contains(&target_e) {
                 continue;
             }
@@ -2482,7 +2483,7 @@ fn chain_to_nearby_targets(
 
         damage = ((damage as f32) * falloff).round().max(1.0) as i32;
 
-        for (target_e, _, _, _, mut health, vel_opt, _, _, missile, _, _) in targets.iter_mut() {
+        for (target_e, _, _, _, mut health, vel_opt, _, _, missile, _, _, _) in targets.iter_mut() {
             if target_e != next_e || missile.is_some() {
                 continue;
             }
@@ -2551,11 +2552,12 @@ fn retaliate_sharp_teeth(
             Option<&mut BigDogMissileState>,
             Option<&DogGuardianLeap>,
             Option<&Enemy>,
+            Option<&Pickup>,
         ),
         Without<Projectile>,
     >,
 ) {
-    for (ee, epos, team, _, mut health, _, _, nexthurt, missile, leap, _) in targets.iter_mut() {
+    for (ee, epos, team, _, mut health, _, _, nexthurt, missile, leap, _, _) in targets.iter_mut() {
         if missile.is_some() || *team != Team::Enemy {
             continue;
         }
@@ -2579,6 +2581,8 @@ pub struct BoomFeel<'w> {
     pub chroma: ResMut<'w, ChromaticAberration>,
     pub floor: Option<Res<'w, FloorMask>>,
 }
+
+
 
 /// Projectile-vs-target hits. Ported whole from nt's `projectile_hits`
 /// (`Pos` for `Transform`, catalog paths for handles, cues for audio).
@@ -2642,6 +2646,7 @@ pub fn projectile_hits(
             Option<&mut BigDogMissileState>,
             Option<&DogGuardianLeap>,
             Option<&Enemy>,
+            Option<&Pickup>,
         ),
         Without<Projectile>,
     >,
@@ -2723,6 +2728,7 @@ pub fn projectile_hits(
             mut missile,
             leap,
             target_enemy,
+            target_pickup,
         ) in targets.iter_mut()
         {
             if health.hp <= 0 {
@@ -2856,7 +2862,7 @@ pub fn projectile_hits(
                 if let Some(state) = missile.as_deref_mut() {
                     state.hurt_from_projectile();
                 }
-                commands.entity(target_e).insert(GmlImage::animated(
+                commands.entity(target_e).try_insert(GmlImage::animated(
                     "images/sprScrapBossMissileHurt.png",
                     3,
                     0.4,
@@ -2865,7 +2871,16 @@ pub fn projectile_hits(
                 if let Some(mut nh) = nexthurt {
                     nh.0 = frame.0 + 5;
                 } else {
-                    commands.entity(target_e).insert(NextHurt(frame.0 + 5));
+                    commands.entity(target_e).try_insert(NextHurt(frame.0 + 5));
+                }
+            } else if *target_team == Team::None {
+                // GML `scr_hit.gml:22` sets `sprite_index = spr_hurt`, so the
+                // chest cycles its hurt strip; a chest carries no `SpriteAnim`,
+                // so only the re-hit gate lands here.
+                if let Some(mut nh) = nexthurt {
+                    nh.0 = frame.0 + 5;
+                } else {
+                    commands.entity(target_e).try_insert(NextHurt(frame.0 + 5));
                 }
             } else if *target_team == Team::Enemy
                 && let Some(mut nh) = nexthurt
@@ -2893,6 +2908,23 @@ pub fn projectile_hits(
                     volume: 1.0,
                     variance: 0.2,
                 });
+            } else if *target_team == Team::None {
+                // GML `scr_hit.gml:25` plays the target's own `snd_hurt`.
+                // `RadChest/Create_0.gml:17` and `RadChestBig/Create_0.gml:13`
+                // set `sndHitMetal`, but `RadMaggotChest/Create_0.gml:11`
+                // overrides it with `sndHitFlesh`.
+                cues.push(AudioCue {
+                    name: if matches!(
+                        target_pickup.map(|p| p.kind),
+                        Some(crate::comps_b::PickupKind::Chest(ChestKind::RadMaggot))
+                    ) {
+                        "sndHitFlesh"
+                    } else {
+                        "sndHitMetal"
+                    },
+                    volume: 1.0,
+                    variance: 0.2,
+                });
             } else {
                 audio.play_hit(&mut cues);
             }
@@ -2901,7 +2933,9 @@ pub fn projectile_hits(
                 apply_knockback(&mut vel.0, proj_vel.0.normalize_or_zero(), proj.knockback);
             }
 
-            HitFlash::apply(&mut commands, target_e, [1.0, 1.0, 1.0, 1.0], 0.1);
+            if *target_team != Team::None {
+                HitFlash::apply(&mut commands, target_e, [1.0, 1.0, 1.0, 1.0], 0.1);
+            }
             trauma.add(0.08);
             repame_fx::spawn_number(
                 &mut commands,
@@ -2941,8 +2975,10 @@ pub fn projectile_hits(
                 // projectile heading like `scrBulletHitFX` instead of a
                 // random angle.
                 let hit_sprite = match *proj_team {
-                    Team::Player => "images/sprBulletHit.png",
                     Team::Enemy => "images/sprEnemyBulletHit.png",
+                    // `team_none` never fires a projectile; the player art is
+                    // the sane default.
+                    Team::Player | Team::None => "images/sprBulletHit.png",
                 };
                 let hit_angle = proj_vel.0.y.atan2(proj_vel.0.x);
                 // Catalog gate: the animated strip when the catalog has it,
@@ -3138,6 +3174,8 @@ pub fn tick_homing_projectiles(
                 best.map(|(_, p)| p)
             }
             Team::Enemy => player_q.single().ok().map(|p| p.0),
+            // `team_none` never fires a homing projectile.
+            Team::None => None,
         };
 
         let Some(target_pos) = target else {
@@ -3209,6 +3247,10 @@ pub fn tick_beams(
         ),
     >,
 ) {
+    // GML's beam `Collision_hitme` is the shared `scr_hit`, and
+    // `scr_can_hit.gml:9` lets `team = 0` through, so the `Team::None`
+    // chest in `targets` above is a legal beam victim and needs no
+    // special case here.
     for (beam_e, beam_pos, mut beam) in beams.iter_mut() {
         beam.timer.tick(time.delta_secs);
         let expired = beam.timer.just_finished();
@@ -3224,6 +3266,8 @@ pub fn tick_beams(
         let b = center + half;
 
         for (target_e, target_pos, target_team, mut health, mut vel) in &mut targets {
+            // `scr_can_hit.gml:9`: `team != _attacker.team || team ==
+            // team_none`, so the `Team::None` chest is never same-team.
             if *target_team == beam.team {
                 continue;
             }
@@ -4459,6 +4503,38 @@ pub fn tick_throne_victory(
                 });
             }
             commands.entity(e).despawn();
+        }
+    }
+}
+
+/// GML `Explosion/Collision_hitme.gml:1` is a bare
+/// `scr_explosion_generic_hit()`, whose gate is `scr_can_hit` - and
+/// `scr_can_hit.gml:9` admits `team == team_none` against ANY attacker. So
+/// every blast pops the three `prop`-parented rad chests, the player's or an
+/// enemy's, and `tick_destroyed_rad_chests` runs the shared `Destroy_0`.
+///
+/// Split out of `apply_explosions` because that system is already at Bevy's
+/// 16-system-param cap, and because its enemy/prop queries are keyed on
+/// `With<Enemy>` / `With<Prop>`, which a chest is neither of.
+pub fn tick_explosion_chest_damage(
+    explosions: Query<(&Pos, &Explosion), (Without<Player>, Without<Prop>)>,
+    mut chests: Query<
+        (&Pos, &Hitbox, &mut Health, &Pickup),
+        (With<Pickup>, Without<Player>, Without<Prop>),
+    >,
+) {
+    for (center, boom) in &explosions {
+        for (cpos, hitbox, mut health, pickup) in &mut chests {
+            if health.hp <= 0 {
+                continue;
+            }
+            if !matches!(pickup.kind, crate::comps_b::PickupKind::Chest(_)) {
+                continue;
+            }
+            if center.0.distance(cpos.0) > boom.radius + hitbox.radius {
+                continue;
+            }
+            health.hp -= boom.damage.max(1);
         }
     }
 }

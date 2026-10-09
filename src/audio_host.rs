@@ -9,6 +9,13 @@ use repame_audio::{Audio, AudioChannel, CueDef, CueRequest, Variation};
 use crate::App;
 
 const EXTS: [&str; 4] = ["ogg", "wav", "mp3", "flac"];
+const STOP_PREFIX: &str = "stop_";
+
+struct PendingCue {
+    stem: &'static str,
+    volume: f32,
+    variance: f32,
+}
 
 pub struct AudioHost {
     sfx: Audio,
@@ -17,6 +24,7 @@ pub struct AudioHost {
     sounds: Option<PathBuf>,
     stems: HashSet<String>,
     missing: HashSet<String>,
+    pending: Vec<PendingCue>,
     tracks: HashSet<String>,
     amb_tracks: HashSet<String>,
     last_miss_log: Option<Instant>,
@@ -61,6 +69,7 @@ impl AudioHost {
             tracks: HashSet::new(),
             amb_tracks: HashSet::new(),
             missing: HashSet::new(),
+            pending: Vec::new(),
             last_miss_log: None,
             music_want: None,
             amb_want: None,
@@ -104,12 +113,23 @@ impl AudioHost {
         for cue in app.drain_audio_cues() {
             self.play_cue(&cue, slider);
         }
+        self.flush_pending();
         self.sync_music(music.and_then(crate::audio::music_path));
         self.sync_ambience(ambience.and_then(crate::audio::ambience_path));
     }
 
     fn play_cue(&mut self, cue: &repame_audio::Cue, slider: f32) {
-        if !self.sfx.is_live() || !self.request_cue(cue.name) {
+        // A `stop_`-prefixed cue is GML `audio_stop_sound`: the loop stems
+        // have no such file on disk, so the prefix is the only marker that
+        // the bank owns a live voice to silence.
+        if let Some(looping) = cue.name.strip_prefix(STOP_PREFIX) {
+            self.pending.retain(|p| p.stem != looping);
+            if self.sfx.is_live() {
+                self.sfx.stop_cue(looping);
+            }
+            return;
+        }
+        if !self.sfx.is_live() {
             return;
         }
         let mut volume = cue.volume;
@@ -123,20 +143,58 @@ impl AudioHost {
             AudioChannel::Ui if hit_family(cue.name) => volume *= slider,
             _ => {}
         }
+        if self.request_cue(cue.name) && self.play(cue.name, volume, cue.variance) {
+            return;
+        }
+        // The decode is still in flight and this cue is already gone from
+        // the queue, so an edge-triggered loop would never start at all.
+        if !self.missing.contains(cue.name) && !self.queued(cue.name) {
+            self.pending.push(PendingCue {
+                stem: cue.name,
+                volume,
+                variance: cue.variance,
+            });
+        }
+    }
+
+    fn queued(&self, stem: &str) -> bool {
+        self.pending.iter().any(|p| p.stem == stem)
+    }
+
+    /// Retry the cues whose first decode had not landed yet.
+    fn flush_pending(&mut self) {
+        if !self.sfx.is_live() {
+            self.pending.clear();
+            return;
+        }
+        let mut still_decoding = Vec::new();
+        for pending in std::mem::take(&mut self.pending) {
+            if self.missing.contains(pending.stem) {
+                continue;
+            }
+            if !self.play(pending.stem, pending.volume, pending.variance) {
+                still_decoding.push(pending);
+            }
+        }
+        self.pending = still_decoding;
+    }
+
+    /// False while the bank has no decoded stem under that name yet.
+    fn play(&mut self, stem: &str, volume: f32, variance: f32) -> bool {
         let jitter = rand::rng().random::<f32>();
-        let rate = 1.0 + (2.0 * jitter - 1.0) * cue.variance * 0.5;
+        let rate = 1.0 + (2.0 * jitter - 1.0) * variance * 0.5;
         let now_ms = self.epoch.elapsed().as_millis() as u64;
-        let _ = self
-            .sfx
+        self.sfx
             .bank()
-            .play_at_ms(cue.name, volume, rate, 0.0, now_ms);
+            .play_at_ms(stem, volume, rate, 0.0, now_ms)
+            .is_some()
     }
 
     /// Ask the bank for a stem, decoding off-thread on first sight.
     ///
-    /// `Queued` drops this play and costs the frame nothing; the stem
-    /// becomes audible on a later frame. `Failed` is terminal, so the
-    /// stem goes in `missing` and is never requested again.
+    /// `Queued` means the decode is still in flight; the caller retries
+    /// from [`Self::pending`]. `Failed` is terminal, so the stem goes in
+    /// `missing` and is never requested again.
     fn request_cue(&mut self, stem: &str) -> bool {
         if self.missing.contains(stem) {
             return false;

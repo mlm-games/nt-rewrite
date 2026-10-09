@@ -1822,16 +1822,15 @@ pub struct DormantScrapBoss {
     pub timer: f32,
 }
 
-/// GML `ProtoStatue` foe: vault guardian state. `rad` snapshots the
-/// run's crown rads on placement; `charged`/`phased` latch the IDPD
-/// waves. (The prop-side `ProtoStatue` marker below flags secret
-/// entrance statues and is unrelated.)
+/// GML `ProtoStatue` foe: vault guardian state. `rad` counts the rads it
+/// has been FED (`Rad/Collision_ProtoStatue.gml`); `charged`/`phased`
+/// latch the IDPD waves. (The prop-side `ProtoStatue` marker below flags
+/// secret entrance statues and is unrelated.)
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct ProtoGuardian {
     pub rad: u32,
     pub charged: bool,
     pub phased: bool,
-    pub init: bool,
 }
 
 /// GML `MomProjectile` marker: leaves a `ToxicGas` trail every tick and

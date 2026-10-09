@@ -695,6 +695,10 @@ pub struct Player {
     /// `sndChickenHeadlessLoop` start/stop around the matching hold.
     pub eyes_loop_on: bool,
     pub horror_loop_on: bool,
+    /// GML `Player.horrornorad` (`scrPowers.gml:292`): steps left during
+    /// which a held Horror beam stops rads from homing in
+    /// (`Rad/Step_0.gml:20`), decayed in `Player/Step_0.gml:749-751`.
+    pub horrornorad: u32,
     pub frog_loop_on: bool,
     pub chicken_headless_loop_on: bool,
     pub mutations: Vec<MutationId>,
@@ -762,6 +766,7 @@ impl Default for Player {
             ultra_ability_mult: 1.0,
             eyes_loop_on: false,
             horror_loop_on: false,
+            horrornorad: 0,
             frog_loop_on: false,
             chicken_headless_loop_on: false,
             mutations: Vec::new(),
@@ -849,6 +854,10 @@ pub struct DogGuardianLeap {
 pub enum Team {
     Player,
     Enemy,
+    /// GML `team_none` (`damagesource/Create_0.gml:1`). `scr_can_hit.gml:9`
+    /// admits every shooter against a `team_none` target, which is what
+    /// makes a `prop` chest damageable from either side.
+    None,
 }
 
 #[derive(Component)]

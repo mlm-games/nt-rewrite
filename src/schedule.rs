@@ -572,6 +572,9 @@ pub fn build_sim_schedule() -> Schedule {
                 combat::apply_explosions
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
+                combat::tick_explosion_chest_damage
+                    .in_set(NtSimSet::Combat)
+                    .run_if(gameplay_active),
                 environment::recenter_prop_corpse
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
@@ -614,6 +617,16 @@ pub fn build_sim_schedule() -> Schedule {
                 deaths::resolve_player_gameover
                     .in_set(NtSimSet::Progression)
                     .run_if(gameplay_active),
+                // GML `Rad/Step_0.gml:10-23` reads the statue / horror / portal targets
+                // through queries that cannot coexist with `collect_pickups`'s
+                // `&mut Pos` / `&mut Health` on `Pickup`, so the reads go
+                // through a snapshot resource first.
+                pickups::gather_rad_magnet_targets
+                    .in_set(NtSimSet::Progression)
+                    .run_if(gameplay_active),
+                pickups::tick_rad_magnet
+                    .in_set(NtSimSet::Progression)
+                    .run_if(gameplay_active),
                 pickups::tick_pickup_drag
                     .in_set(NtSimSet::Progression)
                     .run_if(gameplay_active),
@@ -638,6 +651,16 @@ pub fn build_sim_schedule() -> Schedule {
                 progression::tick_portal_shock
                     .in_set(NtSimSet::Progression)
                     .run_if(gameplay_active),
+                // `prop/Step_1.gml:12` `if (hp <= 0) instance_destroy()`.
+                // Runs after the two places that set a rad chest's `hp = 0`.
+                progression::tick_destroyed_rad_chests
+                    .after(progression::tick_portal_shock)
+                    .after(pickups::collect_pickups)
+                    .in_set(NtSimSet::Progression)
+                    .run_if(gameplay_active),
+            )
+                .chain(),
+            (
                 // GML parity: `PortalClear` is a 5-step wall-blaster
                 // (`MenuGen/Alarm_1` pops one per camper, meets only `Floor`s), so
                 // it ticks + despawns on the Title campfire too, not just behind
