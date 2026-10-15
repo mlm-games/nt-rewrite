@@ -29,7 +29,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use bevy_ecs::prelude::*;
-use glam::Vec2;
+use glam::{DVec2, DVec4, Vec2};
+use repame_actors::{ActorDraw, ActorItem};
 use repame_anim::{AnimCatalog, AnimDef, AtlasDesc, UvRect, frame_key};
 use repame_atlas::AtlasId;
 use repame_fx::{DamageNumber, Particle, particle_sprites};
@@ -170,13 +171,27 @@ impl RenderAssets {
         Some((self.catalog.uv(path, frame)?, self.catalog.def(path)?))
     }
 
+    fn batch_desc_for(size: u32, layers: u32, generation: u64) -> BatchDesc {
+        BatchDesc {
+            layer_size: size,
+            layers,
+            uploads_gen: generation,
+            ..Default::default()
+        }
+    }
+
     /// [`BatchDesc`] matching this pack (layer size + page count).
     pub fn batch_desc(&self) -> BatchDesc {
-        BatchDesc {
-            layer_size: self.atlas_size,
-            layers: self.layers,
-            uploads_gen: self.uploads_gen,
-            ..Default::default()
+        Self::batch_desc_for(self.atlas_size, self.layers, self.uploads_gen)
+    }
+
+    /// Atlas resources backing [`ActorItem::Raster`] placements. `id`
+    /// names the view's batch so GPU resources are not shared across views.
+    pub fn raster_atlas(&self, id: &str) -> repame_actors::RasterAtlas {
+        repame_actors::RasterAtlas {
+            desc: self.batch_desc(),
+            uploads: self.take_uploads(),
+            batch_id: id.to_string(),
         }
     }
 
@@ -196,7 +211,7 @@ impl RenderAssets {
         flip_x: bool,
         rotation: f32,
         tint: [f32; 4],
-    ) -> Option<SpriteInstance> {
+    ) -> Option<ActorDraw> {
         self.sprite_for_full(path, frame, center, flip_x, false, rotation, tint)
     }
 
@@ -219,23 +234,41 @@ impl RenderAssets {
         flip_y: bool,
         rotation: f32,
         tint: [f32; 4],
-    ) -> Option<SpriteInstance> {
+    ) -> Option<ActorDraw> {
         let (uv, def) = self.uv(path, frame)?;
-        let anchor = def.anchor();
-        Some(SpriteInstance {
+        self.raster(
+            &uv,
+            &def,
             center,
+            Vec2::new(if flip_x { -1.0 } else { 1.0 }, if flip_y { -1.0 } else { 1.0 }),
             rotation,
-            size: Vec2::new(def.w as f32, def.h as f32),
-            anchor: Vec2::new(anchor[0], anchor[1]),
-            flip_x,
-            flip_y,
-            uv_min: Vec2::new(uv.min[0], uv.min[1]),
-            uv_max: Vec2::new(uv.max[0], uv.max[1]),
-            color: tint_to_linear(tint),
-            page: uv.page,
-            z: 0.0,
-            blend: SpriteBlend::Alpha,
-        })
+            tint,
+        )
+    }
+
+    /// One atlas-cell placement. `scale` is a multiple of the strip cell,
+    /// which is what GML's `image_xscale` means, so a negative component
+    /// mirrors - the `flip` channels are sugar over it.
+    fn raster(
+        &self,
+        uv: &UvRect,
+        def: &AnimDef,
+        center: Vec2,
+        scale: Vec2,
+        rotation: f32,
+        tint: [f32; 4],
+    ) -> Option<ActorDraw> {
+        Some(raster_draw(
+            uv.page,
+            uv.min,
+            uv.max,
+            [def.w as f32, def.h as f32],
+            center,
+            scale,
+            rotation,
+            def.anchor(),
+            tint,
+        ))
     }
 
     /// Sized textured sprite: pulse decals (cobweb/ice/trap visuals)
@@ -250,23 +283,20 @@ impl RenderAssets {
         size: Vec2,
         flip_x: bool,
         tint: [f32; 4],
-    ) -> Option<SpriteInstance> {
+    ) -> Option<ActorDraw> {
         let (uv, def) = self.uv(path, frame)?;
-        let anchor = def.anchor();
-        Some(SpriteInstance {
+        let cell = Vec2::new(def.w as f32, def.h as f32);
+        self.raster(
+            &uv,
+            &def,
             center,
-            rotation: 0.0,
-            size,
-            anchor: Vec2::new(anchor[0], anchor[1]),
-            flip_x,
-            flip_y: false,
-            uv_min: Vec2::new(uv.min[0], uv.min[1]),
-            uv_max: Vec2::new(uv.max[0], uv.max[1]),
-            color: tint_to_linear(tint),
-            page: uv.page,
-            z: 0.0,
-            blend: SpriteBlend::Alpha,
-        })
+            Vec2::new(
+                size.x / cell.x * if flip_x { -1.0 } else { 1.0 },
+                size.y / cell.y,
+            ),
+            0.0,
+            tint,
+        )
     }
 
     /// Scaled + rotated textured sprite (GML `draw_sprite_ext` parity
@@ -280,7 +310,7 @@ impl RenderAssets {
         scale: f32,
         rotation: f32,
         tint: [f32; 4],
-    ) -> Option<SpriteInstance> {
+    ) -> Option<ActorDraw> {
         self.sprite_stretched(path, frame, center, Vec2::splat(scale), rotation, tint)
     }
 
@@ -294,23 +324,149 @@ impl RenderAssets {
         scale: Vec2,
         rotation: f32,
         tint: [f32; 4],
-    ) -> Option<SpriteInstance> {
+    ) -> Option<ActorDraw> {
         let (uv, def) = self.uv(path, frame)?;
-        let anchor = def.anchor();
-        Some(SpriteInstance {
-            center,
-            rotation,
-            size: Vec2::new(def.w as f32 * scale.x, def.h as f32 * scale.y),
-            anchor: Vec2::new(anchor[0], anchor[1]),
-            flip_x: false,
-            flip_y: false,
-            uv_min: Vec2::new(uv.min[0], uv.min[1]),
-            uv_max: Vec2::new(uv.max[0], uv.max[1]),
-            color: tint_to_linear(tint),
-            page: uv.page,
-            z: 0.0,
-            blend: SpriteBlend::Alpha,
-        })
+        self.raster(&uv, &def, center, scale, rotation, tint)
+    }
+}
+
+/// One atlas placement as an [`ActorDraw`]. `cell` is the strip-cell extent
+/// `scale` multiplies; cropped windows pass the cropped uv with the cropped
+/// size expressed as a scale of the full cell.
+/// Batch-level [`SpriteInstance`] (e.g. `repame_fx::particle_sprites`) as a
+/// draw. Every field maps 1:1; the particle's absolute size becomes both cell
+/// and scale-one, so no catalog cell is needed.
+fn from_sprite_instance(s: &SpriteInstance, color: [f32; 4]) -> ActorDraw {
+    ActorDraw {
+        item: ActorItem::Raster {
+            page: s.page,
+            uv_min: [s.uv_min.x, s.uv_min.y],
+            uv_max: [s.uv_max.x, s.uv_max.y],
+            size: [s.size.x, s.size.y],
+        },
+        world: DVec2::new(f64::from(s.center.x), f64::from(s.center.y)),
+        rotation: f64::from(s.rotation),
+        scale: DVec2::new(
+            if s.flip_x { -1.0 } else { 1.0 },
+            if s.flip_y { -1.0 } else { 1.0 },
+        ),
+        anchor: DVec2::new(f64::from(s.anchor.x), f64::from(s.anchor.y)),
+        tint: dvec4(color),
+        clip: None,
+        blend: match s.blend {
+            SpriteBlend::Additive => repose_core::BlendMode::Add,
+            SpriteBlend::Multiply => repose_core::BlendMode::Multiply,
+            SpriteBlend::Alpha => repose_core::BlendMode::Alpha,
+        },
+        z: s.z,
+    }
+}
+
+fn dvec4(tint: [f32; 4]) -> DVec4 {
+    DVec4::new(
+        f64::from(tint[0]),
+        f64::from(tint[1]),
+        f64::from(tint[2]),
+        f64::from(tint[3]),
+    )
+}
+
+/// Draw back to a batch-level [`SpriteInstance`]. Only [`ActorItem::Raster`]
+/// maps; anything else has no batch form.
+pub(crate) fn to_sprite_instance(d: &ActorDraw) -> Option<SpriteInstance> {
+    let ActorItem::Raster {
+        page,
+        uv_min,
+        uv_max,
+        size,
+    } = d.item
+    else {
+        return None;
+    };
+    let (sx, sy) = (d.scale.x as f32, d.scale.y as f32);
+    Some(SpriteInstance {
+        center: Vec2::new(d.world.x as f32, d.world.y as f32),
+        rotation: d.rotation as f32,
+        size: Vec2::new(size[0] * sx.abs(), size[1] * sy.abs()),
+        anchor: Vec2::new(d.anchor.x as f32, d.anchor.y as f32),
+        flip_x: sx < 0.0,
+        flip_y: sy < 0.0,
+        uv_min: Vec2::new(uv_min[0], uv_min[1]),
+        uv_max: Vec2::new(uv_max[0], uv_max[1]),
+        color: [
+            d.tint.x as f32,
+            d.tint.y as f32,
+            d.tint.z as f32,
+            d.tint.w as f32,
+        ],
+        page,
+        z: d.z,
+        blend: match d.blend {
+            repose_core::BlendMode::Add => SpriteBlend::Additive,
+            repose_core::BlendMode::Multiply => SpriteBlend::Multiply,
+            _ => SpriteBlend::Alpha,
+        },
+    })
+}
+
+/// Test-only placement readout: drawn extent and center in world px.
+/// Raster draws span cell times scale; rects span twice the half extent.
+#[cfg(test)]
+fn drawn_size(d: &ActorDraw) -> Vec2 {
+    match d.item {
+        ActorItem::Raster { size: cell, .. } => Vec2::new(
+            cell[0] * d.scale.x.abs() as f32,
+            cell[1] * d.scale.y.abs() as f32,
+        ),
+        ActorItem::Rect { half } => Vec2::new(
+            half[0] * 2.0 * d.scale.x.abs() as f32,
+            half[1] * 2.0 * d.scale.y.abs() as f32,
+        ),
+        ActorItem::Rig { .. } => Vec2::ZERO,
+    }
+}
+
+#[cfg(test)]
+fn drawn_center(d: &ActorDraw) -> Vec2 {
+    Vec2::new(d.world.x as f32, d.world.y as f32)
+}
+
+#[cfg(test)]
+fn drawn_top_left(d: &ActorDraw) -> Vec2 {
+    let size = drawn_size(d);
+    drawn_center(d)
+        - Vec2::new(
+            d.anchor.x as f32 * size.x,
+            d.anchor.y as f32 * size.y,
+        )
+}
+
+fn raster_draw(
+    page: u32,
+    uv_min: [f32; 2],
+    uv_max: [f32; 2],
+    cell: [f32; 2],
+    center: Vec2,
+    scale: Vec2,
+    rotation: f32,
+    anchor: [f32; 2],
+    tint: [f32; 4],
+) -> ActorDraw {
+    ActorDraw {
+        item: ActorItem::Raster {
+            page,
+            uv_min,
+            uv_max,
+            size: cell,
+        },
+        world: DVec2::new(f64::from(center.x), f64::from(center.y)),
+        rotation: f64::from(rotation),
+        scale: DVec2::new(f64::from(scale.x), f64::from(scale.y)),
+        anchor: DVec2::new(f64::from(anchor[0]), f64::from(anchor[1])),
+        tint: dvec4(tint_to_linear(tint)),
+        clip: None,
+        blend: repose_core::BlendMode::Alpha,
+        z: 0.0,
     }
 }
 
@@ -1114,7 +1270,7 @@ fn wall_out_part(
     wy: i32,
     crop: (f32, f32, f32, f32),
     tint: [f32; 4],
-) -> Option<SpriteInstance> {
+) -> Option<ActorDraw> {
     let (l, r, w, h) = crop;
     if w <= 0.0 || h <= 0.0 {
         return None;
@@ -1151,20 +1307,17 @@ fn wall_out_part(
     let iw = ix1 - ix0;
     let ih = iy1 - iy0;
     let top_left = Vec2::new(wx as f32 * 16.0 - 4.0 + ix0, wy as f32 * 16.0 - 12.0 + iy0);
-    Some(SpriteInstance {
-        center: top_left + Vec2::new(iw, ih) * 0.5,
-        rotation: 0.0,
-        size: Vec2::new(iw, ih),
-        anchor: Vec2::new(0.5, 0.5),
-        flip_x: false,
-        flip_y: false,
-        uv_min: Vec2::new(uv_min[0], uv_min[1]),
-        uv_max: Vec2::new(uv_max[0], uv_max[1]),
-        color: tint_to_linear(tint),
-        page: uv.page,
-        z: 0.0,
-        blend: SpriteBlend::Alpha,
-    })
+    Some(raster_draw(
+        uv.page,
+        [uv_min.x, uv_min.y],
+        [uv_max.x, uv_max.y],
+        [sw, sh],
+        top_left + Vec2::new(iw, ih) * 0.5,
+        Vec2::new(iw / sw, ih / sh),
+        0.0,
+        [0.5, 0.5],
+        tint,
+    ))
 }
 
 /// GML `Top`/`TopSmall` chain, sorted for stable draw order. Every
@@ -1316,7 +1469,7 @@ pub const Z_PAUSE_BUTTON: f32 = 25.0;
 /// internal push order: the engine sort is stable on `(blend, z, page)`
 /// ties). `pub(crate)` so the view composer assigns rungs per layer
 /// next to the push order (single place both are visible).
-pub(crate) fn stamp_z(out: &mut [SpriteInstance], z: f32) {
+pub(crate) fn stamp_z(out: &mut [ActorDraw], z: f32) {
     for s in out.iter_mut() {
         if s.z == 0.0 {
             s.z = z;
@@ -1355,7 +1508,7 @@ fn floor_frame(cx: i32, cy: i32, frames: i32) -> i32 {
 
 /// One 32x32 floor tile, top-left placed at the cell's origin.
 fn push_floor_tile(
-    out: &mut Vec<SpriteInstance>,
+    out: &mut Vec<ActorDraw>,
     assets: &RenderAssets,
     floor_png: &str,
     cx: i32,
@@ -1382,24 +1535,21 @@ fn place_top_left(
     top_left: Vec2,
     tint: [f32; 4],
     grow: f32,
-) -> Option<SpriteInstance> {
+) -> Option<ActorDraw> {
     let (uv, def) = assets.uv(path, frame)?;
     let anchor = def.anchor();
     let size = Vec2::new(def.w as f32 + grow, def.h as f32 + grow);
-    Some(SpriteInstance {
-        center: top_left + Vec2::new(anchor[0] * size.x, anchor[1] * size.y),
-        rotation: 0.0,
-        size,
-        anchor: Vec2::new(anchor[0], anchor[1]),
-        flip_x: false,
-        flip_y: false,
-        uv_min: Vec2::new(uv.min[0], uv.min[1]),
-        uv_max: Vec2::new(uv.max[0], uv.max[1]),
-        color: tint_to_linear(tint),
-        page: uv.page,
-        z: 0.0,
-        blend: SpriteBlend::Alpha,
-    })
+    Some(raster_draw(
+        uv.page,
+        uv.min,
+        uv.max,
+        [size.x, size.y],
+        top_left + Vec2::new(anchor[0] * size.x, anchor[1] * size.y),
+        Vec2::ONE,
+        0.0,
+        anchor,
+        tint,
+    ))
 }
 
 fn projectile_frame(assets: &RenderAssets, path: &str, life: &crate::time::GTimer) -> i32 {
@@ -1853,7 +2003,7 @@ pub fn fog_sprites(
     canvas_dp: [f32; 2],
     world_size: [f32; 2],
     cam: &Camera2d,
-) -> Vec<SpriteInstance> {
+) -> Vec<ActorDraw> {
     let mut out = Vec::new();
     let area = world
         .get_resource::<Run>()
@@ -1922,7 +2072,7 @@ pub fn sideart_sprites(
     canvas_dp: [f32; 2],
     world_size: [f32; 2],
     cam: &Camera2d,
-) -> Vec<SpriteInstance> {
+) -> Vec<ActorDraw> {
     let mut out = Vec::new();
     let opt = world
         .get_resource::<crate::savedata_part::SaveData>()
@@ -1966,11 +2116,13 @@ fn native_image_instance(
     flip: bool,
     depth: f32,
     tint: [f32; 4],
-) -> Option<SpriteInstance> {
+) -> Option<ActorDraw> {
     let mut sprite = assets
         .sprite_stretched(image.path, image.frame(), pos, scale, angle, tint)
         .or_else(|| Some(white_quad(pos, angle, scale, tint)))?;
-    sprite.flip_x = flip;
+    if flip {
+        sprite.scale.x *= -1.0;
+    }
     sprite.z = -depth / 5.0;
     Some(sprite)
 }
@@ -1981,7 +2133,7 @@ fn laser_sight(
     origin: Vec2,
     angle: f32,
     walls: &[Vec2],
-) -> Option<SpriteInstance> {
+) -> Option<ActorDraw> {
     let step = Vec2::new(angle.cos(), angle.sin()) * 2.0;
     let mut tip = origin;
     for _ in 0..=1000 {
@@ -1996,8 +2148,8 @@ fn laser_sight(
     let native = assets.native_size(path)?;
     let size = Vec2::new(native.x * (origin.distance(tip) / 2.0 + 2.0), native.y);
     let mut sight = assets.sprite_sized(path, 0, origin, size, false, [1.0; 4])?;
-    sight.rotation = angle;
-    sight.anchor = Vec2::ZERO;
+    sight.rotation = f64::from(angle);
+    sight.anchor = DVec2::ZERO;
     Some(sight)
 }
 
@@ -2018,16 +2170,16 @@ struct StaticWorldKey {
 #[derive(Clone, Default)]
 pub struct StaticWorldCache {
     key: Option<StaticWorldKey>,
-    prefix: Arc<[SpriteInstance]>,
-    wall_out: Arc<[SpriteInstance]>,
-    wall_trans: Arc<[SpriteInstance]>,
-    wall_top: Arc<[SpriteInstance]>,
+    prefix: Arc<[ActorDraw]>,
+    wall_out: Arc<[ActorDraw]>,
+    wall_trans: Arc<[ActorDraw]>,
+    wall_top: Arc<[ActorDraw]>,
     wall_centers: Arc<[Vec2]>,
     /// GML `scrShadows` wall half: every flipped `Out` sprite at
     /// `(x, y + 16)`, untinted. These are COVERAGE stamps, not draws - they
     /// go into the `shad` surface (`crate::shadow_pass`) that `BackCont`
     /// composites once, never into the batch as per-wall 0.4 quads.
-    wall_shadows: Arc<[SpriteInstance]>,
+    wall_shadows: Arc<[ActorDraw]>,
 }
 
 impl StaticWorldCache {
@@ -2037,7 +2189,7 @@ impl StaticWorldCache {
 
     /// The `shad` coverage stamps for the current floor. Empty until
     /// [`world_instances_cached`] has run once for this key.
-    pub fn wall_shadows(&self) -> Arc<[SpriteInstance]> {
+    pub fn wall_shadows(&self) -> Arc<[ActorDraw]> {
         self.wall_shadows.clone()
     }
 }
@@ -2135,7 +2287,7 @@ fn static_world_key(world: &mut World, assets: &RenderAssets) -> Option<StaticWo
 /// pickups, opened chests, enemies, player, projectiles, hit-FX, held
 /// guns, melee swings). Chrome layers stamp their own rung - see the
 /// z-ladder doc above.
-pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInstance> {
+pub fn world_instances(world: &mut World, assets: &RenderAssets) -> Vec<ActorDraw> {
     let mut cache = StaticWorldCache::default();
     world_instances_cached(world, assets, &mut cache)
 }
@@ -2144,7 +2296,7 @@ pub fn world_instances_cached(
     world: &mut World,
     assets: &RenderAssets,
     cache: &mut StaticWorldCache,
-) -> Vec<SpriteInstance> {
+) -> Vec<ActorDraw> {
     let key = static_world_key(world, assets);
     let reuse = key.is_some() && cache.key == key;
     let cached_prefix = reuse.then(|| cache.prefix.clone());
@@ -3969,20 +4121,19 @@ fn pulse_now(world: &World) -> f32 {
 
 /// Used when the catalog lacks the strip (subset packs) or when no
 /// strip exists at all (muzzle tongues, hazard discs).
-fn white_quad(center: Vec2, rotation: f32, size: Vec2, tint: [f32; 4]) -> SpriteInstance {
-    SpriteInstance {
-        center,
-        rotation,
-        size,
-        anchor: Vec2::new(0.5, 0.5),
-        flip_x: false,
-        flip_y: false,
-        uv_min: Vec2::ZERO,
-        uv_max: Vec2::ONE,
-        color: tint_to_linear(tint),
-        page: 0,
+fn white_quad(center: Vec2, rotation: f32, size: Vec2, tint: [f32; 4]) -> ActorDraw {
+    ActorDraw {
+        item: ActorItem::Rect {
+            half: [size.x * 0.5, size.y * 0.5],
+        },
+        world: DVec2::new(f64::from(center.x), f64::from(center.y)),
+        rotation: f64::from(rotation),
+        scale: DVec2::ONE,
+        anchor: DVec2::splat(0.5),
+        tint: dvec4(tint_to_linear(tint)),
+        clip: None,
+        blend: repose_core::BlendMode::Alpha,
         z: 0.0,
-        blend: SpriteBlend::Alpha,
     }
 }
 
@@ -4056,27 +4207,24 @@ pub fn hud_gui_place(
     tint: [f32; 4],
     map: HudGuiMap,
     view: [f32; 4],
-) -> Option<SpriteInstance> {
+) -> Option<ActorDraw> {
     let (uv, def) = assets.uv(path, frame)?;
     let anchor = def.anchor();
     let size = Vec2::new(def.w as f32 * mul * map.s, def.h as f32 * mul * map.s);
     // GML draw point minus the origin: `draw_sprite(spr, sub, x, y)` puts
     // the art top-left at `(x - xorigin, y - yorigin)`.
     let top_left = hud_gui_to_world(map, view, gx - def.xorigin * mul, gy - def.yorigin * mul);
-    Some(SpriteInstance {
-        center: top_left + Vec2::new(anchor[0] * size.x, anchor[1] * size.y),
-        rotation: 0.0,
-        size,
-        anchor: Vec2::new(anchor[0], anchor[1]),
-        flip_x: false,
-        flip_y: false,
-        uv_min: Vec2::new(uv.min[0], uv.min[1]),
-        uv_max: Vec2::new(uv.max[0], uv.max[1]),
-        color: tint_to_linear(tint),
-        page: uv.page,
-        z: 0.0,
-        blend: SpriteBlend::Alpha,
-    })
+    Some(raster_draw(
+        uv.page,
+        uv.min,
+        uv.max,
+        [size.x, size.y],
+        top_left + Vec2::new(anchor[0] * size.x, anchor[1] * size.y),
+        Vec2::ONE,
+        0.0,
+        anchor,
+        tint,
+    ))
 }
 
 /// One HUD text in 320x240 GUI space (GML `scrDrawPlayerHUD` regions +
@@ -4777,7 +4925,7 @@ fn gui_button(text: impl Into<String>, gx: f32, gy: f32, color: [u8; 4]) -> Menu
 /// the footprint. `left` picks the branch (MENU/RETRY style vs mirrored);
 /// center-x keeps the ~2px surface-pad shift.
 fn push_shadowed_sprite(
-    out: &mut Vec<SpriteInstance>,
+    out: &mut Vec<ActorDraw>,
     assets: &RenderAssets,
     path: &str,
     frame: i32,
@@ -4813,7 +4961,7 @@ fn push_shadowed_sprite(
 }
 
 fn push_shadowed_gui(
-    out: &mut Vec<SpriteInstance>,
+    out: &mut Vec<ActorDraw>,
     assets: &RenderAssets,
     path: &str,
     frame: i32,
@@ -4850,7 +4998,7 @@ pub(crate) fn letterbox_sprites(
     world_size: [f32; 2],
     cam: &Camera2d,
     frame: i32,
-) -> Vec<SpriteInstance> {
+) -> Vec<ActorDraw> {
     if frame <= 0 {
         return Vec::new();
     }
@@ -4871,7 +5019,7 @@ pub(crate) fn letterbox_sprites(
             0.0,
             [1.0; 4],
         ) {
-            sprite.size.y *= scale;
+            sprite.scale.y *= f64::from(scale);
             out.push(sprite);
         }
     }
@@ -4941,7 +5089,7 @@ pub(crate) fn settings_slider_action(target: SettingSliderTarget, value: f32) ->
 }
 
 fn push_settings_slider(
-    out: &mut Vec<SpriteInstance>,
+    out: &mut Vec<ActorDraw>,
     assets: &RenderAssets,
     view: [f32; 4],
     gm: HudGuiMap,
@@ -4990,7 +5138,7 @@ fn settings_slider_part(
     source_y: f32,
     width: f32,
     height: f32,
-) -> Option<SpriteInstance> {
+) -> Option<ActorDraw> {
     if width <= 0.0 || height <= 0.0 {
         return None;
     }
@@ -5017,20 +5165,17 @@ fn settings_slider_part(
     );
     let size = Vec2::new(width * gm.s, height * gm.s);
     let top_left = hud_gui_to_world(gm, view, x, y);
-    Some(SpriteInstance {
-        center: top_left + size * 0.5,
-        rotation: 0.0,
-        size,
-        anchor: Vec2::new(0.5, 0.5),
-        flip_x: false,
-        flip_y: false,
-        uv_min,
-        uv_max,
-        color: tint_to_linear([1.0; 4]),
-        page: uv.page,
-        z: 0.0,
-        blend: SpriteBlend::Alpha,
-    })
+    Some(raster_draw(
+        uv.page,
+        [uv_min.x, uv_min.y],
+        [uv_max.x, uv_max.y],
+        [source_width, source_height],
+        top_left + size * 0.5,
+        Vec2::new(size.x / source_width, size.y / source_height),
+        0.0,
+        [0.5, 0.5],
+        [1.0; 4],
+    ))
 }
 
 fn settings_option_button(text: impl Into<String>, cx: f32, y: f32) -> MenuGuiText {
@@ -5081,7 +5226,7 @@ fn gamepad_glyph_frame(entry: &repame_input::KeymapEntry) -> Option<i32> {
 /// strip is 24x24 with a centered origin, so the glyph centers there).
 #[allow(clippy::too_many_arguments)]
 fn push_gamepad_glyph(
-    out: &mut Vec<SpriteInstance>,
+    out: &mut Vec<ActorDraw>,
     assets: &RenderAssets,
     gamepad_type: u8,
     frame: i32,
@@ -5150,7 +5295,7 @@ fn push_confirm_text(out: &mut Vec<MenuGuiText>, world: &World, vw: f32) {
 /// The `gp_face1` half of the CONFIRM prompt: `dx - 9 -
 /// font_get_string_width(str)` from GML `Draw_75:11`.
 fn push_confirm_glyph(
-    out: &mut Vec<SpriteInstance>,
+    out: &mut Vec<ActorDraw>,
     assets: &RenderAssets,
     world: &World,
     vw: f32,
@@ -5455,7 +5600,7 @@ fn pad_control_name(entry: &repame_input::KeymapEntry) -> String {
 /// on every device so the instruction keeps its backing everywhere - the
 /// letterbox bars GML draws for the rest of the game are the `letterbox_view`
 /// layer, not this one.
-pub fn tutorial_sprites(world: &mut World, canvas_dp: [f32; 2], view: [f32; 4]) -> Vec<SpriteInstance> {
+pub fn tutorial_sprites(world: &mut World, canvas_dp: [f32; 2], view: [f32; 4]) -> Vec<ActorDraw> {
     let Some(state) = world.get_resource::<crate::state::TutorialState>() else {
         return Vec::new();
     };
@@ -7676,7 +7821,7 @@ fn ability_hud_sprites(
     ultra: Option<UltraMutationId>,
     mutations: &[MutationId],
     patience_used: bool,
-) -> Vec<SpriteInstance> {
+) -> Vec<ActorDraw> {
     let mut out = Vec::new();
     let mut x = view[2] - 12.0;
     let mut y = 13.0;
@@ -7741,7 +7886,7 @@ pub fn hud_sprites(
     assets: &RenderAssets,
     view: [f32; 4],
     dt_secs: f32,
-) -> Vec<SpriteInstance> {
+) -> Vec<ActorDraw> {
     let mut out = Vec::new();
     if world
         .get_resource::<crate::savedata_part::SaveData>()
@@ -8159,7 +8304,7 @@ fn hud_weapon_part(
     tint: [f32; 4],
     map: HudGuiMap,
     view: [f32; 4],
-) -> Option<SpriteInstance> {
+) -> Option<ActorDraw> {
     let (uv, def) = assets.uv(path, 1)?;
     let (sw, sh) = (def.w as f32, def.h as f32);
     if sw <= 0.0 || sh <= 0.0 {
@@ -8192,20 +8337,17 @@ fn hud_weapon_part(
     );
     let size = Vec2::new(iw * map.s, ih * map.s);
     let top_left = hud_gui_to_world(map, view, dx + (-wx).max(0.0), dy + (-wy).max(0.0));
-    Some(SpriteInstance {
-        center: top_left + size * 0.5,
-        rotation: 0.0,
-        size,
-        anchor: Vec2::new(0.5, 0.5),
-        flip_x: false,
-        flip_y: false,
-        uv_min: Vec2::new(uv_min[0], uv_min[1]),
-        uv_max: Vec2::new(uv_max[0], uv_max[1]),
-        color: tint_to_linear(tint),
-        page: uv.page,
-        z: 0.0,
-        blend: SpriteBlend::Alpha,
-    })
+    Some(raster_draw(
+        uv.page,
+        [uv_min.x, uv_min.y],
+        [uv_max.x, uv_max.y],
+        [sw, sh],
+        top_left + size * 0.5,
+        Vec2::new(size.x / sw, size.y / sh),
+        0.0,
+        [0.5, 0.5],
+        tint,
+    ))
 }
 
 /// Coop fainted bars (GML `TopCont/Draw_0` `Revive` block): `sprFaintedBar` at the
@@ -8216,7 +8358,7 @@ pub fn fainted_bar_sprites(
     world: &mut World,
     assets: &RenderAssets,
     view: [f32; 4],
-) -> Vec<SpriteInstance> {
+) -> Vec<ActorDraw> {
     let mut out = Vec::new();
     let hud: HudState = sync_hud_state(world);
     if hud.fainted_bars.is_empty() {
@@ -8312,7 +8454,7 @@ pub fn crosshair_sprites(
     world: &mut World,
     assets: &RenderAssets,
     dt_secs: f32,
-) -> Vec<SpriteInstance> {
+) -> Vec<ActorDraw> {
     let mut out = Vec::new();
     // GML `TopCont/Draw_0` is `with Player`: no entity, no lerped crosshair.
     // The GameOver cursor is `UberCont/Draw_75`'s raw mouse sprite (menu-crosshair path
@@ -8425,7 +8567,7 @@ pub fn portal_indicator_sprites(
     canvas_dp: [f32; 2],
     world_size: [f32; 2],
     cam: &Camera2d,
-) -> Vec<SpriteInstance> {
+) -> Vec<ActorDraw> {
     let mut out = Vec::new();
     // Live runs only: stale portals from a previous run must not draw
     // arrows over title/menus.
@@ -8535,7 +8677,7 @@ fn prop_shadow(sprites: Option<&PropSprites>) -> ShadowSpec {
 }
 
 fn push_shadow(
-    out: &mut Vec<SpriteInstance>,
+    out: &mut Vec<ActorDraw>,
     assets: &RenderAssets,
     pos: Vec2,
     spec: ShadowSpec,
@@ -8547,7 +8689,7 @@ fn push_shadow(
 }
 
 fn push_pickup_shadow(
-    out: &mut Vec<SpriteInstance>,
+    out: &mut Vec<ActorDraw>,
     assets: &RenderAssets,
     pos: Vec2,
     kind: PickupKind,
@@ -8582,7 +8724,7 @@ fn push_pickup_shadow(
 ///
 /// Tinted [`shadow_color`] at [`SHADOW_ALPHA`]: GML stamps opaque black into `shad`, then
 /// `BackCont/Draw_0` fogs it to the area color at 0.4 alpha.
-pub fn shadow_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInstance> {
+pub fn shadow_sprites(world: &mut World, assets: &RenderAssets) -> Vec<ActorDraw> {
     let mut out = Vec::new();
     let tint = world
         .get_resource::<Run>()
@@ -8681,7 +8823,7 @@ pub fn shadow_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteIns
 /// 2x scale, alpha 0.1 (`bm_add`). Ported for live projectiles (same
 /// strip/frame/rotation as the body) and portals; gated on the
 /// `bloom` setting exactly like GML.
-pub fn bloom_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInstance> {
+pub fn bloom_sprites(world: &mut World, assets: &RenderAssets) -> Vec<ActorDraw> {
     let mut out = Vec::new();
     if !world
         .get_resource::<crate::savedata_part::SaveData>()
@@ -8713,7 +8855,7 @@ pub fn bloom_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInst
         if let Some(mut s) =
             assets.sprite_scaled_rotated(path, frame, pos.0, 2.0, rotation, [1.0, 1.0, 1.0, 0.1])
         {
-            s.blend = SpriteBlend::Additive;
+            s.blend = repose_core::BlendMode::Add;
             out.push(s);
         }
     }
@@ -8727,7 +8869,7 @@ pub fn bloom_sprites(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInst
             0.0,
             [1.0, 1.0, 1.0, 0.1],
         ) {
-            s.blend = SpriteBlend::Additive;
+            s.blend = repose_core::BlendMode::Add;
             out.push(s);
         }
     }
@@ -9062,7 +9204,7 @@ fn menu_loadout_sprites(
     loadout_frame: f32,
     loadout_open: bool,
     to_world: &dyn Fn([f32; 2]) -> Vec2,
-    out: &mut Vec<SpriteInstance>,
+    out: &mut Vec<ActorDraw>,
 ) {
     let (w, h) = (vwvh[0], vwvh[1]);
     let race = CHAR_SELECT_ORDER[selected.min(CHAR_SELECT_ORDER.len() - 1)];
@@ -9258,7 +9400,7 @@ fn push_loadout_weapon(
     wid: WeaponId,
     pos: Vec2,
     tint: [f32; 4],
-    out: &mut Vec<SpriteInstance>,
+    out: &mut Vec<ActorDraw>,
 ) {
     let meta = weapon_meta(wid);
     if let Some(lout) = meta.wep_lout {
@@ -9291,7 +9433,7 @@ fn menu_loadout_closed_sprites(
     available: bool,
     include_chrome: bool,
     to_world: &dyn Fn([f32; 2]) -> Vec2,
-    out: &mut Vec<SpriteInstance>,
+    out: &mut Vec<ActorDraw>,
 ) {
     let (w, h) = (vwvh[0], vwvh[1]);
     let race = CHAR_SELECT_ORDER[selected.min(CHAR_SELECT_ORDER.len() - 1)];
@@ -9532,7 +9674,7 @@ pub fn splash_sprites(
     world: &mut World,
     assets: &RenderAssets,
     view: [f32; 4],
-) -> Vec<SpriteInstance> {
+) -> Vec<ActorDraw> {
     let mut out = Vec::new();
     let splash = world.get_resource::<SplashState>().cloned();
     let (mode, t, guns) = splash
@@ -9596,7 +9738,7 @@ pub fn splash_sprites(
                     [1.0, 1.0, 1.0, 0.1],
                 ) {
                     // Additive shimmer (`bm_add`).
-                    s.blend = SpriteBlend::Additive;
+                    s.blend = repose_core::BlendMode::Add;
                     out.push(s);
                 }
             }
@@ -9675,7 +9817,7 @@ pub fn splash_sprites(
                         [1.0, 1.0, 1.0, 0.05],
                     ) {
                         // Additive glow (`bm_add`).
-                        s.blend = SpriteBlend::Additive;
+                        s.blend = repose_core::BlendMode::Add;
                         out.push(s);
                     }
                 }
@@ -9720,7 +9862,7 @@ fn pixel_line(
     x2: f32,
     y2: f32,
     tint: [f32; 4],
-    out: &mut Vec<SpriteInstance>,
+    out: &mut Vec<ActorDraw>,
 ) {
     let dx0 = x2 - x1;
     let dy0 = y2 - y1;
@@ -9753,7 +9895,7 @@ fn pixel_line(
             rot,
             tint,
         ) {
-            s.anchor = Vec2::new(0.5, 0.5);
+            s.anchor = DVec2::new(0.5, 0.5);
             out.push(s);
             return;
         }
@@ -9775,14 +9917,14 @@ pub fn roadmap_sprites(
     drawy: f32,
     waypoints: &[crate::comps_a::Waypoint],
     pos: usize,
-) -> Vec<SpriteInstance> {
+) -> Vec<ActorDraw> {
     const SEG: f32 = 9.0;
     const MAXSUB: [i32; 8] = [0, 3, 1, 3, 1, 3, 1, 3];
     const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
     const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
     let mut out = Vec::new();
     let push =
-        |out: &mut Vec<SpriteInstance>, path: &str, frame: i32, x: f32, y: f32, tint: [f32; 4]| {
+        |out: &mut Vec<ActorDraw>, path: &str, frame: i32, x: f32, y: f32, tint: [f32; 4]| {
             if let Some(s) = assets.sprite_for(path, frame, to_world(x, y), false, 0.0, tint) {
                 out.push(s);
             }
@@ -10041,25 +10183,22 @@ pub fn place_touch_sprite_rot(
     tint: [f32; 4],
     map: HudGuiMap,
     view: [f32; 4],
-) -> Option<SpriteInstance> {
+) -> Option<ActorDraw> {
     let (uv, def) = assets.uv(path, frame)?;
     let anchor = def.anchor();
     let size = Vec2::new(def.w as f32 * mul * map.s, def.h as f32 * mul * map.s);
     let top_left = hud_gui_to_world(map, view, gx - def.xorigin * mul, gy - def.yorigin * mul);
-    Some(SpriteInstance {
-        center: top_left + Vec2::new(anchor[0] * size.x, anchor[1] * size.y),
+    Some(raster_draw(
+        uv.page,
+        uv.min,
+        uv.max,
+        [size.x, size.y],
+        top_left + Vec2::new(anchor[0] * size.x, anchor[1] * size.y),
+        Vec2::ONE,
         rotation,
-        size,
-        anchor: Vec2::new(anchor[0], anchor[1]),
-        flip_x: false,
-        flip_y: false,
-        uv_min: Vec2::new(uv.min[0], uv.min[1]),
-        uv_max: Vec2::new(uv.max[0], uv.max[1]),
-        color: tint_to_linear(tint),
-        page: uv.page,
-        z: 0.0,
-        blend: SpriteBlend::Alpha,
-    })
+        anchor,
+        tint,
+    ))
 }
 
 /// Menu art sprites (`Menu/Draw_0`, drawn here where the UI framework cannot):
@@ -10075,7 +10214,7 @@ pub fn touch_sprites(
     canvas_dp: [f32; 2],
     world_size: [f32; 2],
     cam: &Camera2d,
-) -> Vec<SpriteInstance> {
+) -> Vec<ActorDraw> {
     let mut out = Vec::new();
     let save = world
         .get_resource::<crate::savedata_part::SaveData>()
@@ -10314,7 +10453,7 @@ pub fn touch_sprites(
                 })
                 .unwrap_or((crate::data::WeaponId::NONE, crate::data::WeaponId::NONE));
             let draw_gun =
-                |id: crate::data::WeaponId, tint: [f32; 4], out: &mut Vec<SpriteInstance>| {
+                |id: crate::data::WeaponId, tint: [f32; 4], out: &mut Vec<ActorDraw>| {
                     let meta = crate::weapon_runtime::weapon_meta(id);
                     let stem = if meta.wep_sprt.is_empty() || meta.wep_sprt == "mskNone" {
                         "sprRevolver"
@@ -10389,7 +10528,7 @@ pub fn pause_button_sprite(
     canvas_dp: [f32; 2],
     world_size: [f32; 2],
     cam: &Camera2d,
-) -> Option<SpriteInstance> {
+) -> Option<ActorDraw> {
     let shown = world
         .get_resource::<crate::savedata_part::SaveData>()
         .is_some_and(|s| s.settings.pause_button)
@@ -10421,7 +10560,7 @@ pub fn menu_sprites(
     canvas_dp: [f32; 2],
     world_size: [f32; 2],
     cam: &Camera2d,
-) -> Vec<SpriteInstance> {
+) -> Vec<ActorDraw> {
     let mut out = Vec::new();
     let view = view_rect_world(canvas_dp, world_size, cam);
     let gm = hud_gui_map(view);
@@ -11325,7 +11464,7 @@ pub fn pause_button_sprites(
     canvas_dp: [f32; 2],
     world_size: [f32; 2],
     cam: &Camera2d,
-) -> Vec<SpriteInstance> {
+) -> Vec<ActorDraw> {
     let view = view_rect_world(canvas_dp, world_size, cam);
     let gm = hud_gui_map(view);
     let vw = view[2];
@@ -11484,7 +11623,7 @@ pub fn spiral_figures(
     assets: &RenderAssets,
     center: Vec2,
     angle_deg: f32,
-) -> Vec<SpriteInstance> {
+) -> Vec<ActorDraw> {
     let mut out = Vec::new();
 
     // GML `scrDrawSpiral` figure gate verbatim: nothing draws while
@@ -11537,7 +11676,7 @@ pub fn spiral_figures(
 /// the `sprEPickup` pill at `(x, y - 7)`, plus the `pick` pad glyph at
 /// `(x, y - 15)` while the GAMEPAD switch is on.
 fn push_pickup_prompt(
-    out: &mut Vec<SpriteInstance>,
+    out: &mut Vec<ActorDraw>,
     assets: &RenderAssets,
     at: Vec2,
     frame: i32,
@@ -11570,7 +11709,7 @@ fn push_pickup_prompt(
     }
 }
 
-pub fn fx_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInstance> {
+pub fn fx_instances(world: &mut World, assets: &RenderAssets) -> Vec<ActorDraw> {
     let mut out = Vec::new();
 
     // GML `scrDrawInteractionHUD` (`scripts/scrDrawPlayerHUD/scrDrawPlayerHUD.gml:339-376`)
@@ -11646,8 +11785,13 @@ pub fn fx_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInsta
                 Some(s) => s,
                 None => white_quad(pos.0, rotation, size, tint),
             };
-            s.size = size;
-            s.anchor = Vec2::new(0.5, 0.5);
+            if let ActorItem::Raster { size: cell, .. } = s.item {
+                s.scale = DVec2::new(
+                    f64::from(size.x) / f64::from(cell[0].max(1e-6)),
+                    f64::from(size.y) / f64::from(cell[1].max(1e-6)),
+                );
+            }
+            s.anchor = DVec2::new(0.5, 0.5);
             out.push(s);
         }
     }
@@ -11669,8 +11813,13 @@ pub fn fx_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInsta
                 Some(s) => s,
                 None => white_quad(pos.0, arc.angle, size, tint),
             };
-            s.size = size;
-            s.anchor = Vec2::new(0.5, 0.5);
+            if let ActorItem::Raster { size: cell, .. } = s.item {
+                s.scale = DVec2::new(
+                    f64::from(size.x) / f64::from(cell[0].max(1e-6)),
+                    f64::from(size.y) / f64::from(cell[1].max(1e-6)),
+                );
+            }
+            s.anchor = DVec2::new(0.5, 0.5);
             out.push(s);
         }
     }
@@ -11707,9 +11856,8 @@ pub fn fx_instances(world: &mut World, assets: &RenderAssets) -> Vec<SpriteInsta
     // Gradient stops are sRGB-authored like every other tint.
     {
         let mut q = world.query::<&Particle>();
-        out.extend(particle_sprites(q.iter(world)).into_iter().map(|mut s| {
-            s.color = tint_to_linear(s.color);
-            s
+        out.extend(particle_sprites(q.iter(world)).into_iter().map(|s| {
+            from_sprite_instance(&s, tint_to_linear(s.color))
         }));
     }
 
@@ -11875,6 +12023,73 @@ pub fn hud_texts_dp(
 //   from the origin.
 
 #[cfg(test)]
+mod raster_offscreen {
+    use super::*;
+    use repame_sprite::{SpriteBatch, screen_camera};
+    use repose_core::{Color, Rect, Scene, SceneNode};
+    use repose_render_wgpu::offscreen::OffscreenRenderer;
+    use repose_render_wgpu::Callback;
+
+    /// The actors migration moved every producer onto [`ActorDraw`]; this
+    /// pins the other end: real atlas art placed through the batch still
+    /// reaches pixels. Skips without assets or a GPU adapter.
+    #[test]
+    fn raster_batch_draws_real_atlas_art() {
+        let assets = match RenderAssets::load(Path::new("assets")) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("SKIP raster offscreen (no assets): {e}");
+                return;
+            }
+        };
+        let mut renderer = match OffscreenRenderer::new_blocking(256, 256, 1) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("SKIP raster offscreen (no GPU): {e}");
+                return;
+            }
+        };
+        let mut batch = SpriteBatch::with_id("test.ntrewrite.raster", assets.batch_desc());
+        batch.set_camera(screen_camera([256.0, 256.0]));
+        let mut placed = 0;
+        let draw_a = assets.sprite_for("sprAllyIdle", 0, Vec2::new(64.0, 64.0), false, 0.0, [1.0; 4]);
+        let draw_b = assets.sprite_for("sprAmmoChest", 0, Vec2::new(192.0, 192.0), false, 0.0, [1.0; 4]);
+        for draw in [&draw_a, &draw_b].into_iter().flatten() {
+            if let Some(sprite) = to_sprite_instance(draw) {
+                batch.push_sprite(&sprite);
+                placed += 1;
+            }
+        }
+        assert_eq!(placed, 2, "catalog must resolve the probe strips");
+        let scene = Scene {
+            clear_color: Color::from_rgba(0, 0, 0, 255),
+            nodes: vec![SceneNode::Callback {
+                rect: Rect { x: 0.0, y: 0.0, w: 256.0, h: 256.0 },
+                payload: Callback::new(batch_with_uploads(batch, &assets)),
+            }],
+        };
+        let px = renderer
+            .render_rgba(&scene, Some([0.0, 0.0, 0.0, 1.0]))
+            .expect("render");
+        let ink = px
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[0] > 8 || p[1] > 8 || p[2] > 8)
+            .count();
+        assert!(ink > 100, "atlas art must reach pixels, got {ink} lit");
+    }
+
+    fn batch_with_uploads(
+        mut batch: SpriteBatch,
+        assets: &RenderAssets,
+    ) -> SpriteBatch {
+        batch.extend_uploads(assets.take_uploads().iter().cloned());
+        batch
+    }
+}
+
+#[cfg(test)]
 mod verbatim_ui_layers {
     use super::*;
 
@@ -11907,7 +12122,7 @@ mod verbatim_ui_layers {
     /// order (the engine sort is stable on ties).
     #[test]
     fn stamp_z_assigns_rung_only() {
-        let mut v = vec![SpriteInstance::default(), SpriteInstance::default()];
+        let mut v = vec![ActorDraw::default(), ActorDraw::default()];
         stamp_z(&mut v, Z_HUD);
         assert!(v.iter().all(|s| s.z == Z_HUD));
     }
@@ -11967,11 +12182,12 @@ mod ui_parity_regression {
             view,
         )
         .expect("revolver art present");
-        let top_left = s.center - Vec2::new(s.anchor.x * s.size.x, s.anchor.y * s.size.y);
+        let top_left = drawn_top_left(&s);
         assert!((top_left.x - 26.0).abs() < 1e-4, "x {top_left:?}");
         assert!((top_left.y - 21.0).abs() < 1e-4, "y {top_left:?}");
-        assert!((s.size.x - 11.0).abs() < 1e-4, "w {:?}", s.size);
-        assert!((s.size.y - 9.0).abs() < 1e-4, "h {:?}", s.size);
+        let size = drawn_size(&s);
+        assert!((size.x - 11.0).abs() < 1e-4, "w {size:?}");
+        assert!((size.y - 9.0).abs() < 1e-4, "h {size:?}");
     }
 
     /// GML `draw_sprite` honors the strip origin: the draw point is
@@ -11998,12 +12214,13 @@ mod ui_parity_regression {
         // Top-left = pos - origin = (11-4, 16-5). (Recovered via the
         // anchor law `center - anchor * size` since the strip's anchor
         // is (4/8, 5/8), not the quad middle.)
-        let top_left = s.center - Vec2::new(s.anchor.x * s.size.x, s.anchor.y * s.size.y);
+        let top_left = drawn_top_left(&s);
         assert!((top_left.x - 7.0).abs() < 1e-4, "x {top_left:?}");
         assert!((top_left.y - 11.0).abs() < 1e-4, "y {top_left:?}");
         // The origin itself lands on the GML draw point (11,16).
-        assert!((s.center.x - 11.0).abs() < 1e-4, "cx {:?}", s.center);
-        assert!((s.center.y - 16.0).abs() < 1e-4, "cy {:?}", s.center);
+        let center = drawn_center(&s);
+        assert!((center.x - 11.0).abs() < 1e-4, "cx {center:?}");
+        assert!((center.y - 16.0).abs() < 1e-4, "cy {center:?}");
         // Zero-origin art is unaffected: health bar still at (20,4).
         let b = hud_gui_place(
             &assets,
@@ -12017,7 +12234,7 @@ mod ui_parity_regression {
             view,
         )
         .expect("health bar art present");
-        let btl = b.center - Vec2::new(b.anchor.x * b.size.x, b.anchor.y * b.size.y);
+        let btl = drawn_top_left(&b);
         assert!((btl.x - 20.0).abs() < 1e-4, "x {btl:?}");
         assert!((btl.y - 4.0).abs() < 1e-4, "y {btl:?}");
     }

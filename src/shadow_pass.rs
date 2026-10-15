@@ -26,8 +26,9 @@
 
 use std::sync::Arc;
 
+use repame_actors::ActorDraw;
 use repame_sprite::{
-    AtlasUpload, BatchDesc, Camera2d, SpriteBatch, SpriteInstance, draw_batch_with_id,
+    AtlasUpload, BatchDesc, Camera2d, SpriteBatch, draw_batch_with_id,
 };
 use repose_render_wgpu::{CallbackRenderPass, CallbackResources, ScreenDescriptor, WgpuCallback};
 
@@ -55,7 +56,7 @@ const MASK_SAMPLES: u32 = 1;
 pub struct ShadowSnapshot {
     /// Coverage stamps (`scrShadows` wall half), untinted and already placed
     /// in world space by `world_instances_cached`.
-    pub stamps: Arc<[SpriteInstance]>,
+    pub stamps: Arc<[ActorDraw]>,
     pub cam: Camera2d,
     pub world_size: [f32; 2],
     /// Cold-start viewport in dp; must match the world viewport's own so both
@@ -322,8 +323,8 @@ impl WgpuCallback for ShadowPass {
         // and ordinary alpha blending into the cleared surface unions them.
         let mut batch = SpriteBatch::with_id(MASK_BATCH_ID, self.desc);
         batch.set_camera(snap.cam.fit_matrix(snap.viewport_dp, snap.world_size));
-        for stamp in snap.stamps.iter() {
-            batch.push_sprite(stamp);
+        for stamp in snap.stamps.iter().filter_map(crate::render::to_sprite_instance) {
+            batch.push_sprite(&stamp);
         }
         // The batch builds its pipelines from the descriptor's sample count
         // (`batch.rs`), and it draws into the 1-sample mask, so the count is

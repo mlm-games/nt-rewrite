@@ -7,6 +7,7 @@ description = "Nuclear Throne recreation on repame + repose (no bevy)"
 [dependencies]
 # Engine; [patch.crates-io] below redirects these to the sibling checkouts.
 repame-sim = "0.3"
+repame-actors = "0.3"
 repame-shell = "0.3.11"
 repame-anim = "0.3"
 repame-sprite = "0.3"
@@ -18,8 +19,8 @@ repame-audio = "0.3.11"
 # their own pixels per repame-atlas docs). Pinned to the cached 0.25 line.
 image = "0.25"
 # Direct dep: bevy derive macros expand to `bevy_ecs::` paths, so every
-# game crate names it explicitly. Must unify with repame-sim's 0.19.
-bevy_ecs = "0.19"
+# game crate names it explicitly. Must unify with repame-sim's 0.20.
+bevy_ecs = "0.20"
 # Same glam as repame: shared math types must unify to one version.
 glam = "0.33"
 serde = { version = "1", features = ["derive"] }
@@ -57,6 +58,7 @@ getrandom = { version = "0.4", features = ["wasm_js"] }
 # satisfy the requirements above.
 # game-utils = { path = "../../../../Repos/game-utils/crates/game-utils" }
 # rlobkit-app-events = { path = "../../../../Repos/rlobkit/rlobkit-app-events" }
+# repame-actors = { path = "../../../../Repos/repame/crates/repame-actors" }
 # repame-anim = { path = "../../../../Repos/repame/crates/repame-anim" }
 # repame-atlas = { path = "../../../../Repos/repame/crates/repame-atlas" }
 # repame-audio = { path = "../../../../Repos/repame/crates/repame-audio" }
@@ -77,6 +79,12 @@ getrandom = { version = "0.4", features = ["wasm_js"] }
 # repose-navigation = { path = "../../../../Repos/repose/crates/repose-navigation" }
 # repose-material = { path = "../../../../Repos/repose/crates/repose-material" }
 # repose-docking = { path = "../../../../Repos/repose/crates/repose-docking" }
+# renamite serves repame-actors; single-type rule needs these local too.
+# renamite-player = { path = "../../../../Repos/renamite/crates/renamite-player" }
+# renamite-player-ui = { path = "../../../../Repos/renamite/crates/renamite-player-ui" }
+# renamite-render-bridge = { path = "../../../../Repos/renamite/crates/renamite-render-bridge" }
+# renamite-model = { path = "../../../../Repos/renamite/crates/renamite-model" }
+# renamite-animation = { path = "../../../../Repos/renamite/crates/renamite-animation" }
 # repose-macros = { path = "../../../../Repos/repose/crates/repose-macros" }
 
 [lib]

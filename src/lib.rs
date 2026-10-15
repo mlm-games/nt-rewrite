@@ -3,8 +3,8 @@
 //!
 //! [`App::view`] (from [`root_view`]) drains staged shell input into
 //! [`NtInput`], advances the sim at [`SIM_HZ`] through the full sim
-//! [`Schedule`], then composes: sprite viewport ([`Viewport2dGpu`] with
-//! assets, canvas [`Viewport2d`] placeholder without), HUD [`Text`] from
+//! [`Schedule`], then composes: actors viewport (atlas raster with
+//! assets, solid-rect placeholder without), HUD [`Text`] from
 //! [`hud_gui_texts_dp`](crate::render::hud_gui_texts_dp) (GML
 //! `TopCont/Draw_64:17-20`: `scrDrawMiscHUD()` then
 //! `scrDrawPlayerHUD`), menus from
@@ -49,26 +49,35 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use web_time::Duration;
 
 use crate::shadow_pass::{ShadowPass, ShadowSnapshot};
 use crate::vortex_pass::{VARD_VARIANTS, VortexPass, VortexTexture};
 use bevy_ecs::prelude::*;
-use glam::Vec2;
+use glam::{DVec2, DVec4, Vec2};
+use repose_core::BlendMode;
 use rand::RngExt;
 use repame_anim::{AnimCatalog, AtlasDesc};
 use repame_sim::{Sim, SimTime};
-use repame_sprite::{
-    BatchDesc, Camera2d, FrameInput, GeomHandle, PickEvent, SpriteBatch, SpriteInstance,
-    Viewport2dGpuWithHudShared, Viewport2dGpuWithIdShared, Viewport2dShared,
+use repame_actors::{
+    ActorDraw, ActorDrawList, ActorItem, ActorLibrary, RasterAtlas, actors_view_mixed,
+    actors_view_mixed_with_events,
 };
-use repose_canvas::Embedded;
+use repame_sprite::{
+    Camera2d, FullscreenDesc, FullscreenPass, PickEvent, TextureFilter, WorldText, effective_fit,
+    rgba8, world_to_dp_with_roll,
+};
+use repame_sprite::fullscreen::SOLID_WGSL;
+use repose_canvas::{Canvas, DrawScope, Embedded};
 use repose_core::PaddingValues;
 use repose_core::input::{Key, KeyEvent, KeyEventType, PhysicalKey, PointerButton};
 use repose_core::prelude::{AlignItems, Modifier};
 use repose_core::{
-    Color, Dp, FocusRequester, RenderContext, Scheduler, Sp, View, remember, request_frame,
+    Color, Dp, FocusRequester, Px, Rect, RenderContext, Scheduler, Sp, View, remember,
+    request_frame,
 };
 use repose_render_wgpu::Callback;
 use repose_ui::{AnnotatedText, Box as UiBox, Column, Text, TextStyle, ViewExt, ZStack};
@@ -282,7 +291,7 @@ pub struct App {
     /// art changes (frame/tint/pixels/scale); cleared when assets unload.
     cursor_img: Option<std::sync::Arc<repose_core::CustomCursorImage>>,
     cursor_img_key: Option<(i32, [u32; 3], u64, u32)>,
-    last_live_frame: Option<Arc<FrameInput>>,
+    last_live_frame: Option<Rc<ActorDrawList>>,
     /// The fourteen bound vortex background textures for `vortex_tex_area`
     /// (slots: spiral, bolt, debris, proto, idpd, idpd2, star, variants).
     /// Rebuilt only when the area changes.
@@ -3592,16 +3601,16 @@ impl App {
         self.cam.offset = Vec2::ZERO;
 
         // Sprite layer: real instances with assets, placeholder quads without; the
-        // batch is the headless-verifiable artifact (`Viewport2dGpu` rebuilds
+        // raster count is the headless-verifiable artifact (the batch rebuilds
         // its own internally). Hardware cursor request: computed inside the
         // sprite borrow (save reads only), refreshed after it ends
         // (`refresh_cursor_img` needs `&mut self`); `None` when assets are
         // absent or the gate is off.
         let mut cursor_req: Option<(i32, [f32; 4])> = None;
-        let mut chrome_sprites: Vec<SpriteInstance> = Vec::new();
-        let mut front_chrome_sprites: Vec<SpriteInstance> = Vec::new();
-        let mut spiral_figure_sprites: Vec<SpriteInstance> = Vec::new();
-        let mut cover_hud_sprites: Vec<SpriteInstance> = Vec::new();
+        let mut chrome_sprites: Vec<ActorDraw> = Vec::new();
+        let mut front_chrome_sprites: Vec<ActorDraw> = Vec::new();
+        let mut spiral_figure_sprites: Vec<ActorDraw> = Vec::new();
+        let mut cover_hud_sprites: Vec<ActorDraw> = Vec::new();
         // GML `scrGameIsGenerationScreen` verbatim: while the generation
         // conts own the draw (`GenCont` behind Loading, `LevCont` behind
         // the mutation/ultra offer) the room draws NOTHING but the spiral
@@ -4013,17 +4022,10 @@ impl App {
                 .get_resource::<crate::comps_b::FloorTransition>()
                 .is_some_and(|f| f.active);
         let _ = &mut sprites;
-        let mut batch = SpriteBatch::new(
-            self.assets
-                .as_ref()
-                .map(|a| a.batch_desc())
-                .unwrap_or_default(),
-        );
-        batch.set_camera(self.cam.fit_matrix(viewport_dp, world_size));
-        for s in &sprites {
-            batch.push_sprite(s);
-        }
-        self.last_sprite_count = batch.len();
+        self.last_sprite_count = sprites
+            .iter()
+            .filter(|d| matches!(d.item, ActorItem::Raster { .. }))
+            .count();
 
         // Vortex snapshot -> mounted background pass. `bg_alpha` is GML
         // `scrDrawSpiral` verbatim: `draw_clear(c_black)` runs in every caller
@@ -4217,18 +4219,28 @@ impl App {
             self.last_live_frame = None;
         }
 
-        let frame = Arc::new(FrameInput {
-            cam: self.cam,
-            world_size,
-            viewport_dp,
-            sprites,
-            texts,
-            background,
-            overlay_color,
-            chroma: 0.0,
-            lights: Vec::new(),
-            occluders: Arc::new([]),
-            ambient: None,
+        let frame = Rc::new(ActorDrawList::from_draws(sprites));
+        let actor_library: Rc<RefCell<ActorLibrary>> =
+            Rc::new(RefCell::new(ActorLibrary::new()));
+        let atlas = self
+            .assets
+            .as_ref()
+            .map(|a| Rc::new(a.raster_atlas("viewport2d.main")));
+        let atlas_floor = self
+            .assets
+            .as_ref()
+            .map(|a| Rc::new(a.raster_atlas("viewport2d.floor")));
+        let hud = hud_texts_view(texts, self.cam, world_size, overlay_color);
+        let background_view = background.map(|color| {
+            solid_fill_view(
+                "viewport2d.background",
+                [
+                    srgb_to_linear(color[0]),
+                    srgb_to_linear(color[1]),
+                    srgb_to_linear(color[2]),
+                    color[3],
+                ],
+            )
         });
         let live_offer = menu_kind == Some(MenuOverlay::Mutation)
             || self
@@ -4270,44 +4282,27 @@ impl App {
         };
         let split_shad = self.assets.is_some() && !stamps.is_empty();
         let (floor_frame, display_frame) = if split_shad {
-            let (below, above): (Vec<SpriteInstance>, Vec<SpriteInstance>) = display_frame
-                .sprites
+            let (below, above): (Vec<ActorDraw>, Vec<ActorDraw>) = display_frame
+                .as_slice()
                 .iter()
                 .cloned()
                 .partition(|s| s.z < Z_SHADOW);
-            let floor = Arc::new(FrameInput {
-                sprites: below,
-                texts: Vec::new(),
-                background: display_frame.background,
-                overlay_color: None,
-                ..display_frame.as_ref().clone()
-            });
-            let rest = Arc::new(FrameInput {
-                sprites: above,
-                background: None,
-                ..display_frame.as_ref().clone()
-            });
-            (Some(floor), rest)
+            (
+                Some(Rc::new(ActorDrawList::from_draws(below))),
+                Rc::new(ActorDrawList::from_draws(above)),
+            )
         } else {
             (None, display_frame)
         };
-        let floor_view = floor_frame.map(|input| {
-            let mut view = Viewport2dGpuWithIdShared(
-                input,
-                GeomHandle::new(),
-                self.assets
-                    .as_ref()
-                    .map(|a| a.take_uploads())
-                    .unwrap_or_default(),
-                self.assets
-                    .as_ref()
-                    .map(|a| a.batch_desc())
-                    .unwrap_or_default(),
-                "viewport2d.floor",
-                |_| {},
-            );
-            view.modifier = view.modifier.hit_passthrough();
-            view
+        let floor_view = floor_frame.map(|draws| {
+            actors_view_mixed(
+                actor_library.clone(),
+                draws,
+                self.cam,
+                world_size,
+                _ctx.clone(),
+                atlas_floor.clone(),
+            )
         });
         let shadow_view = split_shad.then(|| {
             let box_dp = self.gml_frame().box_dp;
@@ -4343,135 +4338,146 @@ impl App {
                 )),
             )
         });
-        let viewport = if self.assets.is_some() {
-            let geom = GeomHandle::new();
-            let uploads = self
-                .assets
-                .as_ref()
-                .map(|a| a.take_uploads())
-                .unwrap_or_default();
-            let desc: BatchDesc = self
-                .assets
-                .as_ref()
-                .map(|a| a.batch_desc())
-                .unwrap_or_default();
-            Viewport2dGpuWithHudShared(display_frame, geom, uploads, desc, move |ev| {
-                let mut staging = staging.borrow_mut();
-                match ev {
-                    PickEvent::Press {
-                        world,
-                        screen,
-                        button,
-                    } => {
-                        staging.pick_down(button);
-                        if button == PointerButton::Primary {
-                            let d = repose_core::locals::effective_density_scale().max(1e-6);
-                            staging.stage_click(world, screen, d);
-                        }
-                    }
-                    PickEvent::Click { button, .. } => {
-                        staging.pick_up(button);
-                    }
-                    PickEvent::Hover { .. } => {}
-                    PickEvent::TouchDown { id, screen } => {
+        let staging_pick = staging.clone();
+        let on_pick = Rc::new(move |ev: PickEvent| {
+            let mut staging = staging_pick.borrow_mut();
+            match ev {
+                PickEvent::Press {
+                    world,
+                    screen,
+                    button,
+                } => {
+                    staging.pick_down(button);
+                    if button == PointerButton::Primary {
                         let d = repose_core::locals::effective_density_scale().max(1e-6);
-                        staging.touch_down(id, Vec2::new(screen[0] / d, screen[1] / d))
-                    }
-                    PickEvent::TouchMove { id, screen } => {
-                        let d = repose_core::locals::effective_density_scale().max(1e-6);
-                        staging.touch_move(id, Vec2::new(screen[0] / d, screen[1] / d))
-                    }
-                    PickEvent::TouchUp { id } => {
-                        staging.touch_up(id);
+                        staging.stage_click(world, screen, d);
                     }
                 }
-            })
-        } else {
-            let geom = GeomHandle::new();
-            let staging = self.staging.clone();
-            Viewport2dShared(display_frame, geom, move |ev| {
-                let mut staging = staging.borrow_mut();
-                match ev {
-                    PickEvent::Press {
-                        world,
-                        screen,
-                        button,
-                    } => {
-                        staging.pick_down(button);
-                        if button == PointerButton::Primary {
-                            let d = repose_core::locals::effective_density_scale().max(1e-6);
-                            staging.stage_click(world, screen, d);
-                        }
-                    }
-                    PickEvent::Click { button, .. } => {
-                        staging.pick_up(button);
-                    }
-                    PickEvent::Hover { .. } => {}
-                    PickEvent::TouchDown { id, screen } => {
-                        let d = repose_core::locals::effective_density_scale().max(1e-6);
-                        staging.touch_down(id, Vec2::new(screen[0] / d, screen[1] / d))
-                    }
-                    PickEvent::TouchMove { id, screen } => {
-                        let d = repose_core::locals::effective_density_scale().max(1e-6);
-                        staging.touch_move(id, Vec2::new(screen[0] / d, screen[1] / d))
-                    }
-                    PickEvent::TouchUp { id } => {
-                        staging.touch_up(id);
-                    }
+                PickEvent::Click { button, .. } => {
+                    staging.pick_up(button);
                 }
-            })
-        };
-        let make_chrome_view = |sprites: Vec<SpriteInstance>, id: &'static str| {
-            if sprites.is_empty() {
-                return None;
+                PickEvent::Release { button, .. } => {
+                    staging.pick_up(button);
+                }
+                PickEvent::Hover { .. } => {}
+                PickEvent::TouchDown { id, screen } => {
+                    let d = repose_core::locals::effective_density_scale().max(1e-6);
+                    staging.touch_down(id, Vec2::new(screen[0] / d, screen[1] / d))
+                }
+                PickEvent::TouchMove { id, screen } => {
+                    let d = repose_core::locals::effective_density_scale().max(1e-6);
+                    staging.touch_move(id, Vec2::new(screen[0] / d, screen[1] / d))
+                }
+                PickEvent::TouchUp { id } => {
+                    staging.touch_up(id);
+                }
             }
-            let chrome_frame = FrameInput {
-                cam: self.cam,
-                world_size,
-                viewport_dp,
-                sprites,
-                texts: Vec::new(),
-                background: None,
-                overlay_color: None,
-                chroma: 0.0,
-                lights: Vec::new(),
-                occluders: Arc::new([]),
-                ambient: None,
-            };
-            if self.assets.is_some() {
-                let desc = self
-                    .assets
-                    .as_ref()
-                    .map(|a| a.batch_desc())
-                    .unwrap_or_default();
-                let mut view = Viewport2dGpuWithIdShared(
-                    Arc::new(chrome_frame),
-                    GeomHandle::new(),
-                    self.assets
-                        .as_ref()
-                        .map(|a| a.take_uploads())
-                        .unwrap_or_default(),
-                    desc,
-                    id,
-                    |_| {},
-                );
-                view.modifier = view.modifier.hit_passthrough();
-                Some(view)
-            } else {
-                let mut view = Viewport2dShared(Arc::new(chrome_frame), GeomHandle::new(), |_| {});
-                view.modifier = view.modifier.hit_passthrough();
-                Some(view)
-            }
-        };
-        let mut chrome_view = make_chrome_view(chrome_sprites, "viewport2d.menu");
-        let cover_hud_view = if pending_pick {
-            make_chrome_view(cover_hud_sprites, "viewport2d.cover.hud")
+        });
+        // Assetless boot has no atlas behind the shared batch, so raster
+        // placeholders would sample nothing. Draw them as solid rects on a
+        // sibling canvas instead; picks still flow through the mixed view.
+        let placeholder_view = if self.assets.is_none() {
+            let draws = display_frame.clone();
+            let cam = self.cam;
+            Some(Canvas(
+                Modifier::new().fill_max_size().hit_passthrough(),
+                move |scope: &mut DrawScope| {
+                    let d =
+                        repose_core::locals::effective_density_scale().max(1e-6);
+                    let canvas_dp = [scope.size.width / d, scope.size.height / d];
+                    let fit = effective_fit(canvas_dp, world_size, &cam);
+                    let center = cam.effective_center();
+                    for draw in draws.as_slice() {
+                        let (size, tint) = match draw.item {
+                            ActorItem::Raster { size, .. } => (size, draw.tint),
+                            ActorItem::Rect { half } => {
+                                ([half[0] * 2.0, half[1] * 2.0], draw.tint)
+                            }
+                            ActorItem::Rig { .. } => continue,
+                        };
+                        let [dx, dy] = repame_sprite::world_to_dp(
+                            [draw.world.x as f32, draw.world.y as f32],
+                            world_size,
+                            center,
+                            fit,
+                        );
+                        let w = size[0]
+                            * draw.scale.x.abs() as f32
+                            * fit.0
+                            * d;
+                        let h = size[1]
+                            * draw.scale.y.abs() as f32
+                            * fit.0
+                            * d;
+                        scope.draw_rect(
+                            Rect {
+                                x: dx * d - w * 0.5,
+                                y: dy * d - h * 0.5,
+                                w,
+                                h,
+                            },
+                            rgba8([
+                                tint.x as f32,
+                                tint.y as f32,
+                                tint.z as f32,
+                                tint.w as f32,
+                            ]),
+                            Px(0.0),
+                        );
+                    }
+                },
+            ))
         } else {
             None
         };
-        let front_chrome_view = make_chrome_view(front_chrome_sprites, "viewport2d.menu.front");
+        let viewport = if self.assets.is_some() {
+            actors_view_mixed_with_events(
+                actor_library.clone(),
+                display_frame,
+                self.cam,
+                world_size,
+                _ctx.clone(),
+                atlas.clone(),
+                on_pick,
+            )
+        } else {
+            actors_view_mixed_with_events(
+                actor_library.clone(),
+                display_frame,
+                self.cam,
+                world_size,
+                _ctx.clone(),
+                None,
+                on_pick,
+            )
+        };
+        let chrome_atlas = |id: &str| {
+            self.assets
+                .as_ref()
+                .map(|a| Rc::new(a.raster_atlas(&format!("viewport2d.chrome.{id}"))))
+        };
+        let make_chrome_view = |sprites: Vec<ActorDraw>, atlas: Option<Rc<RasterAtlas>>| {
+            if sprites.is_empty() {
+                return None;
+            }
+            Some(actors_view_mixed(
+                actor_library.clone(),
+                Rc::new(ActorDrawList::from_draws(sprites)),
+                self.cam,
+                world_size,
+                _ctx.clone(),
+                atlas,
+            ))
+        };
+        let mut chrome_view = make_chrome_view(chrome_sprites, chrome_atlas("menu"));
+        let cover_hud_view = if pending_pick {
+            make_chrome_view(cover_hud_sprites, chrome_atlas("cover"))
+        } else {
+            None
+        };
+        let front_chrome_view = make_chrome_view(front_chrome_sprites, chrome_atlas("front"));
         let spiral_figure_view = if vortex_above {
-            make_chrome_view(spiral_figure_sprites, "viewport2d.spiral.figures")
+            make_chrome_view(spiral_figure_sprites, chrome_atlas("spiral"))
         } else {
             None
         };
@@ -4568,6 +4574,9 @@ impl App {
                 layers.push(vortex);
             }
         }
+        if let Some(background) = background_view {
+            layers.push(background);
+        }
         if let Some(floor) = floor_view {
             layers.push(floor);
         }
@@ -4575,6 +4584,10 @@ impl App {
             layers.push(shadow);
         }
         layers.push(viewport);
+        if let Some(placeholder) = placeholder_view {
+            layers.push(placeholder);
+        }
+        layers.push(hud);
         if vortex_above {
             if let Some(vortex) = vortex_layer.take() {
                 layers.push(vortex);
@@ -4674,28 +4687,18 @@ impl App {
                 let art =
                     letterbox_sprites(assets, viewport_dp, world_size, &self.cam, letterbox_frame);
                 if !art.is_empty() {
-                    let frame = FrameInput {
-                        cam: self.cam,
+                    let letterbox_atlas = self
+                        .assets
+                        .as_ref()
+                        .map(|a| Rc::new(a.raster_atlas("viewport2d.letterbox")));
+                    let view = actors_view_mixed(
+                        actor_library.clone(),
+                        Rc::new(ActorDrawList::from_draws(art)),
+                        self.cam,
                         world_size,
-                        viewport_dp,
-                        sprites: art,
-                        texts: Vec::new(),
-                        background: None,
-                        overlay_color: None,
-                        chroma: 0.0,
-                        lights: Vec::new(),
-                        occluders: Arc::new([]),
-                        ambient: None,
-                    };
-                    let mut view = Viewport2dGpuWithIdShared(
-                        Arc::new(frame),
-                        GeomHandle::new(),
-                        assets.take_uploads(),
-                        assets.batch_desc(),
-                        "viewport2d.letterbox",
-                        |_| {},
+                        _ctx.clone(),
+                        letterbox_atlas,
                     );
-                    view.modifier = view.modifier.hit_passthrough();
                     let mut children = Vec::new();
                     let bar = Dp(bar_dp);
                     let width = Dp(gml.box_dp[2]);
@@ -5084,16 +5087,105 @@ fn nearest_poi(world: &mut World, player: Vec2) -> Option<CamPoi> {
     best.map(|(_, poi)| poi)
 }
 
+/// World-anchored HUD text plus the fullscreen overlay tint, the half of the
+/// old HUD viewport that is not sprites. Texts project through the live
+/// camera; the overlay covers the canvas after them.
+fn hud_texts_view(
+    texts: Vec<WorldText>,
+    cam: Camera2d,
+    world_size: [f32; 2],
+    overlay_color: Option<[f32; 4]>,
+) -> View {
+    Canvas(
+        Modifier::new().fill_max_size().hit_passthrough(),
+        move |scope: &mut DrawScope| {
+            let d = repose_core::locals::effective_density_scale().max(1e-6);
+            let fit = effective_fit(
+                [scope.size.width / d, scope.size.height / d],
+                world_size,
+                &cam,
+            );
+            let center = cam.effective_center();
+            let project = |wx: f32, wy: f32| -> [f32; 2] {
+                let [dx, dy] = world_to_dp_with_roll(
+                    [wx, wy],
+                    world_size,
+                    center,
+                    (fit.0, fit.1, fit.2),
+                    cam.roll,
+                );
+                [dx * d, dy * d]
+            };
+            for t in texts.iter() {
+                let [tx, ty] = project(t.pos.x, t.pos.y);
+                scope.draw_text_with_family(
+                    t.text.clone(),
+                    repose_core::Vec2 { x: tx, y: ty },
+                    rgba8(t.color),
+                    Px(t.size * fit.0 * d),
+                    t.font_family,
+                );
+            }
+            if let Some(tint) = overlay_color {
+                scope.draw_rect(
+                    Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: scope.size.width,
+                        h: scope.size.height,
+                    },
+                    rgba8(tint),
+                    Px(0.0),
+                );
+            }
+        },
+    )
+}
+
+/// Opaque fullscreen color fill as a scene sibling: the old viewport drew
+/// `background` under the batch and `overlay_color` over it; both are display
+/// colors, so they linearize here exactly once.
+fn solid_fill_view(id: &str, linear: [f32; 4]) -> View {
+    let mut pass = FullscreenPass::new(
+        id,
+        SOLID_WGSL,
+        FullscreenDesc {
+            texture_slots: 0,
+            filter: TextureFilter::Nearest,
+        },
+    );
+    pass.set_uniform_f32(&linear);
+    Embedded(
+        Modifier::new().fill_max_size().hit_passthrough(),
+        Callback::new(pass),
+    )
+}
+
 /// Placeholder sprite layer (no-assets path): colored quads from sim truth
 /// (canvas draws solid tint rects, so uv 0..1 / page 0 suffices). Covers
 /// walls, props, pickups, enemies, the player, and projectiles.
-pub fn placeholder_instances(world: &mut World) -> Vec<SpriteInstance> {
-    fn quad(center: Vec2, size: f32, tint: [f32; 4]) -> SpriteInstance {
-        SpriteInstance {
-            center,
-            size: Vec2::splat(size),
-            color: tint,
-            ..Default::default()
+pub fn placeholder_instances(world: &mut World) -> Vec<ActorDraw> {
+    fn quad(center: Vec2, size: f32, tint: [f32; 4]) -> ActorDraw {
+        ActorDraw {
+            item: ActorItem::Raster {
+                page: 0,
+                uv_min: [0.0, 0.0],
+                uv_max: [1.0, 1.0],
+                size: [size, size],
+            },
+            world: DVec2::new(f64::from(center.x), f64::from(center.y)),
+            rotation: 0.0,
+            scale: DVec2::ONE,
+            anchor: DVec2::splat(0.5),
+            tint: DVec4::new(
+                f64::from(tint[0]),
+                f64::from(tint[1]),
+                f64::from(tint[2]),
+                f64::from(tint[3]),
+            ),
+            clip: None,
+            blend: BlendMode::Alpha,
+            z: 0.0,
         }
     }
 
