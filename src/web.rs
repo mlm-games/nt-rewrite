@@ -51,17 +51,22 @@ fn run() -> anyhow::Result<()> {
         save_path.display(),
         save.version
     );
-    let audio = std::rc::Rc::new(std::cell::RefCell::new(
+    let audio = std::sync::Arc::new(std::sync::Mutex::new(
         crate::audio_host::AudioHost::new(),
     ));
     // The browser only lets an `AudioContext` start from a gesture, and
     // `game.html` is reached by navigating from the start page, which drops
     // the activation the PLAY click granted - so the device opens suspended
-    // and stays silent. The cell is what lets the gesture callback and the
+    // and stays silent. The lock is what lets the gesture callback and the
     // frame loop share the one device; the callback fires between frames, so
     // it never contends with `pump`.
     let on_gesture = audio.clone();
-    repame_shell::on_first_user_gesture(move || on_gesture.borrow().unlock_all());
+    repame_shell::on_first_user_gesture(move || {
+        on_gesture
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unlock_all();
+    });
     let mut poller = repame_shell::GamepadPoller::new();
     let mut bank = repame_shell::PadBank::default();
     let mut last = web_time::Instant::now();
@@ -74,7 +79,10 @@ fn run() -> anyhow::Result<()> {
         let dt = now.duration_since(last).min(Duration::from_secs_f32(0.25));
         last = now;
         let view = root_view(sched, ctx, &mut app, dt);
-        audio.borrow_mut().pump(dt.as_secs_f32(), &mut app);
+        audio
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .pump(dt.as_secs_f32(), &mut app);
         view
     })
     .map_err(|e| anyhow::anyhow!("{e:?}"))?;
