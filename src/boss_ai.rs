@@ -45,10 +45,10 @@ use crate::anim::SpriteAnim;
 use crate::audio::{AudioCue, GameAudio};
 use crate::combat::{queue_enemy_spawn, queue_enemy_spawn_no_kill};
 use crate::comps_a::{
-    BossIntro, BouncesLeft, DamageSource, FloorMask, GameCleanup, Health, Hitbox, LevelCleanup,
-    NextHurt, Player, Projectile, ProjectileAccel, ProjectileFade,
+    BOSS_INTRO_FRAMES, BossIntro, BouncesLeft, DamageSource, FloorMask, GameCleanup, Health,
+    Hitbox, LevelCleanup, NextHurt, Player, Projectile, ProjectileAccel, ProjectileFade,
     ProjectileFriction, ProjectileTyp, RaceState, Run, ShellWallBounce, Team, Toast, TopSmalls,
-    Velocity, WallCell, WallTile, BOSS_INTRO_FRAMES, gml_motion_add_clamp,
+    Velocity, WallCell, WallTile, gml_motion_add_clamp,
 };
 use crate::comps_b::{
     Beam, BigGenerator, BossBrain, BossPhase, CustomExplosion, Enemy, EnemyBrain, HitWarning,

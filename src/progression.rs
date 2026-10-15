@@ -1664,9 +1664,7 @@ pub fn tick_destroyed_rad_chests(
             continue;
         }
         let kind = match (opened.map(|o| o.0), pickup.map(|p| p.kind)) {
-            (Some(kind @ (ChestKind::Rad | ChestKind::RadBig | ChestKind::RadMaggot)), _) => {
-                kind
-            }
+            (Some(kind @ (ChestKind::Rad | ChestKind::RadBig | ChestKind::RadMaggot)), _) => kind,
             (
                 None,
                 Some(PickupKind::Chest(

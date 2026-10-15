@@ -240,7 +240,10 @@ impl RenderAssets {
             &uv,
             &def,
             center,
-            Vec2::new(if flip_x { -1.0 } else { 1.0 }, if flip_y { -1.0 } else { 1.0 }),
+            Vec2::new(
+                if flip_x { -1.0 } else { 1.0 },
+                if flip_y { -1.0 } else { 1.0 },
+            ),
             rotation,
             tint,
         )
@@ -434,11 +437,7 @@ fn drawn_center(d: &ActorDraw) -> Vec2 {
 #[cfg(test)]
 fn drawn_top_left(d: &ActorDraw) -> Vec2 {
     let size = drawn_size(d);
-    drawn_center(d)
-        - Vec2::new(
-            d.anchor.x as f32 * size.x,
-            d.anchor.y as f32 * size.y,
-        )
+    drawn_center(d) - Vec2::new(d.anchor.x as f32 * size.x, d.anchor.y as f32 * size.y)
 }
 
 fn raster_draw(
@@ -5691,18 +5690,15 @@ pub fn tutorial_texts(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
         world
             .get_resource::<crate::keymap::InputMapState>()
             .and_then(|m| {
-                crate::keymap::NtAction::from_name(action).map(|a| {
-                    pad_control_name(&m.session.map.active(&a, true))
-                })
+                crate::keymap::NtAction::from_name(action)
+                    .map(|a| pad_control_name(&m.session.map.active(&a, true)))
             })
             .unwrap_or_else(|| action.to_ascii_uppercase())
     };
     let text = match (step, variant) {
         // Touch: pre-baked, no substitution (`Draw_64:34` passes them to
         // `loc` untouched).
-        (crate::state::TutorialStep::Walking, 0) => {
-            "WALK USING @wMOVEMENT STICK".to_string()
-        }
+        (crate::state::TutorialStep::Walking, 0) => "WALK USING @wMOVEMENT STICK".to_string(),
         (crate::state::TutorialStep::PickingUp, 0) => {
             "PICK UP NEW WEAPON USING THE @wINTERACT BUTTON".to_string()
         }
@@ -5716,9 +5712,7 @@ pub fn tutorial_texts(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
             "@wABILITY BUTTON@s USES YOUR SPECIAL SKILL#@wGIVE IT A GO!".to_string()
         }
         // Gamepad (`Draw_64:51-70`).
-        (crate::state::TutorialStep::Walking, 2) => {
-            "WALK USING @wLEFT JOYSTICK".to_string()
-        }
+        (crate::state::TutorialStep::Walking, 2) => "WALK USING @wLEFT JOYSTICK".to_string(),
         (crate::state::TutorialStep::PickingUp, 2) => {
             format!("PICK UP NEW WEAPON WITH @w{}@s BUTTON", pad_name("pick"))
         }
@@ -5726,7 +5720,10 @@ pub fn tutorial_texts(world: &mut World, canvas_dp: [f32; 2]) -> Vec<GuiRow> {
             format!("AIM USING @wRIGHT STICK@s, @w{}@s FIRES", pad_name("fire"))
         }
         (crate::state::TutorialStep::Swapping, 2) => {
-            format!("SWAP WEAPONS WITH @w{}@s#TRY IT A FEW TIMES!", pad_name("swap"))
+            format!(
+                "SWAP WEAPONS WITH @w{}@s#TRY IT A FEW TIMES!",
+                pad_name("swap")
+            )
         }
         (crate::state::TutorialStep::Power, 2) => {
             format!("{}@s USES YOUR ABILITY#GIVE IT A GO!", pad_name("spec"))
@@ -8450,11 +8447,7 @@ pub const PLAYER_LEVEL_MAX: u32 = 10;
 /// deadzone. Skipped while paused (`PauseImage` gate) and until the first hover stages a
 /// cursor; `with Player`, so death removes it. Keyboard-mode LOCAL exclusion, the
 /// `Draw_75` cursor and the touch path: gate below.
-pub fn crosshair_sprites(
-    world: &mut World,
-    assets: &RenderAssets,
-    dt_secs: f32,
-) -> Vec<ActorDraw> {
+pub fn crosshair_sprites(world: &mut World, assets: &RenderAssets, dt_secs: f32) -> Vec<ActorDraw> {
     let mut out = Vec::new();
     // GML `TopCont/Draw_0` is `with Player`: no entity, no lerped crosshair.
     // The GameOver cursor is `UberCont/Draw_75`'s raw mouse sprite (menu-crosshair path
@@ -9670,11 +9663,7 @@ fn hash01(n: u32) -> f32 {
 /// shake and the additive glow ring. Driven by [`SplashState`]
 /// (missing state reads as mode 0). GUI 320x240 through
 /// [`hud_gui_map`], so rows line up with the splash text overlay.
-pub fn splash_sprites(
-    world: &mut World,
-    assets: &RenderAssets,
-    view: [f32; 4],
-) -> Vec<ActorDraw> {
+pub fn splash_sprites(world: &mut World, assets: &RenderAssets, view: [f32; 4]) -> Vec<ActorDraw> {
     let mut out = Vec::new();
     let splash = world.get_resource::<SplashState>().cloned();
     let (mode, t, guns) = splash
@@ -10452,30 +10441,29 @@ pub fn touch_sprites(
                     )
                 })
                 .unwrap_or((crate::data::WeaponId::NONE, crate::data::WeaponId::NONE));
-            let draw_gun =
-                |id: crate::data::WeaponId, tint: [f32; 4], out: &mut Vec<ActorDraw>| {
-                    let meta = crate::weapon_runtime::weapon_meta(id);
-                    let stem = if meta.wep_sprt.is_empty() || meta.wep_sprt == "mskNone" {
-                        "sprRevolver"
-                    } else {
-                        meta.wep_sprt
-                    };
-                    let path = format!("images/{stem}.png");
-                    if let Some(s) = place_touch_sprite_rot(
-                        assets,
-                        &path,
-                        0,
-                        swap_home.x,
-                        swap_home.y + 10.0,
-                        scale + 0.5,
-                        45.0_f32.to_radians(),
-                        tint,
-                        gm,
-                        view,
-                    ) {
-                        out.push(s);
-                    }
+            let draw_gun = |id: crate::data::WeaponId, tint: [f32; 4], out: &mut Vec<ActorDraw>| {
+                let meta = crate::weapon_runtime::weapon_meta(id);
+                let stem = if meta.wep_sprt.is_empty() || meta.wep_sprt == "mskNone" {
+                    "sprRevolver"
+                } else {
+                    meta.wep_sprt
                 };
+                let path = format!("images/{stem}.png");
+                if let Some(s) = place_touch_sprite_rot(
+                    assets,
+                    &path,
+                    0,
+                    swap_home.x,
+                    swap_home.y + 10.0,
+                    scale + 0.5,
+                    45.0_f32.to_radians(),
+                    tint,
+                    gm,
+                    view,
+                ) {
+                    out.push(s);
+                }
+            };
             draw_gun(bwep, [0.7, 0.7, 0.7, 1.0], &mut out);
             draw_gun(wep, [1.0, 1.0, 1.0, 1.0], &mut out);
         }
@@ -11856,9 +11844,11 @@ pub fn fx_instances(world: &mut World, assets: &RenderAssets) -> Vec<ActorDraw> 
     // Gradient stops are sRGB-authored like every other tint.
     {
         let mut q = world.query::<&Particle>();
-        out.extend(particle_sprites(q.iter(world)).into_iter().map(|s| {
-            from_sprite_instance(&s, tint_to_linear(s.color))
-        }));
+        out.extend(
+            particle_sprites(q.iter(world))
+                .into_iter()
+                .map(|s| from_sprite_instance(&s, tint_to_linear(s.color))),
+        );
     }
 
     out
@@ -12027,8 +12017,8 @@ mod raster_offscreen {
     use super::*;
     use repame_sprite::{SpriteBatch, screen_camera};
     use repose_core::{Color, Rect, Scene, SceneNode};
-    use repose_render_wgpu::offscreen::OffscreenRenderer;
     use repose_render_wgpu::Callback;
+    use repose_render_wgpu::offscreen::OffscreenRenderer;
 
     /// The actors migration moved every producer onto [`ActorDraw`]; this
     /// pins the other end: real atlas art placed through the batch still
@@ -12052,8 +12042,22 @@ mod raster_offscreen {
         let mut batch = SpriteBatch::with_id("test.ntrewrite.raster", assets.batch_desc());
         batch.set_camera(screen_camera([256.0, 256.0]));
         let mut placed = 0;
-        let draw_a = assets.sprite_for("sprAllyIdle", 0, Vec2::new(64.0, 64.0), false, 0.0, [1.0; 4]);
-        let draw_b = assets.sprite_for("sprAmmoChest", 0, Vec2::new(192.0, 192.0), false, 0.0, [1.0; 4]);
+        let draw_a = assets.sprite_for(
+            "sprAllyIdle",
+            0,
+            Vec2::new(64.0, 64.0),
+            false,
+            0.0,
+            [1.0; 4],
+        );
+        let draw_b = assets.sprite_for(
+            "sprAmmoChest",
+            0,
+            Vec2::new(192.0, 192.0),
+            false,
+            0.0,
+            [1.0; 4],
+        );
         for draw in [&draw_a, &draw_b].into_iter().flatten() {
             if let Some(sprite) = to_sprite_instance(draw) {
                 batch.push_sprite(&sprite);
@@ -12064,7 +12068,12 @@ mod raster_offscreen {
         let scene = Scene {
             clear_color: Color::from_rgba(0, 0, 0, 255),
             nodes: vec![SceneNode::Callback {
-                rect: Rect { x: 0.0, y: 0.0, w: 256.0, h: 256.0 },
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 256.0,
+                    h: 256.0,
+                },
                 payload: Callback::new(batch_with_uploads(batch, &assets)),
             }],
         };
@@ -12080,10 +12089,7 @@ mod raster_offscreen {
         assert!(ink > 100, "atlas art must reach pixels, got {ink} lit");
     }
 
-    fn batch_with_uploads(
-        mut batch: SpriteBatch,
-        assets: &RenderAssets,
-    ) -> SpriteBatch {
+    fn batch_with_uploads(mut batch: SpriteBatch, assets: &RenderAssets) -> SpriteBatch {
         batch.extend_uploads(assets.take_uploads().iter().cloned());
         batch
     }

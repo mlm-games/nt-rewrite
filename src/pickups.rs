@@ -1592,7 +1592,10 @@ pub fn tick_rad_magnet(
                 .iter()
                 .filter(|(_, p, _)| p.distance(here) < 170.0)
                 .filter(|(_, p, _)| !crate::walls::segment_hits_wall(here, *p, &mask))
-                .min_by(|a, b| a.1.distance_squared(here).total_cmp(&b.1.distance_squared(here)));
+                .min_by(|a, b| {
+                    a.1.distance_squared(here)
+                        .total_cmp(&b.1.distance_squared(here))
+                });
             if let Some((horror_e, horror_pos, radius)) = horror {
                 let horror_e = *horror_e;
                 if !coasting && horror_pos.distance(here) <= RAD_MASK_HALF + radius {
@@ -1615,15 +1618,14 @@ pub fn tick_rad_magnet(
         // GML `Rad/Step_0.gml:19-23`.
         if goal.is_none()
             && (targets.any_portal
-                || (!targets.player_blocked && here.distance(targets.player) < targets.player_range))
+                || (!targets.player_blocked
+                    && here.distance(targets.player) < targets.player_range))
         {
             goal = Some(targets.player);
         }
         // GML `Rad/Step_0.gml:26-27`
         // `mp_potential_step(target.x, target.y, 12, 0)` - 12 px PER STEP.
-        if !coasting
-            && let Some(goal) = goal
-        {
+        if !coasting && let Some(goal) = goal {
             crate::spatial::potential_step_solid(
                 &mut pos.0,
                 goal,

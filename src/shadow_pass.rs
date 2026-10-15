@@ -27,9 +27,7 @@
 use std::sync::Arc;
 
 use repame_actors::ActorDraw;
-use repame_sprite::{
-    AtlasUpload, BatchDesc, Camera2d, SpriteBatch, draw_batch_with_id,
-};
+use repame_sprite::{AtlasUpload, BatchDesc, Camera2d, SpriteBatch, draw_batch_with_id};
 use repose_render_wgpu::{CallbackRenderPass, CallbackResources, ScreenDescriptor, WgpuCallback};
 
 /// Batch id for the mask surface. Stable, so the engine reuses the atlas bind
@@ -323,7 +321,11 @@ impl WgpuCallback for ShadowPass {
         // and ordinary alpha blending into the cleared surface unions them.
         let mut batch = SpriteBatch::with_id(MASK_BATCH_ID, self.desc);
         batch.set_camera(snap.cam.fit_matrix(snap.viewport_dp, snap.world_size));
-        for stamp in snap.stamps.iter().filter_map(crate::render::to_sprite_instance) {
+        for stamp in snap
+            .stamps
+            .iter()
+            .filter_map(crate::render::to_sprite_instance)
+        {
             batch.push_sprite(&stamp);
         }
         // The batch builds its pipelines from the descriptor's sample count

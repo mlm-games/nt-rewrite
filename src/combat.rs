@@ -2582,8 +2582,6 @@ pub struct BoomFeel<'w> {
     pub floor: Option<Res<'w, FloorMask>>,
 }
 
-
-
 /// Projectile-vs-target hits. Ported whole from nt's `projectile_hits`
 /// (`Pos` for `Transform`, catalog paths for handles, cues for audio).
 #[allow(clippy::too_many_arguments)]

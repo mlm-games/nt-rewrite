@@ -25,12 +25,12 @@ use crate::combat::{
     PendingEnemySpawn, apply_birth_overrides, queue_enemy_spawn, queue_enemy_spawn_birth,
 };
 use crate::comps_a::{
-    ARENA_H, ARENA_W, BossIntro, BouncesLeft, CurrentFrame, DamageSource, DogGuardianLeap,
-    DogGuardianPose, Euphoria, FireCooldown, FloorMask, GameCleanup, Health, HeavyHeart, HitId,
-    Hitbox, Homing, LastDamageTaken, LevelCleanup, NextHurt, Player, Projectile, ProjectileFade,
-    ProjectileFriction, ProjectileTyp, ProjectileVisual, Run, ScarierFace, ShellWallBounce,
-    SplitOnDeath, Team, Toast, Velocity, WallCell, WallTile, BOSS_INTRO_FRAMES,
-    apply_gml_friction, gml_motion_add_clamp,
+    ARENA_H, ARENA_W, BOSS_INTRO_FRAMES, BossIntro, BouncesLeft, CurrentFrame, DamageSource,
+    DogGuardianLeap, DogGuardianPose, Euphoria, FireCooldown, FloorMask, GameCleanup, Health,
+    HeavyHeart, HitId, Hitbox, Homing, LastDamageTaken, LevelCleanup, NextHurt, Player, Projectile,
+    ProjectileFade, ProjectileFriction, ProjectileTyp, ProjectileVisual, Run, ScarierFace,
+    ShellWallBounce, SplitOnDeath, Team, Toast, Velocity, WallCell, WallTile, apply_gml_friction,
+    gml_motion_add_clamp,
 };
 use crate::comps_b::{
     BigGuardianBullet, BossBrain, Corpse, CorpseCollision, CrownPedestal, EliteBlocker, Enemy,

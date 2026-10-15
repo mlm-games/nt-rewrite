@@ -51,9 +51,7 @@ fn run() -> anyhow::Result<()> {
         save_path.display(),
         save.version
     );
-    let audio = std::sync::Arc::new(std::sync::Mutex::new(
-        crate::audio_host::AudioHost::new(),
-    ));
+    let audio = std::sync::Arc::new(std::sync::Mutex::new(crate::audio_host::AudioHost::new()));
     // The browser only lets an `AudioContext` start from a gesture, and
     // `game.html` is reached by navigating from the start page, which drops
     // the activation the PLAY click granted - so the device opens suspended

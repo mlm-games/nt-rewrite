@@ -47,9 +47,9 @@
 // enough to exceed the default trait-solver recursion depth.
 #![recursion_limit = "256"]
 
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use web_time::Duration;
@@ -58,20 +58,20 @@ use crate::shadow_pass::{ShadowPass, ShadowSnapshot};
 use crate::vortex_pass::{VARD_VARIANTS, VortexPass, VortexTexture};
 use bevy_ecs::prelude::*;
 use glam::{DVec2, DVec4, Vec2};
-use repose_core::BlendMode;
 use rand::RngExt;
-use repame_anim::{AnimCatalog, AtlasDesc};
-use repame_sim::{Sim, SimTime};
 use repame_actors::{
     ActorDraw, ActorDrawList, ActorItem, ActorLibrary, RasterAtlas, actors_view_mixed,
     actors_view_mixed_with_events,
 };
+use repame_anim::{AnimCatalog, AtlasDesc};
+use repame_sim::{Sim, SimTime};
+use repame_sprite::fullscreen::SOLID_WGSL;
 use repame_sprite::{
     Camera2d, FullscreenDesc, FullscreenPass, PickEvent, TextureFilter, WorldText, effective_fit,
     rgba8, world_to_dp_with_roll,
 };
-use repame_sprite::fullscreen::SOLID_WGSL;
 use repose_canvas::{Canvas, DrawScope, Embedded};
+use repose_core::BlendMode;
 use repose_core::PaddingValues;
 use repose_core::input::{Key, KeyEvent, KeyEventType, PhysicalKey, PointerButton};
 use repose_core::prelude::{AlignItems, Modifier};
@@ -99,8 +99,7 @@ use crate::render::{
     menu_sprites, pause_button_sprites, portal_indicator_sprites, settings_slider_hit,
     settings_slider_value, shadow_color, shadow_sprites, sideart_sprites, spiral_figures,
     splash_sprites, srgb_to_linear, stamp_z, title_cam_focus, title_camera_step, touch_sprites,
-    view_rect_world,
-    world_camera, world_instances_cached,
+    view_rect_world, world_camera, world_instances_cached,
 };
 use crate::schedule::build_sim_schedule;
 use crate::setup::setup_run_with_seed;
@@ -143,9 +142,9 @@ pub mod render;
 pub mod run_save;
 pub mod savedata_part;
 pub mod schedule;
-pub mod shadow_pass;
 pub mod secrets;
 pub mod setup;
+pub mod shadow_pass;
 pub mod spatial;
 pub mod spawns;
 pub mod state;
@@ -1110,6 +1109,15 @@ impl App {
         // show. Hence kill, not re-warm, with the layer mounted until
         // `is_done` (~a second of remnant, exactly like GML).
         if state == AppState::Title && self.adv_state != AppState::Title {
+            self.spiral.kill();
+            killed_this_tick = true;
+        }
+        // Fresh gameplay entry always drops the cont (`GenCont/Destroy_0`
+        // destroys it outright): a debug boot straight into InGame never
+        // runs a generation cover, so without this the boot spiral stays
+        // alive and its opaque pass buries the world forever. A cover
+        // re-arms below via the latch exactly like the seed-change kill.
+        if state == AppState::InGame && self.adv_state != AppState::InGame && !killed_this_tick {
             self.spiral.kill();
             killed_this_tick = true;
         }
@@ -4220,8 +4228,7 @@ impl App {
         }
 
         let frame = Rc::new(ActorDrawList::from_draws(sprites));
-        let actor_library: Rc<RefCell<ActorLibrary>> =
-            Rc::new(RefCell::new(ActorLibrary::new()));
+        let actor_library: Rc<RefCell<ActorLibrary>> = Rc::new(RefCell::new(ActorLibrary::new()));
         let atlas = self
             .assets
             .as_ref()
@@ -4382,17 +4389,14 @@ impl App {
             Some(Canvas(
                 Modifier::new().fill_max_size().hit_passthrough(),
                 move |scope: &mut DrawScope| {
-                    let d =
-                        repose_core::locals::effective_density_scale().max(1e-6);
+                    let d = repose_core::locals::effective_density_scale().max(1e-6);
                     let canvas_dp = [scope.size.width / d, scope.size.height / d];
                     let fit = effective_fit(canvas_dp, world_size, &cam);
                     let center = cam.effective_center();
                     for draw in draws.as_slice() {
                         let (size, tint) = match draw.item {
                             ActorItem::Raster { size, .. } => (size, draw.tint),
-                            ActorItem::Rect { half } => {
-                                ([half[0] * 2.0, half[1] * 2.0], draw.tint)
-                            }
+                            ActorItem::Rect { half } => ([half[0] * 2.0, half[1] * 2.0], draw.tint),
                             ActorItem::Rig { .. } => continue,
                         };
                         let [dx, dy] = repame_sprite::world_to_dp(
@@ -4401,14 +4405,8 @@ impl App {
                             center,
                             fit,
                         );
-                        let w = size[0]
-                            * draw.scale.x.abs() as f32
-                            * fit.0
-                            * d;
-                        let h = size[1]
-                            * draw.scale.y.abs() as f32
-                            * fit.0
-                            * d;
+                        let w = size[0] * draw.scale.x.abs() as f32 * fit.0 * d;
+                        let h = size[1] * draw.scale.y.abs() as f32 * fit.0 * d;
                         scope.draw_rect(
                             Rect {
                                 x: dx * d - w * 0.5,
@@ -4416,12 +4414,7 @@ impl App {
                                 w,
                                 h,
                             },
-                            rgba8([
-                                tint.x as f32,
-                                tint.y as f32,
-                                tint.z as f32,
-                                tint.w as f32,
-                            ]),
+                            rgba8([tint.x as f32, tint.y as f32, tint.z as f32, tint.w as f32]),
                             Px(0.0),
                         );
                     }
@@ -6093,6 +6086,18 @@ mod cursor_staging_tests {
         );
         crate::state::menus::apply_menu_action(&mut app.sim.world, action.unwrap());
         assert!(app.capture_armed(), "capture must arm after the row click");
+    }
+
+    #[test]
+    fn fresh_ingame_entry_kills_boot_spiral() {
+        let mut app = App::new_with_seed(4242);
+        assert!(app.spiral_alive(), "boot opens with a live logo spiral");
+        crate::state::goto_state(&mut app.sim.world, AppState::InGame);
+        app.step_spiral_lifecycle();
+        assert!(
+            !app.spiral_alive(),
+            "gameplay entry without a cover must drop the cont or its opaque pass buries the world"
+        );
     }
 }
 
