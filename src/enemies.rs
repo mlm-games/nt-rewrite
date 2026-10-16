@@ -205,6 +205,28 @@ fn spawn_enemy_impl(
     let def = enemy_def(kind);
     let e = crate::setup::spawn_enemy(commands, kind, pos, true);
 
+    // GML `FrogQueen/Create_0.gml:40-44`: the Mom digs out through five
+    // `PortalClear` bursts (centre plus a +-24 cross).
+    if kind == EnemyKind::FrogQueen {
+        for off in [
+            glam::Vec2::ZERO,
+            glam::Vec2::new(0.0, -24.0),
+            glam::Vec2::new(0.0, 24.0),
+            glam::Vec2::new(-24.0, 0.0),
+            glam::Vec2::new(24.0, 0.0),
+        ] {
+            commands.spawn((
+                GameCleanup,
+                LevelCleanup,
+                crate::comps_b::PortalClear {
+                    timer: GTimer::from_seconds(5.0 / 30.0, TimerMode::Once),
+                    scale: 1.0,
+                },
+                Pos(pos + off),
+            ));
+        }
+    }
+
     // GML HP law (loop scaling); scarier-face 0.8 floor kept.
     let scarier_face = scarier_face || context.scarier_face;
     let hp = if scarier_face {
