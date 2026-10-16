@@ -4818,7 +4818,10 @@ pub fn apply_explosions(
             }
             health.invuln = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
             secrets.mark_damage_taken();
-            last_damage.note_from_source(boom.source.as_ref());
+            // GML `Explosion/Create_0:5`: the damage rides the explosion's
+            // own hit id, so the death screen shows `sprExplosion` even
+            // when the blast was the player's own grenade.
+            last_damage.note(Some(HitId::Explosion(WeaponId::NONE)), None);
             HitFlash::apply(&mut commands, player_e, [1.0, 0.3, 0.2, 1.0], 0.15);
             cues.push(AudioCue {
                 name: crate::enemy_data::gml_race_hurt(race_state.race),
