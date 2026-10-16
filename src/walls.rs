@@ -99,6 +99,11 @@ pub fn apply_pending_wall_breaks(
                 // The 16x16 cell, not the 32x32 `Floor` that covers it: GML's
                 // `FloorExplo` mask is 16x16 (`mskFloorExplo.yy:74,89`).
                 mask.opened.insert((cell.0, cell.1));
+                // `TopSmall/Collision_Floor`: the new `FloorExplo` is a
+                // `Floor` child and the collision event destroys the tile, so
+                // a Trans tile the ring grew onto a since re-sealed and
+                // re-broken cell does not stay over the rubble.
+                tops.cells.remove(&(cell.0, cell.1));
                 // `FloorExplo/Create_0:3-7`: `scrWallBreakSound()` per break.
                 cues.push(AudioCue {
                     name: break_sound,
@@ -200,6 +205,35 @@ pub fn apply_pending_wall_breaks(
                 despawned.insert(wall_e);
                 commands.entity(wall_e).despawn();
                 live_walls.remove(&(cell.0, cell.1));
+            }
+        }
+    }
+
+    if std::env::var("NT_DUMP_MAP").is_ok() && !broken_cells.is_empty() {
+        let (mut minx, mut miny, mut maxx, mut maxy) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+        for &(x, y) in mask.opened.iter().chain(live_walls.iter()) {
+            minx = minx.min(x);
+            miny = miny.min(y);
+            maxx = maxx.max(x);
+            maxy = maxy.max(y);
+        }
+        if minx <= maxx {
+            eprintln!("nt-live: opened={} walls={}", mask.opened.len(), live_walls.len());
+            for cy in miny..=maxy {
+                let mut row = String::new();
+                for cx in minx..=maxx {
+                    let ch = if mask.opened.contains(&(cx, cy)) {
+                        'o'
+                    } else if live_walls.contains(&(cx, cy)) {
+                        'W'
+                    } else if mask.cells.contains(&crate::worldgen::floor_cell_for_wall(cx, cy)) {
+                        '#'
+                    } else {
+                        '.'
+                    };
+                    row.push(ch);
+                }
+                eprintln!("nt-live: bounds=({minx},{miny}) {row}");
             }
         }
     }
