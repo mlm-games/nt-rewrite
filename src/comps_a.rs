@@ -85,6 +85,9 @@ pub const TILE: f32 = 32.0;
 #[derive(Resource, Default, Clone)]
 pub struct FloorMask {
     pub cells: std::collections::HashSet<(i32, i32)>,
+    /// GML `Floor/Create_0:30`: `styleb` floors draw the `sprFloor<area>B`
+    /// ruin art (32px tile coordinates, matching [`Self::cells`]).
+    pub styleb: std::collections::HashSet<(i32, i32)>,
     /// 16x16 wall cells cleared by `scrWallDestroy`, in wall-grid coordinates
     /// (see [`crate::worldgen::floor_cell_for_wall`] for the 32x32 mapping).
     pub opened: std::collections::HashSet<(i32, i32)>,

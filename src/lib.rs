@@ -925,8 +925,13 @@ impl App {
             // running. `request_frame` is deliberately left alone, because
             // gating it on window focus stalls the game outright on platforms
             // that report unfocused while still visible (Android resume, some
-            // browser tabs).
-            if (!paused || spiral_cover) && !splash_without_cont && self.window_focused {
+            // browser tabs). A drained (killed) spiral is exempt: `is_done`
+            // gates the pass mount, so a drain frozen by focus loss leaves
+            // the leftover wisps over the world forever.
+            if (!paused || spiral_cover)
+                && !splash_without_cont
+                && (self.window_focused || !self.spiral.alive)
+            {
                 self.spiral.step(1.0);
             }
             // GML `scrDrawSpiral` bolt/debris one-shots fire inline in
@@ -1117,9 +1122,15 @@ impl App {
         // runs a generation cover, so without this the boot spiral stays
         // alive and its opaque pass buries the world forever. A cover
         // re-arms below via the latch exactly like the seed-change kill.
+        // The entry also stamps the drift baseline: without it the drift
+        // rewarm reads the untouched `adv_area` (0, Campfire's id) against
+        // the live area and rebuilds a live spiral one tick later, sticking
+        // the boot in the vortex for good.
         if state == AppState::InGame && self.adv_state != AppState::InGame && !killed_this_tick {
             self.spiral.kill();
             killed_this_tick = true;
+            self.adv_seed = seed;
+            self.adv_area = gml_area_for_area(area);
         }
         if cover {
             if killed_this_tick {
@@ -1757,19 +1768,10 @@ impl App {
     /// polling, NT's dp-viewport fields) stay here.
     fn px_to_world(&self, px: Option<Vec2>) -> Option<Vec2> {
         let px = px?;
-        let d = self.view_density.max(1e-6);
-        // `camera_fit_extent` takes PHYSICAL px (it divides by density
-        // itself): stored dp must be scaled back up first, or the
-        // extent double-divides and the aim scale collapses (~2.4x too
-        // fast at density 1.25).
-        let extent = camera_fit_extent(
-            [self.view_viewport_dp[0] * d, self.view_viewport_dp[1] * d],
-            self.view_density,
-        );
         Some(repame_sprite::unproject_px(
             px,
             self.view_viewport_dp,
-            extent,
+            self.view_world_size,
             self.view_density,
             &self.cam,
         ))
@@ -1879,14 +1881,12 @@ impl App {
         self.staging.borrow_mut().stage_click(world, screen, d);
     }
 
-    pub fn touch_down(&mut self, id: u64, screen: Vec2) {
-        let d = repose_core::locals::effective_density_scale().max(1e-6);
-        self.staging.borrow_mut().touch_down(id, screen / d);
+    pub fn touch_down(&mut self, id: u64, screen_dp: Vec2) {
+        self.staging.borrow_mut().touch_down(id, screen_dp);
     }
 
-    pub fn touch_move(&mut self, id: u64, screen: Vec2) {
-        let d = repose_core::locals::effective_density_scale().max(1e-6);
-        self.staging.borrow_mut().touch_move(id, screen / d);
+    pub fn touch_move(&mut self, id: u64, screen_dp: Vec2) {
+        self.staging.borrow_mut().touch_move(id, screen_dp);
     }
 
     pub fn touch_up(&mut self, id: u64) {
@@ -2747,6 +2747,24 @@ impl App {
                 && let Some(click) = staging_clicks.last().copied()
             {
                 let frame = self.gml_frame();
+                let trace = std::env::var("NT_PICK_TRACE").is_ok();
+                if trace {
+                    let gui = frame.dp_to_gui(click.dp);
+                    let hit = self.route_title_click(gui, frame.gui_width());
+                    eprintln!(
+                        "nt-title: dp=({:.1},{:.1}) gui=({:.1},{:.1}) box=({:.0},{:.0},{:.0},{:.0}) vw={:.1} hit={:?}",
+                        click.dp[0],
+                        click.dp[1],
+                        gui[0],
+                        gui[1],
+                        frame.box_dp[0],
+                        frame.box_dp[1],
+                        frame.box_dp[2],
+                        frame.box_dp[3],
+                        frame.gui_width(),
+                        hit
+                    );
+                }
                 if overlay == OverlayMenu::Settings || overlay == OverlayMenu::Credits {
                     let kind = menu_overlay_kind(
                         state,
@@ -3619,6 +3637,7 @@ impl App {
         let mut front_chrome_sprites: Vec<ActorDraw> = Vec::new();
         let mut spiral_figure_sprites: Vec<ActorDraw> = Vec::new();
         let mut cover_hud_sprites: Vec<ActorDraw> = Vec::new();
+        let mut live_hud_sprites: Vec<ActorDraw> = Vec::new();
         // GML `scrGameIsGenerationScreen` verbatim: while the generation
         // conts own the draw (`GenCont` behind Loading, `LevCont` behind
         // the mutation/ultra offer) the room draws NOTHING but the spiral
@@ -3767,16 +3786,11 @@ impl App {
             // GML `GenCont/Draw_0` draws ONLY spiral + GENERATING + roadmap -
             // no PlayerHUD/MiscHUD - and the Loading room's run is
             // pre-`setup_run` (no live run actors), so the HUD stays off while
-            // Loading like GML. LevCont's mutation offer keeps the live
-            // PlayerHUD enabled.
+            // Loading like GML. The mutation/ultra offer is a generation
+            // screen too: the room clears to black under the spiral and the
+            // offer rooms never had a PlayerHUD.
             let hud_view = view_rect_world(viewport_dp, world_size, &self.cam);
-            let loading_cover = state == AppState::Loading
-                || self
-                    .sim
-                    .world
-                    .get_resource::<crate::comps_b::FloorTransition>()
-                    .is_some_and(|f| f.active);
-            let mut h = if loading_cover {
+            let mut h = if generation_screen {
                 Vec::new()
             } else {
                 hud_sprites(&mut self.sim.world, assets, hud_view, hud_dt)
@@ -3785,7 +3799,12 @@ impl App {
             if pending_pick {
                 cover_hud_sprites = h;
             } else {
-                s.extend(h);
+                // GML `scrDrawPlayerHUD` draws the bars and the numbers in
+                // the GUI pass, over the letterbox bars and the menu chrome.
+                // Ride the top HUD layer with the text rows; in the world
+                // batch the opaque letterbox covered the bars while the
+                // numbers stayed visible (stray digits over the pause band).
+                live_hud_sprites = h;
             }
             // Touch controls (`scrDrawMobileControls`, `TopCont/Draw_64` tail):
             // sticks + buttons over the HUD, under splash/menus. GML gate
@@ -3934,19 +3953,12 @@ impl App {
                     Z_MENU
                 };
                 stamp_z(&mut menu, menu_z);
-                if matches!(
-                    kind,
-                    MenuOverlay::Title
-                        | MenuOverlay::Loading
-                        | MenuOverlay::Mutation
-                        | MenuOverlay::Pause
-                        | MenuOverlay::Settings
-                        | MenuOverlay::GameOver
-                ) {
-                    chrome_sprites = menu;
-                } else {
-                    s.extend(menu);
-                }
+                // All menu chrome (mutation offer included) rides the chrome
+                // view: it mounts after the vortex pass and before the HUD
+                // text layers, so the offer cards clear the spiral while the
+                // HP/level/ammo rows stay on top, exactly like `LevCont`'s
+                // `Draw_0` (icons) under its `Draw_64` (PlayerHUD + labels).
+                chrome_sprites = menu;
             }
             // Hardware cursor (GML `UberCont/Draw_75` verbatim): while the OS pointer
             // is hidden the game hands it `sprCrosshair[opt_crosshair]`
@@ -4018,17 +4030,12 @@ impl App {
                 self.cursor_img_key = None;
             }
         }
-        // Cover flag for the chrome below: same generation-screen law
-        // as the sprite composer above (its `playing` is block-local).
-        // Canvas text rides above the opaque vortex pass, so the HUD
-        // rows need the same gate or HP/level/ammo/FLOOR paints over
-        // the spiral mid-transition.
-        let cover_chrome_off = state == AppState::Loading
-            || self
-                .sim
-                .world
-                .get_resource::<crate::comps_b::FloorTransition>()
-                .is_some_and(|f| f.active);
+        // Cover flag for the chrome below: the full generation-screen law
+        // (Loading, the floor transition, and the mutation/ultra offer).
+        // Canvas text rides above the opaque vortex pass, so the HUD rows
+        // need that gate or HP/level/ammo/FLOOR paints over the spiral -
+        // including on the offer, whose rooms never had a PlayerHUD.
+        let cover_chrome_off = generation_screen;
         let _ = &mut sprites;
         self.last_sprite_count = sprites
             .iter()
@@ -4131,9 +4138,10 @@ impl App {
         //
         // That fill is a GPU write into the sRGB target, which re-encodes on
         // write, so it must be linear like every sprite tint (`tint_to_linear`)
-        // - `background_color` is authored in sRGB and raw double-encoding sent
-        // Desert's #af8f6a to screen as #d8c5ad, a pale void stopping at the
-        // wall art.
+        // - `background_color` is authored in sRGB. Linearized exactly once, at
+        // the `solid_fill_view` call below: raw double-encoding sent Desert's
+        // #af8f6a to screen as #d8c5ad (pale void), and linearizing here as
+        // well sent it out as #6d4625 (dark void).
         let background = if vortex_layer.is_some() && bg_alpha > 0.0 {
             None
         } else if matches!(
@@ -4142,7 +4150,7 @@ impl App {
         ) {
             Some([0.0, 0.0, 0.0, 1.0])
         } else {
-            Some(background_color(area).map(srgb_to_linear))
+            Some(background_color(area))
         };
         // Fullscreen overlays: hit flashes (white). Menu dimming is
         // the scrim `UiBox` below (GML parity: one black
@@ -4354,6 +4362,18 @@ impl App {
                     screen,
                     button,
                 } => {
+                    if std::env::var("NT_PICK_TRACE").is_ok() {
+                        let d = repose_core::locals::effective_density_scale().max(1e-6);
+                        eprintln!(
+                            "nt-pick: screen_px=({:.1},{:.1}) dp=({:.1},{:.1}) world=({:.1},{:.1})",
+                            screen[0],
+                            screen[1],
+                            screen[0] / d,
+                            screen[1] / d,
+                            world.x,
+                            world.y
+                        );
+                    }
                     staging.pick_down(button);
                     if button == PointerButton::Primary {
                         let d = repose_core::locals::effective_density_scale().max(1e-6);
@@ -4429,6 +4449,7 @@ impl App {
                 display_frame,
                 self.cam,
                 world_size,
+                viewport_dp,
                 _ctx.clone(),
                 atlas.clone(),
                 on_pick,
@@ -4439,6 +4460,7 @@ impl App {
                 display_frame,
                 self.cam,
                 world_size,
+                viewport_dp,
                 _ctx.clone(),
                 None,
                 on_pick,
@@ -4474,6 +4496,7 @@ impl App {
         } else {
             None
         };
+        let live_hud_view = make_chrome_view(live_hud_sprites, chrome_atlas("hud"));
 
         // Focusable root so hardware keys reach the staging feed. Focus loss
         // drops held keys + edges here: winit delivers no key-ups across an
@@ -4580,7 +4603,10 @@ impl App {
         if let Some(placeholder) = placeholder_view {
             layers.push(placeholder);
         }
-        layers.push(hud);
+        let hud_rows_layer = (!pending_pick && !hud_rows.is_empty()).then(|| {
+            ZStack(Modifier::new().fill_max_size().hit_passthrough())
+                .child(hud_rows.iter().map(gui_text_layer).collect::<Vec<_>>())
+        });
         if vortex_above {
             if let Some(vortex) = vortex_layer.take() {
                 layers.push(vortex);
@@ -4588,12 +4614,6 @@ impl App {
         }
         if let Some(figures) = spiral_figure_view {
             layers.push(figures);
-        }
-        if !pending_pick && !hud_rows.is_empty() {
-            layers.push(
-                ZStack(Modifier::new().fill_max_size().hit_passthrough())
-                    .child(hud_rows.iter().map(gui_text_layer).collect::<Vec<_>>()),
-            );
         }
         // GML `scrLetterbox` (36 px bars): cinematic chrome over menus,
         // transitions, game over, and boss intros - but NOT the
@@ -4849,6 +4869,16 @@ impl App {
                     .hit_passthrough(),
             ));
         }
+        // The HUD mounts after the letterbox bars: they are opaque room chrome,
+        // and stacking them last here put them over the HUD layer, hiding the
+        // rows that fall inside the 36 px band.
+        layers.push(hud);
+        if let Some(live) = live_hud_view {
+            layers.push(live);
+        }
+        if let Some(hud_rows) = hud_rows_layer {
+            layers.push(hud_rows);
+        }
         if let Some(front_chrome) = front_chrome_view {
             layers.push(front_chrome);
         }
@@ -4993,19 +5023,6 @@ pub fn resolve_assets_dir() -> Option<PathBuf> {
         }
     }
     None
-}
-
-/// Fit extent helper: viewport size in dp, used only where a dp-space size
-/// is needed before the GML frame resolves (the live frame passes
-/// [`render::gml_view_size`] as `world_size` so the engine contain-fit owns
-/// the scale and pillarbox). Takes PHYSICAL px (`Scheduler.size`).
-pub fn camera_fit_extent(viewport_px: [f32; 2], density: f32) -> [f32; 2] {
-    let d = if density.is_finite() && density > 1e-6 {
-        density
-    } else {
-        1.0
-    };
-    [viewport_px[0] / d, viewport_px[1] / d]
 }
 
 /// Player position from sim truth. `None` when no player exists

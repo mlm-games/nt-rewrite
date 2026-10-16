@@ -35,6 +35,9 @@ pub const TILE: f32 = 32.0;
 pub struct LevelPlan {
     pub floor_cells: Vec<(i32, i32)>,
     pub wall_cells: HashSet<(i32, i32)>,
+    /// GML `Floor/Create_0:30`: floors laid by a `styleb` maker draw the
+    /// `sprFloor<area>B` ruin art. True-cell set, 32px tile coordinates.
+    pub styleb_cells: HashSet<(i32, i32)>,
 
     pub small_walls: Vec<(i16, i16)>,
     pub bones: Vec<(Vec2, bool)>,
@@ -486,6 +489,7 @@ impl Gen {
             plan: LevelPlan {
                 floor_cells: Vec::new(),
                 wall_cells: HashSet::new(),
+                styleb_cells: HashSet::new(),
                 small_walls: Vec::new(),
                 bones: Vec::new(),
                 bone_sprite: "images/sprBones.png",
@@ -980,6 +984,12 @@ impl Gen {
         if let Some(root) = self.root_styleb {
             self.plan.styleb = root;
         }
+        self.plan.styleb_cells = self
+            .styleb_cells
+            .iter()
+            .filter(|(_, v)| **v)
+            .map(|(c, _)| *c)
+            .collect();
         (self.plan, self.styleb_cells)
     }
 }
@@ -1025,7 +1035,12 @@ fn turn_table(rng: &mut StdRng, area: i32) -> i32 {
 /// inline before walls, bounded 16 (GML unbounded per frame, same convergence).
 /// Skipped where `scrAreaHasSafespawn` is false (campfire, crib, vault,
 /// palace/HQ finales).
-fn apply_safespawn_shift(plan: &mut LevelPlan, run: &Run, gen_rng: &mut StdRng) {
+fn apply_safespawn_shift(
+    plan: &mut LevelPlan,
+    run: &Run,
+    gen_rng: &mut StdRng,
+    styleb_map: &mut HashMap<(i32, i32), bool>,
+) {
     let no_safe = matches!(
         run.area,
         AreaId::Campfire | AreaId::Vault | AreaId::CrownVault | AreaId::Crib
@@ -1068,6 +1083,11 @@ fn apply_safespawn_shift(plan: &mut LevelPlan, run: &Run, gen_rng: &mut StdRng) 
             *cx += dx;
             *cy += dy;
         }
+        let moved: HashMap<(i32, i32), bool> = styleb_map
+            .drain()
+            .map(|((cx, cy), v)| ((cx + dx, cy + dy), v))
+            .collect();
+        *styleb_map = moved;
         for chest in plan.chests.iter_mut() {
             let p = match chest {
                 ChestSpawn::Weapon(p) | ChestSpawn::Ammo(p) | ChestSpawn::Rad(p) => p,
@@ -1121,7 +1141,7 @@ pub fn generate_level(run: &Run) -> LevelPlan {
     }
     let initial = genr.create_maker(0, 0);
     genr.run_makers(goal, vec![initial]);
-    apply_safespawn_shift(&mut genr.plan, run, &mut genr.rng);
+    apply_safespawn_shift(&mut genr.plan, run, &mut genr.rng, &mut genr.styleb_cells);
     let (mut plan, styleb_cells) = genr.finish();
 
     let floors = plan.floor_cells.clone();
@@ -1138,6 +1158,7 @@ fn generate_palace_last(run: &Run) -> LevelPlan {
     let mut plan = LevelPlan {
         floor_cells: Vec::new(),
         wall_cells: HashSet::new(),
+        styleb_cells: HashSet::new(),
         small_walls: Vec::new(),
         bones: Vec::new(),
         bone_sprite: "images/sprBones.png",
@@ -1369,6 +1390,7 @@ fn generate_hq_last(run: &Run) -> LevelPlan {
     let mut plan = LevelPlan {
         floor_cells: Vec::new(),
         wall_cells: HashSet::new(),
+        styleb_cells: HashSet::new(),
         small_walls: Vec::new(),
         bones: Vec::new(),
         bone_sprite: "images/sprBones.png",

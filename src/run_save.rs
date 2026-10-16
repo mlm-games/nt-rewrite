@@ -115,7 +115,14 @@ pub fn run_save_file_path() -> PathBuf {
     profile_dir().join(run_save_file_name())
 }
 
+/// `$NT_RUN_SAVE_DIR` overrides the directory (debug boots redirect it so
+/// their fresh-run floor save never lands on the real mid-run save).
+/// Otherwise: sibling of the profile save, so a corrupt run blob cannot
+/// take the profile with it.
 fn profile_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("NT_RUN_SAVE_DIR") {
+        return PathBuf::from(dir);
+    }
     crate::savedata_part::save_file_path()
         .parent()
         .map(Path::to_path_buf)

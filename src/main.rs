@@ -21,8 +21,27 @@ fn boot() -> App {
 
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 fn boot_at(files_dir: Option<std::path::PathBuf>) -> App {
-    let mut app = App::new();
-    if let Ok(st) = std::env::var("NT_DEBUG_STATE") {
+    let debug_state = std::env::var("NT_DEBUG_STATE").ok();
+    // Debug boots must not touch the real mid-run save: `setup_run` writes
+    // one as soon as the first floor generates.
+    if debug_state.is_some() && std::env::var("NT_RUN_SAVE_DIR").is_err() {
+        // Safety: boot runs before any thread starts (edition 2024 set_var).
+        unsafe {
+            std::env::set_var(
+                "NT_RUN_SAVE_DIR",
+                std::env::temp_dir().join("nt-rewrite-debug"),
+            );
+        }
+    }
+    // An `ingame` debug boot takes the live-run seam (as if Loading just
+    // ran `setup_run`): the plain boot carries no run, so the state swap
+    // alone would sit the debug entry in an empty world.
+    let mut app = if debug_state.as_deref() == Some("ingame") {
+        App::new_with_seed(rand::random::<u64>())
+    } else {
+        App::new()
+    };
+    if let Some(st) = debug_state {
         let state = match st.as_str() {
             "title" => nt_rewrite::state::AppState::Title,
             "ingame" => nt_rewrite::state::AppState::InGame,

@@ -355,7 +355,11 @@ impl WgpuCallback for ShadowPass {
         let words = uniform_words(snap.color, crate::render::SHADOW_ALPHA, size);
         queue.write_buffer(&gpu.uniforms, 0, &words);
 
-        if !batch.is_empty() && size[0] > 0 && size[1] > 0 {
+        // The composite below samples the mask unconditionally, so the mask
+        // must be cleared every frame. Gating the clear on a non-empty batch
+        // left the previous frame's stamps on the surface whenever the wall
+        // set emptied, smearing a stale dark band over the floor.
+        if size[0] > 0 && size[1] > 0 {
             // Written in `prepare`, which repose submits before the main pass,
             // so the composite below always samples THIS frame's stamps.
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

@@ -56,6 +56,7 @@ use crate::worldgen::{self, ChestSpawn, LevelPlan, PopulationEvent, PropKind, is
 pub fn build_floor_mask(plan: &LevelPlan) -> FloorMask {
     FloorMask {
         cells: plan.floor_cells.iter().copied().collect(),
+        styleb: plan.styleb_cells.clone(),
         opened: Default::default(),
         cols: (ARENA_W / crate::comps_a::TILE) as i32,
         rows: (ARENA_H / crate::comps_a::TILE) as i32,
@@ -1925,6 +1926,60 @@ fn spawn_wall_tiles(
 /// Steroids gates off `GameCont.crown` and `scr_ultra_get` at chest
 /// `Create_0` time.
 #[allow(clippy::too_many_arguments)]
+/// `NT_DUMP_MAP=1` diagnostics: the level grid as text, one char per 16px
+/// cell - `#` floor, `W` wall, `.` void - so a generated void can be read
+/// against the maker's rules.
+fn dump_level_map(
+    run: &Run,
+    floor_tiles: &std::collections::HashSet<(i32, i32)>,
+    walls: &std::collections::HashSet<(i32, i32)>,
+    styleb: &std::collections::HashSet<(i32, i32)>,
+) {
+    if floor_tiles.is_empty() {
+        return;
+    }
+    let (mut tmin, mut tmax) = ((i32::MAX, i32::MAX), (i32::MIN, i32::MIN));
+    for &t in floor_tiles {
+        let c = (t.0 * 2, t.1 * 2);
+        tmin = (tmin.0.min(c.0), tmin.1.min(c.1));
+        tmax = (tmax.0.max(c.0 + 1), tmax.1.max(c.1 + 1));
+    }
+    for &w in walls {
+        tmin = (tmin.0.min(w.0), tmin.1.min(w.1));
+        tmax = (tmax.0.max(w.0), tmax.1.max(w.1));
+    }
+    eprintln!(
+        "nt-map: area={:?} floor={} seed={} tiles={} walls={} styleb={} bounds=({},{})-({},{})",
+        run.area,
+        run.floor_in_area,
+        run.gen_seed,
+        floor_tiles.len(),
+        walls.len(),
+        styleb.len(),
+        tmin.0,
+        tmin.1,
+        tmax.0,
+        tmax.1
+    );
+    for wy in tmin.1..=tmax.1 {
+        let mut row = String::with_capacity((tmax.0 - tmin.0 + 1) as usize);
+        for wx in tmin.0..=tmax.0 {
+            let tile = (wx.div_euclid(2), wy.div_euclid(2));
+            let floor_here = floor_tiles.contains(&tile);
+            row.push(if floor_here && styleb.contains(&tile) {
+                'b'
+            } else if floor_here {
+                '#'
+            } else if walls.contains(&(wx, wy)) {
+                'W'
+            } else {
+                '.'
+            });
+        }
+        eprintln!("{row}");
+    }
+}
+
 pub fn spawn_level(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
@@ -1957,6 +2012,9 @@ pub fn spawn_level(
     // ring is fixed for the whole level, so seed it from the level-start
     // wall set before any break can extend it.
     tops.seed(&floor_set, &wall_set);
+    if std::env::var("NT_DUMP_MAP").is_ok() {
+        dump_level_map(run, &floor_set, &wall_set, &plan.styleb_cells);
+    }
     spawn_wall_tiles(&mut *commands, wall_set.into_iter().collect(), &floor_set);
 
     spawn_secret_entrances(
@@ -2713,6 +2771,7 @@ pub fn setup_title_campfire(world: &mut World) {
     let mut plan = LevelPlan {
         floor_cells: floors.clone(),
         wall_cells: std::collections::HashSet::new(),
+        styleb_cells: std::collections::HashSet::new(),
         small_walls: Vec::new(),
         bones: Vec::new(),
         bone_sprite: "images/sprNightBones.png",

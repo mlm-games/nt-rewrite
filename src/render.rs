@@ -2352,6 +2352,7 @@ pub fn world_instances_cached(
             let seed = run.gen_seed;
             let cells: HashSet<(i32, i32)> = mask.cells.iter().copied().collect();
             let opened: HashSet<(i32, i32)> = mask.opened.iter().copied().collect();
+            let styleb: HashSet<(i32, i32)> = mask.styleb.iter().copied().collect();
             let has = |p: &str| assets.catalog.def(p).is_some();
             let (floor_png, wall_bot_png, wall_top_png, wall_out_png, wall_trans_png) =
                 area_sprites_full_for_run(floor, area, has);
@@ -2366,14 +2367,23 @@ pub fn world_instances_cached(
             // (`background_set_colour`), then ONLY the live floor cells - no
             // padded outside ring of floor tiles (a ±6-cell ring buried the
             // transparent vortex layer on the campfire title). Lit strip over
-            // mask cells only; room colour elsewhere.
+            // mask cells only; room colour elsewhere. `Floor/Create_0:30`:
+            // a `styleb` floor draws the `sprFloor<area>B` ruin art instead
+            // of the normal tile (the brown cracked masses).
+            let styleb_png = floor_png.replace(".png", "B.png");
+            let has_styleb_png = has(&styleb_png);
             if minx <= maxx {
                 for cy in miny..=maxy {
                     for cx in minx..=maxx {
                         if !cells.contains(&(cx, cy)) {
                             continue;
                         }
-                        push_floor_tile(&mut out, assets, floor_png, cx, cy);
+                        let png = if has_styleb_png && styleb.contains(&(cx, cy)) {
+                            styleb_png.as_str()
+                        } else {
+                            floor_png
+                        };
+                        push_floor_tile(&mut out, assets, png, cx, cy);
                     }
                 }
             }
@@ -2436,8 +2446,13 @@ pub fn world_instances_cached(
                 .copied()
                 .collect();
             walls.sort_by_key(|c| (c.0, c.1));
+            // Same `With<WallTile>` filter as the drawn set above. GML's `place_free`
+            // only ever sees live `solid` instances - a destroyed `Wall` leaves the
+            // instance list - but a broken wall keeps its `WallCell` after losing
+            // `WallTile`. Counting those made every neighbour crop against a wall that
+            // is no longer drawn, cutting gaps into the run.
             let solid_wall_set: HashSet<(i32, i32)> = world
-                .query::<&WallCell>()
+                .query_filtered::<&WallCell, With<WallTile>>()
                 .iter(world)
                 .map(|cell| (cell.0, cell.1))
                 .collect();
@@ -2475,11 +2490,12 @@ pub fn world_instances_cached(
                     || opened.contains(&south_wall);
                 let raw = wall_body_raw(seed, wx, wy);
                 let frame = raw as i32;
-                if !floor_south {
-                    continue;
-                }
-                if has(wall_bot_png) && bot_frames > 0 {
-                    if let Some(s) = place_top_left(
+                // `Wall/Create_0:34` hides the BODY where the south
+                // neighbour is not floor (`visible = false`); `SubTopCont/
+                // Draw_0` draws the Top for every Wall with no such gate, so
+                // second-layer walls keep their top art over the background.
+                if floor_south && has(wall_bot_png) && bot_frames > 0 {
+                    if let Some(mut s) = place_top_left(
                         assets,
                         wall_bot_png,
                         frame,
@@ -2487,6 +2503,7 @@ pub fn world_instances_cached(
                         [1.0; 4],
                         0.0,
                     ) {
+                        s.z = Z_WALL_SUBTOP;
                         out.push(s);
                     }
                 }
