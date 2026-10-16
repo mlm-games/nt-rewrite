@@ -37,7 +37,7 @@ pub fn install(bytes: &[u8]) -> anyhow::Result<()> {
         if file.is_dir() {
             continue;
         }
-        let name = file.name().replace('\\', "/");
+        let name = file.name()?.replace('\\', "/");
         if !name.contains("images/") && !name.contains("fonts/") && !name.contains("sounds/") {
             continue;
         }
