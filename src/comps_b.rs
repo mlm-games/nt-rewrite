@@ -1367,6 +1367,21 @@ pub struct PortalSucking {
     pub target_pos: Vec2,
 }
 
+/// GML `Portal/Create_0.gml` attract helper: while the player is inside
+/// half the attract range, `angle -= 30 * right` accumulates per step and
+/// the body shows `spr_hurt` frame 1. `active` stays true only while
+/// inside the half range; the angle resets to 0 on the way out.
+#[derive(Component, Default)]
+pub struct PortalSpin {
+    pub angle: f32,
+    pub active: bool,
+}
+
+/// GML `Portal/Step_0.gml:33-37`: once the exit portal's endgame expires
+/// the room is over and the player is invisible (`visible = false`).
+#[derive(Component)]
+pub struct PlayerHidden;
+
 #[derive(Component, Clone, Copy)]
 pub struct WeaponVisual {
     pub owner: Entity,

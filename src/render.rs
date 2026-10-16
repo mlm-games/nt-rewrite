@@ -3381,10 +3381,32 @@ pub fn world_instances_cached(
             Option<&Inventory>,
             Option<&Telekinesis>,
             Option<&ThroneSit>,
+            Option<&crate::comps_b::PortalSpin>,
+            Option<&crate::comps_b::PlayerHidden>,
         )>();
-        for (entity, pos, player, pa, aim, vel, anim, flash, health, race, inv_opt, telek, sit) in
-            q.iter(world)
+        for (
+            entity,
+            pos,
+            player,
+            pa,
+            aim,
+            vel,
+            anim,
+            flash,
+            health,
+            race,
+            inv_opt,
+            telek,
+            sit,
+            spin,
+            hidden,
+        ) in q.iter(world)
         {
+            // GML `Portal/Step_0:33-37`: `visible = false` hides the whole
+            // `Player/Draw_0` while the room ends.
+            if hidden.is_some() {
+                continue;
+            }
             let (anim_path, anim_frame) = match anim {
                 Some(a) => (a.path.as_str(), a.frame as i32),
                 None => {
@@ -3643,7 +3665,14 @@ pub fn world_instances_cached(
             } else {
                 (path, frame)
             };
-            if let Some(s) = assets.sprite_for(path, frame, pos.0, flip, 0.0, tint) {
+            // GML `Portal/Create_0.gml` attract helper: inside half the
+            // attract range the body holds `spr_hurt` frame 1 and spins by
+            // the accumulated `angle`.
+            let (path, frame, body_rot) = match spin.filter(|s| s.active) {
+                Some(spin) => (pa.hurt, 1, spin.angle.to_radians()),
+                None => (path, frame, 0.0),
+            };
+            if let Some(s) = assets.sprite_for(path, frame, pos.0, flip, body_rot, tint) {
                 out.push(s);
             }
             // GML underwater bubble (Oasis, non-Fish/Robot): animated
@@ -4015,6 +4044,12 @@ pub fn world_instances_cached(
             let Some(pos) = world.get::<Pos>(gun.owner) else {
                 continue;
             };
+            if world
+                .get::<crate::comps_b::PlayerHidden>(gun.owner)
+                .is_some()
+            {
+                continue;
+            }
             let aim = world
                 .get::<AimDir>(gun.owner)
                 .map(|a| a.0)

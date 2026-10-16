@@ -30,9 +30,9 @@ use crate::comps_a::{
 };
 use crate::comps_b::{
     ChestKind, CrownPedestal, Enemy, FloorTransition, GroundPhysics, LoopTransition, OpenedChest,
-    Pickup, PickupCurse, PickupKind, Portal, PortalCarriedWeapons, PortalClear, PortalClosing,
-    PortalPhase, PortalShock, PortalState, PortalSucking, Prop, PropSprites, RadChestContainer,
-    SecretEntrance, SitZone, ThroneSit, YungCuz,
+    Pickup, PickupCurse, PickupKind, PlayerHidden, Portal, PortalCarriedWeapons, PortalClear,
+    PortalClosing, PortalPhase, PortalShock, PortalSpin, PortalState, PortalSucking, Prop,
+    PropSprites, RadChestContainer, SecretEntrance, SitZone, ThroneSit, YungCuz,
 };
 use crate::data::{
     AmmoKind, AreaId, CrownKind, MutationId, RaceId, SecretTarget, UltraMutationId, ammo_max,
@@ -1536,8 +1536,14 @@ pub fn portal_check(
 /// inside the half-distance, so no velocity write is needed here either.
 pub fn portal_attract(
     time: Res<SimTime>,
+    mut commands: Commands,
     mut player_q: Query<
-        (Entity, &mut Pos),
+        (
+            Entity,
+            &mut Pos,
+            Option<&mut PortalSpin>,
+            Option<&crate::comps_a::AimDir>,
+        ),
         (With<Player>, Without<Portal>, Without<PortalSucking>),
     >,
     mut weapon_q: Query<
@@ -1561,6 +1567,7 @@ pub fn portal_attract(
     }
     let tpos = portal_pos.0;
     let dt = time.delta_secs;
+    let frames = dt * crate::SIM_HZ as f32;
 
     let attract_step = |ppos: glam::Vec2| -> Option<(glam::Vec2, f32)> {
         let dist = ppos.distance(tpos);
@@ -1575,7 +1582,8 @@ pub fn portal_attract(
         Some((dir, spd))
     };
 
-    if let Ok((_player_e, mut ppos)) = player_q.single_mut() {
+    if let Ok((player_e, mut ppos, spin_opt, aim_opt)) = player_q.single_mut() {
+        let before = ppos.0;
         if let Some((dir, spd)) = attract_step(ppos.0) {
             let delta = dir * spd * 30.0 * dt;
             let nx = glam::Vec2::new(ppos.0.x + delta.x, ppos.0.y);
@@ -1585,6 +1593,42 @@ pub fn portal_attract(
             }
             if mask.is_walkable(ny) {
                 ppos.0.y = ny.y;
+            }
+        }
+        // GML `Portal/Create_0.gml` attract helper (`Portal/Step_0` calls
+        // it against `Player`): inside half the range the player spins
+        // (`angle -= 30 * right` per step) and the body holds
+        // `spr_hurt` frame 1; on the way out `angle` resets to 0.
+        let dist = before.distance(tpos);
+        let inside_half = dist <= 48.0 && attract_step(before).is_some();
+        let right = aim_opt
+            .map(|a| {
+                let (r, _) = if a.0.length_squared() > 0.001 {
+                    crate::player::gml_player_right_back_from_aim(a.0)
+                } else {
+                    (1.0, -1.0)
+                };
+                r
+            })
+            .unwrap_or(1.0);
+        match spin_opt {
+            Some(mut spin) if inside_half => {
+                spin.angle -= 30.0 * right * frames;
+                spin.active = true;
+            }
+            Some(mut spin) => {
+                spin.angle = 0.0;
+                spin.active = false;
+            }
+            None => {
+                commands.entity(player_e).insert(PortalSpin {
+                    angle: if inside_half {
+                        -30.0 * right * frames
+                    } else {
+                        0.0
+                    },
+                    active: inside_half,
+                });
             }
         }
     }
@@ -2448,6 +2492,9 @@ pub fn tick_portal_suck(
     let portal_e = suck.portal;
     let race = race_state.race;
     commands.entity(player_e).remove::<PortalSucking>();
+    // The floor advance re-creates the player, so the disappear-phase
+    // invisibility (`Portal/Step_0:33-37`) ends here.
+    commands.entity(player_e).remove::<PlayerHidden>();
 
     // GML `Portal/Alarm_1` verbatim: the tutorial exit portal restarts the run
     // (`game_restart()`) instead of advancing the floor. The port reboots run
@@ -3242,6 +3289,11 @@ pub fn animate_portal(
             if st.endgame < 0.0 {
                 st.phase = PortalPhase::Disappear;
                 st.anim = GTimer::from_seconds(0.75, TimerMode::Once);
+                // GML `Portal/Step_0:33-37`: the room is over, so the
+                // player goes invisible until the floor restarts.
+                if let Ok((pe, _, _)) = player_q.single_mut() {
+                    commands.entity(pe).insert(PlayerHidden);
+                }
                 if let (Some(anim), Some(def)) = (
                     anim_opt.as_mut(),
                     catalog.def(PortalState::disappear_sprite(st.kind)),
