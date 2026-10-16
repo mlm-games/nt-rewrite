@@ -2539,7 +2539,14 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
             if menu.go_offsety > 0.0 {
                 menu.go_offsety = approach(menu.go_offsety, 0.0, 32.0 * steps);
             }
-            if menu.go_death_pos >= 2.0 {
+            // GML `GameOver/Draw_0:63-64` gates the splat growth on
+            // `UberCont.letterbox_frame >= 2`, which the sim cannot see;
+            // `offsety` rides the same 32/step intro clock from 128, so
+            // its second tick is the closest proxy. The old
+            // `go_death_pos >= 2.0` gate matched the timing only when the
+            // run already had two waypoints, so a first-floor death froze
+            // the splash on frame 0 - the small, off-centre splash.
+            if menu.go_offsety <= 64.0 {
                 menu.go_splat = approach(menu.go_splat, 2.0, 0.7 * steps);
             }
             if menu.go_appear > 0.0 {
