@@ -200,7 +200,7 @@ pub fn contact_damage(
     let player_pos = player_pos.0;
     let mut took_damage = 0;
 
-    for (enemy_pos, enemy, mut brain, mut ehealth, enemy_hitbox, enemy_vel) in &mut enemies {
+    for (enemy_pos, enemy, mut brain, mut ehealth, enemy_hitbox, mut enemy_vel) in &mut enemies {
         if player_pos.distance(enemy_pos.0) >= PLAYER_RADIUS + enemy_hitbox.radius {
             continue;
         }
