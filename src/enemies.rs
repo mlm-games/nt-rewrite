@@ -4099,17 +4099,19 @@ pub fn tick_bigmaggot(
             &mut Pos,
             &Health,
             Option<&HurtAnim>,
+            &mut SpriteAnim,
         ),
         (With<Enemy>, Without<Prop>),
     >,
     props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+    catalog: Res<repame_anim::AnimCatalog>,
 ) {
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player_pos = player_q.single().ok().map(|p| p.0);
     let positions: Vec<(Entity, glam::Vec2, i32, f32)> = enemies
         .iter()
-        .map(|(e, enemy, _, _, p, _, _)| {
+        .map(|(e, enemy, _, _, p, _, _, _)| {
             (
                 e,
                 p.0,
@@ -4120,7 +4122,7 @@ pub fn tick_bigmaggot(
         .collect();
     let solids = prop_shapes(&props);
     let mut rng = rand::rng();
-    for (entity, enemy, mut brain, mut vel, mut pos, health, hurt) in &mut enemies {
+    for (entity, enemy, mut brain, mut vel, mut pos, health, hurt, mut anim) in &mut enemies {
         if enemy.kind != EnemyKind::BigMaggot || brain.burrow_state != 0 {
             continue;
         }
@@ -4167,6 +4169,13 @@ pub fn tick_bigmaggot(
             }
             if burrow {
                 enemy_cue(&mut cues, "sndBigMaggotBurrow");
+                // GML `BigMaggot/Alarm_1.gml:6-12`: `image_index = 0` then
+                // `instance_change(BigMaggotBurrow, false)`; the 12-frame
+                // dig strip at `image_speed` 0.4 runs the whole 30-step
+                // `alarm[0]`.
+                if let Some(def) = catalog.def("images/sprBigMaggotBurrow.png") {
+                    anim.set_path("images/sprBigMaggotBurrow.png", def, true);
+                }
                 brain.rage = 0.0;
                 brain.burrow_state = 1;
                 brain.burrow_alarm0 = 30.0;
@@ -4213,15 +4222,23 @@ pub fn tick_bigmaggot_burrow(
     mask: Res<FloorMask>,
     player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
     mut enemies: Query<
-        (Entity, &Enemy, &mut EnemyBrain, &mut Velocity, &mut Pos),
+        (
+            Entity,
+            &Enemy,
+            &mut EnemyBrain,
+            &mut Velocity,
+            &mut Pos,
+            &mut SpriteAnim,
+        ),
         (With<Enemy>, Without<Prop>),
     >,
     props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+    catalog: Res<repame_anim::AnimCatalog>,
 ) {
     let dt = time.delta_secs;
     let player_pos = player_q.single().ok().map(|p| p.0);
     let mut rng = rand::rng();
-    for (_entity, enemy, mut brain, mut vel, mut pos) in &mut enemies {
+    for (_entity, enemy, mut brain, mut vel, mut pos, mut anim) in &mut enemies {
         if enemy.kind != EnemyKind::BigMaggot || brain.burrow_state == 0 {
             continue;
         }
@@ -4245,8 +4262,16 @@ pub fn tick_bigmaggot_burrow(
                         vel.0 = glam::Vec2::ZERO;
                         sync_heading(&mut brain, &vel);
                         enemy_cue(&mut cues, "sndBigMaggotUnburrowSand");
+                        // GML `BigMaggotBurrow/Alarm_0.gml:5-10`:
+                        // `image_index = 0`, `sprite_index =
+                        // sprBigMaggotAppear`, `visible = 1`; the 11-frame
+                        // rise strip at 0.4 is the whole state, with the
+                        // `alarm[1] = 5 / 0.4` sound landing inside it.
+                        if let Some(def) = catalog.def("images/sprBigMaggotAppear.png") {
+                            anim.set_path("images/sprBigMaggotAppear.png", def, true);
+                        }
                         brain.burrow_state = 2;
-                        brain.burrow_alarm1 = 5.0 / 0.4;
+                        brain.burrow_alarm1 = 11.0 / 0.4;
                         brain.attack = GTimer::from_seconds((5.0 / 0.4) / 30.0, TimerMode::Once);
                         spawn_burst(
                             &mut commands,

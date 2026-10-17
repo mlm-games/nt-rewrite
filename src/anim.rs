@@ -227,12 +227,19 @@ pub fn enemy_anim_switch(
             &EnemySprites,
             &mut SpriteAnim,
             Option<&MaggotSpawnCharge>,
+            Option<&crate::comps_b::EnemyBrain>,
         ),
         (With<Enemy>, Without<HurtAnim>, Without<FireAnim>),
     >,
 ) {
-    for (vel, sprites, mut anim, charge) in &mut q {
+    for (vel, sprites, mut anim, charge, brain) in &mut q {
         if charge.is_some() || (anim.oneshot && !anim.finished) {
+            continue;
+        }
+        // GML `BigMaggotBurrow` carries no step event of its own: the dig
+        // and rise strips own the sprite for the whole burrow, so the
+        // idle/walk swap stands down until `instance_change(BigMaggot, 0)`.
+        if brain.is_some_and(|b| b.burrow_state != 0) {
             continue;
         }
 
