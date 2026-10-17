@@ -4172,7 +4172,11 @@ pub fn tick_bigmaggot(
                 // GML `BigMaggot/Alarm_1.gml:6-12`: `image_index = 0` then
                 // `instance_change(BigMaggotBurrow, false)`; the 12-frame
                 // dig strip at `image_speed` 0.4 runs the whole 30-step
-                // `alarm[0]`.
+                // `alarm[0]`. `Other_7`'s `visible = 0` arm needs the strip
+                // to outlive the alarm, which never happens in the
+                // recreation: the two are 30 steps and GameMaker fires
+                // alarms before the animation-end check, so the rise strip
+                // is already in place when it runs.
                 if let Some(def) = catalog.def("images/sprBigMaggotBurrow.png") {
                     anim.set_path("images/sprBigMaggotBurrow.png", def, true);
                 }
