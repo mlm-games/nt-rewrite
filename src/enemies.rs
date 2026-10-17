@@ -518,6 +518,26 @@ fn spawn_enemy_impl(
     if let Some(anim_def) = catalog.def(def.sprite) {
         ec.insert(SpriteAnim::new(def.sprite, anim_def));
     }
+    // GML `MeleeFake/Step_0:22` `scrFirstFrameAnim(0.4)` on top of
+    // `MeleeFake/Create_0:16` `image_speed = 0`: the dormant strips crawl
+    // with `random(0.02)` while parked on frame 0, then advance at 0.4.
+    let dormant_strip = match kind {
+        EnemyKind::MeleeFake => Some("images/sprMeleeFake.png"),
+        EnemyKind::Assassin => Some("images/sprJungleAssassinHide.png"),
+        _ => None,
+    };
+    if let Some(hide) = dormant_strip {
+        if kind == EnemyKind::Assassin {
+            // GML `JungleAssassinHide`: the sleeping jungle assassin; the
+            // same `Assassin` kind flips awake in place (`Step_0:17-19`).
+            ec.insert(AssassinSleeping);
+        }
+        if let Some(hide_def) = catalog.def(hide) {
+            let mut anim = SpriteAnim::with_image_speed(hide, hide_def, 0.4);
+            anim.frame0_rate = 0.02;
+            ec.insert(anim);
+        }
+    }
     if kind == EnemyKind::TutorialTarget {
         // GML `TutorialTarget/Create_0.gml:26` `alarm[1] = -1` plus
         // `Step_2.gml`'s unconditional pin back to `xstart`/`ystart`.
@@ -5164,7 +5184,14 @@ pub fn tick_melee_bandit(
     run: Res<Run>,
     player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
     mut enemies: Query<
-        (Entity, &Enemy, &mut EnemyBrain, &mut Velocity, &mut Pos),
+        (
+            Entity,
+            &Enemy,
+            &mut EnemyBrain,
+            &mut Velocity,
+            &mut Pos,
+            Option<&AssassinSleeping>,
+        ),
         (With<Enemy>, Without<Prop>),
     >,
     props: Query<(Entity, &Prop, &Pos), With<Prop>>,
@@ -5174,7 +5201,7 @@ pub fn tick_melee_bandit(
     let player_pos = player_q.single().ok().map(|p| p.0);
     let positions: Vec<(Entity, glam::Vec2, i32, f32)> = enemies
         .iter()
-        .map(|(e, enemy, _, _, p)| {
+        .map(|(e, enemy, _, _, p, _)| {
             (
                 e,
                 p.0,
@@ -5185,10 +5212,15 @@ pub fn tick_melee_bandit(
         .collect();
     let solids = prop_shapes(&props);
     let mut rng = rand::rng();
-    for (entity, enemy, mut brain, mut vel, mut pos) in &mut enemies {
+    for (entity, enemy, mut brain, mut vel, mut pos, sleeping) in &mut enemies {
         // GML `JungleAssassin` declares `MeleeBandit` as its parent object, so
         // it inherits every one of MeleeBandit's events.
         if !matches!(enemy.kind, EnemyKind::MeleeBandit | EnemyKind::Assassin) {
+            continue;
+        }
+        // A dormant jungle assassin (`JungleAssassinHide`) runs no
+        // `MeleeBandit` alarms until `tick_melee_fakes` wakes it.
+        if sleeping.is_some() {
             continue;
         }
         let epos = pos.0;
@@ -8766,6 +8798,13 @@ pub fn tick_turrets(
     }
 }
 
+/// GML `JungleAssassinHide` (`MeleeFake` subclass): a dormant jungle
+/// assassin parked on the `sprJungleAssassinHide` bush strip. The port has
+/// no separate object for it, so the marker rides the `Assassin` kind and
+/// [`tick_melee_fakes`] clears it on wake.
+#[derive(Component)]
+pub struct AssassinSleeping;
+
 /// GML `objects/MeleeFake`: a dormant `MeleeBandit` that wakes into its real
 /// self. Until then it does not move and does not attack -- the port had it
 /// chasing and hitting for 1.
@@ -8773,13 +8812,20 @@ pub fn tick_turrets(
 /// (`!instance_number(enemy)`), or the player within 64 px on a clear line with
 /// no `Portal` on the floor. `Destroy_0` runs the *real* object's create/destroy
 /// pair, so a fake killed while dormant still drops the real assassin's rads.
+/// The same `Step_0` runs on the jungle hide (`__get_spawn_enemy_object`
+/// returns `JungleAssassin`), which wakes in place instead of respawning.
 pub fn tick_melee_fakes(
     mut commands: Commands,
+    mut cues: ResMut<Queue<AudioCue>>,
+    catalog: Res<repame_anim::AnimCatalog>,
     run: Res<Run>,
     mask: Res<FloorMask>,
     player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
     enemies: Query<&Pos, (With<Enemy>, Without<Player>)>,
-    fakes: Query<(Entity, &Enemy, &Pos, &Health), (With<Enemy>, Without<Player>, Without<Prop>)>,
+    mut fakes: Query<
+        (Entity, &Enemy, &Pos, &Health, Option<&mut SpriteAnim>),
+        (With<Enemy>, Without<Player>, Without<Prop>),
+    >,
     portals: Query<(), (With<crate::comps_b::Portal>, Without<Enemy>)>,
 ) {
     if fakes.is_empty() {
@@ -8792,8 +8838,9 @@ pub fn tick_melee_fakes(
     // GML `!instance_number(enemy)`: any other live enemy keeps it asleep.
     let alive: Vec<glam::Vec2> = enemies.iter().map(|p| p.0).collect();
 
-    for (entity, enemy, pos, health) in &fakes {
-        if enemy.kind != EnemyKind::MeleeFake {
+    for (entity, enemy, pos, health, anim) in &mut fakes {
+        let jungle_hide = enemy.kind == EnemyKind::Assassin;
+        if enemy.kind != EnemyKind::MeleeFake && !jungle_hide {
             continue;
         }
         let wakes = health.hp < health.max
@@ -8802,6 +8849,19 @@ pub fn tick_melee_fakes(
                 && pos.0.distance(player_pos.0) <= 64.0
                 && has_line_of_sight(pos.0, player_pos.0, &mask));
         if !wakes {
+            continue;
+        }
+        // GML `MeleeFake/Step_0:16` `snd_play(sndAssassinGetUp)`.
+        enemy_cue(&mut cues, "sndAssassinGetUp");
+        if jungle_hide {
+            // GML `Step_0:17-19` with `JungleAssassin` as the spawn object:
+            // the bush becomes the assassin without leaving its spot.
+            commands.entity(entity).try_remove::<AssassinSleeping>();
+            if let Some(mut anim) = anim
+                && let Some(def) = catalog.def("images/sprJungleAssassinIdle.png")
+            {
+                anim.set_path("images/sprJungleAssassinIdle.png", def, false);
+            }
             continue;
         }
         queue_enemy_spawn(

@@ -1781,7 +1781,10 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
             radius: 12.0,
             size: 22.0,
             color: [0.2, 0.18, 0.24, 1.0],
-            sprite: "images/sprMeleeIdle.png",
+            // GML `MeleeFake/Create_0:24` `spr_idle = sprite_index` = the
+            // object's default `sprMeleeFake` (the crouched husk), not the
+            // awake bandit's `sprMeleeIdle`.
+            sprite: "images/sprMeleeFake.png",
             score: 15,
             touch_damage: 1,
             rad_drop: 8,

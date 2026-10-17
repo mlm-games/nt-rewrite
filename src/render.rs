@@ -51,8 +51,8 @@ use crate::comps_a::{
 };
 use crate::comps_b::{
     Beam, BigDogMissileState, BossBrain, BossPhase, ChestArt, ChestKind, Corpse, CrownObject,
-    Enemy, EnemyBrain, FxAngle, GmlImage, GroundDecalTint, GroundDetail, HazardCloud, HurtAnim,
-    InvisiWall, MaggotSpawnCharge, Mote, MoteScale, NativeAngle, NativeDepth, NativeFlip,
+    Enemy, EnemyBrain, FxAngle, GmlImage, GroundDecalTint, GroundDetail, HazardCloud, HitWarning,
+    HurtAnim, InvisiWall, MaggotSpawnCharge, Mote, MoteScale, NativeAngle, NativeDepth, NativeFlip,
     NativeScale, OpenedChest, Pickup, PickupKind, PickupLifetime, Portal, PortalClear, PortalShock,
     PortalStrike, Prop, PropSprites, Shield, StaticFx, SwingFx, Telekinesis, ThroneCarpet,
     ThroneSit, TitleCampChar, TitleCampfire, TitleLogMenu, TitleTv, ToxicGasState, WeaponVisual,
@@ -3956,6 +3956,25 @@ pub fn world_instances_cached(
                 ) {
                     out.push(s);
                 }
+            }
+        }
+        // GML `HitWarning` (`sprAssassinNotice`): the melee-lunge telegraph
+        // rides its 6-frame strip at 8 fps; the port's 0.5 s marker window
+        // ends before the strip does, so the last frame holds.
+        let mut q = world.query::<(&Pos, &HitWarning)>();
+        for (pos, warning) in q.iter(world) {
+            let elapsed = warning.timer.duration() - warning.timer.remaining_secs();
+            let frames = strip_frames(assets, "images/sprAssassinNotice.png").max(1);
+            let frame = ((elapsed * 8.0).floor() as u32).min(frames - 1) as i32;
+            if let Some(s) = assets.sprite_for(
+                "images/sprAssassinNotice.png",
+                frame,
+                pos.0,
+                false,
+                0.0,
+                [1.0; 4],
+            ) {
+                out.push(s);
             }
         }
         let mut q = world.query::<(&Pos, &PortalStrike)>();

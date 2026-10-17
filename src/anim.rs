@@ -228,12 +228,18 @@ pub fn enemy_anim_switch(
             &mut SpriteAnim,
             Option<&MaggotSpawnCharge>,
             Option<&crate::comps_b::EnemyBrain>,
+            Option<&crate::enemies::AssassinSleeping>,
         ),
         (With<Enemy>, Without<HurtAnim>, Without<FireAnim>),
     >,
 ) {
-    for (vel, sprites, mut anim, charge, brain) in &mut q {
+    for (vel, sprites, mut anim, charge, brain, sleeping) in &mut q {
         if charge.is_some() || (anim.oneshot && !anim.finished) {
+            continue;
+        }
+        // GML `JungleAssassinHide` never swaps strips: the bush owns the
+        // sprite until `tick_melee_fakes` wakes it.
+        if sleeping.is_some() {
             continue;
         }
         // GML `BigMaggotBurrow` carries no step event of its own: the dig
@@ -782,6 +788,7 @@ pub fn derive_hurt_path(idle: &'static str) -> &'static str {
         "images/sprRavenIdle.png" => "images/sprRavenHurt.png",
         "images/sprSalamanderIdle.png" => "images/sprSalamanderHurt.png",
         "images/sprMeleeIdle.png" => "images/sprMeleeHurt.png",
+        "images/sprMeleeFake.png" => "images/sprMeleeHurt.png",
         "images/sprJungleBanditIdle.png" => "images/sprJungleBanditHurt.png",
         "images/sprBigMaggotIdle.png" => "images/sprBigMaggotHurt.png",
         "images/sprFastRatIdle.png" => "images/sprFastRatHurt.png",
@@ -1055,6 +1062,7 @@ pub fn derive_dead_path(idle: &'static str) -> &'static str {
         "images/sprRavenIdle.png" => "images/sprRavenDead.png",
         "images/sprSalamanderIdle.png" => "images/sprSalamanderDead.png",
         "images/sprMeleeIdle.png" => "images/sprMeleeDead.png",
+        "images/sprMeleeFake.png" => "images/sprMeleeDead.png",
         "images/sprJungleBanditIdle.png" => "images/sprJungleBanditDead.png",
         "images/sprBigMaggotIdle.png" => "images/sprBigMaggotDead.png",
         "images/sprFastRatIdle.png" => "images/sprFastRatDead.png",
