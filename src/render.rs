@@ -8997,7 +8997,9 @@ pub fn gui_text_sprites(
 /// GML `scrDarkness` light stamps for the darkness mask, inverted for the
 /// multiply composite: gray discs (half lit) around every light first, then
 /// white cores (fully lit) over them. The player is the main light; GML also
-/// lights portals, explosions, ground flames and barrels.
+/// lights portals, explosions, ground flames, barrels, torches, cave
+/// crystals, allies, snares, I.D.P.D. spawns, crown pedestals and the sewer
+/// `styleb` floor tiles.
 pub fn darkness_light_stamps(world: &mut World, assets: &RenderAssets) -> Vec<ActorDraw> {
     let mut rng = rand::rng();
     const DISC: &str = "images/sprPortalClear.png";
@@ -9016,9 +9018,20 @@ pub fn darkness_light_stamps(world: &mut World, assets: &RenderAssets) -> Vec<Ac
         }
     }
     {
-        let mut q = world.query::<(&Pos, &crate::combat::Explosion)>();
-        for (pos, _) in q.iter(world) {
-            lights.push((pos.0, 160.0, 110.0));
+        let mut q = world.query::<(
+            &Pos,
+            &crate::combat::Explosion,
+            Option<&crate::comps_b::ExplosionVisual>,
+        )>();
+        for (pos, _, visual) in q.iter(world) {
+            // GML `scrDarkness`: small blasts dim at 80, meat explosions at
+            // 140 with a small core, everything else at 160 with a big one.
+            use crate::comps_b::NativeExplosionKind as Kind;
+            match visual.map(|v| v.0) {
+                Some(Kind::Meat) => lights.push((pos.0, 140.0, 40.0)),
+                Some(Kind::Small) => lights.push((pos.0, 80.0, 110.0)),
+                _ => lights.push((pos.0, 160.0, 110.0)),
+            }
         }
     }
     {
@@ -9030,9 +9043,55 @@ pub fn darkness_light_stamps(world: &mut World, assets: &RenderAssets) -> Vec<Ac
     {
         let mut q = world.query::<(&Pos, &crate::comps_b::PropSprites)>();
         for (pos, sprites) in q.iter(world) {
-            if sprites.idle.contains("Barrel") {
+            if sprites.idle.contains("Dead") {
+                continue;
+            }
+            if sprites.idle.contains("Barrel")
+                || sprites.idle.contains("Torch")
+                || sprites.idle.contains("CrystalProp")
+            {
                 lights.push((pos.0, 90.0, 30.0));
             }
+        }
+    }
+    {
+        let mut q = world.query_filtered::<&Pos, With<crate::comps_b::Ally>>();
+        for pos in q.iter(world) {
+            lights.push((pos.0, 90.0, 30.0));
+        }
+    }
+    {
+        let mut q = world.query_filtered::<&Pos, With<crate::player_fire::Tangle>>();
+        for pos in q.iter(world) {
+            lights.push((pos.0, 110.0, 20.0));
+        }
+    }
+    {
+        let mut q = world.query_filtered::<&Pos, With<crate::idpd::IdpdSpawnPortal>>();
+        for pos in q.iter(world) {
+            lights.push((pos.0, 60.0, 20.0));
+        }
+    }
+    {
+        let mut q = world.query_filtered::<&Pos, With<crate::comps_b::CrownPedestal>>();
+        for pos in q.iter(world) {
+            lights.push((pos.0, 72.0, 32.0));
+        }
+    }
+    // GML sewer arm: `styleb` floor tiles (the cracked brown masses) glow
+    // gray only, with no lit core.
+    if world
+        .get_resource::<Run>()
+        .is_some_and(|run| matches!(run.area, AreaId::Sewers | AreaId::PizzaSewers))
+        && let Some(mask) = world.get_resource::<FloorMask>()
+    {
+        let cells: Vec<(i32, i32)> = mask.styleb.iter().copied().collect();
+        for (cx, cy) in cells {
+            lights.push((
+                glam::Vec2::new(cx as f32 * TILE + 16.0, cy as f32 * TILE + 16.0),
+                32.0,
+                0.0,
+            ));
         }
     }
     let mut out = Vec::new();
@@ -9046,6 +9105,9 @@ pub fn darkness_light_stamps(world: &mut World, assets: &RenderAssets) -> Vec<Ac
         }
     }
     for (pos, _, core) in &lights {
+        if *core <= 0.0 {
+            continue;
+        }
         let r = *core + rng.random_range(0.0..3.0);
         if let Some(s) = assets.sprite_scaled_rotated(DISC, 0, *pos, r * 2.0 / 64.0, 0.0, [1.0; 4])
         {
