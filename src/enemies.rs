@@ -8932,14 +8932,12 @@ pub fn tick_new_car_plz(
 /// raises the Scrap Boss through `Destroy_0`.
 pub fn tick_dormant_scrap_boss(
     time: Res<SimTime>,
-    mut commands: Commands,
-    run: Res<Run>,
     mask: Res<FloorMask>,
     player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
     portals: Query<Entity, With<crate::comps_b::Portal>>,
     mut sleepers: Query<
-        (Entity, &Pos, &mut crate::comps_b::DormantScrapBoss),
-        (With<crate::comps_b::DormantScrapBoss>, Without<Prop>),
+        (&Pos, &mut Prop, &mut crate::comps_b::DormantScrapBoss),
+        With<crate::comps_b::DormantScrapBoss>,
     >,
 ) {
     if sleepers.is_empty() {
@@ -8950,19 +8948,17 @@ pub fn tick_dormant_scrap_boss(
         return;
     };
     let portal_open = !portals.is_empty();
-    let mut wake: Vec<(Entity, glam::Vec2)> = Vec::new();
-    for (entity, pos, mut dormant) in &mut sleepers {
+    for (pos, mut prop, mut dormant) in &mut sleepers {
         if line_of_sight_public(pos.0, player_pos, &mask) {
             dormant.timer += dt * crate::SIM_HZ as f32;
         }
-        // GML `Step_0.gml:12`: `distance < 160 && !Portal && timer > 150`.
+        // GML `Step_0.gml:12`: `distance < 160 && !Portal && timer > 150`
+        // then `instance_destroy()`, whose `Destroy_0` raises the Scrap
+        // Boss. The port routes the wake through the same prop death, so a
+        // kill landing on the wake step cannot spawn two bosses.
         if !portal_open && dormant.timer > 150.0 && pos.0.distance(player_pos) < 160.0 {
-            wake.push((entity, pos.0));
+            prop.hp = 0;
         }
-    }
-    for (entity, at) in wake {
-        commands.entity(entity).despawn();
-        queue_enemy_spawn(&mut commands, EnemyKind::BigDog, at, 1.0, run.loop_count);
     }
 }
 

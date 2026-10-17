@@ -2393,7 +2393,16 @@ pub fn spawn_level(
             }
         });
     }
-    if let Some(kind) = plan.boss {
+    // GML `scrPopulate.gml:319-372` only plants the last-subarea bosses when
+    // `_has_boss` (`subarea == maxsubarea`); the Big Bandit's `WantBoss` sits
+    // outside that gate on every desert subarea. Guarding here keeps a stale
+    // or miscomputed plan from raising the Scrap Boss on 3-1 (#14).
+    let boss_is_last = run.floor_in_area
+        >= crate::worldgen::gml_max_subarea(crate::worldgen::gml_area_from_run(&run));
+    let plan_boss = plan
+        .boss
+        .filter(|kind| matches!(kind, EnemyKind::BigBandit) || boss_is_last);
+    if let Some(kind) = plan_boss {
         match kind {
             EnemyKind::BigBandit => {
                 // GML `WantBoss/Step_0:9-24`: treshhold = subarea == maxsubarea
