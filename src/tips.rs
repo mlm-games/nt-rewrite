@@ -26,6 +26,8 @@ pub struct TipCtx {
     pub weapon_text: Option<&'static str>,
     pub skills: Vec<MutationId>,
     pub has_player: bool,
+    /// GML `UberCont.april_fools` swaps the General:9 line for its Alt.
+    pub april_fools: bool,
 }
 
 fn pick(arr: &[&'static str], rng: &mut impl RngExt) -> &'static str {
@@ -55,6 +57,9 @@ pub fn pick_loading_tip_world(world: &mut World) -> String {
         weapon_text: None,
         skills: Vec::new(),
         has_player: false,
+        april_fools: world
+            .get_resource::<crate::date_part::DateRuntime>()
+            .is_some_and(|d| d.events.april_fools),
     };
     let mut q = world.query::<(&Player, &Health, &Inventory, &RaceState, &CrownState)>();
     if let Some((player, health, inv, race, crown)) = q.iter(world).next() {
@@ -88,7 +93,15 @@ pub fn pick_tip(ctx: &TipCtx, rng: &mut impl RngExt) -> &'static str {
     }
     loop {
         let tip = match tip_type {
-            0 => pick(GENERAL, rng),
+            0 => {
+                // GML `scrTips:32-34`: the april-fools alt line.
+                let t = pick(GENERAL, rng);
+                if ctx.april_fools && t == "fish can roll" {
+                    "fish can't roll"
+                } else {
+                    t
+                }
+            }
             1 => pick(area_tips(ctx.gml_area), rng),
             2 => match ctx.race {
                 // GML `:301-303`: the ultra sub-pool fires at level 10+

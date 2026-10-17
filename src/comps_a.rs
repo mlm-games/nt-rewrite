@@ -387,6 +387,9 @@ impl LastDamageTaken {
             (Some(HitId::Fire), _) => "FIRE".into(),
             (Some(HitId::Trap), _) => "TRAP".into(),
             (Some(HitId::Explosion(_)), _) => "EXPLOSION".into(),
+            (Some(HitId::SmallExplosion), _) => "SMALL EXPLOSION".into(),
+            (Some(HitId::GreenExplosion), _) => "GREEN EXPLOSION".into(),
+            (Some(HitId::PopoExplosion), _) => "I.D.P.D. EXPLOSION".into(),
             (Some(HitId::Weapon(_)), _) => "BULLET".into(),
             (Some(HitId::Crown), _) => "CROWN".into(),
             (Some(HitId::CurseEat), _) => "CURSE EAT".into(),
@@ -1002,6 +1005,12 @@ pub struct RaceLoadout {
 pub enum HitId {
     Weapon(WeaponId),
     Explosion(WeaponId),
+    /// GML `objects/SmallExplosion|GreenExplosion|PopoExplosion` carry
+    /// their own hit ids (`Create_0`), which `scrDeathCauses` resolves to
+    /// their own game-over sprites.
+    SmallExplosion,
+    GreenExplosion,
+    PopoExplosion,
 
     Enemy(u16),
     Contact,

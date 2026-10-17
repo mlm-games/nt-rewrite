@@ -818,6 +818,27 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
             area: run_area,
         });
 
+    // GML `GenCont/Destroy_0.gml:226-228`: a halloween howl on desert
+    // floors that spawned a `Bandit`.
+    if run_area == crate::data::AreaId::Desert
+        && world
+            .resource::<crate::date_part::DateRuntime>()
+            .events
+            .halloween
+        && world
+            .query::<&crate::comps_b::Enemy>()
+            .iter(world)
+            .any(|e| e.kind == crate::data::EnemyKind::Bandit)
+    {
+        world
+            .resource_mut::<Queue<crate::audio::AudioCue>>()
+            .push(crate::audio::AudioCue {
+                name: "sndHalloweenWolf",
+                volume: 1.0,
+                variance: 0.2,
+            });
+    }
+
     // GML `scrSavegamePlayers:219-230`: the restored `Player` instance is
     // written over the loadout-built one, field for field, once the floor
     // entities exist.

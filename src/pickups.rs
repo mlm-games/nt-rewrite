@@ -1082,7 +1082,7 @@ pub fn maybe_spawn_drop(
     health: &Health,
     loops: u32,
     decide: Option<&crate::decide_wep::DecideCtx>,
-) {
+) -> bool {
     maybe_spawn_drop_ctx(
         commands,
         catalog,
@@ -1100,7 +1100,7 @@ pub fn maybe_spawn_drop(
             get_loaded: steroids_get_loaded(player),
             ..Default::default()
         },
-    );
+    )
 }
 
 /// GML `scripts/scrDrop/scrDrop.gml` verbatim. `chest_ctx` carries the
@@ -1120,8 +1120,9 @@ pub fn maybe_spawn_drop_ctx(
     loops: u32,
     decide: Option<&crate::decide_wep::DecideCtx>,
     chest_ctx: &ChestCtx,
-) {
+) -> bool {
     let mut rng = rand::rng();
+    let mut dropped = false;
 
     // GML `scrDrop.gml:32-34`: Fish Confiscate rolls `_confiscate` at
     // 20%, which swaps the HPPickup / AmmoPickup / weapon pickup for a
@@ -1187,6 +1188,7 @@ pub fn maybe_spawn_drop_ctx(
                     hasted,
                 );
             }
+            dropped = true;
         } else {
             if !guns_blocks_ammo {
                 if confiscate {
@@ -1194,6 +1196,7 @@ pub fn maybe_spawn_drop_ctx(
                 } else {
                     spawn_ammo_pickup(commands, catalog, count_cursed(inv), at, loops, hasted);
                 }
+                dropped = true;
             }
         }
     } else if weapon_chance > 0 && rng.random_range(0.0..100.0) < weapon_chance as f32 {
@@ -1209,7 +1212,9 @@ pub fn maybe_spawn_drop_ctx(
             // GML `scrDrop.gml:85`: `scrWeaponPickupCreate(..., true)`.
             commands.entity(e).insert(WepPickupAmmo(true));
         }
+        dropped = true;
     }
+    dropped
 }
 
 /// GML `HPPickup/Create_0.gml:8-15` verbatim: `num = 2`, `4` with Second

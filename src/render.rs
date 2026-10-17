@@ -1966,8 +1966,7 @@ pub fn view_rect_world(canvas_dp: [f32; 2], world_size: [f32; 2], cam: &Camera2d
 
 /// Fog strip for an area (GML `TopCont/Draw_0` verbatim: pizza sewers
 /// first, then sewers or the halloween event flag; everywhere else
-/// draws nothing). The port has no halloween event flag, so callers
-/// pass `false` (documented at the call site).
+/// draws nothing). `halloween` comes from [`crate::date_part::DateEvents`].
 pub fn fog_sprite_for_area(area: AreaId, halloween: bool) -> Option<&'static str> {
     if area == AreaId::PizzaSewers {
         Some("images/sprFog102.png")
@@ -2009,8 +2008,11 @@ pub fn fog_sprites(
         .get_resource::<Run>()
         .map(|r| r.area)
         .unwrap_or(AreaId::Desert);
-    // No halloween event flag in the port (see `fog_sprite_for_area`).
-    let Some(path) = fog_sprite_for_area(area, false) else {
+    // GML `TopCont/Draw_0:9-12`: halloween fogs every area.
+    let halloween = world
+        .get_resource::<crate::date_part::DateRuntime>()
+        .is_some_and(|d| d.events.halloween);
+    let Some(path) = fog_sprite_for_area(area, halloween) else {
         return out;
     };
     let scroll = world

@@ -47,6 +47,11 @@ winit = "0.30"
 ndk = "0.9"
 rlobkit-app-events = { version = "0.5", features = ["jni-bridge"] }
 
+# Local clock for the date-gated events (`date_part.rs`); the wasm build
+# resolves UTC by hand instead (no tz database there).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+jiff = "0.2"
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

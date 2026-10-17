@@ -117,6 +117,20 @@ pub struct GroundFlame {
     pub launch: glam::Vec2,
 }
 
+/// GML `objects/SnowFlake`: an anchor with a DRAW offset - `addy` counts
+/// 320 -> 0 at ~1/step (the flake descends ~320 px), `addx` sways on
+/// `sin(wave / 5)`, and the last 20 steps fade out. The port moves the
+/// entity itself (`base + (addx, -addy)`) and keeps the 20-step linger
+/// without an alpha ramp.
+#[derive(Component)]
+pub struct Snowflake {
+    pub base: glam::Vec2,
+    pub addx: f32,
+    pub addy: f32,
+    pub wave: f32,
+    pub fade: f32,
+}
+
 impl EnvironmentHazard {
     pub fn new(spec: EnvironmentHazardSpec) -> Self {
         Self {
@@ -1796,6 +1810,9 @@ pub fn spawn_motes(
 pub fn tick_motes(
     time: Res<SimTime>,
     mut commands: Commands,
+    date: Res<crate::date_part::DateRuntime>,
+    run: Res<crate::comps_a::Run>,
+    player_q: Query<&Pos, With<Player>>,
     mut sets: ParamSet<(
         Query<
             (
@@ -1810,6 +1827,7 @@ pub fn tick_motes(
             Without<crate::comps_a::WallTile>,
         >,
         Query<&Pos, With<TopSmall>>,
+        Query<(Entity, &mut Pos, &mut Snowflake)>,
     )>,
     floor: Option<Res<crate::comps_a::FloorMask>>,
     spiral: Option<Res<crate::vortex::SpiralCtl>>,
@@ -1834,6 +1852,38 @@ pub fn tick_motes(
             vel.y = -vel.y * keep;
         }
     };
+    // GML `BackCont/Alarm_0.gml:10-17`: one `SnowFlake` every
+    // `5 + random(60)` steps (mean 35) on the Frozen City, and on every
+    // floor under the xmas flag; the anchor lands in a two-view box
+    // around the camera (the port stands the camera in for the player)
+    // and the draw offset starts 320 px above it.
+    if run.area == crate::data::AreaId::FrozenCity || date.events.xmas {
+        let mut rng = rand::rng();
+        if rng.random_range(0..35) == 0
+            && let Ok(ppos) = player_q.single()
+        {
+            let base = ppos.0
+                + glam::Vec2::new(
+                    rng.random_range(-crate::vortex::GUI_W..crate::vortex::GUI_W),
+                    rng.random_range(-crate::vortex::GUI_H..crate::vortex::GUI_H),
+                );
+            let mut image = GmlImage::new("images/sprSnowFlake.png", 3, 0.0);
+            image.phase = rng.random_range(0.0..3.0);
+            commands.spawn((
+                GameCleanup,
+                LevelCleanup,
+                image,
+                Snowflake {
+                    base,
+                    addx: 0.0,
+                    addy: 320.0,
+                    wave: rng.random_range(0.0..std::f32::consts::TAU),
+                    fade: 0.0,
+                },
+                Pos(base - glam::Vec2::new(0.0, 320.0)),
+            ));
+        }
+    }
     for (e, mut pos, mut ground, mut angle, mut mote, mut scale, image) in &mut sets.p0() {
         mote.tick = mote.tick.wrapping_add(1);
         let falling = if let Some(fall) = mote.fall {
@@ -1892,6 +1942,21 @@ pub fn tick_motes(
         }
         if mote.bounce_period > 0 && mote.tick % mote.bounce_period.max(1) as u32 == 0 {
             bounce(pos.0, &mut ground.vel, 1.0);
+        }
+    }
+    // GML `SnowFlake/Step_0`: descend on the `sin`-sway offsets, then
+    // linger 20 steps (GML's `image_alpha` ramp) before despawning.
+    for (e, mut pos, mut flake) in &mut sets.p2() {
+        if flake.addy > 0.0 {
+            flake.addx -= (flake.wave / 5.0).sin() * steps;
+            flake.addy -= (1.0 - (flake.wave / 3.0).sin() / 2.0) * steps;
+            flake.wave += 0.2 * steps;
+            pos.0 = flake.base + glam::Vec2::new(flake.addx, -flake.addy);
+        } else {
+            flake.fade += steps;
+            if flake.fade > 20.0 {
+                commands.entity(e).despawn();
+            }
         }
     }
 }

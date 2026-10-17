@@ -250,6 +250,9 @@ pub fn deathcause_sprite_for_hit(
             crate::data::EnemyKind::from_u16(id).map(|k| crate::enemy_data::enemy_def(k).sprite)
         }
         Some(HitId::Explosion(_)) => Some("images/sprExplosion.png"),
+        Some(HitId::SmallExplosion) => Some("images/sprSmallExplosion.png"),
+        Some(HitId::GreenExplosion) => Some("images/sprGreenExplosion.png"),
+        Some(HitId::PopoExplosion) => Some("images/sprPopoExplo.png"),
         Some(HitId::Toxic) => Some("images/sprToxicGas.png"),
         Some(HitId::Fire) | Some(HitId::Trap) => Some("images/sprTrapGameover.png"),
         Some(HitId::CurseEat) => Some("images/sprCurse.png"),

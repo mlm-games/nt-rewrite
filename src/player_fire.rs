@@ -2796,8 +2796,11 @@ pub fn in_blast_box(at: Vec2, left: f32, top: f32, right: f32, bottom: f32) -> b
     at.x > left && at.y > top && at.x < right && at.y < bottom
 }
 
-/// GML `scrMeltingCorpseExplosion` (`scrPowers.gml:464-517`). Purely cosmetic:
-/// it deals no damage, so the caller owns the actual corpse/enemy removal.
+/// GML `scrMeltingCorpseExplosion` (`scrPowers.gml:464-517`): streaks and
+/// splat are cosmetic; each `MeatExplosion` spot is a real blast. A
+/// `MeatExplosion` inherits `damagesource` (`team_none`, `hitid` None) with
+/// `damage = 4` and collides with every `hitme` - enemies, props (bushes,
+/// barrels, obstacles) and the player.
 fn melting_corpse_explosion(commands: &mut Commands, from: Vec2, at: Vec2, size: i32, tb: bool) {
     let mut rng = rand::rng();
 
@@ -2829,13 +2832,25 @@ fn melting_corpse_explosion(commands: &mut Commands, from: Vec2, at: Vec2, size:
     if size >= 2 {
         meat_explosion_ring(commands, at, rng.random_range(0.0..std::f32::consts::TAU));
     } else {
-        commands.spawn((
-            GameCleanup,
-            LevelCleanup,
-            GmlImage::animated("images/sprMeatExplosion.png", 5, 0.4, true),
-            Pos(at),
-        ));
+        spawn_meat_blast(commands, at);
     }
+}
+
+/// GML `objects/MeatExplosion`: `damage = 4` on a 32x32 mask (half-extent
+/// 16), `team_none` parent, `hitid` None. The shared blast entity's
+/// `NativeExplosionKind::Meat` visual is the same art the corpse's own
+/// strip used to be spawned with.
+fn spawn_meat_blast(commands: &mut Commands, at: Vec2) {
+    crate::spawns::spawn_explosion_with_source_radius_kind(
+        commands,
+        at,
+        4,
+        None,
+        16.0,
+        Team::Player,
+        true,
+        Some(NativeExplosionKind::Meat),
+    );
 }
 
 /// GML `repeat 3 { instance_create(x + ldrx(24, _ang), ..., MeatExplosion); _ang += 120 }`.
@@ -2843,12 +2858,7 @@ fn meat_explosion_ring(commands: &mut Commands, at: Vec2, start: f32) {
     for step in 0..3 {
         let a = start + step as f32 * std::f32::consts::TAU / 3.0;
         let off = Vec2::new(a.cos(), a.sin()) * 24.0;
-        commands.spawn((
-            GameCleanup,
-            LevelCleanup,
-            GmlImage::animated("images/sprMeatExplosion.png", 5, 0.4, true),
-            Pos(at + off),
-        ));
+        spawn_meat_blast(commands, at + off);
     }
 }
 

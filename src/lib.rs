@@ -118,6 +118,7 @@ pub mod comps_a;
 pub mod comps_b;
 pub mod crown;
 pub mod data;
+mod date_part;
 mod dead_path_part;
 pub mod deaths;
 pub mod decide_wep;
@@ -4975,6 +4976,10 @@ fn init_schedule_resources(world: &mut World) {
     world.insert_resource(Euphoria::default());
     world.insert_resource(OpenMind::default());
     world.insert_resource(HeavyHeart::default());
+    world.insert_resource(crate::date_part::DateRuntime {
+        events: crate::date_part::DateEvents::today(),
+        party_gun_dropped: false,
+    });
     world.init_resource::<CribTrip>();
     world.init_resource::<crate::state::OverlayMenu>();
     world.init_resource::<crate::state::PendingUnpause>();

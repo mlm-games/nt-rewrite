@@ -218,6 +218,8 @@ pub const WEAPON_GOLDEN_SHOTGUN: WeaponId = WeaponId(42);
 pub const WEAPON_GOLDEN_BAZOOKA: WeaponId = WeaponId(102);
 pub const WEAPON_CHICKEN_SWORD: WeaponId = WeaponId(46);
 pub const WEAPON_RUSTY_REVOLVER: WeaponId = WeaponId(56);
+/// GML `wep_party_gun` (`scrDrop` birthday drop).
+pub const WEAPON_PARTY_GUN: WeaponId = WeaponId(82);
 pub const WEAPON_ROGUE_RIFLE: WeaponId = WeaponId(81);
 pub const WEAPON_DOG_SPIN_ATTACK: WeaponId = WeaponId(108);
 pub const WEAPON_GUITAR: WeaponId = WeaponId(115);

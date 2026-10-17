@@ -1403,6 +1403,12 @@ pub struct EnemySprites {
     pub charge: Option<&'static str>,
 }
 
+/// GML `Bandit/Create_0.gml:27-36` runs its costume roll once at spawn;
+/// the port's spawn paths are resource-less, so the roll happens on the
+/// first tick an enemy is seen instead.
+#[derive(Component)]
+pub struct CostumeRolled;
+
 #[derive(Component)]
 pub struct Prop {
     pub size: Vec2,

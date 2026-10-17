@@ -77,7 +77,16 @@ pub fn spawn_explosion_with_source_radius_kind(
             source,
         },
         LingeringBlast {
-            duration: GTimer::from_seconds(0.75, TimerMode::Once),
+            // GML lives: `Explosion` 9 frames at `image_speed 0.4` = 0.75 s;
+            // `MeatExplosion` 6 frames = 0.5 s.
+            duration: GTimer::from_seconds(
+                if visual == Some(NativeExplosionKind::Meat) {
+                    0.5
+                } else {
+                    0.75
+                },
+                TimerMode::Once,
+            ),
             tick: GTimer::from_seconds(1.0 / 30.0, TimerMode::Repeating),
             hit: Vec::new(),
         },

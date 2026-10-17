@@ -627,6 +627,57 @@ pub fn flush_pending_enemy_spawns(
     }
 }
 
+/// GML `Bandit/Create_0.gml:27-36`: a 10% spawn roll dresses normal
+/// bandits in the snow strips (`UberCont.xmas`) or the spooky ones
+/// (`UberCont.halloween`, checked second). The kind stays `Bandit`, so
+/// every gameplay path is untouched - only the strip table and the idle
+/// anim swap.
+pub fn roll_bandit_costumes(
+    mut commands: Commands,
+    catalog: Res<repame_anim::AnimCatalog>,
+    date: Res<crate::date_part::DateRuntime>,
+    mut new_enemies: Query<
+        (Entity, &Enemy, Option<&mut crate::comps_b::EnemySprites>),
+        Without<crate::comps_b::CostumeRolled>,
+    >,
+) {
+    if !date.events.xmas && !date.events.halloween {
+        return;
+    }
+    let mut rng = rand::rng();
+    for (entity, enemy, sprites) in &mut new_enemies {
+        commands
+            .entity(entity)
+            .insert(crate::comps_b::CostumeRolled);
+        if enemy.kind != EnemyKind::Bandit || rng.random_range(0.0..1.0) >= 0.1 {
+            continue;
+        }
+        let (idle, walk, hurt) = if date.events.xmas {
+            (
+                "images/sprSnowBanditIdle.png",
+                "images/sprSnowBanditWalk.png",
+                "images/sprSnowBanditHurt.png",
+            )
+        } else {
+            (
+                "images/sprSpookyBanditIdle.png",
+                "images/sprSpookyBanditWalk.png",
+                "images/sprSpookyBanditHurt.png",
+            )
+        };
+        if let Some(mut s) = sprites {
+            s.idle = idle;
+            s.walk = Some(walk);
+            s.hurt = hurt;
+        }
+        if let Some(def) = catalog.def(idle) {
+            commands
+                .entity(entity)
+                .insert(crate::anim::SpriteAnim::new(idle, def));
+        }
+    }
+}
+
 /// Enemies that spawned inside a solid cell (the secret-entrance guard ring in
 /// `setup::spawn_secret_entrances`, the vault-statue bandits, the boss
 /// coordinates) start in contact, so `move_contact_solid` walks them out while

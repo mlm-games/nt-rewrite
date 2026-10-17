@@ -1501,17 +1501,55 @@ pub fn corpse_hits(
 /// Split only because bevy_ecs caps systems at 16 params: iterating the
 /// [`DeathEvents`] record preserves the per-death multiplicity exactly
 /// (including repeated TriggerFingers scaling with several deaths).
+/// Screen-feel sinks `resolve_death_drops` drives (bundled so the system
+/// stays within the 16-param cap, same as `BoomFeel`).
+#[derive(bevy_ecs::system::SystemParam)]
+pub struct DeathFeel<'w> {
+    pub trauma: ResMut<'w, Trauma>,
+    pub hitstop: ResMut<'w, HitStop>,
+    pub slow_mo: ResMut<'w, SlowMotion>,
+    pub flash: ResMut<'w, FlashWhite>,
+    pub rumble_queue: ResMut<'w, Queue<RumbleRequest>>,
+}
+
+/// GML `scrDrop.gml:92-99`: on the birthday, a roll that dropped nothing
+/// has a 5% chance to hand out the party gun - once per boot
+/// (`global.party_gun_special_drop`).
+fn birthday_party_drop(
+    commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
+    pos: glam::Vec2,
+    dropped: bool,
+    date: &mut crate::date_part::DateRuntime,
+) {
+    if dropped || !date.events.birthday || date.party_gun_dropped {
+        return;
+    }
+    let mut rng = rand::rng();
+    if rng.random_range(0.0..1.0) <= 0.05 {
+        let e = crate::pickups::spawn_pickup(
+            commands,
+            catalog,
+            crate::comps_b::PickupKind::Weapon(crate::data::WEAPON_PARTY_GUN),
+            pos,
+            0,
+            false,
+        );
+        commands
+            .entity(e)
+            .insert(crate::comps_b::WepPickupAmmo(true));
+        date.party_gun_dropped = true;
+    }
+}
+
 pub fn resolve_death_drops(
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
     audio: Res<GameAudio>,
-    mut rumble_queue: ResMut<Queue<RumbleRequest>>,
+    mut feel: DeathFeel,
+    mut date: ResMut<crate::date_part::DateRuntime>,
     mut cues: ResMut<Queue<AudioCue>>,
     mut run: ResMut<Run>,
-    mut slow_mo: ResMut<SlowMotion>,
-    mut flash: ResMut<FlashWhite>,
-    mut hitstop: ResMut<HitStop>,
-    mut trauma: ResMut<Trauma>,
     mut loop_transition: ResMut<LoopTransition>,
     throne_room: Res<ThroneRoomState>,
     mut toast: ResMut<Toast>,
@@ -1555,7 +1593,7 @@ pub fn resolve_death_drops(
                         &mut commands,
                         &mut loop_transition,
                         &mut toast,
-                        &mut trauma,
+                        &mut feel.trauma,
                         player_pos_now,
                     );
                 } else {
@@ -1564,25 +1602,26 @@ pub fn resolve_death_drops(
                     // run, so the mid-run save is dropped.
                     crate::run_save::delete_run_save();
                     toast.show("THE NUCLEAR THRONE");
-                    flash_white(&mut flash, 0.2);
-                    trauma.add(0.5);
-                    slow_motion(&mut slow_mo, 0.25, 2.0);
+                    flash_white(&mut feel.flash, 0.2);
+                    feel.trauma.add(0.5);
+                    slow_motion(&mut feel.slow_mo, 0.25, 2.0);
                 }
             }
             EnemyKind::ThroneII => {
                 loop_transition.throne_ii_defeated();
-                crate::loop_transition::mark_throne_ii_defeated(&mut toast, &mut trauma);
+                crate::loop_transition::mark_throne_ii_defeated(&mut toast, &mut feel.trauma);
                 // GML `Nothing2/Destroy_0`: `repeat (2) scrDrop(100, 0)`
                 // (chest-or-ammo spawns, not bare weapon caches).
                 for _ in 0..2 {
-                    crate::pickups::maybe_spawn_drop(
+                    let drop_pos = event.pos
+                        + glam::Vec2::new(
+                            rand::rng().random_range(-16.0..16.0),
+                            rand::rng().random_range(-16.0..16.0),
+                        );
+                    let dropped = crate::pickups::maybe_spawn_drop(
                         &mut commands,
                         &catalog,
-                        event.pos
-                            + glam::Vec2::new(
-                                rand::rng().random_range(-16.0..16.0),
-                                rand::rng().random_range(-16.0..16.0),
-                            ),
+                        drop_pos,
                         100,
                         0,
                         &player,
@@ -1591,6 +1630,7 @@ pub fn resolve_death_drops(
                         run.loop_count,
                         Some(&decide),
                     );
+                    birthday_party_drop(&mut commands, &catalog, drop_pos, dropped, &mut date);
                 }
             }
             EnemyKind::FrogQueen => {
@@ -1683,9 +1723,9 @@ pub fn resolve_death_drops(
         }
 
         if def.boss {
-            hitstop.trigger(0.28, 0.18);
-            slow_motion(&mut slow_mo, 0.35, 0.55);
-            flash_white(&mut flash, 0.12);
+            feel.hitstop.trigger(0.28, 0.18);
+            slow_motion(&mut feel.slow_mo, 0.35, 0.55);
+            flash_white(&mut feel.flash, 0.12);
             toast.show(&format!(
                 "{} DEFEATED",
                 enemy_def(enemy.kind).name.to_ascii_uppercase()
@@ -1694,8 +1734,8 @@ pub fn resolve_death_drops(
 
         if def.boss {
             audio.play_boom(&mut cues);
-            rumble(&mut rumble_queue, 0.8, 1.0, 0.4);
-            slow_motion(&mut slow_mo, 0.35, 0.6);
+            rumble(&mut feel.rumble_queue, 0.8, 1.0, 0.4);
+            slow_motion(&mut feel.slow_mo, 0.35, 0.6);
             let melting_bonus = if race_state.race == RaceId::Melting {
                 1
             } else {
@@ -1721,7 +1761,7 @@ pub fn resolve_death_drops(
             // draws, so the roll count is per-kind (`ScrapBoss` 1,
             // `Nothing2` 2, `HyperCrystal` 3).
             for _ in 0..def.drop_rolls {
-                maybe_spawn_drop(
+                let dropped = maybe_spawn_drop(
                     &mut commands,
                     &catalog,
                     pos,
@@ -1733,6 +1773,7 @@ pub fn resolve_death_drops(
                     run.loop_count,
                     Some(&decide),
                 );
+                birthday_party_drop(&mut commands, &catalog, pos, dropped, &mut date);
             }
         } else {
             let melting_bonus = if race_state.race == RaceId::Melting {
@@ -1755,7 +1796,7 @@ pub fn resolve_death_drops(
             // write `repeat (2) scrDrop(...)` (or a bare double call), which is
             // two independent `random(100)` draws, not one doubled chance.
             for _ in 0..crate::enemy_data::enemy_def(enemy.kind).drop_rolls {
-                maybe_spawn_drop(
+                let dropped = maybe_spawn_drop(
                     &mut commands,
                     &catalog,
                     pos,
@@ -1767,9 +1808,10 @@ pub fn resolve_death_drops(
                     run.loop_count,
                     Some(&decide),
                 );
+                birthday_party_drop(&mut commands, &catalog, pos, dropped, &mut date);
             }
             if event.extra_drop_chance != 0 || event.extra_weapon_chance != 0 {
-                maybe_spawn_drop(
+                let dropped = maybe_spawn_drop(
                     &mut commands,
                     &catalog,
                     pos,
@@ -1781,6 +1823,7 @@ pub fn resolve_death_drops(
                     run.loop_count,
                     Some(&decide),
                 );
+                birthday_party_drop(&mut commands, &catalog, pos, dropped, &mut date);
             }
             if enemy.kind == EnemyKind::WepMimic {
                 // GML `WepMimic/Destroy_0`: a bare `scrDecideWep(1)`
@@ -1953,7 +1996,7 @@ pub fn move_projectiles(
         let trap_fire = aux.p6().get(e).is_ok();
         let prev = tpos.0;
         tpos.0 += vel.0 * dt;
-        let pos = tpos.0;
+        let mut pos = tpos.0;
         if split.is_some() && vel.0 == glam::Vec2::ZERO {
             on_projectile_removed(
                 &mut commands,
@@ -2039,6 +2082,38 @@ pub fn move_projectiles(
                     hit_prop = Some((prop_e, center, prop.destructible, death.copied()));
                     break;
                 }
+            }
+        }
+
+        // GM resolves overlaps at the end of every step, the spawn step
+        // included; the port samples only the post-move point, and its 8 px
+        // muzzle can sit inside a wall the player is hugging, so a shell at
+        // 12-18 px/step can clear the 16 px wall on its first move and sail
+        // through it. From tick 2 on `prev` is the point checked last tick,
+        // so this retry is a no-op there - it only fires on the spawn tick,
+        // settling the projectile on the wall before it ever moves.
+        if hit_normal.is_none() {
+            let mut at_normal: Option<glam::Vec2> = None;
+            let mut at_prop: Option<(Entity, glam::Vec2, bool, Option<PropDeathEffect>)> = None;
+            if let Some(n) = arena_wall_normal(prev, p.radius, ARENA_W, ARENA_H) {
+                at_normal = Some(n);
+            }
+            if !trap_fire {
+                for (prop_e, prop, prop_pos, death, _, _, _) in props.iter() {
+                    let center = prop_pos.0;
+                    let half = prop.size * 0.5;
+                    if let Some(n) = circle_aabb_normal(prev, p.radius, center, half) {
+                        at_normal = Some(n);
+                        at_prop = Some((prop_e, center, prop.destructible, death.copied()));
+                        break;
+                    }
+                }
+            }
+            if at_normal.is_some() {
+                tpos.0 = prev;
+                pos = prev;
+                hit_normal = at_normal;
+                hit_prop = at_prop;
             }
         }
 
@@ -3245,7 +3320,8 @@ pub fn tick_beams(
     mut commands: Commands,
     mut secrets: ResMut<SecretTriggers>,
     mut last_damage: ResMut<LastDamageTaken>,
-    mut beams: Query<(Entity, &Pos, &mut Beam)>,
+    mask: Res<FloorMask>,
+    mut beams: Query<(Entity, &mut Pos, &mut Beam)>,
     mut targets: Query<
         (Entity, &Pos, &Team, &mut Health, Option<&mut Velocity>),
         (
@@ -3268,10 +3344,50 @@ pub fn tick_beams(
             continue;
         }
 
-        let center = beam_pos.0;
-        let half = beam.dir.normalize_or_zero() * (beam.length * 0.5);
-        let a = center - half;
-        let b = center + half;
+        let dir = beam.dir.normalize_or_zero();
+        // GML `Laser/Alarm_0`: the beam walks out in 2 px steps from the
+        // muzzle and stops at the first `Wall` (any length) or `hitme`
+        // target (past the 16-step minimum, so the shooter's own body is
+        // skipped), capped at its max length. Re-clip every tick so the
+        // drawn beam and its damage end where the walk would.
+        let near = beam_pos.0 - dir * (beam.length * 0.5);
+        let mut stop = beam.length;
+        let mut walked = 0.0;
+        while walked + 2.0 <= stop {
+            walked += 2.0;
+            let p = near + dir * walked;
+            if !mask.is_walkable(p) && p.x.abs() < ARENA_W / 2.0 && p.y.abs() < ARENA_H / 2.0 {
+                stop = walked;
+                break;
+            }
+        }
+        if stop == beam.length {
+            let mut enemy_stop = stop;
+            for (_, target_pos, target_team, _, _) in targets.iter() {
+                if *target_team == beam.team {
+                    continue;
+                }
+                let p = target_pos.0;
+                let along = (p - near).dot(dir);
+                // `_dir > 16` in GML: 16 two-px steps = 32 px.
+                if along <= 32.0 || along >= enemy_stop {
+                    continue;
+                }
+                if distance_to_segment(p, near, near + dir * enemy_stop) > beam.width * 0.5 {
+                    continue;
+                }
+                enemy_stop = along;
+            }
+            stop = enemy_stop;
+        }
+        if stop != beam.length {
+            beam.length = stop;
+            let center = near + dir * (stop * 0.5);
+            commands.entity(beam_e).insert(Pos(center));
+        }
+
+        let a = near;
+        let b = near + dir * beam.length;
 
         for (target_e, target_pos, target_team, mut health, mut vel) in &mut targets {
             // `scr_can_hit.gml:9`: `team != _attacker.team || team ==
@@ -4525,13 +4641,30 @@ pub fn tick_throne_victory(
 /// 16-system-param cap, and because its enemy/prop queries are keyed on
 /// `With<Enemy>` / `With<Prop>`, which a chest is neither of.
 pub fn tick_explosion_chest_damage(
-    explosions: Query<(&Pos, &Explosion), (Without<Player>, Without<Prop>)>,
+    mut commands: Commands,
+    explosions: Query<
+        (&Pos, &Explosion, Option<&ExplosionVisual>),
+        (Without<Player>, Without<Prop>),
+    >,
     mut chests: Query<
         (&Pos, &Hitbox, &mut Health, &Pickup),
         (With<Pickup>, Without<Player>, Without<Prop>),
     >,
+    projectiles: Query<(Entity, &Pos, &Projectile)>,
 ) {
-    for (center, boom) in &explosions {
+    for (center, boom, visual) in &explosions {
+        // GML `MeatExplosion/Collision_projectile:2-5`: while the blast
+        // overlaps a projectile it destroys it (`typ != 0`; the
+        // laser/lightning family is `typ 0` and rides its own components).
+        // Any team's shot pops - the blast's `team_none` parent sees every
+        // projectile as foreign.
+        if matches!(visual.map(|v| v.0), Some(NativeExplosionKind::Meat)) {
+            for (proj_e, ppos, proj) in &projectiles {
+                if ppos.0.distance(center.0) <= boom.radius + proj.radius {
+                    commands.entity(proj_e).try_despawn();
+                }
+            }
+        }
         for (cpos, hitbox, mut health, pickup) in &mut chests {
             if health.hp <= 0 {
                 continue;
@@ -4547,8 +4680,7 @@ pub fn tick_explosion_chest_damage(
     }
 }
 
-/// Timed area explosion: trauma/chroma/hitstop/boom, player-team damage to
-/// enemies + destructible props (corpse/effect chain, secret entrances,
+/// Timed area explosion: trauma/chroma/hitstop/boom, player-team damage to/// enemies + destructible props (corpse/effect chain, secret entrances,
 /// snowman ambushes, gold/rad drops) + wall breaks, hits-player damage with
 /// Boiling Veins law, Death-crown chains. GML parity (`Pos` for the
 /// `x`/`y` pair; prop marker options folded into one query to fit the
@@ -4792,7 +4924,13 @@ pub fn apply_explosions(
             }
 
             for (_, cell, wpos) in &walls {
-                if fused && wpos.0.distance(pos) < boom.radius * 0.85 {
+                // GML `MeatExplosion` has no `Collision_Wall`: meat blasts
+                // (blood weapons, Melting's corpse detonations) never crack
+                // the grid.
+                if !matches!(visual.map(|v| v.0), Some(NativeExplosionKind::Meat))
+                    && fused
+                    && wpos.0.distance(pos) < boom.radius * 0.85
+                {
                     commands.spawn((
                         GameCleanup,
                         LevelCleanup,
@@ -4828,10 +4966,20 @@ pub fn apply_explosions(
             }
             health.invuln = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
             secrets.mark_damage_taken();
-            // GML `Explosion/Create_0:5`: the damage rides the explosion's
-            // own hit id, so the death screen shows `sprExplosion` even
-            // when the blast was the player's own grenade.
-            last_damage.note(Some(HitId::Explosion(WeaponId::NONE)), None);
+            // GML `objects/*/Create_0`: the damage rides the explosion
+            // object's own hit id - `SmallExplosion`/`GreenExplosion`/
+            // `PopoExplosion` each keep theirs (`scrDeathCauses` sprites),
+            // `MeatExplosion` inherits `damagesource`'s `HitId.None`, and
+            // everything else is the standard `HitId.Explosion` (the fix
+            // for a plain `Explosion/Create_0:5`).
+            let hit = match visual.map(|v| v.0) {
+                Some(NativeExplosionKind::Small) => Some(HitId::SmallExplosion),
+                Some(NativeExplosionKind::Green) => Some(HitId::GreenExplosion),
+                Some(NativeExplosionKind::Popo) => Some(HitId::PopoExplosion),
+                Some(NativeExplosionKind::Meat) => None,
+                _ => Some(HitId::Explosion(WeaponId::NONE)),
+            };
+            last_damage.note(hit, None);
             HitFlash::apply(&mut commands, player_e, [1.0, 0.3, 0.2, 1.0], 0.15);
             cues.push(AudioCue {
                 name: crate::enemy_data::gml_race_hurt(race_state.race),
