@@ -410,6 +410,9 @@ pub struct PropDeathEffect {
     /// tail): 4 x `Smoke`, one `ExploderExplo` and `sndEXPChest`, plus the
     /// `prop/Destroy_0.gml:12` `scrRadDrop` taking `_high = 26`.
     pub rad_chest: bool,
+    /// GML `Car/Destroy_0.gml:15`, `CarVenus:17`, `CarVenusFixed:27`:
+    /// `snd_play(sndExplosionCar)` on top of the blast booms.
+    pub cue: Option<&'static str>,
 }
 
 /// GML `scrDrop(_pickup_chance, _weapon_chance)`, kept as two
@@ -583,6 +586,7 @@ impl PropDeathEffect {
             blast_jitter: 3.0,
             ground_flames: 6,
             flame_jitter: 24.0,
+            cue: Some("sndExplosionCar"),
             ..Default::default()
         }
     }
@@ -599,6 +603,7 @@ impl PropDeathEffect {
             ground_flames: 6,
             flame_jitter: 0.0,
             flame_launch: Some((4.0, 16.0)),
+            cue: Some("sndExplosionCar"),
             ..Default::default()
         }
     }
@@ -758,6 +763,20 @@ pub fn spawn_prop_corpse(
     pos: glam::Vec2,
     sprites: &PropSprites,
 ) {
+    // GML `Car/Destroy_0.gml:11`, `CarVenus:7` and `CarVenusFixed:23` set
+    // `corpse = false` before `event_inherited()`: the grounded cars (and
+    // their frozen-city variants) vanish into their blasts leaving no
+    // husk - the `sprScorchmark` `spr_dead` they carry is vestigial
+    // (`CarThrow` and `SentryGun` keep theirs and are not listed).
+    if matches!(
+        sprites.idle,
+        "images/sprCarIdle.png"
+            | "images/sprFrozenCar.png"
+            | "images/sprVenusCarFixed.png"
+            | "images/sprVenuzCar2.png"
+    ) {
+        return;
+    }
     let mut ec = commands.spawn((GameCleanup, LevelCleanup, *sprites, Pos(pos)));
     if sprites.dead == "images/sprScorchmark.png" {
         ec.insert((NativeDepth(5.0), GmlImage::new(sprites.dead, 1, 0.0)));
@@ -805,6 +824,14 @@ pub fn spawn_prop_death_effect(
     let Some(effect) = effect else {
         return;
     };
+
+    if let Some(name) = effect.cue {
+        cues.push(crate::audio::AudioCue {
+            name,
+            volume: 1.0,
+            variance: 0.2,
+        });
+    }
 
     if effect.rad_chest {
         spawn_rad_chest_burst(commands, particles_on, pos);
