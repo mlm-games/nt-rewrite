@@ -30,6 +30,7 @@ use std::sync::Arc;
 
 use bevy_ecs::prelude::*;
 use glam::{DVec2, DVec4, Vec2};
+use rand::RngExt;
 use repame_actors::{ActorDraw, ActorItem};
 use repame_anim::{AnimCatalog, AnimDef, AtlasDesc, UvRect, frame_key};
 use repame_atlas::AtlasId;
@@ -3674,6 +3675,38 @@ pub fn world_instances_cached(
             };
             if let Some(s) = assets.sprite_for(path, frame, pos.0, flip, body_rot, tint) {
                 out.push(s);
+            }
+            // GML `CrystalShield/Draw_0:24-32`: the active shield rides the
+            // owner at `y - 2`, picking up an `orandom(time / 28)` x-jitter
+            // once `time >= 28`; skins B/C swap in their own idle strip. The
+            // disappear strips and the Juggernaut back/front pair are
+            // renderer work not ported here.
+            if let Some(shield) = world.get::<crate::comps_b::Shield>(entity)
+                && !shield.timer.is_finished()
+            {
+                let shield_path = match race.map(|rs| rs.skin) {
+                    Some(crate::data::SkinLetter::B) => "images/sprShieldB.png",
+                    Some(crate::data::SkinLetter::C) => "images/sprShieldC.png",
+                    _ => "images/sprShield.png",
+                };
+                let time = shield.timer.elapsed_secs() * 30.0;
+                let jitter = if time >= 28.0 {
+                    let mut rng = rand::rng();
+                    rng.random_range(0.0f32..(time / 28.0))
+                } else {
+                    0.0
+                };
+                let frame = ((blink_t * 8.0).floor() as i32).rem_euclid(4);
+                if let Some(s) = assets.sprite_for(
+                    shield_path,
+                    frame,
+                    pos.0 + Vec2::new(jitter, -2.0),
+                    false,
+                    0.0,
+                    [1.0; 4],
+                ) {
+                    out.push(s);
+                }
             }
             // GML underwater bubble (Oasis, non-Fish/Robot): animated
             // `sprPlayerBubble` over the body.

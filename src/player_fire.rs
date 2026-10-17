@@ -59,7 +59,7 @@ use crate::comps_b::{
     Ally, BIG_DOG_MISSILE_DAMAGE, BIG_DOG_MISSILE_HP, BIG_DOG_MISSILE_RADIUS, BigDogMissileState,
     BloodAmmo, ChestKind, Corpse, CryAnim, CustomExplosion, Dash, DeploysSentry, Enemy, GmlImage,
     HazardCloud, HorrorCharge, NativeAngle, NativeDepth, NativeExplosionKind, NativeFlip,
-    PickupKind, PlasmaBurst, PopPopCharges, Portal, PortalStrike, PortalSucking, Prop, PropSprites,
+    PickupKind, PlasmaBurst, Portal, PortalStrike, PortalSucking, Prop, PropSprites,
     SecretEntrance, Shield, Slowed, SpawnsWeaponPickup, SwingFx, Telekinesis, WeaponVisual,
 };
 use crate::data::{
@@ -530,7 +530,6 @@ pub fn player_fire(
     >,
     mut fire_q: Query<(&mut FireCooldown, &mut Inventory, &mut Velocity), With<Player>>,
     mut vis_q: Query<&mut WeaponVisual>,
-    mut pop_q: Query<&mut PopPopCharges>,
     catalog: Res<repame_anim::AnimCatalog>,
     mut tut: Option<ResMut<crate::state::TutorialState>>,
 ) {
@@ -590,6 +589,9 @@ pub fn player_fire(
     let fire_pressed = input.take_fire_pressed() || input.take_fire_released();
     let spec_held = input.spec_held;
     let spec_pressed = input.take_spec_pressed();
+    // GML `Player/Step_0.gml:413`: a Crystal holding RMB never reaches
+    // `scrPlayerFiring` - no shots while the shield key is down.
+    let shield_hold = race_state.race == RaceId::Crystal && spec_held;
 
     let mut fx = FireFx {
         trauma: &mut trauma,
@@ -605,7 +607,10 @@ pub fn player_fire(
     let origin = pos.0;
     let aim_v = aim.0;
 
-    if cooldown.burst_left > 0 && cooldown.burst_timer.is_finished() && primary_id != WeaponId::NONE
+    if !shield_hold
+        && cooldown.burst_left > 0
+        && cooldown.burst_timer.is_finished()
+        && primary_id != WeaponId::NONE
     {
         let shot = GunShot {
             player_ent,
@@ -620,14 +625,7 @@ pub fn player_fire(
         if primary_def.melee.is_none() {
             run.shots_fired += 1;
         }
-        fire_burst_volley(
-            &mut commands,
-            &mut fx,
-            &shot,
-            &player,
-            &mut pop_q,
-            &mut vis_q,
-        );
+        fire_burst_volley(&mut commands, &mut fx, &shot, &player, &mut vis_q);
         cooldown.burst_left -= 1;
         cooldown.burst_timer = GTimer::from_seconds(primary_def.burst_interval, TimerMode::Once);
     }
@@ -648,26 +646,21 @@ pub fn player_fire(
         if secondary_def.melee.is_none() {
             run.shots_fired += 1;
         }
-        fire_burst_volley(
-            &mut commands,
-            &mut fx,
-            &shot,
-            &player,
-            &mut pop_q,
-            &mut vis_q,
-        );
+        fire_burst_volley(&mut commands, &mut fx, &shot, &player, &mut vis_q);
         cooldown.burst_left_b -= 1;
         cooldown.burst_timer_b =
             GTimer::from_seconds(secondary_def.burst_interval, TimerMode::Once);
     }
 
-    let primary_intent = if primary_def.automatic || is_steroids {
-        fire_held
-    } else {
-        fire_pressed
-    };
+    let primary_intent = !shield_hold
+        && if primary_def.automatic || is_steroids {
+            fire_held
+        } else {
+            fire_pressed
+        };
 
-    let secondary_intent = is_steroids && spec_held && secondary_id != WeaponId::NONE;
+    let secondary_intent =
+        !shield_hold && is_steroids && spec_held && secondary_id != WeaponId::NONE;
 
     if primary_id != WeaponId::NONE && primary_intent && cooldown.timer.is_finished() {
         let shot = GunShot {
@@ -697,7 +690,6 @@ pub fn player_fire(
             &mut vel,
             &mut cooldown,
             true,
-            &mut pop_q,
             &mut vis_q,
         );
     }
@@ -726,7 +718,6 @@ pub fn player_fire(
             &mut vel,
             &mut cooldown,
             true,
-            &mut pop_q,
             &mut vis_q,
         );
     }
@@ -739,7 +730,6 @@ fn fire_burst_volley(
     fx: &mut FireFx,
     shot: &GunShot,
     player: &Player,
-    pop_q: &mut Query<&mut PopPopCharges>,
     vis_q: &mut Query<&mut WeaponVisual>,
 ) {
     for mut wv in vis_q.iter_mut() {
@@ -748,15 +738,6 @@ fn fire_burst_volley(
         }
     }
     spawn_pellets(commands, fx, shot, player);
-    if let Ok(mut charges) = pop_q.get_mut(shot.player_ent)
-        && charges.0 > 0
-    {
-        charges.0 -= 1;
-        spawn_pellets(commands, fx, shot, player);
-        if charges.0 == 0 {
-            commands.entity(shot.player_ent).remove::<PopPopCharges>();
-        }
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -770,7 +751,6 @@ fn fire_one_gun(
     vel: &mut Velocity,
     cooldown: &mut FireCooldown,
     consume_ammo: bool,
-    pop_q: &mut Query<&mut PopPopCharges>,
     vis_q: &mut Query<&mut WeaponVisual>,
 ) {
     let def = shot.def;
@@ -870,40 +850,6 @@ fn fire_one_gun(
     for mut wv in vis_q.iter_mut() {
         if wv.owner == shot.player_ent && wv.slot == shot.visual_slot {
             wv.wkick = def.recoil;
-        }
-    }
-    if let Ok(mut charges) = pop_q.get_mut(shot.player_ent)
-        && charges.0 > 0
-    {
-        charges.0 -= 1;
-        let mut can_dup = true;
-        if def.melee.is_none() && def.ammo != AmmoKind::None && def.ammo_cost > 0 {
-            match pay_fire_cost(inv, health, def.ammo, def.ammo_cost, None, player.free_ammo) {
-                AmmoPayment::Paid => {}
-                AmmoPayment::Failed => {
-                    can_dup = false;
-                }
-            }
-        }
-        if can_dup {
-            spawn_pellets(commands, fx, shot, player);
-            let mult = if player.throne_butt
-                || matches!(player.ultra, Some(UltraMutationId::VenuzBack2Bizniz))
-            {
-                3.0
-            } else {
-                2.0
-            };
-            let timer = if shot.visual_slot == 0 {
-                &mut cooldown.timer
-            } else {
-                &mut cooldown.timer_b
-            };
-            timer.set_duration((def.cooldown * player.fire_rate_mult * mult).max(0.03));
-            vel.0 -= shot.aim.normalize_or_zero() * 8.0 * 30.0 * 0.15;
-        }
-        if charges.0 == 0 {
-            commands.entity(shot.player_ent).remove::<PopPopCharges>();
         }
     }
 
@@ -2931,7 +2877,10 @@ pub fn player_ability(
     mut cues: ResMut<Queue<AudioCue>>,
     mut rumble_q: ResMut<Queue<RumbleRequest>>,
     mut toast: ResMut<Toast>,
-    mut pop_q: Query<&mut PopPopCharges>,
+    // Cursor world point (Rogue's strike and Crystal's Throne-Butt
+    // teleport spawn at the mouse like GML `mouse_x`/`mouse_y`); absent
+    // headless, where the 64px stick arm covers the target.
+    hover: Option<Res<crate::render::HoverWorld>>,
     corpses: Query<(Entity, &Pos, &Corpse, Option<&SpriteAnim>), With<Corpse>>,
     portals: Query<Entity, With<Portal>>,
     // `bevy_ecs` caps a system at 16 params, so the death-cause bookkeeping
@@ -2964,7 +2913,7 @@ pub fn player_ability(
     >,
     mut walls_and_allies: ParamSet<(
         Query<(Entity, &WallCell, &Pos), With<WallTile>>,
-        Query<Entity, With<Ally>>,
+        Query<(Entity, &mut Health, &mut Ally), With<Ally>>,
         Query<&SnareSeed>,
         Query<(Entity, &Pos), (With<Tangle>, Without<Player>)>,
         Query<&mut WeaponVisual>,
@@ -3185,23 +3134,28 @@ pub fn player_ability(
             }
         }
         AbilityKind::Shield => {
-            let timer = GTimer::from_seconds(1.6 * ability_mult.clamp(1.0, 2.0), TimerMode::Once);
-            if let Some(mut s) = shield {
-                s.timer = timer;
-            } else {
+            // GML `scrPowers.gml:29-40`: the press only creates a shield
+            // when none of the player's own is up (`_any`), so a second
+            // press mid-shield is fully inert. `CrystalShield/Step_2`
+            // counts `time += 1.6 * timescale` (plus `timescale` with
+            // Throne Butt) and pops at 60.
+            let active = shield.as_ref().is_some_and(|s| !s.timer.is_finished());
+            if !active {
+                let per_step = if player.throne_butt { 2.6 } else { 1.6 };
+                let timer = GTimer::from_seconds(60.0 / per_step / 30.0, TimerMode::Once);
                 commands.entity(player_e).insert(Shield { timer });
+                feel.trauma.add(0.08);
+                cue(
+                    &mut cues,
+                    if matches!(player.ultra, Some(UltraMutationId::CrystalJuggernaut)) {
+                        "sndCrystalJuggernaut"
+                    } else {
+                        "sndCrystalShield"
+                    },
+                    1.0,
+                    0.0,
+                );
             }
-            feel.trauma.add(0.08);
-            cue(
-                &mut cues,
-                if matches!(player.ultra, Some(UltraMutationId::CrystalJuggernaut)) {
-                    "sndCrystalJuggernaut"
-                } else {
-                    "sndCrystalShield"
-                },
-                1.0,
-                0.0,
-            );
         }
         // GML `scrPowers.gml:41-67`: the Eyes branch lives entirely inside
         // `if _hold`, so there is no press effect to arm.
@@ -3282,14 +3236,107 @@ pub fn player_ability(
             );
         }
         AbilityKind::PopPop => {
-            let charges = if player.throne_butt
-                || matches!(player.ultra, Some(UltraMutationId::VenuzBack2Bizniz))
-            {
-                2
-            } else {
-                1
+            // GML `scrPowers.gml:135-179` (Race.Venuz): a `can_shoot` press
+            // dumps `2 + TB*2` shots the same step. `scrYVCanPopPop` rejects
+            // non-guns and the three melee-ish ids; `scrCheckCanShoot`
+            // demands ammo and rads for the whole volley up front.
+            if !cooldown.timer.is_finished() {
+                return;
+            }
+            let slot = inv.current.min(inv.weapon_slots.saturating_sub(1));
+            let wep = inv.weapons[slot];
+            let kind = weapon_ammo(wep);
+            let can_pop = kind != AmmoKind::None
+                && !matches!(wep, WeaponId(24) | WeaponId(37) | WeaponId(53));
+            if !can_pop {
+                cue(&mut cues, "sndMutant6No", 1.0, 0.0);
+                return;
+            }
+            let count = 2 + 2 * i32::from(player.throne_butt);
+            let cost = weapon_meta(wep).wep_cost as i32;
+            let rad_cost = weapon_runtime_def(wep).rad_cost as i32;
+            let ammo_ok = cost <= 0 || player.free_ammo || inv.ammo_of(kind) >= cost * count;
+            let rads_ok =
+                rad_cost <= 0 || player.free_ammo || player.rads as i32 >= rad_cost * count;
+            if !ammo_ok || !rads_ok {
+                if !rads_ok {
+                    toast.show("NOT ENOUGH RADS");
+                    cue(&mut cues, "sndUltraEmpty", 1.0, 0.2);
+                } else {
+                    toast.show(if inv.ammo_of(kind) > 0 {
+                        "NOT ENOUGH AMMO"
+                    } else {
+                        "EMPTY"
+                    });
+                    cue(&mut cues, "sndEmpty", 1.0, 0.0);
+                }
+                return;
+            }
+            let shake_scale: f32 = persist.p0().settings.screenshake.clamp(0.0, 2.0);
+            let underwater = matches!(persist.p2().area, AreaId::Oasis);
+            let mut vis_q = walls_and_allies.p4();
+            let mut fx = FireFx {
+                trauma: &mut feel.trauma,
+                hitstop: &mut feel.hitstop,
+                cues: &mut cues,
+                rumble: &mut rumble_q,
+                toast: &mut toast,
+                shake_scale,
+                underwater,
+                catalog: &catalog,
+                mainvol: &mut feel.mainvol,
             };
-            commands.entity(player_e).insert(PopPopCharges(charges));
+            let shot = GunShot {
+                player_ent: player_e,
+                pos,
+                aim: aim.0,
+                weapon_id: wep,
+                def: weapon_runtime_def(wep),
+                visual_slot: 0,
+                burst: false,
+            };
+            // GML `:157-165` `UltraSkill.Back2Bizniz`: `1 + TB` free shots
+            // (no ammo) land before the paid volley.
+            if matches!(player.ultra, Some(UltraMutationId::VenuzBack2Bizniz)) {
+                for _ in 0..(1 + i32::from(player.throne_butt)) {
+                    fire_one_gun(
+                        &mut commands,
+                        &mut fx,
+                        &shot,
+                        &mut player,
+                        &mut inv,
+                        &mut health,
+                        &mut vel,
+                        &mut cooldown,
+                        false,
+                        &mut vis_q,
+                    );
+                }
+            }
+            // GML `:167`: `motion_add(gunangle + 180, 8)` - a backward kick
+            // on top of each shot's own push.
+            vel.0 -= aim.0.normalize_or_zero() * 8.0 * 30.0;
+            for _ in 0..count {
+                fire_one_gun(
+                    &mut commands,
+                    &mut fx,
+                    &shot,
+                    &mut player,
+                    &mut inv,
+                    &mut health,
+                    &mut vel,
+                    &mut cooldown,
+                    true,
+                    &mut vis_q,
+                );
+            }
+            // GML `:173`: `if (speed > 14) speed = 14` (px/step).
+            if vel.0.length() > 14.0 * 30.0 {
+                vel.0 = vel.0.normalize_or_zero() * 14.0 * 30.0;
+            }
+            // GML `:176`: `reload *= (2 + _tb)` after the volley.
+            let reload = cooldown.timer.duration() * (2.0 + f32::from(player.throne_butt));
+            cooldown.timer.set_duration(reload);
             cue(
                 &mut cues,
                 if player.throne_butt {
@@ -3330,6 +3377,14 @@ pub fn player_ability(
             let slot = inv.current;
             let w = inv.weapons[slot];
             if w == WeaponId::NONE {
+                return;
+            }
+            // GML `scrPowers.gml:181` gates on `scr_weapon_is_valid(wep) &&
+            // scr_weapon_is_valid(bwep)`: Robot needs a second gun before a
+            // weapon is eatable (`wep_none` is invalid).
+            let other_valid =
+                (0..inv.weapon_slots).any(|i| i != slot && inv.weapons[i] != WeaponId::NONE);
+            if !other_valid {
                 return;
             }
             let meta = weapon_meta(w);
@@ -3441,7 +3496,10 @@ pub fn player_ability(
             cue(&mut cues, "sndChickenThrow", 1.0, 0.0);
         }
         AbilityKind::SpawnAlly => {
-            let has_ally = !walls_and_allies.p1().is_empty();
+            // GML `scrPowers.gml:244-280` (Race.Rebel). Every live ally is
+            // fully healed and its decay pushed back (GML `Alarm_2` resets
+            // to 120) before the new one drops.
+            let has_ally = walls_and_allies.p1().iter().next().is_some();
             let cost = if has_ally || matches!(player.ultra, Some(UltraMutationId::RebelRiot)) {
                 2
             } else {
@@ -3454,6 +3512,10 @@ pub fn player_ability(
                 cue(&mut cues, "sndSpawnSuperAlly", 1.0, 0.0);
             }
             health.hp -= cost;
+            for (_, mut ahp, mut ally) in walls_and_allies.p1().iter_mut() {
+                ahp.hp = ahp.max;
+                ally.life = GTimer::from_seconds(12.0, TimerMode::Once);
+            }
             let ally_count = if matches!(player.ultra, Some(UltraMutationId::RebelRiot)) {
                 2
             } else {
@@ -3533,14 +3595,21 @@ pub fn player_ability(
                 return;
             }
             player.rogue_ammo = player.rogue_ammo.saturating_sub(1);
-            // GML `scrPowers.gml:352-358`: the strike spawns on the cursor,
-            // or 64px along the fire direction on gamepad/touch.
+            // GML `scrPowers.gml:352-358`: the strike spawns on the cursor
+            // for keyboard/mouse, or 64px along the fire direction on
+            // gamepad/touch. The pad stamp picks the arm (touch aims never
+            // carry a cursor).
             // `PortalStrike/Create_0.gml:3-7` then primes `explo_x` back by
             // `size * 0.5 * (ammo
             // - 0.5)` so the five blasts straddle the aim point rather than
             //   all trailing it.
             let heading = aim_v.normalize_or_zero();
-            let target = pos + heading * 64.0;
+            let cursor = if input.touch_dis <= 0.0 && !input.aim_from_pad {
+                hover.as_ref().and_then(|h| h.0)
+            } else {
+                None
+            };
+            let target = cursor.unwrap_or(pos + heading * 64.0);
             let size = PORTAL_STRIKE_SIZE;
             commands.spawn((
                 LevelCleanup,
@@ -3664,7 +3733,6 @@ pub fn player_ability(
                 &mut vel,
                 &mut cooldown,
                 false,
-                &mut pop_q,
                 &mut vis_q,
             );
 
@@ -3697,6 +3765,10 @@ pub fn player_ability(
         AbilityKind::CuzSwap => {
             // GML Cuz (`scrPowers.gml:430-454`): ring of
             // `20*(1+Emotional)` tears + `spr_cry` swap.
+            // GML `:432`: underwater refuses outright, before the ammo test.
+            if matches!(persist.p2().area, AreaId::Oasis) {
+                return;
+            }
             if player.cuz_ammo == 0 {
                 cue(&mut cues, "sndCuzCryAttackNoAmmo", 1.0, 0.0);
                 return;

@@ -1603,9 +1603,6 @@ pub struct FrogCharge {
 }
 
 #[derive(Component)]
-pub struct PopPopCharges(pub u8);
-
-#[derive(Component)]
 pub struct SnareZone {
     pub timer: Timer,
     pub radius: f32,

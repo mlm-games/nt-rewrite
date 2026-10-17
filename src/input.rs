@@ -16,6 +16,12 @@ use std::collections::HashSet;
 pub struct NtInput {
     pub move_axis: Vec2,
     pub aim_axis: Vec2,
+    /// True while a gamepad stick wrote `aim_axis` on the last sample.
+    /// GML picks aim-device consumers by `is_gamepad(index)`
+    /// (`Player/Step_0`/`scrPowers` Rogue + Crystal TB arms); the port
+    /// layers mouse-then-pad, so the pad stamp is what distinguishes the
+    /// cursor arm from the stick arm. Cleared with the other pulses.
+    pub aim_from_pad: bool,
     pub fire_held: bool,
     /// GML `JoystickAttack.dis` (px deflection, `min(rad, mdis) * 2`):
     /// trigger distance for the touch attack stick. Mouse/keyboard
@@ -152,6 +158,7 @@ impl Default for NtInput {
         Self {
             move_axis: Vec2::ZERO,
             aim_axis: Vec2::ZERO,
+            aim_from_pad: false,
             fire_held: false,
             touch_dis: 0.0,
             move_stick: None,
@@ -295,6 +302,7 @@ impl NtInput {
     pub fn clear_transient(&mut self) {
         self.move_axis = Vec2::ZERO;
         self.aim_axis = Vec2::ZERO;
+        self.aim_from_pad = false;
         self.fire_held = false;
         self.fire_pressed = false;
         self.fire_released = false;
@@ -872,6 +880,7 @@ pub fn sample_gamepad_mapped(
     }
     if right != Vec2::ZERO {
         output.aim_axis = right.clamp_length_max(1.0);
+        output.aim_from_pad = true;
     }
 
     let mut fire_held = false;

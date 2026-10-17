@@ -17,7 +17,7 @@ use crate::comps_b::{
     Ally, Dash, Enemy, EnemyBrain, FrogCharge, HorrorCharge, Portal, PortalState, PortalSucking,
     Prop, Shield, Telekinesis, WeaponVisual, WeaponVisualOwner,
 };
-use crate::data::{AbilityKind, EnemyKind, RaceId, WeaponId};
+use crate::data::{AbilityKind, EnemyKind, RaceId, UltraMutationId, WeaponId};
 use crate::input::NtInput;
 use crate::msg::Queue;
 use crate::spatial::{Pos, clamp_to_arena, resolve_mask_circle, resolve_prop_collision};
@@ -42,12 +42,14 @@ pub fn player_move(
             &mut Pos,
             Option<&mut Dash>,
             Option<&PortalSucking>,
+            Option<&RaceState>,
+            Option<&Shield>,
         ),
         (With<Player>, Without<Prop>),
     >,
     props: Query<(Entity, &Prop, &Pos), With<Prop>>,
 ) {
-    let Ok((entity, player, mut vel, mut pos, dash, sucking)) = q.single_mut() else {
+    let Ok((entity, player, mut vel, mut pos, dash, sucking, race, shield)) = q.single_mut() else {
         return;
     };
     if sucking.is_some() {
@@ -69,7 +71,23 @@ pub fn player_move(
         // GML Player/Step_0 only clamps while adding walk accel: impulses
         // above maxspeed (melee lunge, knockback) decay via friction
         // instead of being hard-clamped away.
-        let max_speed = player.speed * player.speed_mult;
+        let mut max_speed = player.speed * player.speed_mult;
+        let mut accel = player.accel;
+        // GML `Player/Step_0:105-120`: holding RMB with an active own
+        // CrystalShield pins the walk (`_maxspeed = 0`; half with the
+        // Juggernaut ultra).
+        let shield_hold = race.is_some_and(|r| r.race == RaceId::Crystal)
+            && input.spec_held
+            && shield.is_some_and(|s| !s.timer.is_finished());
+        if shield_hold {
+            if player.ultra == Some(UltraMutationId::CrystalJuggernaut) {
+                max_speed *= 0.5;
+                accel *= 0.5;
+            } else {
+                max_speed = 0.0;
+                accel = 0.0;
+            }
+        }
         // GML `Player/Step_0:101,134` verbatim: any movement input latches
         // the tutorial Walking step (`KeyCont.moving > 0`), not accel-gated -
         // an accel-gate stalled Walking until friction bled speed and
@@ -81,7 +99,7 @@ pub fn player_move(
         }
         if input.move_axis != glam::Vec2::ZERO && vel.0.length() < max_speed {
             let dir = input.move_axis.normalize_or_zero();
-            vel.0 += dir * player.accel * dt;
+            vel.0 += dir * accel * dt;
             if vel.0.length() > max_speed {
                 vel.0 = vel.0.normalize_or_zero() * max_speed;
             }
@@ -549,14 +567,17 @@ pub fn tick_hold_abilities(
     mut commands: Commands,
     input: Res<NtInput>,
     mut cues: ResMut<Queue<AudioCue>>,
+    hover: Option<Res<crate::render::HoverWorld>>,
     mut player_q: Query<
         (
             Entity,
-            &Pos,
+            &mut Pos,
             &mut Player,
             &mut Health,
             &mut Velocity,
             &AimDir,
+            Option<&RaceState>,
+            Option<&mut Shield>,
         ),
         (With<Player>, Without<Enemy>, Without<Projectile>),
     >,
@@ -572,8 +593,11 @@ pub fn tick_hold_abilities(
     mut frog_q: Query<&mut FrogCharge>,
     telek_q: Query<&Telekinesis>,
     floor: Option<Res<FloorMask>>,
+    walls: Query<&Pos, With<crate::comps_a::WallTile>>,
 ) {
-    let Ok((player_e, ppos, mut player, mut health, mut pvel, aim)) = player_q.single_mut() else {
+    let Ok((player_e, mut ppos, mut player, mut health, mut pvel, aim, race_opt, shield_opt)) =
+        player_q.single_mut()
+    else {
         return;
     };
     let held = input.spec_held;
@@ -720,6 +744,55 @@ pub fn tick_hold_abilities(
             if horror_q.get(player_e).is_ok() {
                 commands.entity(player_e).remove::<HorrorCharge>();
             }
+        }
+    }
+
+    // Crystal shield is hold-driven (`CrystalShield/Step_2`): without
+    // Throne Butt it drops the moment RMB is released; either way the
+    // `time` clock (60 steps at 1.6/step, 2.6 with the mutation) is the end.
+    if race_opt.is_some_and(|r| r.race == RaceId::Crystal)
+        && let Some(shield) = shield_opt
+    {
+        if !shield.timer.is_finished() {
+            if !player.throne_butt && !held {
+                commands.entity(player_e).remove::<Shield>();
+            }
+        } else {
+            // GML `:60-66` + `Other_11`: the Throne-Butt shield teleports
+            // the player to the aim point on expiry - the cursor on
+            // mouse, `player + aim * dis` on sticks.
+            if player.throne_butt {
+                let heading = aim.0.normalize_or_zero();
+                let cursor = if input.touch_dis <= 0.0 && !input.aim_from_pad {
+                    hover.as_ref().and_then(|h| h.0)
+                } else {
+                    None
+                };
+                let mut target = cursor.unwrap_or(pos + heading * 64.0);
+                let walkable = |p: Vec2| floor.as_ref().is_none_or(|m| m.is_walkable(p));
+                // GML `:44-56`: a wall overlap is nudged out one px at a
+                // time (capped at 20) away from the nearest wall centre;
+                // off the floor the teleport cancels.
+                let mut iterations = 0;
+                while !walkable(target) && iterations < 20 {
+                    if let Some(wall) = walls.iter().map(|w| w.0).min_by(|a, b| {
+                        a.distance_squared(target)
+                            .total_cmp(&b.distance_squared(target))
+                    }) {
+                        target += (target - wall).normalize_or_zero();
+                    }
+                    iterations += 1;
+                }
+                if walkable(target) {
+                    ppos.0 = target;
+                    cues.push(AudioCue {
+                        name: "sndCrystalTB",
+                        volume: 1.0,
+                        variance: 0.0,
+                    });
+                }
+            }
+            commands.entity(player_e).remove::<Shield>();
         }
     }
 

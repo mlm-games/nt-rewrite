@@ -2599,8 +2599,8 @@ pub fn projectile_hits(
         (
             Entity,
             &mut Pos,
-            &Team,
-            &Projectile,
+            &mut Team,
+            &mut Projectile,
             &mut Velocity,
             Option<&mut PiercesLeft>,
             Option<&mut ProjectileHitSet>,
@@ -2664,8 +2664,8 @@ pub fn projectile_hits(
     for (
         proj_e,
         mut proj_pos,
-        proj_team,
-        proj,
+        mut proj_team,
+        mut proj,
         mut proj_vel,
         pierce,
         mut hit_set,
@@ -2803,6 +2803,12 @@ pub fn projectile_hits(
                 && let Some(shield) = shield
                 && !shield.timer.is_finished()
             {
+                // GML `CrystalShield/Collision_projectile:4-14`: the shot is
+                // re-teamed to the shield's team and reversed, with
+                // `sndCrystalRicochet`; the shield takes no damage.
+                *proj_team = Team::Player;
+                proj_vel.0 = -proj_vel.0;
+                proj.source = Some(DamageSource::player_weapon(target_e, WeaponId::NONE));
                 let mut rng = rand::rng();
                 crate::effects::spawn_burst(
                     &mut commands,
@@ -2812,7 +2818,11 @@ pub fn projectile_hits(
                     [0.3, 0.65, 1.0, 1.0],
                     (60.0, 160.0),
                 );
-                audio.play_hit(&mut cues);
+                cues.push(AudioCue {
+                    name: "sndCrystalRicochet",
+                    volume: 1.0,
+                    variance: 0.0,
+                });
                 break;
             }
 
@@ -3112,7 +3122,7 @@ pub fn projectile_hits(
             chain_to_nearby_targets(
                 &mut commands,
                 &mut targets,
-                proj,
+                &proj,
                 hit_target,
                 hit_pos,
                 chain.range,
