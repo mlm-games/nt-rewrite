@@ -170,6 +170,7 @@ pub fn contact_damage(
             &mut Velocity,
             &Player,
             &RaceState,
+            Option<&Shield>,
         ),
         (With<Player>, Without<Enemy>),
     >,
@@ -186,7 +187,7 @@ pub fn contact_damage(
     >,
 ) {
     let _ = &mut flash;
-    let Ok((player_e, player_pos, mut health, mut player_vel, player, race_state)) =
+    let Ok((player_e, player_pos, mut health, mut player_vel, player, race_state, shield)) =
         player_q.single_mut()
     else {
         return;
@@ -202,6 +203,17 @@ pub fn contact_damage(
     for (enemy_pos, enemy, mut brain, mut ehealth, enemy_hitbox, enemy_vel) in &mut enemies {
         if player_pos.distance(enemy_pos.0) >= PLAYER_RADIUS + enemy_hitbox.radius {
             continue;
+        }
+
+        // GML `CrystalShield/Collision_hitme`: an idling shield turns every
+        // touching enemy away from Crystal. This is the wiki's "lost sight"
+        // repulsion - it keeps contact damage rare without blocking it.
+        if shield.is_some_and(|s| !s.timer.is_finished()) {
+            let away = (enemy_pos.0 - player_pos).normalize_or_zero();
+            brain.heading = away.y.atan2(away.x);
+            if let Some(evel) = enemy_vel.as_deref_mut() {
+                evel.0 = away * evel.0.length();
+            }
         }
 
         // GML `enemy/Collision_Player` applies the `size <= 2` push-outside-the-
