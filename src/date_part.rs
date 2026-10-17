@@ -46,8 +46,8 @@ fn local_day_month() -> (i8, i8) {
 /// tz has no wasm database), via the civil-from-days algorithm.
 #[cfg(target_arch = "wasm32")]
 fn local_day_month() -> (i8, i8) {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let secs = web_time::SystemTime::now()
+        .duration_since(web_time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
     let days = secs.div_euclid(86_400);
