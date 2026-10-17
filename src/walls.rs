@@ -218,7 +218,11 @@ pub fn apply_pending_wall_breaks(
             maxy = maxy.max(y);
         }
         if minx <= maxx {
-            eprintln!("nt-live: opened={} walls={}", mask.opened.len(), live_walls.len());
+            eprintln!(
+                "nt-live: opened={} walls={}",
+                mask.opened.len(),
+                live_walls.len()
+            );
             for cy in miny..=maxy {
                 let mut row = String::new();
                 for cx in minx..=maxx {
@@ -226,7 +230,10 @@ pub fn apply_pending_wall_breaks(
                         'o'
                     } else if live_walls.contains(&(cx, cy)) {
                         'W'
-                    } else if mask.cells.contains(&crate::worldgen::floor_cell_for_wall(cx, cy)) {
+                    } else if mask
+                        .cells
+                        .contains(&crate::worldgen::floor_cell_for_wall(cx, cy))
+                    {
                         '#'
                     } else {
                         '.'
