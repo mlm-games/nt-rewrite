@@ -4478,13 +4478,18 @@ impl App {
                 AreaId::Sewers | AreaId::CrystalCaves | AreaId::CursedCaves | AreaId::Labs
             );
             if dark_area {
-                let eyes = self
+                let player_race = self
                     .sim
                     .world
                     .query_filtered::<&crate::comps_a::RaceState, With<crate::comps_a::Player>>()
                     .iter(&self.sim.world)
                     .next()
-                    .is_some_and(|r| r.race == crate::data::RaceId::Eyes);
+                    .copied();
+                // GML `scrDarkness:5-11`: no player clears to `c_gray`
+                // (dim), and the Eyes race does the same with their wider
+                // core, so a missing light never blacks the screen out.
+                let eyes = player_race.is_some_and(|r| r.race == crate::data::RaceId::Eyes);
+                let no_player = player_race.is_none();
                 let stamps: Arc<[ActorDraw]> = Arc::from(crate::render::darkness_light_stamps(
                     &mut self.sim.world,
                     self.assets.as_ref().unwrap(),
@@ -4503,7 +4508,7 @@ impl App {
                             cam: self.cam,
                             world_size,
                             viewport_dp,
-                            clear: if eyes {
+                            clear: if eyes || no_player {
                                 [dim, dim, dim]
                             } else {
                                 [0.0, 0.0, 0.0]
