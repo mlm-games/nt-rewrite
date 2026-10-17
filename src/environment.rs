@@ -2007,10 +2007,14 @@ pub fn tick_motes(
                 &mut MoteScale,
                 Option<&mut GmlImage>,
             ),
-            Without<crate::comps_a::WallTile>,
+            (
+                Without<crate::comps_a::WallTile>,
+                Without<Player>,
+                Without<Yeti>,
+            ),
         >,
         Query<&Pos, With<TopSmall>>,
-        Query<(Entity, &mut Pos, &mut Snowflake)>,
+        Query<(Entity, &mut Pos, &mut Snowflake), (Without<Player>, Without<Yeti>)>,
     )>,
     mut yetis: Query<(
         Entity,

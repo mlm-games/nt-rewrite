@@ -3273,7 +3273,7 @@ pub fn player_ability(
     >,
     mut walls_and_allies: ParamSet<(
         Query<(Entity, &WallCell, &Pos), With<WallTile>>,
-        Query<(Entity, &mut Health, &mut Ally), With<Ally>>,
+        Query<(Entity, &mut Health, &mut Ally), (With<Ally>, Without<Player>, Without<Enemy>)>,
         Query<&SnareSeed>,
         Query<(Entity, &Pos), (With<Tangle>, Without<Player>)>,
         Query<&mut WeaponVisual>,
