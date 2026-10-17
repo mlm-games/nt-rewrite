@@ -2493,8 +2493,11 @@ pub fn tick_portal_suck(
     let race = race_state.race;
     commands.entity(player_e).remove::<PortalSucking>();
     // The floor advance re-creates the player, so the disappear-phase
-    // invisibility (`Portal/Step_0:33-37`) ends here.
+    // invisibility (`Portal/Step_0:33-37`) ends here. The spin goes with
+    // it (`Portal/Step_0:36` zeroes `angle`): left on, `PortalSpin.active`
+    // would keep the next floor's body on `spr_hurt` frame 1, rotated.
     commands.entity(player_e).remove::<PlayerHidden>();
+    commands.entity(player_e).remove::<PortalSpin>();
 
     // GML `Portal/Alarm_1` verbatim: the tutorial exit portal restarts the run
     // (`game_restart()`) instead of advancing the floor. The port reboots run
@@ -3290,9 +3293,11 @@ pub fn animate_portal(
                 st.phase = PortalPhase::Disappear;
                 st.anim = GTimer::from_seconds(0.75, TimerMode::Once);
                 // GML `Portal/Step_0:33-37`: the room is over, so the
-                // player goes invisible until the floor restarts.
+                // player goes invisible until the floor restarts, and the
+                // spin state clears with it (`roll = false`, `angle = 0`).
                 if let Ok((pe, _, _)) = player_q.single_mut() {
                     commands.entity(pe).insert(PlayerHidden);
+                    commands.entity(pe).insert(PortalSpin::default());
                 }
                 if let (Some(anim), Some(def)) = (
                     anim_opt.as_mut(),
