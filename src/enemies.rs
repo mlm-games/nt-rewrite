@@ -252,9 +252,9 @@ fn spawn_enemy_impl(
         touch_damage: def.touch_damage,
         // GML `MeleeFake/Destroy_0:5-8`: the dormant body's Destroy runs
         // the real object's create/destroy pair and then overwrites
-        // `raddrop = 16` - twice the awake drop - so a sleeping assassin
-        // killed in the bush pays double. The wake path restores 8.
-        rad_drop: if kind == EnemyKind::Assassin {
+        // `raddrop = 16` - twice the awake drop - so anything killed while
+        // dormant pays double. The assassin's wake path restores 8.
+        rad_drop: if matches!(kind, EnemyKind::Assassin | EnemyKind::MeleeFake) {
             16
         } else {
             def.rad_drop

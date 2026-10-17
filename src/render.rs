@@ -3151,9 +3151,22 @@ pub fn world_instances_cached(
             Option<&MaggotSpawnCharge>,
             Option<&DogGuardianLeap>,
             Option<&crate::comps_b::RavenFlight>,
+            Option<&crate::enemies::AssassinSleeping>,
         )>();
-        for (pos, enemy, _vel, _aim, _anim, _flash, brain, _hurt, _charge, _leap, _flight) in
-            q.iter(world)
+        for (
+            pos,
+            enemy,
+            _vel,
+            _aim,
+            _anim,
+            _flash,
+            brain,
+            _hurt,
+            _charge,
+            _leap,
+            _flight,
+            _sleeping,
+        ) in q.iter(world)
         {
             if enemy.kind != EnemyKind::Sniper {
                 continue;
@@ -3175,20 +3188,22 @@ pub fn world_instances_cached(
             }
         }
         // Guns behind.
-        for (pos, enemy, vel, aim, _anim, _flash, brain, _hurt, _charge, _leap, flight) in
+        for (pos, enemy, vel, aim, _anim, _flash, brain, _hurt, _charge, _leap, flight, sleeping) in
             q.iter(world)
         {
             let Some(gun_path) = enemy_gun_art(enemy.kind) else {
                 continue;
             };
+            // The dormant jungle hide (`MeleeFake`) draws no pipe - its
+            // GML object has no `Draw_0` at all.
+            if sleeping.is_some() {
+                continue;
+            }
             let Some(brain) = brain else {
                 continue;
             };
             let gunangle = brain.gunangle;
-            let draw_angle = if matches!(
-                enemy.kind,
-                EnemyKind::MeleeBandit | EnemyKind::Assassin
-            ) {
+            let draw_angle = if matches!(enemy.kind, EnemyKind::MeleeBandit | EnemyKind::Assassin) {
                 gunangle + brain.wepangle
             } else {
                 gunangle
@@ -3208,7 +3223,8 @@ pub fn world_instances_cached(
             }
         }
         // Bodies.
-        for (pos, enemy, vel, aim, anim, flash, brain, hurt, charge, leap, flight) in q.iter(world)
+        for (pos, enemy, vel, aim, anim, flash, brain, hurt, charge, leap, flight, _sleeping) in
+            q.iter(world)
         {
             let (mut path, mut frame) = if hurt.is_none()
                 && let Some(charge) = charge
@@ -3292,20 +3308,21 @@ pub fn world_instances_cached(
             }
         }
         // Guns in front.
-        for (pos, enemy, vel, aim, _anim, _flash, brain, _hurt, _charge, _leap, flight) in
+        for (pos, enemy, vel, aim, _anim, _flash, brain, _hurt, _charge, _leap, flight, sleeping) in
             q.iter(world)
         {
             let Some(gun_path) = enemy_gun_art(enemy.kind) else {
                 continue;
             };
+            // Dormant hides draw no pipe (`MeleeFake` has no `Draw_0`).
+            if sleeping.is_some() {
+                continue;
+            }
             let Some(brain) = brain else {
                 continue;
             };
             let gunangle = brain.gunangle;
-            let draw_angle = if matches!(
-                enemy.kind,
-                EnemyKind::MeleeBandit | EnemyKind::Assassin
-            ) {
+            let draw_angle = if matches!(enemy.kind, EnemyKind::MeleeBandit | EnemyKind::Assassin) {
                 gunangle + brain.wepangle
             } else {
                 gunangle
