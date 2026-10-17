@@ -576,6 +576,10 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
             // is skipped wholesale and the floor is generated from the
             // restored run (`GenCont` reads `GameCont` the same way).
             *run = restored.session.run.clone();
+            // GML saves `GameCont`, not the room: the `CanOasis` object (and
+            // with it the open oasis window) does not survive a save, so the
+            // port's `can_oasis` stand-in must not either.
+            run.can_oasis = false;
         } else {
             run.protowep = protowep;
             run.protocurse = false;
