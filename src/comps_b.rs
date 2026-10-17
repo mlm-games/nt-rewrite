@@ -79,6 +79,10 @@ pub struct Beam {
     pub timer: Timer,
     pub tick: Timer,
     pub source: Option<DamageSource>,
+    /// GML `Laser/Alarm_0` spawns a `Smoke` at the walk tip on every
+    /// second-step alarm; this toggles the port's per-tick tick pass to
+    /// the same cadence.
+    pub walk_smoke: bool,
 }
 
 #[derive(Component)]
@@ -1147,12 +1151,14 @@ pub struct GroundPhysics {
 }
 
 /// GML `Shell`/`HeavyShell` eject casing (`scrBulletShotShellFX`): built-in
-/// motion at friction 0.2, `move_bounce_solid` + `speed /= 2` on walls
-/// (`Shell/Collision_Wall`), `Alarm_0` expiry at `90 + random(30)` steps
-/// plus the 2-step `time` countdown.
+/// motion at `friction` (Shell 0.2, the Stress sweat 0.25),
+/// `move_bounce_solid` + `speed /= 2` on walls (`Shell/Collision_Wall`),
+/// `Alarm_0` expiry at `90 + random(30)` steps plus the 2-step `time`
+/// countdown (the 8-step sweat sets `time = 0`).
 #[derive(Component)]
 pub struct ShellCasing {
     pub life: Timer,
+    pub friction: f32,
 }
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]

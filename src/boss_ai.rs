@@ -443,6 +443,7 @@ pub fn spawn_enemy_beam(
             timer: GTimer::from_seconds(duration, TimerMode::Once),
             tick: GTimer::from_seconds(0.06, TimerMode::Repeating),
             source: None,
+            walk_smoke: false,
         },
         Pos(center),
     ));
@@ -1895,6 +1896,7 @@ fn throne_ai(
                 timer: GTimer::from_seconds(20.0 / 30.0, TimerMode::Once),
                 tick: GTimer::from_seconds(0.06, TimerMode::Repeating),
                 source: Some(DamageSource::enemy(owner, EnemyKind::Throne)),
+                walk_smoke: false,
             },
             Pos(origin),
         ));

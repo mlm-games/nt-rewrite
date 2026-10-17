@@ -58,8 +58,8 @@ use crate::comps_a::{
 use crate::comps_b::{
     Ally, BIG_DOG_MISSILE_DAMAGE, BIG_DOG_MISSILE_HP, BIG_DOG_MISSILE_RADIUS, BigDogMissileState,
     BloodAmmo, ChestKind, Corpse, CryAnim, CustomExplosion, Dash, DeploysSentry, Enemy, GmlImage,
-    HazardCloud, HorrorCharge, NativeAngle, NativeDepth, NativeExplosionKind, NativeFlip,
-    PickupKind, PlasmaBurst, Portal, PortalStrike, PortalSucking, Prop, PropSprites,
+    HazardCloud, HorrorCharge, MoteStrip, NativeAngle, NativeDepth, NativeExplosionKind,
+    NativeFlip, PickupKind, PlasmaBurst, Portal, PortalStrike, PortalSucking, Prop, PropSprites,
     SecretEntrance, Shield, Slowed, SpawnsWeaponPickup, SwingFx, Telekinesis, WeaponVisual,
 };
 use crate::data::{
@@ -71,8 +71,8 @@ use crate::effects::{
     spawn_burst,
 };
 use crate::environment::{
-    PropDeathEffect, spawn_native_explosion_visual, spawn_native_smoke_mote, spawn_prop_corpse,
-    spawn_prop_death_effect, spawn_shell_casing,
+    PropDeathEffect, spawn_motes, spawn_native_explosion_visual, spawn_native_smoke_mote,
+    spawn_prop_corpse, spawn_prop_death_effect, spawn_shell_casing, spawn_shell_casing_at,
 };
 use crate::input::NtInput;
 use crate::msg::Queue;
@@ -184,6 +184,29 @@ pub struct BeamShot {
     pub color: [f32; 4],
 }
 
+/// GML `LaserCannon` (`Create_0`: `alarm[0] = 15`, `ammo = 3`,
+/// `time = 1`) + `Alarm_0`: after the charge, spit one beam per remaining
+/// shot `interval` apart, each aimed down the live `gunangle` from
+/// `creator + lengthdir(16, gunangle)` (`LaserCannon/Step_0:2-3`).
+#[derive(Clone, Copy, Debug)]
+pub struct BeamBurst {
+    pub delay: f32,
+    pub shots: u32,
+    pub interval: f32,
+    pub beam: BeamShot,
+}
+
+/// Live charge of a [`BeamBurst`] shot; [`tick_beam_charges`] fires it.
+#[derive(Component)]
+pub struct BeamCharge {
+    pub owner: Entity,
+    pub timer: GTimer,
+    pub shots_left: u32,
+    pub interval: f32,
+    pub beam: BeamShot,
+    pub source: Option<DamageSource>,
+}
+
 /// The archetype fields the fire path branches on. Port-only table: GML
 /// spells the same quirks out as `case` arms and instance fields inside
 /// `scripts/scrFire/scrFire.gml` (e.g. sticky at `:216-223`).
@@ -197,6 +220,7 @@ pub struct FireArch {
     pub blood: Option<BloodAmmo>,
     pub pickup: Option<SpawnsWeaponPickup>,
     pub beam: Option<BeamShot>,
+    pub burst: Option<BeamBurst>,
     pub plasma: Option<PlasmaBurst>,
     pub plasma_scale: f32,
     pub hits_all: bool,
@@ -299,14 +323,24 @@ fn projectile_arch(id: WeaponId) -> FireArch {
             ..FireArch::default()
         },
         "LASER CANNON" => FireArch {
-            beam: Some(BeamShot {
-                length: 820.0,
-                width: 24.0,
-                damage: 18,
-                knockback: 100.0,
-                duration: 0.18,
-                tick: 1.0 / 30.0,
-                color: [1.0, 0.18, 0.14, 1.0],
+            // GML `LaserCannon`: 15-step charge, then three `Laser`s one
+            // step apart; each `Laser` walks 2 px/step to the first
+            // wall/enemy within 320 px and fades in ~0.17 s. Per-beam
+            // damage split from the old single 18/tick beam so a full
+            // burst stays on the same total.
+            burst: Some(BeamBurst {
+                delay: 15.0 / 30.0,
+                shots: 3,
+                interval: 1.0 / 30.0,
+                beam: BeamShot {
+                    length: 320.0,
+                    width: 24.0,
+                    damage: 6,
+                    knockback: 100.0,
+                    duration: 0.18,
+                    tick: 1.0 / 30.0,
+                    color: [1.0, 0.18, 0.14, 1.0],
+                },
             }),
             ..FireArch::default()
         },
@@ -645,6 +679,32 @@ pub fn player_fire(
     // GML `Player/Step_0.gml:413`: a Crystal holding RMB never reaches
     // `scrPlayerFiring` - no shots while the shield key is down.
     let shield_hold = race_state.race == RaceId::Crystal && spec_held;
+
+    // GML `Player/Step_0.gml:480-497` (Stress): while hurt, each step rolls
+    // `random(2) < 1 - hp/max` for a sweat drop - a `Shell`-bodied
+    // `sprSweat` parked on `irandom(2)`, thrown behind the aim at
+    // `gunangle + 180 + orandom(45)`, speed `2 + random(2)`, friction
+    // 0.25, destroyed 8 steps later (`alarm[0] = 8` with `time = 0`).
+    if player.stress && health.hp > 0 {
+        let stress_drop = (1.0 - health.hp as f32 / health.max.max(1) as f32).max(0.0);
+        let mut rng = rand::rng();
+        if rng.random_range(0.0..2.0) < stress_drop {
+            let base_deg = aim.0.y.atan2(aim.0.x).to_degrees();
+            let dir = (base_deg + 180.0 + rng.random_range(0.0..45.0)).to_radians();
+            let speed = (2.0 + rng.random_range(0.0..2.0)) * 30.0;
+            spawn_shell_casing_at(
+                &mut commands,
+                &catalog,
+                "images/sprSweat.png",
+                pos.0,
+                dir,
+                speed,
+                8.0 / 30.0,
+                0.25,
+                rng.random_range(0..3),
+            );
+        }
+    }
 
     let mut fx = FireFx {
         trauma: &mut trauma,
@@ -1380,6 +1440,25 @@ fn spawn_pellets(commands: &mut Commands, fx: &mut FireFx, shot: &GunShot, playe
         split.pellets += u8::from(player.crown == CrownKind::Death);
     }
 
+    if let Some(burst) = archetype.burst {
+        // GML `LaserCannon/Create_0:9` + `Alarm_0`: the charge rides the
+        // player and fires from `creator + lengthdir(16, gunangle)`.
+        commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            BeamCharge {
+                owner: shot.player_ent,
+                timer: GTimer::from_seconds(burst.delay, TimerMode::Once),
+                shots_left: burst.shots,
+                interval: burst.interval,
+                beam: burst.beam,
+                source: Some(DamageSource::player_weapon(shot.player_ent, id)),
+            },
+            Pos(shot.pos),
+        ));
+        return;
+    }
+
     if let Some(mut beam) = archetype.beam {
         beam.damage = def.damage;
         spawn_beam_shot(
@@ -1644,18 +1723,15 @@ fn melee_attack(
     let aim_angle = shot.aim.y.atan2(shot.aim.x);
     // GML `scrFire` melee arms all do `instance_create(x, y, Dust)` at
     // the player on every swing (12 arms, e.g. `scripts/scrFire/scrFire.gml:902`
-    // for black sword); the port spawns its dust burst here instead.
-    {
-        let mut rng = rand::rng();
-        crate::effects::spawn_burst(
-            commands,
-            &mut rng,
-            player_pos,
-            1,
-            [0.75, 0.72, 0.68, 1.0],
-            (20.0, 60.0),
-        );
-    }
+    // for black sword).
+    spawn_motes(
+        commands,
+        fx.catalog,
+        fx.particles_on,
+        player_pos,
+        MoteStrip::Dust,
+        1,
+    );
 
     // Slash life reads the fired strip's frame count (GML swaps in the
     // mega strip on the mega variant, `scripts/scrFire/scrFire.gml:907-908`),
@@ -1780,11 +1856,53 @@ pub fn spawn_beam_shot(
             timer: GTimer::from_seconds(spec.duration, TimerMode::Once),
             tick: GTimer::from_seconds(spec.tick, TimerMode::Repeating),
             source,
+            // The player beams descend from GML's `Laser`, whose walk
+            // puffs `Smoke` at the tip (`Laser/Alarm_0`).
+            walk_smoke: true,
         },
         // Orientation rides `Beam.dir`; the renderer sizes from
         // length/width (no Transform rotation write headless).
         Pos(center),
     ));
+}
+
+/// GML `LaserCannon/Alarm_0` (+ `projectileburst/Alarm_0`): once the
+/// charge expires, spawn one beam at `owner + lengthdir(16, gunangle)`
+/// per remaining shot, `interval` apart, and cue the shot.
+pub fn tick_beam_charges(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mut cues: ResMut<Queue<AudioCue>>,
+    owners: Query<(&Pos, &AimDir)>,
+    mut charges: Query<(Entity, &mut BeamCharge)>,
+) {
+    let dt = time.delta_secs;
+    for (e, mut charge) in &mut charges {
+        charge.timer.tick(dt);
+        if !charge.timer.just_finished() {
+            continue;
+        }
+        let Ok((owner_pos, aim)) = owners.get(charge.owner) else {
+            commands.entity(e).despawn();
+            continue;
+        };
+        let dir = aim.0.normalize_or_zero();
+        let muzzle = owner_pos.0 + dir * 16.0;
+        spawn_beam_shot(
+            &mut commands,
+            muzzle,
+            dir,
+            charge.beam,
+            charge.source.clone(),
+        );
+        cue(&mut cues, "sndLaserCannon", 1.0, 0.2);
+        charge.shots_left -= 1;
+        if charge.shots_left == 0 {
+            commands.entity(e).despawn();
+        } else {
+            charge.timer = GTimer::from_seconds(charge.interval, TimerMode::Once);
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

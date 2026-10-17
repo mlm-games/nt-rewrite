@@ -1625,9 +1625,6 @@ pub fn spawn_shell_casing(
     speed_bonus: f32,
     spread: (f32, f32),
 ) {
-    let Some(def) = catalog.def(art) else {
-        return;
-    };
     let mut rng = rand::rng();
     let right = if aim.length_squared() > 0.0 {
         crate::player::gml_player_right_back_from_aim(aim).0
@@ -1638,23 +1635,51 @@ pub fn spawn_shell_casing(
     let dir = (base_deg + right * 100.0 + rng.random_range(spread.0..spread.1)).to_radians();
     let speed = (rng.random_range(2.0..4.0) + speed_bonus) * 30.0;
     let life = (90.0 + rng.random_range(0.0..30.0) + 22.0) / 30.0;
+    spawn_shell_casing_at(commands, catalog, art, pos, dir, speed, life, 0.2, 0);
+}
+
+/// Explicit-heading casing spawn shared by the shot eject, the BuffGator
+/// debris spray and the Stress sweat (which override art, life,
+/// friction and the parked frame).
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_shell_casing_at(
+    commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
+    art: &'static str,
+    pos: glam::Vec2,
+    dir_rad: f32,
+    speed: f32,
+    life_secs: f32,
+    friction: f32,
+    frame: u32,
+) {
+    let Some(def) = catalog.def(art) else {
+        return;
+    };
+    let mut rng = rand::rng();
+    let mut anim = crate::anim::SpriteAnim::oneshot(art, def);
+    // GML `Shell/Create_0` never sets `image_speed` and the sweat pins it
+    // with `image_speed = 0`: the casing art is parked.
+    anim.fps = 0.0;
+    anim.frame = frame.min(def.frames.saturating_sub(1));
     commands.spawn((
         GameCleanup,
         LevelCleanup,
         Pos(pos),
-        crate::anim::SpriteAnim::oneshot(art, def),
+        anim,
         FxAngle(rng.random_range(0.0..std::f32::consts::TAU)),
         GroundPhysics {
-            vel: glam::Vec2::from_angle(dir) * speed,
+            vel: glam::Vec2::from_angle(dir_rad) * speed,
             rotspeed: 0.0,
         },
         ShellCasing {
-            life: GTimer::from_seconds(life, TimerMode::Once),
+            life: GTimer::from_seconds(life_secs, TimerMode::Once),
+            friction,
         },
     ));
 }
 
-/// GML `Shell` step: built-in motion at friction 0.2, and
+/// GML `Shell` step: built-in motion at the casing's friction, and
 /// `Shell/Collision_Wall` (`move_bounce_solid(true)`, `speed /= 2`).
 pub fn tick_shell_casings(
     time: Res<SimTime>,
@@ -1682,7 +1707,7 @@ pub fn tick_shell_casings(
             commands.entity(e).despawn();
             continue;
         }
-        crate::comps_a::apply_gml_friction(&mut phys.vel, 0.2, dt);
+        crate::comps_a::apply_gml_friction(&mut phys.vel, casing.friction, dt);
         if phys.vel.length_squared() <= 0.0 {
             continue;
         }

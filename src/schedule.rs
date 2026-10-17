@@ -505,6 +505,9 @@ pub fn build_sim_schedule() -> Schedule {
                 combat::tick_beams
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
+                crate::player_fire::tick_beam_charges
+                    .in_set(NtSimSet::Combat)
+                    .run_if(gameplay_active),
                 combat::tick_sentry_turrets
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),

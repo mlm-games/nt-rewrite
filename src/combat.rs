@@ -1349,6 +1349,28 @@ pub fn resolve_enemy_deaths(
                 // GML `BigMaggot/Destroy_0`.
                 spawn_maggot_explosion(&mut commands, save.settings.particles, pos);
             }
+            EnemyKind::BuffGator => {
+                // GML `BuffGator/Destroy_0.gml:2-8`: 18 `Shell`s spray out
+                // along one random heading as `sprShotShell` debris, speed
+                // `4 + random(2)`.
+                let mut rng = rand::rng();
+                let heading = rng.random_range(0.0..std::f32::consts::TAU);
+                for _ in 0..18 {
+                    let speed = (4.0 + rng.random_range(0.0..2.0)) * 30.0;
+                    let life = (90.0 + rng.random_range(0.0..30.0) + 22.0) / 30.0;
+                    crate::environment::spawn_shell_casing_at(
+                        &mut commands,
+                        &catalog,
+                        "images/sprShotShell.png",
+                        pos,
+                        heading,
+                        speed,
+                        life,
+                        0.2,
+                        0,
+                    );
+                }
+            }
             _ => {}
         }
 
@@ -3321,6 +3343,8 @@ pub fn tick_beams(
     mut secrets: ResMut<SecretTriggers>,
     mut last_damage: ResMut<LastDamageTaken>,
     mask: Res<FloorMask>,
+    catalog: Res<repame_anim::AnimCatalog>,
+    decide: Res<crate::pickups::GunDecideCache>,
     mut beams: Query<(Entity, &mut Pos, &mut Beam)>,
     mut targets: Query<
         (Entity, &Pos, &Team, &mut Health, Option<&mut Velocity>),
@@ -3387,6 +3411,21 @@ pub fn tick_beams(
 
         let a = near;
         let b = near + dir * beam.length;
+
+        // GML `Laser/Alarm_0` foot: `instance_create(x, y, Smoke)` at the
+        // walk tip each 2-step alarm; the port's damage tick pass runs per
+        // step, so toggle to the same cadence (first tick included).
+        if beam.walk_smoke {
+            crate::environment::spawn_motes(
+                &mut commands,
+                &catalog,
+                decide.particles,
+                b,
+                crate::comps_b::MoteStrip::Smoke,
+                1,
+            );
+        }
+        beam.walk_smoke = !beam.walk_smoke;
 
         for (target_e, target_pos, target_team, mut health, mut vel) in &mut targets {
             // `scr_can_hit.gml:9`: `team != _attacker.team || team ==
