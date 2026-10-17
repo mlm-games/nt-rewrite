@@ -166,8 +166,8 @@ fn ensure_mask(
                 // `dst * mask`: the inverted subtract blit.
                 blend: Some(wgpu::BlendState {
                     color: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::Src,
-                        dst_factor: wgpu::BlendFactor::Dst,
+                        src_factor: wgpu::BlendFactor::Dst,
+                        dst_factor: wgpu::BlendFactor::Zero,
                         operation: wgpu::BlendOperation::Add,
                     },
                     alpha: wgpu::BlendComponent {
