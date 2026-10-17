@@ -3541,6 +3541,21 @@ pub fn tick_sentry_turrets(
             Pos(pos),
         ));
 
+        // GML `SentryGun/Alarm_0.gml:41-43`: the turret kicks out an empty
+        // shell at `gunangle + right * 100 + random(50) - 25`, speed
+        // `2 + random(2)`.
+        if decide.particles {
+            crate::environment::spawn_shell_casing(
+                &mut commands,
+                &catalog,
+                "images/sprBulletShell.png",
+                pos,
+                dir,
+                0.0,
+                (-25.0, 25.0),
+            );
+        }
+
         if sentry.ammo <= 0 {
             commands.entity(entity).despawn();
         }

@@ -1146,6 +1146,15 @@ pub struct GroundPhysics {
     pub rotspeed: f32,
 }
 
+/// GML `Shell`/`HeavyShell` eject casing (`scrBulletShotShellFX`): built-in
+/// motion at friction 0.2, `move_bounce_solid` + `speed /= 2` on walls
+/// (`Shell/Collision_Wall`), `Alarm_0` expiry at `90 + random(30)` steps
+/// plus the 2-step `time` countdown.
+#[derive(Component)]
+pub struct ShellCasing {
+    pub life: Timer,
+}
+
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeWallMotion {
     Stop,

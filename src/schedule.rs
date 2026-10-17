@@ -558,9 +558,15 @@ pub fn build_sim_schedule() -> Schedule {
                 environment::tick_native_motion
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),
-                environment::tick_ground_flames
-                    .in_set(NtSimSet::Combat)
-                    .run_if(gameplay_active),
+                (
+                    environment::tick_ground_flames
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    environment::tick_shell_casings
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                )
+                    .chain(),
                 environment::tick_prop_drops
                     .in_set(NtSimSet::Combat)
                     .run_if(gameplay_active),

@@ -72,7 +72,7 @@ use crate::effects::{
 };
 use crate::environment::{
     PropDeathEffect, spawn_native_explosion_visual, spawn_native_smoke_mote, spawn_prop_corpse,
-    spawn_prop_death_effect,
+    spawn_prop_death_effect, spawn_shell_casing,
 };
 use crate::input::NtInput;
 use crate::msg::Queue;
@@ -485,6 +485,8 @@ pub struct FireFx<'a> {
     /// (GML runs that strip at `image_speed = 0.4`,
     /// `Slash/Create_0.gml:2`), never a per-kind constant.
     pub catalog: &'a repame_anim::AnimCatalog,
+    /// `settings.particles`: gates the per-swing melee `Dust` puff.
+    pub particles_on: bool,
     pub mainvol: &'a mut MainVol,
 }
 
@@ -653,6 +655,7 @@ pub fn player_fire(
         shake_scale,
         underwater: matches!(run.area, AreaId::Oasis),
         catalog: &catalog,
+        particles_on: time_and_save.p1().settings.particles,
         mainvol: &mut mainvol,
     };
     let origin = pos.0;
@@ -1456,7 +1459,39 @@ fn spawn_pellets(commands: &mut Commands, fx: &mut FireFx, shot: &GunShot, playe
             Some(id),
         );
     }
-    // Shell casings are render juice (GroundPhysics sprites); omitted.
+    // GML `scrFire`: guns with ejector art throw a `Shell` casing on every
+    // shot (`scrBulletShotShellFX`, `Shell/Create_0`); the heavy guns throw
+    // `HeavyShell`, and the double minigun's runs `speed ++` (`Shell, 40`
+    // call after the motion).
+    if fx.particles_on {
+        let casing = match base_weapon_name(def.name) {
+            "HEAVY REVOLVER" | "HEAVY MACHINEGUN" => Some(("images/sprHeavyShell.png", 0.0)),
+            "REVOLVER"
+            | "RUSTY REVOLVER"
+            | "MACHINEGUN"
+            | "TRIPLE MACHINEGUN"
+            | "QUADRUPLE MACHINEGUN"
+            | "MINIGUN"
+            | "SMG"
+            | "POP GUN"
+            | "SMART GUN"
+            | "INCINERATOR"
+            | "BOUNCER SMG" => Some(("images/sprBulletShell.png", 0.0)),
+            "DOUBLE MINIGUN" => Some(("images/sprBulletShell.png", 1.0)),
+            _ => None,
+        };
+        if let Some((art, bonus)) = casing {
+            spawn_shell_casing(
+                commands,
+                fx.catalog,
+                art,
+                shot.pos,
+                shot.aim,
+                bonus,
+                (0.0, 25.0),
+            );
+        }
+    }
 }
 
 /// GML `scrFire.gml:789-796` / `DogSpinAttack/Create_0.gml:1-7`.
@@ -3345,6 +3380,7 @@ pub fn player_ability(
                 shake_scale,
                 underwater,
                 catalog: &catalog,
+                particles_on: persist.p0().settings.particles,
                 mainvol: &mut feel.mainvol,
             };
             let shot = GunShot {
@@ -3773,6 +3809,7 @@ pub fn player_ability(
                 shake_scale,
                 underwater,
                 catalog: &catalog,
+                particles_on: persist.p0().settings.particles,
                 mainvol: &mut feel.mainvol,
             };
             let shot = GunShot {

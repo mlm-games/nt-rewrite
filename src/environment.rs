@@ -15,12 +15,12 @@ use crate::anim::SpriteAnim;
 use crate::combat::{Explosion, HitFlash};
 use crate::comps_a::{
     ARENA_H, ARENA_W, DamageSource, FloorMask, GameCleanup, Health, LevelCleanup, Player,
-    Projectile, ProjectileTyp, Team, Velocity, WallTile, boiling_veins_damage,
+    Projectile, ProjectileTyp, Team, Velocity, WallCell, WallTile, boiling_veins_damage,
 };
 use crate::comps_b::{
     FxAngle, GmlImage, GroundPhysics, Mote, MoteScale, MoteStrip, NativeAngle, NativeDepth,
     NativeExplosionKind, NativeFlip, NativeLifetime, NativeMotion, NativeWallMotion, Portal, Prop,
-    PropSprites, ThroneWeaken, TopSmall, TrapFire,
+    PropSprites, ShellCasing, ThroneWeaken, TopSmall, TrapFire,
 };
 use crate::data::{CrownKind, EnemyKind};
 use crate::secrets::SecretTriggers;
@@ -1605,6 +1605,98 @@ pub fn tick_ground_flames(
             image.set_path(path, 4);
             image.looping = false;
             image.destroy_on_end = true;
+        }
+    }
+}
+
+/// GML `Shell`/`HeavyShell` eject casing (`scrBulletShotShellFX` +
+/// `Shell/Create_0`): `motion_add(gunangle + right * 100 + orandom(25),
+/// random_range(2, 4))` from the shooter, a random tumble angle, friction
+/// 0.2 and a wall bounce that halves the speed. The double minigun's
+/// `speed ++` rides `speed_bonus`; `spread` is the random term's range
+/// (`scrBulletShotShellFX` rolls `[0, 25)`, `SentryGun/Alarm_0:42`
+/// `random(50) - 25`).
+pub fn spawn_shell_casing(
+    commands: &mut Commands,
+    catalog: &repame_anim::AnimCatalog,
+    art: &'static str,
+    pos: glam::Vec2,
+    aim: glam::Vec2,
+    speed_bonus: f32,
+    spread: (f32, f32),
+) {
+    let Some(def) = catalog.def(art) else {
+        return;
+    };
+    let mut rng = rand::rng();
+    let right = if aim.length_squared() > 0.0 {
+        crate::player::gml_player_right_back_from_aim(aim).0
+    } else {
+        1.0
+    };
+    let base_deg = aim.y.atan2(aim.x).to_degrees();
+    let dir = (base_deg + right * 100.0 + rng.random_range(spread.0..spread.1)).to_radians();
+    let speed = (rng.random_range(2.0..4.0) + speed_bonus) * 30.0;
+    let life = (90.0 + rng.random_range(0.0..30.0) + 22.0) / 30.0;
+    commands.spawn((
+        GameCleanup,
+        LevelCleanup,
+        Pos(pos),
+        crate::anim::SpriteAnim::oneshot(art, def),
+        FxAngle(rng.random_range(0.0..std::f32::consts::TAU)),
+        GroundPhysics {
+            vel: glam::Vec2::from_angle(dir) * speed,
+            rotspeed: 0.0,
+        },
+        ShellCasing {
+            life: GTimer::from_seconds(life, TimerMode::Once),
+        },
+    ));
+}
+
+/// GML `Shell` step: built-in motion at friction 0.2, and
+/// `Shell/Collision_Wall` (`move_bounce_solid(true)`, `speed /= 2`).
+pub fn tick_shell_casings(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mask: Res<FloorMask>,
+    walls: Query<
+        &Pos,
+        (
+            With<WallCell>,
+            With<WallTile>,
+            Without<GroundPhysics>,
+            Without<ShellCasing>,
+        ),
+    >,
+    mut casings: Query<(Entity, &mut Pos, &mut GroundPhysics, &mut ShellCasing)>,
+) {
+    let dt = time.delta_secs;
+    let solids: Vec<(glam::Vec2, glam::Vec2)> = walls
+        .iter()
+        .map(|pos| (pos.0, glam::Vec2::splat(8.0)))
+        .collect();
+    for (e, mut pos, mut phys, mut casing) in &mut casings {
+        casing.life.tick(dt);
+        if casing.life.just_finished() {
+            commands.entity(e).despawn();
+            continue;
+        }
+        crate::comps_a::apply_gml_friction(&mut phys.vel, 0.2, dt);
+        if phys.vel.length_squared() <= 0.0 {
+            continue;
+        }
+        let hit = move_bounce_solid(
+            &mut pos.0,
+            &mut phys.vel,
+            1.5,
+            dt,
+            &solids,
+            Some(&mask),
+            true,
+        );
+        if hit.is_some() {
+            phys.vel *= 0.5;
         }
     }
 }
