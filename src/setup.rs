@@ -643,7 +643,9 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
         // not carry the death position/HP into the new run (one-frame
         // flash / crosshair swoop on spawn).
         world.remove_resource::<crate::hud::HudBars>();
-        world.remove_resource::<crate::render::CrosshairState>();
+        // Reset in place, never removed: `tick_ion_charges` requires it
+        // every gameplay tick; `init = false` re-snaps it on the next draw.
+        world.insert_resource(crate::render::CrosshairState::default());
         world.resource_mut::<MutationChoice>().0 = None;
         world.resource_mut::<ScarierFace>().0 = false;
         world.resource_mut::<Euphoria>().0 = false;
