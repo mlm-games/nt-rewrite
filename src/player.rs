@@ -593,7 +593,15 @@ pub fn tick_hold_abilities(
     mut frog_q: Query<&mut FrogCharge>,
     telek_q: Query<&Telekinesis>,
     floor: Option<Res<FloorMask>>,
-    walls: Query<&Pos, With<crate::comps_a::WallTile>>,
+    walls: Query<
+        &Pos,
+        (
+            With<crate::comps_a::WallTile>,
+            Without<Player>,
+            Without<Enemy>,
+            Without<Projectile>,
+        ),
+    >,
 ) {
     let Ok((player_e, mut ppos, mut player, mut health, mut pvel, aim, race_opt, shield_opt)) =
         player_q.single_mut()

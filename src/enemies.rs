@@ -7716,12 +7716,15 @@ pub fn tick_thrown_cars(
     mut commands: Commands,
     mut cues: ResMut<Queue<AudioCue>>,
     mask: Res<FloorMask>,
-    mut cars: Query<(
-        Entity,
-        &mut crate::comps_b::ThrownCar,
-        &mut Pos,
-        &mut Health,
-    )>,
+    mut cars: Query<
+        (
+            Entity,
+            &mut crate::comps_b::ThrownCar,
+            &mut Pos,
+            &mut Health,
+        ),
+        Without<Player>,
+    >,
     mut player_q: Query<
         (Entity, &Pos, &mut Health, &crate::comps_a::RaceState),
         (With<Player>, Without<Enemy>),
