@@ -11868,6 +11868,34 @@ pub fn fx_instances(world: &mut World, assets: &RenderAssets) -> Vec<ActorDraw> 
         }
     }
 
+    // GML `LaserCannon/Step_0:2-5`: while the burst is charging the eye
+    // rides the player at `+16` down `gunangle` and grows `0.02`/frame
+    // from `0.2` (`LaserCannon/Create_0:6-7`), `image_speed = 0`.
+    {
+        let mut q = world.query::<&crate::player_fire::BeamCharge>();
+        for charge in q.iter(world) {
+            let (Some(ppos), Some(aim)) = (
+                world.get::<Pos>(charge.owner),
+                world.get::<AimDir>(charge.owner),
+            ) else {
+                continue;
+            };
+            let dir = aim.0.normalize_or_zero();
+            let elapsed = (charge.timer.duration() - charge.timer.remaining_secs()) * 30.0;
+            let scale = 0.2 + 0.02 * elapsed;
+            if let Some(s) = assets.sprite_scaled_rotated(
+                "images/sprLaserCannon.png",
+                0,
+                ppos.0 + dir * 16.0,
+                scale,
+                dir.y.atan2(dir.x),
+                [1.0; 4],
+            ) {
+                out.push(s);
+            }
+        }
+    }
+
     // Lightning arcs: one stretched quad per segment (`Pos` = midpoint,
     // `len`/`angle` on the marker). Strip frame follows the elapsed
     // fraction; alpha is the port's own `(1 - t) * 0.9` fade, no floor -

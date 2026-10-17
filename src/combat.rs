@@ -3465,10 +3465,71 @@ pub fn tick_beams(
     }
 }
 
+/// GML `PlasmaImpact` (spawned by `IonBurst/Other_11`): a 0.4-speed
+/// strip whose `Collision_hitme` runs `scr_hit(other.id, 10)` behind
+/// `scr_can_hit` plus `motion_add_m(toward the impact, 2, 16)`;
+/// `Other_7` (anim end) destroys it.
+#[derive(Component)]
+pub struct PlasmaImpact {
+    pub team: Team,
+    pub damage: i32,
+    pub source: Option<DamageSource>,
+    pub timer: GTimer,
+}
+
+/// The `Collision_hitme` half of [`PlasmaImpact`]: an enemy mask
+/// overlapping the impact takes `damage` once per `nexthurt` window and
+/// is shoved toward the impact (`motion_add_m(..., 2, 16)`).
+pub fn tick_plasma_impacts(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    frame: Res<CurrentFrame>,
+    mut impacts: Query<(Entity, &Pos, &mut PlasmaImpact)>,
+    mut enemies: Query<
+        (
+            Entity,
+            &Pos,
+            &Hitbox,
+            &mut Health,
+            Option<&mut Velocity>,
+            Option<&mut NextHurt>,
+        ),
+        (With<Enemy>, Without<PlasmaImpact>),
+    >,
+) {
+    let dt = time.delta_secs;
+    for (e, pos, mut impact) in &mut impacts {
+        impact.timer.tick(dt);
+        if impact.timer.just_finished() {
+            commands.entity(e).despawn();
+            continue;
+        }
+        for (ee, epos, hitbox, mut health, vel, nh) in &mut enemies {
+            if epos.0.distance(pos.0) > 16.0 + hitbox.radius {
+                continue;
+            }
+            if nh.as_ref().is_some_and(|nh| nh.0 > frame.0) {
+                continue;
+            }
+            health.hp -= impact.damage;
+            if let Some(mut nh) = nh {
+                nh.0 = frame.0 + 5;
+            }
+            if let Some(mut vel) = vel {
+                apply_knockback(
+                    &mut vel.0,
+                    (pos.0 - epos.0).normalize_or_zero(),
+                    2.0 * 30.0,
+                );
+            }
+            HitFlash::apply(&mut commands, ee, [1.0, 1.0, 1.0, 1.0], 0.08);
+        }
+    }
+}
+
 /// Render split: no sprite handle; the renderer keys art off `Projectile`.
 ///
-/// GML `SentryGun`: `Step_0.gml:1` destroys the body at `hp <= 0`
-/// (`Destroy_0.gml:1` drops `scrDrop(16, 0)`), `Create_0.gml:14` holds the
+/// GML `SentryGun`: `Step_0.gml:1` destroys the body at `hp <= 0`/// (`Destroy_0.gml:1` drops `scrDrop(16, 0)`), `Create_0.gml:14` holds the
 /// first shot for `alarm[0] = 30` steps, `Alarm_0.gml:18-29` keeps only
 /// targets with a clear `collision_line` to the muzzle.
 pub fn tick_sentry_turrets(

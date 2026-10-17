@@ -207,6 +207,29 @@ pub struct BeamCharge {
     pub source: Option<DamageSource>,
 }
 
+/// GML `IonBurst` (a `projectileburst`): `Create_0` sets `ammo = 10`,
+/// `time = 1`, `alarm[0] = 30` (doubled `ammo` under Laser Brain), and
+/// `Alarm_0` spends one shot per alarm; each `Other_11` shot lands a
+/// `PlasmaImpact` at the crosshair.
+#[derive(Clone, Copy, Debug)]
+pub struct IonBurst {
+    pub delay: f32,
+    pub shots: u32,
+    pub interval: f32,
+}
+
+/// Live stream of an [`IonBurst`]; [`tick_ion_charges`] fires it.
+#[derive(Component)]
+pub struct IonCharge {
+    pub owner: Entity,
+    pub timer: GTimer,
+    pub shots_left: u32,
+    pub interval: f32,
+    pub damage: i32,
+    /// Laser Brain picks the upgraded shot cue (`sndLaserUpg`).
+    pub brain: bool,
+}
+
 /// The archetype fields the fire path branches on. Port-only table: GML
 /// spells the same quirks out as `case` arms and instance fields inside
 /// `scripts/scrFire/scrFire.gml` (e.g. sticky at `:216-223`).
@@ -221,6 +244,7 @@ pub struct FireArch {
     pub pickup: Option<SpawnsWeaponPickup>,
     pub beam: Option<BeamShot>,
     pub burst: Option<BeamBurst>,
+    pub ion: Option<IonBurst>,
     pub plasma: Option<PlasmaBurst>,
     pub plasma_scale: f32,
     pub hits_all: bool,
@@ -311,14 +335,13 @@ fn projectile_arch(id: WeaponId) -> FireArch {
             ..FireArch::default()
         },
         "ION CANNON" => FireArch {
-            beam: Some(BeamShot {
-                length: 760.0,
-                width: 28.0,
-                damage: 18,
-                knockback: 120.0,
-                duration: 0.2,
-                tick: 1.0 / 30.0,
-                color: [0.52, 0.85, 1.0, 1.0],
+            // GML `IonBurst/Create_0:5-7`: `alarm[0] = 30`, `ammo = 10`,
+            // `time = 1`; `Other_11` fires a `PlasmaImpact` at the
+            // crosshair per alarm (21 shots under Laser Brain).
+            ion: Some(IonBurst {
+                delay: 30.0 / 30.0,
+                shots: 11,
+                interval: 1.0 / 30.0,
             }),
             ..FireArch::default()
         },
@@ -1440,6 +1463,29 @@ fn spawn_pellets(commands: &mut Commands, fx: &mut FireFx, shot: &GunShot, playe
         split.pellets += u8::from(player.crown == CrownKind::Death);
     }
 
+    if let Some(ion) = archetype.ion {
+        // GML `IonBurst/Create_0:8`: Laser Brain doubles `ammo`, so the
+        // stream runs `2 * shots - 1` alarms.
+        let shots = if player.laser_brain {
+            ion.shots * 2 - 1
+        } else {
+            ion.shots
+        };
+        commands.spawn((
+            GameCleanup,
+            LevelCleanup,
+            IonCharge {
+                owner: shot.player_ent,
+                timer: GTimer::from_seconds(ion.delay, TimerMode::Once),
+                shots_left: shots,
+                interval: ion.interval,
+                damage: 2 * (1 + i32::from(player.laser_brain)),
+                brain: player.laser_brain,
+            },
+        ));
+        return;
+    }
+
     if let Some(burst) = archetype.burst {
         // GML `LaserCannon/Create_0:9` + `Alarm_0`: the charge rides the
         // player and fires from `creator + lengthdir(16, gunangle)`.
@@ -1896,6 +1942,110 @@ pub fn tick_beam_charges(
             charge.source.clone(),
         );
         cue(&mut cues, "sndLaserCannon", 1.0, 0.2);
+        charge.shots_left -= 1;
+        if charge.shots_left == 0 {
+            commands.entity(e).despawn();
+        } else {
+            charge.timer = GTimer::from_seconds(charge.interval, TimerMode::Once);
+        }
+    }
+}
+
+/// GML `IonBurst/Other_11`: one shot per alarm places a `PlasmaImpact`
+/// at `crosshair_x/y` while that point is over `Floor`; every overlapping
+/// `hitme` takes the flat `2 * (1 + laser_brain)` with no inframe gate
+/// (`scr_can_hit(id, false, ...)`), three `Smoke`s puff and the impact
+/// runs its 0.4-speed strip (`Collision_hitme` + `Other_7` live on the
+/// [`crate::combat::PlasmaImpact`] tick).
+#[allow(clippy::too_many_arguments)]
+pub fn tick_ion_charges(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    catalog: Res<repame_anim::AnimCatalog>,
+    mask: Res<FloorMask>,
+    decide: Res<crate::pickups::GunDecideCache>,
+    crosshair: Res<crate::render::CrosshairState>,
+    hover: Res<crate::render::HoverWorld>,
+    save: Res<SaveData>,
+    frame: Res<CurrentFrame>,
+    mut trauma: ResMut<Trauma>,
+    mut cues: ResMut<Queue<AudioCue>>,
+    players: Query<(), With<Player>>,
+    mut charges: Query<(Entity, &mut IonCharge)>,
+    mut enemies: Query<
+        (Entity, &Pos, &Hitbox, &mut Health, Option<&mut NextHurt>),
+        With<Enemy>,
+    >,
+) {
+    let dt = time.delta_secs;
+    // GML `IonBurst/Other_11` aim source: a keyboard-driven player reads
+    // `KeyCont.dis_fire/dir_fire` - the RAW cursor distance/heading, set
+    // from the mouse - while everything else reads the lerped
+    // `crosshair_x/y` (`TopCont/Draw_0`).
+    let (keyboard_local, _) = crate::input::gml_input_device(Some(&*save));
+    for (e, mut charge) in &mut charges {
+        // GML `projectileburst/Alarm_0:3-6`: a dead creator kills the burst.
+        if !players.contains(charge.owner) {
+            commands.entity(e).despawn();
+            continue;
+        }
+        charge.timer.tick(dt);
+        if !charge.timer.just_finished() {
+            continue;
+        }
+        let at = if keyboard_local {
+            hover.0.unwrap_or(Vec2::new(crosshair.x, crosshair.y))
+        } else {
+            Vec2::new(crosshair.x, crosshair.y)
+        };
+        // `Other_11` plays the shot before the floor gate.
+        cue(
+            &mut cues,
+            if charge.brain { "sndLaserUpg" } else { "sndLaser" },
+            1.0,
+            0.2,
+        );
+        if mask.is_walkable(at)
+            && let Some(def) = catalog.def("images/sprPlasmaImpact.png")
+        {
+            let life = def.frames.max(1) as f32 / 0.4 / 30.0;
+            commands.spawn((
+                GameCleanup,
+                LevelCleanup,
+                Pos(at),
+                SpriteAnim::oneshot_with_image_speed("images/sprPlasmaImpact.png", def, 0.4),
+                crate::combat::PlasmaImpact {
+                    team: Team::Player,
+                    damage: 10,
+                    source: None,
+                    timer: GTimer::from_seconds(life, TimerMode::Once),
+                },
+            ));
+            for (ee, epos, hitbox, mut health, nh) in &mut enemies {
+                if epos.0.distance(at) > 16.0 + hitbox.radius {
+                    continue;
+                }
+                health.hp -= charge.damage;
+                if let Some(mut nh) = nh {
+                    nh.0 = frame.0 + 5;
+                }
+                crate::combat::HitFlash::apply(
+                    &mut commands,
+                    ee,
+                    [1.0, 1.0, 1.0, 1.0],
+                    0.08,
+                );
+            }
+            spawn_motes(
+                &mut commands,
+                &catalog,
+                decide.particles,
+                at,
+                MoteStrip::Smoke,
+                3,
+            );
+            trauma.add(0.06);
+        }
         charge.shots_left -= 1;
         if charge.shots_left == 0 {
             commands.entity(e).despawn();
