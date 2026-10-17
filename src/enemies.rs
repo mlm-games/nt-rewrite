@@ -2761,6 +2761,18 @@ pub fn enemy_ai(
                 fire.hurting = hurt.is_some();
                 let cap = if fire.armed { 8.0 } else { 3.0 };
                 gml_clamp_speed(&mut brain, &mut vel, enemy.kind, cap);
+            } else if matches!(
+                enemy.kind,
+                EnemyKind::LaserCrystal | EnemyKind::InvLaserCrystal
+            ) {
+                // GML `LaserCrystal/Other_10:3-4`: the drift runs with no
+                // `walk` gate, along `direction` (= `brain.heading`), and
+                // only while the charge sprite is off.
+                if !charge_state.contains_key(&entity) {
+                    let drift = brain.heading;
+                    add_gml_motion(&mut brain, &mut vel, drift, 0.5, dt);
+                    gml_clamp_speed(&mut brain, &mut vel, enemy.kind, 1.5);
+                }
             } else if brain.walk > 0.0 {
                 let (impulse_f, cap_f) = gml_walk_law(enemy.kind);
                 // GML `PopoFreak/Other_10:6-7` swaps the push to `walkdir` at 1
@@ -3137,6 +3149,24 @@ pub fn enemy_ai(
                             brain.gunangle,
                             euphoria,
                         );
+                    } else if matches!(
+                        enemy.kind,
+                        EnemyKind::LaserCrystal | EnemyKind::InvLaserCrystal
+                    ) {
+                        // GML `LaserCrystal/Alarm_2:6-12`: each shot is an
+                        // instant `EnemyLaser` beam, never a bullet.
+                        fire_enemy_laser(
+                            &mut commands,
+                            &mask,
+                            player_pos,
+                            entity,
+                            enemy.kind,
+                            epos,
+                            brain.gunangle,
+                        );
+                        brain.burst_left = def.bullets_per_shot.saturating_sub(1);
+                        brain.burst_timer =
+                            GTimer::from_seconds(def.burst_interval, TimerMode::Once);
                     } else {
                         brain.burst_left = def.bullets_per_shot;
                         brain.burst_timer =
@@ -3308,6 +3338,26 @@ pub fn enemy_ai(
                             let wdir = glam::Vec2::new(base.cos(), base.sin());
                             vel.0 = wdir * (0.6 * 30.0);
                             brain.walk = 20.0 + rng.random_range(0.0..10.0);
+                        } else if matches!(
+                            enemy.kind,
+                            EnemyKind::LaserCrystal | EnemyKind::InvLaserCrystal
+                        ) {
+                            // GML `LaserCrystal/Alarm_1:9-14`: the close and
+                            // no-sight arms re-pick the drift heading.
+                            let toward = dir.y.atan2(dir.x);
+                            if !(los && dist < 160.0) {
+                                if rng.random::<f32>() < 1.0 / 3.0 {
+                                    brain.heading = rng.random_range(0.0..std::f32::consts::TAU);
+                                }
+                            } else if dist <= 64.0 {
+                                if rng.random::<f32>() < 1.0 / 3.0 {
+                                    brain.heading = toward;
+                                } else if rng.random_bool(0.5) {
+                                    brain.heading = toward
+                                        + std::f32::consts::FRAC_PI_2
+                                        + rng.random_range(0.0..std::f32::consts::PI);
+                                }
+                            }
                         }
                     }
                 }
@@ -3350,6 +3400,27 @@ pub fn enemy_ai(
                                 },
                                 TimerMode::Once,
                             );
+                        }
+                    } else if matches!(
+                        enemy.kind,
+                        EnemyKind::LaserCrystal | EnemyKind::InvLaserCrystal
+                    ) {
+                        fire_enemy_laser(
+                            &mut commands,
+                            &mask,
+                            player_pos,
+                            entity,
+                            enemy.kind,
+                            epos,
+                            brain.gunangle,
+                        );
+                        brain.burst_left = brain.burst_left.saturating_sub(1);
+                        if brain.burst_left == 0 {
+                            brain.attack =
+                                GTimer::from_seconds(def.attack_cooldown, TimerMode::Once);
+                        } else {
+                            brain.burst_timer =
+                                GTimer::from_seconds(def.burst_interval, TimerMode::Once);
                         }
                     } else {
                         let gdir = glam::Vec2::new(brain.gunangle.cos(), brain.gunangle.sin());
@@ -5758,6 +5829,47 @@ fn fire_enemy_flak(
 /// (`EuphoriaEffectDelay/Step_0.gml:1`); the port folds the 0.8 in at
 /// spawn.
 #[allow(clippy::too_many_arguments)]
+/// GML `Laser/Alarm_0` + `EnemyLaser/Create_0`: walk 2 px steps up to 160
+/// frames (320 px), stopping at the first `Wall` or at a `hitme` past the
+/// 32 px arming distance, then stretch the beam there. The smoke at the
+/// tip is `Alarm_0`'s own `instance_create(x, y, Smoke)`.
+fn fire_enemy_laser(
+    commands: &mut Commands,
+    mask: &FloorMask,
+    player_pos: glam::Vec2,
+    owner: Entity,
+    kind: EnemyKind,
+    from: glam::Vec2,
+    angle: f32,
+) {
+    let dir = glam::Vec2::from_angle(angle);
+    let mut end = from;
+    for step in 1..=160 {
+        let p = from + dir * (2.0 * step as f32);
+        if !mask.is_walkable(p) {
+            break;
+        }
+        end = p;
+        if step > 16 && p.distance(player_pos) < crate::spatial::PLAYER_RADIUS {
+            break;
+        }
+    }
+    commands.spawn((
+        GameCleanup,
+        LevelCleanup,
+        crate::comps_b::GmlLaser {
+            start: from,
+            end,
+            angle,
+            // GML `EnemyLaser/Create_0:3` `damage = 1`.
+            damage: 1,
+            elapsed: 0.0,
+            source: Some(DamageSource::enemy(owner, kind)),
+        },
+    ));
+    crate::environment::spawn_native_smoke_mote(commands, true, end, dir, 4.0);
+}
+
 pub fn fire_enemy_bullet(
     commands: &mut Commands,
     rng: &mut impl RngExt,
@@ -7412,6 +7524,61 @@ pub fn tick_toxic_gas(
         }
         commands.entity(gas_entity).despawn();
     }
+}
+
+/// GML `Laser/Step_0` + `Collision_hitme`: the beam fades over five steps
+/// and lands its `damage` on the player once, carrying the same
+/// `DamageSource` a bullet from the owner would.
+pub fn tick_gml_lasers(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mut beams: Query<(Entity, &mut crate::comps_b::GmlLaser)>,
+    mut player_q: Query<
+        (Entity, &Pos, &mut Health, &crate::comps_a::RaceState),
+        (With<Player>, Without<Enemy>),
+    >,
+    mut secrets: ResMut<crate::secrets::SecretTriggers>,
+    mut last_damage: ResMut<LastDamageTaken>,
+    mut trauma: ResMut<Trauma>,
+    mut cues: ResMut<Queue<AudioCue>>,
+) {
+    let dt = time.delta_secs;
+    let frames = dt * crate::SIM_HZ as f32;
+    let mut player = player_q.single_mut().ok();
+    for (e, mut laser) in &mut beams {
+        if laser.elapsed == 0.0
+            && let Some((player_e, ppos, health, race)) = player.as_mut()
+            && health.invuln.is_finished()
+            && point_segment_distance(ppos.0, laser.start, laser.end)
+                <= crate::spatial::PLAYER_RADIUS
+        {
+            health.hp -= laser.damage;
+            health.invuln = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
+            crate::combat::HitFlash::apply(&mut commands, *player_e, [1.0, 0.15, 0.1, 1.0], 0.18);
+            secrets.mark_damage_taken();
+            last_damage.note_from_source(laser.source.as_ref());
+            trauma.add(0.35);
+            cues.push(AudioCue {
+                name: crate::enemy_data::gml_race_hurt(race.race),
+                volume: 1.0,
+                variance: 0.2,
+            });
+        }
+        laser.elapsed += frames;
+        if laser.elapsed > 5.0 {
+            commands.entity(e).despawn();
+        }
+    }
+}
+
+fn point_segment_distance(p: glam::Vec2, a: glam::Vec2, b: glam::Vec2) -> f32 {
+    let ab = b - a;
+    let len2 = ab.length_squared();
+    if len2 <= 1e-6 {
+        return p.distance(a);
+    }
+    let t = ((p - a).dot(ab) / len2).clamp(0.0, 1.0);
+    p.distance(a + ab * t)
 }
 
 /// GML `scrRavenLift` on one raven: six `Dust`, `sndRavenLift`, and the

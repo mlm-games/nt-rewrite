@@ -11953,6 +11953,63 @@ pub fn fx_instances(world: &mut World, assets: &RenderAssets) -> Vec<ActorDraw> 
         }
     }
 
+    // GML `Laser/Draw_0` with the `EnemyLaser` overrides: the body is
+    // `sprEnemyLaser` stretched from `start` to `end` at `image_yscale`
+    // 1.25 - 0.25/step, with the `sprEnemyLaserStart/End` caps stepping
+    // through their `img` frames (`Step_0`).
+    {
+        let mut q = world.query::<&crate::comps_b::GmlLaser>();
+        for laser in q.iter(world) {
+            let yscale = (1.25 - 0.25 * laser.elapsed).max(0.0);
+            if yscale <= 0.0 {
+                continue;
+            }
+            let mid = (laser.start + laser.end) * 0.5;
+            let len = (laser.end - laser.start).length().max(1.0);
+            let rotation = laser.angle;
+            if let Some(mut body) = assets.sprite_for(
+                "images/sprEnemyLaser.png",
+                0,
+                mid,
+                false,
+                rotation,
+                [1.0; 4],
+            ) {
+                if let ActorItem::Raster { size: cell, .. } = body.item {
+                    body.scale = DVec2::new(
+                        f64::from(len) / f64::from(cell[0].max(1e-6)),
+                        f64::from(8.0 * yscale) / f64::from(cell[1].max(1e-6)),
+                    );
+                }
+                body.anchor = DVec2::new(0.5, 0.5);
+                out.push(body);
+            }
+            let img = (laser.elapsed * 0.5).floor() as i32;
+            let start_frames = strip_frames(assets, "images/sprEnemyLaserStart.png").max(1);
+            if let Some(s) = assets.sprite_for(
+                "images/sprEnemyLaserStart.png",
+                img.rem_euclid(start_frames as i32),
+                laser.start,
+                false,
+                rotation,
+                [1.0; 4],
+            ) {
+                out.push(s);
+            }
+            let end_frames = strip_frames(assets, "images/sprEnemyLaserEnd.png").max(1);
+            if let Some(s) = assets.sprite_for(
+                "images/sprEnemyLaserEnd.png",
+                img.rem_euclid(end_frames as i32),
+                laser.end,
+                false,
+                rotation,
+                [1.0; 4],
+            ) {
+                out.push(s);
+            }
+        }
+    }
+
     // GML `LaserCannon/Step_0:2-5`: while the burst is charging the eye
     // rides the player at `+16` down `gunangle` and grows `0.02`/frame
     // from `0.2` (`LaserCannon/Create_0:6-7`), `image_speed = 0`.

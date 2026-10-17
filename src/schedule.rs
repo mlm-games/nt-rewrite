@@ -422,6 +422,9 @@ pub fn build_sim_schedule() -> Schedule {
                     enemies::tick_ravens
                         .in_set(NtSimSet::Combat)
                         .run_if(gameplay_active),
+                    enemies::tick_gml_lasers
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
                 )
                     .chain(),
                 (

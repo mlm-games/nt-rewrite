@@ -650,6 +650,21 @@ pub struct RavenFlight {
     pub nofly: f32,
 }
 
+/// GML `Laser`/`EnemyLaser`: a beam, not a flying bullet. `start` is the
+/// muzzle, `end` the point the walk in `Laser/Alarm_0` stopped at; the
+/// renderer stretches `sprEnemyLaser` across the segment and draws the
+/// start/end caps. `elapsed` counts 30 Hz steps for the `image_yscale`
+/// fade (`Step_0`: 1.25 - 0.25/step) and the cap frames (`img += 0.5`).
+#[derive(Component)]
+pub struct GmlLaser {
+    pub start: glam::Vec2,
+    pub end: glam::Vec2,
+    pub angle: f32,
+    pub damage: i32,
+    pub elapsed: f32,
+    pub source: Option<crate::comps_a::DamageSource>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum RavenPhase {
     Ground,
