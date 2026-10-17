@@ -2505,6 +2505,7 @@ pub fn enemy_ai(
             Option<&mut DogGuardianLeap>,
             Option<&mut NextHurt>,
             Option<&crate::comps_b::RavenFlight>,
+            Option<&crate::comps_b::SnowBotRide>,
         ),
         (With<Enemy>, Without<Prop>),
     >,
@@ -2529,7 +2530,7 @@ pub fn enemy_ai(
     // symmetric collision event and keeps no such snapshot.
     let positions: Vec<(Entity, glam::Vec2, i32, f32)> = enemies
         .iter()
-        .map(|(e, enemy, _, _, pos, _, _, _, _, _, _, _)| {
+        .map(|(e, enemy, _, _, pos, _, _, _, _, _, _, _, _)| {
             (
                 e,
                 pos.0,
@@ -2555,6 +2556,7 @@ pub fn enemy_ai(
         mut dog_pose,
         mut next_hurt,
         raven_flight,
+        snowbot_ride,
     ) in &mut enemies
     {
         // GML `RavenFly` is a different object with no `Alarm_1`: while a
@@ -2920,7 +2922,10 @@ pub fn enemy_ai(
                     | EnemyKind::Guardian
                     | EnemyKind::ExploGuardian
             );
-            if !owns_motion && !owns_decide && brain.attack.just_finished() {
+            // GML `SnowBotCar` overrides `Alarm_1` with the throw decide
+            // (`tick_snowbot_cars`); the inherited sled physics still run.
+            let riding = snowbot_ride.is_some();
+            if !owns_motion && !owns_decide && !riding && brain.attack.just_finished() {
                 gml_alarm_1_decide(
                     enemy.kind,
                     epos,
@@ -7523,6 +7528,282 @@ pub fn tick_toxic_gas(
             next.0 = frame.0 + 5;
         }
         commands.entity(gas_entity).despawn();
+    }
+}
+
+/// GML `SnowBot/Collision_Car` -> `SnowBotCar/Alarm_1` -> `CarThrow`: a
+/// walking SnowBot that touches a car mounts it (`sprSnowBotCarLift`,
+/// `sndSnowBotPickup`, car -> `Wind`), drives it with the inherited sled
+/// physics, and throws it every 40 frames when the player is in sight.
+pub fn tick_snowbot_cars(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mut cues: ResMut<Queue<AudioCue>>,
+    catalog: Res<repame_anim::AnimCatalog>,
+    mask: Res<FloorMask>,
+    player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
+    mut bots: Query<
+        (
+            Entity,
+            &mut Enemy,
+            &mut EnemyBrain,
+            &mut Pos,
+            &mut Velocity,
+            &mut crate::comps_b::EnemySprites,
+            Option<&mut SpriteAnim>,
+            Option<&mut crate::comps_b::SnowBotRide>,
+        ),
+        (With<Enemy>, Without<Player>, Without<Prop>),
+    >,
+    cars: Query<(Entity, &Pos, &crate::comps_b::PropSprites), (With<Prop>, Without<Enemy>)>,
+) {
+    let dt = time.delta_secs;
+    let frames = dt * crate::SIM_HZ as f32;
+    let Ok(ppos) = player_q.single() else {
+        return;
+    };
+    let player_pos = ppos.0;
+    let mut rng = rand::rng();
+
+    // Mount pass: GML's per-step `Collision_Car`.
+    let mut mounts: Vec<(Entity, glam::Vec2, bool)> = Vec::new();
+    let mut taken: Vec<Entity> = Vec::new();
+    for (e, _, _, pos, _, _, _, ride) in bots.iter() {
+        if ride.is_some() {
+            continue;
+        }
+        for (car_e, car_pos, car_sprites) in &cars {
+            let is_red = match car_sprites.idle {
+                "images/sprFrozenCar.png" => false,
+                "images/sprCarIdle.png" => true,
+                _ => continue,
+            };
+            if taken.contains(&car_e) {
+                continue;
+            }
+            if pos.0.distance(car_pos.0) <= 22.0 {
+                taken.push(car_e);
+                mounts.push((e, car_pos.0, is_red));
+                break;
+            }
+        }
+    }
+    for (bot, car_pos, is_red) in mounts {
+        if let Ok((_, mut enemy, mut brain, _, mut vel, mut sprites, anim, _)) = bots.get_mut(bot) {
+            commands
+                .entity(bot)
+                .try_insert(crate::comps_b::SnowBotRide {
+                    is_red,
+                    throw_alarm: 40.0,
+                });
+            let (idle, walk, hurt, lift) = if is_red {
+                (
+                    "images/sprSnowBotRedCarIdle.png",
+                    "images/sprSnowBotRedCarWalk.png",
+                    "images/sprSnowBotRedCarHurt.png",
+                    "images/sprSnowBotRedCarLift.png",
+                )
+            } else {
+                (
+                    "images/sprSnowBotCarIdle.png",
+                    "images/sprSnowBotCarWalk.png",
+                    "images/sprSnowBotCarHurt.png",
+                    "images/sprSnowBotCarLift.png",
+                )
+            };
+            sprites.idle = idle;
+            sprites.walk = Some(walk);
+            sprites.hurt = hurt;
+            if let Some(mut anim) = anim
+                && let Some(def) = catalog.def(lift)
+            {
+                anim.set_path_at_rate(lift, def.frames.max(1), 12.0, true);
+            }
+            brain.walk = 0.0;
+            brain.attack = GTimer::from_seconds(40.0 / 30.0, TimerMode::Once);
+            vel.0 = glam::Vec2::ZERO;
+            enemy.touch_damage = 0;
+            enemy_cue(&mut cues, "sndSnowBotPickup");
+            // GML `with other { instance_change(Wind, false) }`: the car
+            // puffs into a wind swirl.
+            if let Some(def) = catalog.def("images/sprWind.png") {
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    GmlImage::animated("images/sprWind.png", def.frames.max(1), 0.4, true),
+                    Pos(car_pos),
+                ));
+            }
+        }
+    }
+    // The car props that got mounted leave with their Wind puff.
+    for car_e in taken {
+        commands.entity(car_e).despawn();
+    }
+
+    // Ride pass: the throw decide (`SnowBotCar/Alarm_1`).
+    for (e, _, mut brain, pos, mut vel, _, anim, ride) in &mut bots {
+        let Some(mut ride) = ride else { continue };
+        ride.throw_alarm -= frames;
+        if ride.throw_alarm > 0.0 {
+            continue;
+        }
+        ride.throw_alarm = 40.0;
+        let to_player = player_pos - pos.0;
+        let dist = to_player.length();
+        let los = has_line_of_sight(pos.0, player_pos, &mask);
+        if los && dist < 160.0 && rng.random_range(0.0..3.0) < 1.0 {
+            // GML `SnowBotCar/Alarm_1:11-30`: throw the car.
+            let dir = glam::Vec2::new(brain.gunangle.cos(), brain.gunangle.sin());
+            let is_red = ride.is_red;
+            commands
+                .entity(e)
+                .try_remove::<crate::comps_b::SnowBotRide>();
+            let (throw_strip, thrown) = if is_red {
+                (
+                    "images/sprSnowBotRedCarThrow.png",
+                    "images/sprCarThrown.png",
+                )
+            } else {
+                (
+                    "images/sprSnowBotCarThrow.png",
+                    "images/sprFrozenCarThrown.png",
+                )
+            };
+            if let Some(mut anim) = anim
+                && let Some(def) = catalog.def(throw_strip)
+            {
+                anim.set_path_at_rate(throw_strip, def.frames.max(1), 12.0, true);
+            }
+            enemy_cue(&mut cues, "sndSnowBotThrow");
+            if let Some(def) = catalog.def(thrown) {
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    crate::comps_b::ThrownCar {
+                        vel: dir * (12.0 * 30.0),
+                        draw_angle: rng.random_range(0.0..std::f32::consts::TAU),
+                        sprite: thrown,
+                    },
+                    Pos(pos.0),
+                    Health {
+                        hp: 20,
+                        max: 20,
+                        invuln: ready_timer(),
+                    },
+                    Hitbox { radius: 14.0 },
+                    Team::Enemy,
+                    SpriteAnim::with_image_speed(thrown, def, 0.4),
+                ));
+            }
+            brain.walk = 0.0;
+            brain.attack = GTimer::from_seconds(40.0 / 30.0, TimerMode::Once);
+            vel.0 = glam::Vec2::ZERO;
+        } else if rng.random_range(0.0..5.0) < 1.0 {
+            // GML `SnowBotCar/Alarm_1:31-36`: pick a new heading and drive.
+            brain.gunangle = rng.random_range(0.0..std::f32::consts::TAU);
+            brain.walk = 30.0;
+        }
+    }
+}
+
+/// GML `CarThrow` (`Step_1` speed 12, `Collision_Wall`, `Collision_hitme`,
+/// `Destroy_0`): the thrown car flies straight until a wall or a body,
+/// hurting the player 5 on contact and bursting into four blasts, six
+/// ground flames and `sndExplosionCar` over a scorchmark.
+pub fn tick_thrown_cars(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mut cues: ResMut<Queue<AudioCue>>,
+    mask: Res<FloorMask>,
+    mut cars: Query<(
+        Entity,
+        &mut crate::comps_b::ThrownCar,
+        &mut Pos,
+        &mut Health,
+    )>,
+    mut player_q: Query<
+        (Entity, &Pos, &mut Health, &crate::comps_a::RaceState),
+        (With<Player>, Without<Enemy>),
+    >,
+    mut secrets: ResMut<crate::secrets::SecretTriggers>,
+    mut last_damage: ResMut<LastDamageTaken>,
+    mut trauma: ResMut<Trauma>,
+) {
+    let dt = time.delta_secs;
+    let mut player = player_q.single_mut().ok();
+    for (e, car, mut pos, health) in &mut cars {
+        let mut boom = health.hp <= 0;
+        let step = car.vel * dt;
+        let next = pos.0 + step;
+        let probe = next + car.vel.normalize_or_zero() * 10.0;
+        if !boom {
+            if mask.is_walkable(probe) {
+                pos.0 = next;
+            } else {
+                // GML `CarThrow/Collision_Wall:1` -> `Destroy_0`.
+                boom = true;
+            }
+        }
+        if let Some((player_e, ppos, health_p, race)) = player.as_mut()
+            && pos.0.distance(ppos.0) <= crate::spatial::PLAYER_RADIUS + 14.0
+        {
+            // GML `CarThrow/Collision_hitme` destroys the car; the prop's
+            // `meleedamage = 5` lands through `enemy/Collision_Player`.
+            boom = true;
+            if health_p.invuln.is_finished() {
+                health_p.hp -= 5;
+                health_p.invuln = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
+                crate::combat::HitFlash::apply(
+                    &mut commands,
+                    *player_e,
+                    [1.0, 0.15, 0.1, 1.0],
+                    0.18,
+                );
+                secrets.mark_damage_taken();
+                last_damage.note(Some(HitId::Contact), Some(EnemyKind::RobotGuard));
+                trauma.add(0.35);
+                cues.push(AudioCue {
+                    name: crate::enemy_data::gml_race_hurt(race.race),
+                    volume: 1.0,
+                    variance: 0.2,
+                });
+            }
+        }
+        if boom {
+            let mut rng = rand::rng();
+            for _ in 0..4 {
+                let at = pos.0
+                    + glam::Vec2::new(rng.random_range(-3.0..3.0), rng.random_range(-3.0..3.0));
+                commands.spawn((
+                    GameCleanup,
+                    LevelCleanup,
+                    crate::combat::Explosion {
+                        timer: GTimer::from_seconds(0.05, TimerMode::Once),
+                        radius: 32.0,
+                        damage: 5,
+                        team: Team::Enemy,
+                        hits_player: true,
+                        source: Some(DamageSource::enemy(e, EnemyKind::RobotGuard)),
+                    },
+                    Pos(at),
+                ));
+            }
+            for _ in 0..6 {
+                let at = pos.0
+                    + glam::Vec2::new(rng.random_range(-16.0..16.0), rng.random_range(-16.0..16.0));
+                crate::environment::spawn_ground_flame(&mut commands, at, false, glam::Vec2::ZERO);
+            }
+            enemy_cue(&mut cues, "sndExplosionCar");
+            commands.spawn((
+                GameCleanup,
+                LevelCleanup,
+                GmlImage::new("images/sprScorchmark.png", 1, 0.0),
+                NativeDepth(5.0),
+                Pos(pos.0),
+            ));
+            commands.entity(e).despawn();
+        }
     }
 }
 

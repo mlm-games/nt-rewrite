@@ -650,6 +650,26 @@ pub struct RavenFlight {
     pub nofly: f32,
 }
 
+/// GML `SnowBotCar` (`SnowBot/Collision_Car` -> `Alarm_1`): the mounted
+/// state on the port's `RobotGuard`. The inherited `SnowBot/Other_10` sled
+/// physics keep driving it; only `Alarm_1` is replaced by the throw.
+#[derive(Component)]
+pub struct SnowBotRide {
+    /// `is_red_car`: the source car was `sprCarIdle`, not `sprFrozenCar`.
+    pub is_red: bool,
+    /// GML `alarm[1]`: the 40-frame throw decide.
+    pub throw_alarm: f32,
+}
+
+/// GML `objects/CarThrow`: the thrown car - a moving, shootable wreck with
+/// a fixed `image_angle = random_angle` and a 4 px draw lift.
+#[derive(Component)]
+pub struct ThrownCar {
+    pub vel: glam::Vec2,
+    pub draw_angle: f32,
+    pub sprite: &'static str,
+}
+
 /// GML `Laser`/`EnemyLaser`: a beam, not a flying bullet. `start` is the
 /// muzzle, `end` the point the walk in `Laser/Alarm_0` stopped at; the
 /// renderer stretches `sprEnemyLaser` across the segment and draws the

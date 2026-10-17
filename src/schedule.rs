@@ -425,6 +425,12 @@ pub fn build_sim_schedule() -> Schedule {
                     enemies::tick_gml_lasers
                         .in_set(NtSimSet::Combat)
                         .run_if(gameplay_active),
+                    enemies::tick_snowbot_cars
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
+                    enemies::tick_thrown_cars
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
                 )
                     .chain(),
                 (

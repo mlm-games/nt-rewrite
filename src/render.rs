@@ -11953,6 +11953,31 @@ pub fn fx_instances(world: &mut World, assets: &RenderAssets) -> Vec<ActorDraw> 
         }
     }
 
+    // GML `CarThrow/Draw_0`: the wreck strip at `y - 4` under its fixed
+    // `image_angle` (the sprite cycles at the prop's 0.4).
+    {
+        let mut q = world.query::<(
+            &Pos,
+            &crate::comps_b::ThrownCar,
+            Option<&SpriteAnim>,
+            Option<&HitFlash>,
+        )>();
+        for (pos, car, anim, flash) in q.iter(world) {
+            let frame = anim.map_or(0, |a| a.frame as i32);
+            let at = pos.0 + Vec2::new(0.0, -4.0);
+            if let Some(s) = assets.sprite_for(
+                car.sprite,
+                frame,
+                at,
+                false,
+                car.draw_angle,
+                flash_tint(flash),
+            ) {
+                out.push(s);
+            }
+        }
+    }
+
     // GML `Laser/Draw_0` with the `EnemyLaser` overrides: the body is
     // `sprEnemyLaser` stretched from `start` to `end` at `image_yscale`
     // 1.25 - 0.25/step, with the `sprEnemyLaserStart/End` caps stepping
