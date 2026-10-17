@@ -2484,30 +2484,6 @@ pub fn spawn_level(
                     run.loop_count,
                     spawn_context,
                 );
-                if other == EnemyKind::FrogQueen {
-                    // GML `FrogQueen/Create_0.gml:39-43`: five `PortalClear`s
-                    // clear her landing.
-                    for (dx, dy) in [
-                        (0.0, 0.0),
-                        (0.0, -24.0),
-                        (0.0, 24.0),
-                        (-24.0, 0.0),
-                        (24.0, 0.0),
-                    ] {
-                        commands.spawn((
-                            GameCleanup,
-                            LevelCleanup,
-                            PortalClear {
-                                timer: GTimer::from_seconds(
-                                    5.0 / 30.0,
-                                    crate::time::TimerMode::Once,
-                                ),
-                                scale: 1.0,
-                            },
-                            Pos(pos + glam::Vec2::new(dx, dy)),
-                        ));
-                    }
-                }
             }
         }
     }

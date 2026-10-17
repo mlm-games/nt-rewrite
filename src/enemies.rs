@@ -4256,6 +4256,11 @@ pub fn tick_bigmaggot_burrow(
                             [0.6, 0.45, 0.3, 1.0],
                             (40.0, 140.0),
                         );
+                        // `BigMaggotBurrow/Alarm_0.gml:7` carries the
+                        // recreation's own marker at this exact spot
+                        // (`//dust ring here plz`): the ring the drill-out
+                        // was always meant to throw.
+                        crate::environment::spawn_dust_ring_12(&mut commands, true, dest);
                     } else {
                         brain.burrow_alarm0 = 1.0;
                     }
