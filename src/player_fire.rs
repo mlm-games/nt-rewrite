@@ -1972,10 +1972,7 @@ pub fn tick_ion_charges(
     mut cues: ResMut<Queue<AudioCue>>,
     players: Query<(), With<Player>>,
     mut charges: Query<(Entity, &mut IonCharge)>,
-    mut enemies: Query<
-        (Entity, &Pos, &Hitbox, &mut Health, Option<&mut NextHurt>),
-        With<Enemy>,
-    >,
+    mut enemies: Query<(Entity, &Pos, &Hitbox, &mut Health, Option<&mut NextHurt>), With<Enemy>>,
 ) {
     let dt = time.delta_secs;
     // GML `IonBurst/Other_11` aim source: a keyboard-driven player reads
@@ -2001,7 +1998,11 @@ pub fn tick_ion_charges(
         // `Other_11` plays the shot before the floor gate.
         cue(
             &mut cues,
-            if charge.brain { "sndLaserUpg" } else { "sndLaser" },
+            if charge.brain {
+                "sndLaserUpg"
+            } else {
+                "sndLaser"
+            },
             1.0,
             0.2,
         );
@@ -2029,12 +2030,7 @@ pub fn tick_ion_charges(
                 if let Some(mut nh) = nh {
                     nh.0 = frame.0 + 5;
                 }
-                crate::combat::HitFlash::apply(
-                    &mut commands,
-                    ee,
-                    [1.0, 1.0, 1.0, 1.0],
-                    0.08,
-                );
+                crate::combat::HitFlash::apply(&mut commands, ee, [1.0, 1.0, 1.0, 1.0], 0.08);
             }
             spawn_motes(
                 &mut commands,

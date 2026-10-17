@@ -3516,11 +3516,7 @@ pub fn tick_plasma_impacts(
                 nh.0 = frame.0 + 5;
             }
             if let Some(mut vel) = vel {
-                apply_knockback(
-                    &mut vel.0,
-                    (pos.0 - epos.0).normalize_or_zero(),
-                    2.0 * 30.0,
-                );
+                apply_knockback(&mut vel.0, (pos.0 - epos.0).normalize_or_zero(), 2.0 * 30.0);
             }
             HitFlash::apply(&mut commands, ee, [1.0, 1.0, 1.0, 1.0], 0.08);
         }
