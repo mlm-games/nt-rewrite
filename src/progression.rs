@@ -671,13 +671,15 @@ pub fn grant_patience_pick(run: &mut Run, player: &mut Player) {
 /// (`objects/GameCont/Other_5.gml` -> `room_restart`), so the queue itself
 /// is port-only.
 pub fn try_start_pending_floor_gen(commands: &mut Commands, run: &Run) {
-    let tip = pick_loading_tip(run);
     commands.insert_resource(FloorTransition {
         active: true,
         stage: 1,
         timer: GTimer::from_seconds(0.05, TimerMode::Repeating),
         progress: 0.0,
-        tip,
+        // GML picks the tip inside `GenCont`'s draw; the port picks it on
+        // the first loading draw (`tips::pick_loading_tip_world`), which
+        // has the live player the pools read.
+        tip: String::new(),
     });
     commands.insert_resource(crate::vortex::SpiralCtl::warmed_up_for_area_seeded(
         run.area,
@@ -3147,23 +3149,6 @@ pub fn tick_floor_transition(
 
 /// Random loading-screen tip (GML `scripts/scrTips/scrTips.gml`: a weighted
 /// `choose` over tip types, falling back to type 0 with no `Player`).
-pub fn pick_loading_tip(_run: &Run) -> String {
-    const TIPS: &[&str] = &[
-        "KILL ENEMIES TO LEVEL UP",
-        "MUTATIONS STACK AFTER EACH LEVEL",
-        "PORTALS OPEN WHEN THE AREA IS CLEAR",
-        "WATCH YOUR AMMO - REVOLVER IS 3 DMG",
-        "HOLD SHIFT TO AIM SLOWLY",
-        "BOILING VEINS SAVES YOU AT LOW HP",
-        "RHINO SKIN GIVES +4 MAX HP",
-        "YOU CAN CARRY TWO WEAPONS",
-        "RAD CANISTERS DROP FROM STRONG ENEMIES",
-        "LOOP TO FIND NEW MUTATIONS",
-    ];
-    let mut rng = rand::rng();
-    TIPS[rng.random_range(0..TIPS.len())].to_string()
-}
-
 /// Portal Disappear-end: flip the level via a near-instant
 /// `PortalSucking` (the player is already at the portal core, so the
 /// lerp is a no-op and `tick_portal_suck` performs the floor advance).

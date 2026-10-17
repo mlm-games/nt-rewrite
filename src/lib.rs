@@ -149,6 +149,7 @@ pub mod spatial;
 pub mod spawns;
 pub mod state;
 pub mod time;
+pub mod tips;
 pub mod vortex;
 pub mod vortex_pass;
 pub mod walls;

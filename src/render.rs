@@ -6131,10 +6131,7 @@ pub fn menu_gui_texts_vw(kind: crate::MenuOverlay, world: &mut World, vw: f32) -
             {
                 transition.tip.clone()
             } else {
-                let picked = world
-                    .get_resource::<crate::comps_a::Run>()
-                    .map(crate::progression::pick_loading_tip)
-                    .unwrap_or_else(|| "KILL ENEMIES TO LEVEL UP".to_string());
+                let picked = crate::tips::pick_loading_tip_world(world);
                 if let Some(mut loading) = world.get_resource_mut::<crate::state::LoadingState>() {
                     loading.tip = picked.clone();
                 } else if let Some(mut transition) =
