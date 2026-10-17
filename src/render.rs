@@ -8880,6 +8880,67 @@ fn push_pickup_shadow(
     }
 }
 
+/// GML `scrDarkness` light stamps for the darkness mask, inverted for the
+/// multiply composite: gray discs (half lit) around every light first, then
+/// white cores (fully lit) over them. The player is the main light; GML also
+/// lights portals, explosions, ground flames and barrels.
+pub fn darkness_light_stamps(world: &mut World, assets: &RenderAssets) -> Vec<ActorDraw> {
+    let mut rng = rand::rng();
+    const DISC: &str = "images/sprPortalClear.png";
+    let mut lights: Vec<(glam::Vec2, f32, f32)> = Vec::new();
+    {
+        let mut q = world.query_filtered::<(&Pos, Option<&crate::comps_a::RaceState>), With<crate::comps_a::Player>>();
+        for (pos, race) in q.iter(world) {
+            let eyes = race.is_some_and(|r| r.race == crate::data::RaceId::Eyes);
+            lights.push((pos.0, 130.0, if eyes { 80.0 } else { 45.0 }));
+        }
+    }
+    {
+        let mut q = world.query_filtered::<&Pos, With<crate::comps_b::Portal>>();
+        for pos in q.iter(world) {
+            lights.push((pos.0, 120.0, 40.0));
+        }
+    }
+    {
+        let mut q = world.query::<(&Pos, &crate::combat::Explosion)>();
+        for (pos, _) in q.iter(world) {
+            lights.push((pos.0, 160.0, 110.0));
+        }
+    }
+    {
+        let mut q = world.query_filtered::<&Pos, With<crate::environment::GroundFlame>>();
+        for pos in q.iter(world) {
+            lights.push((pos.0, 70.0, 30.0));
+        }
+    }
+    {
+        let mut q = world.query::<(&Pos, &crate::comps_b::PropSprites)>();
+        for (pos, sprites) in q.iter(world) {
+            if sprites.idle.contains("Barrel") {
+                lights.push((pos.0, 90.0, 30.0));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let dim = crate::dark_pass::DARK_DIM;
+    for (pos, radius, _) in &lights {
+        let r = *radius + rng.random_range(0.0..4.0);
+        if let Some(s) =
+            assets.sprite_scaled_rotated(DISC, 0, *pos, r * 2.0 / 64.0, 0.0, [dim, dim, dim, 1.0])
+        {
+            out.push(s);
+        }
+    }
+    for (pos, _, core) in &lights {
+        let r = *core + rng.random_range(0.0..3.0);
+        if let Some(s) = assets.sprite_scaled_rotated(DISC, 0, *pos, r * 2.0 / 64.0, 0.0, [1.0; 4])
+        {
+            out.push(s);
+        }
+    }
+    out
+}
+
 /// Soft blob shadows under actors (GML `scrShadows` entity half, composited
 /// by `BackCont/Draw_0`). `spr_shadow` values and offsets resolve from the modeled kind;
 /// missing strips draw nothing.

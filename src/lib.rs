@@ -54,6 +54,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use web_time::Duration;
 
+use crate::dark_pass::{DarkPass, DarkSnapshot};
 use crate::shadow_pass::{ShadowPass, ShadowSnapshot};
 use crate::vortex_pass::{VARD_VARIANTS, VortexPass, VortexTexture};
 use bevy_ecs::prelude::*;
@@ -132,6 +133,7 @@ mod ids_part;
 pub mod input;
 pub mod keymap;
 
+pub mod dark_pass;
 pub mod loop_transition;
 pub mod msg;
 pub mod pickups;
@@ -4321,6 +4323,11 @@ impl App {
                 atlas_floor.clone(),
             )
         });
+        let atlas_uploads = self
+            .assets
+            .as_ref()
+            .map(|a| a.take_uploads())
+            .unwrap_or_default();
         let shadow_view = split_shad.then(|| {
             let box_dp = self.gml_frame().box_dp;
             Embedded(
@@ -4348,10 +4355,7 @@ impl App {
                         .as_ref()
                         .map(|a| a.batch_desc())
                         .unwrap_or_default(),
-                    self.assets
-                        .as_ref()
-                        .map(|a| a.take_uploads())
-                        .unwrap_or_default(),
+                    atlas_uploads.clone(),
                 )),
             )
         });
@@ -4467,6 +4471,56 @@ impl App {
                 None,
                 on_pick,
             )
+        };
+        let dark_view = if playing && self.assets.is_some() {
+            let dark_area = matches!(
+                area,
+                AreaId::Sewers | AreaId::CrystalCaves | AreaId::CursedCaves | AreaId::Labs
+            );
+            if dark_area {
+                let eyes = self
+                    .sim
+                    .world
+                    .query_filtered::<&crate::comps_a::RaceState, With<crate::comps_a::Player>>()
+                    .iter(&self.sim.world)
+                    .next()
+                    .is_some_and(|r| r.race == crate::data::RaceId::Eyes);
+                let stamps: Arc<[ActorDraw]> = Arc::from(crate::render::darkness_light_stamps(
+                    &mut self.sim.world,
+                    self.assets.as_ref().unwrap(),
+                ));
+                let box_dp = self.gml_frame().box_dp;
+                let dim = f64::from(crate::dark_pass::DARK_DIM);
+                Some(Embedded(
+                    Modifier::new()
+                        .absolute()
+                        .size(Dp(box_dp[2]), Dp(box_dp[3]))
+                        .offset(Some(Dp(box_dp[0])), Some(Dp(box_dp[1])), None, None)
+                        .hit_passthrough(),
+                    Callback::new(DarkPass::new(
+                        DarkSnapshot {
+                            stamps,
+                            cam: self.cam,
+                            world_size,
+                            viewport_dp,
+                            clear: if eyes {
+                                [dim, dim, dim]
+                            } else {
+                                [0.0, 0.0, 0.0]
+                            },
+                        },
+                        self.assets
+                            .as_ref()
+                            .map(|a| a.batch_desc())
+                            .unwrap_or_default(),
+                        atlas_uploads.clone(),
+                    )),
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
         };
         let chrome_atlas = |id: &str| {
             self.assets
@@ -4602,6 +4656,10 @@ impl App {
             layers.push(shadow);
         }
         layers.push(viewport);
+        // GML `TopCont` darkness: over the world, under the HUD.
+        if let Some(dark) = dark_view {
+            layers.push(dark);
+        }
         if let Some(placeholder) = placeholder_view {
             layers.push(placeholder);
         }
