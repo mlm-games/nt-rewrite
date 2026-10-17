@@ -839,6 +839,49 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
             });
     }
 
+    // GML `GenCont/Destroy_0.gml:95-99`: xmas city, first loop - 1% of
+    // floors swap the enemy nearest the room sentinel (within 160 px) for
+    // the peek-a-boo Yeti. `instance_destroy(id, false)` skips the Destroy
+    // event, so the swapped enemy pays no drops.
+    if run_area == crate::data::AreaId::City
+        && world.resource::<crate::comps_a::Run>().loop_count == 0
+        && world
+            .resource::<crate::date_part::DateRuntime>()
+            .events
+            .xmas
+    {
+        let sentinel = glam::Vec2::splat(crate::worldgen::TILE as f32 * 0.5);
+        let nearest = world
+            .query::<(Entity, &crate::spatial::Pos, &crate::comps_b::Enemy)>()
+            .iter(world)
+            .map(|(e, p, _)| (e, p.0))
+            .min_by(|a, b| {
+                a.1.distance_squared(sentinel)
+                    .total_cmp(&b.1.distance_squared(sentinel))
+            });
+        let mut rng = rand::rng();
+        if let Some((enemy_e, at)) = nearest
+            && at.distance(sentinel) < 160.0
+            && rng.random_range(0..100) == 0
+        {
+            world.despawn(enemy_e);
+            world.spawn((
+                crate::comps_a::GameCleanup,
+                crate::comps_a::LevelCleanup,
+                crate::comps_b::GmlImage::new("images/sprYetiBurrowed.png", 1, 0.0),
+                crate::environment::Yeti {
+                    pose: crate::environment::YetiPose::Burrowed,
+                    timer: crate::time::GTimer::from_seconds(
+                        15.0 / 30.0 + rng.random_range(0.0..1.0),
+                        crate::time::TimerMode::Once,
+                    ),
+                },
+                crate::comps_b::NativeDepth(-2.0),
+                crate::spatial::Pos(at),
+            ));
+        }
+    }
+
     // GML `scrSavegamePlayers:219-230`: the restored `Player` instance is
     // written over the loadout-built one, field for field, once the floor
     // entities exist.

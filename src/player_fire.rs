@@ -506,7 +506,11 @@ pub struct GunShot {
 /// intents. `Transform` -> [`Pos`]; pulses drained every tick.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn player_fire(
-    mut time_and_save: ParamSet<(Res<SimTime>, Res<SaveData>)>,
+    mut time_and_save: ParamSet<(
+        Res<SimTime>,
+        Res<SaveData>,
+        Res<crate::date_part::DateRuntime>,
+    )>,
     mut input: ResMut<NtInput>,
     mut commands: Commands,
     mut trauma: ResMut<Trauma>,
@@ -532,6 +536,10 @@ pub fn player_fire(
     mut vis_q: Query<&mut WeaponVisual>,
     catalog: Res<repame_anim::AnimCatalog>,
     mut tut: Option<ResMut<crate::state::TutorialState>>,
+    mut crib_sitters: ParamSet<(
+        Query<&mut crate::comps_b::YvCouch>,
+        Query<&mut crate::comps_b::YungCuz>,
+    )>,
 ) {
     let Ok((player_ent, pos, aim, mut player, mut health, race_state, sucking)) =
         player_q.single_mut()
@@ -589,6 +597,49 @@ pub fn player_fire(
     let fire_pressed = input.take_fire_pressed() || input.take_fire_released();
     let spec_held = input.spec_held;
     let spec_pressed = input.take_spec_pressed();
+
+    // GML `Player/Step_0.gml:753-779`: the horn emote. Yung Venuz shakes
+    // and toots (party horn on the birthday, oasis horn underwater); Yung
+    // Cuz rings; the crib sitters react where they exist.
+    if input.horn_pressed {
+        let underwater = matches!(run.area, AreaId::Oasis);
+        let birthday = time_and_save.p2().events.birthday;
+        if race_state.race == RaceId::Venuz {
+            trauma.add(0.08);
+            cue(
+                &mut cues,
+                if underwater {
+                    "sndOasisHorn"
+                } else if birthday {
+                    "sndPartyHorn"
+                } else {
+                    "sndVenuz"
+                },
+                1.0,
+                0.0,
+            );
+            if let Ok(mut cuz) = crib_sitters.p1().single_mut() {
+                cuz.strip = crate::comps_b::CuzStrip::Horn;
+                cuz.crying = false;
+                cue(&mut cues, "sndCuzHorn", 1.0, 0.0);
+            }
+        } else if race_state.race == RaceId::Cuz {
+            cue(
+                &mut cues,
+                if underwater {
+                    "sndCuzOasisRinger"
+                } else {
+                    "sndCuzRinger"
+                },
+                1.0,
+                0.0,
+            );
+            if let Ok(mut couch) = crib_sitters.p0().single_mut() {
+                couch.play_airhorn();
+                cue(&mut cues, "sndVenuz", 1.0, 0.0);
+            }
+        }
+    }
     // GML `Player/Step_0.gml:413`: a Crystal holding RMB never reaches
     // `scrPlayerFiring` - no shots while the shield key is down.
     let shield_hold = race_state.race == RaceId::Crystal && spec_held;

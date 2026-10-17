@@ -329,6 +329,7 @@ pub fn tick_yv_couch(
                     CuzStrip::InteractTo => (8.0, 4),
                     CuzStrip::InteractFrom => (8.0, 4),
                     CuzStrip::Heya => (6.0, 20),
+                    CuzStrip::Horn => (6.0, 22),
                 }
             });
         let anim_end = crate::comps_b::yung_cuz_step(&mut cuz, steps, fps, frames);

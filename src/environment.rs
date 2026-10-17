@@ -117,6 +117,25 @@ pub struct GroundFlame {
     pub launch: glam::Vec2,
 }
 
+/// GML `objects/Yeti`: the xmas peek-a-boo easter egg. Burrowed
+/// (`sprYetiBurrowed`) for 15 + random(30) steps, then the appear strip,
+/// the idle strip (facing the player, 15 steps), and the disappear strip,
+/// destroyed at its animation end (`Other_7`). The port carries the pose
+/// in the component and drives the `GmlImage` path directly.
+#[derive(Component)]
+pub struct Yeti {
+    pub pose: YetiPose,
+    pub timer: GTimer,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum YetiPose {
+    Burrowed,
+    Appear,
+    Idle,
+    Disappear,
+}
+
 /// GML `objects/SnowFlake`: an anchor with a DRAW offset - `addy` counts
 /// 320 -> 0 at ~1/step (the flake descends ~320 px), `addx` sways on
 /// `sin(wave / 5)`, and the last 20 steps fade out. The port moves the
@@ -1829,6 +1848,13 @@ pub fn tick_motes(
         Query<&Pos, With<TopSmall>>,
         Query<(Entity, &mut Pos, &mut Snowflake)>,
     )>,
+    mut yetis: Query<(
+        Entity,
+        &Pos,
+        &mut Yeti,
+        &mut GmlImage,
+        Option<&mut crate::comps_b::NativeFlip>,
+    )>,
     floor: Option<Res<crate::comps_a::FloorMask>>,
     spiral: Option<Res<crate::vortex::SpiralCtl>>,
 ) {
@@ -1942,6 +1968,58 @@ pub fn tick_motes(
         }
         if mote.bounce_period > 0 && mote.tick % mote.bounce_period.max(1) as u32 == 0 {
             bounce(pos.0, &mut ground.vel, 1.0);
+        }
+    }
+    // GML `objects/Yeti` (`Alarm_0`, `Step_0`, `Alarm_1`, `Other_7`):
+    // burrowed -> appear -> idle (faces the player, 15 steps) -> disappear
+    // -> destroyed at the strip's end.
+    for (e, yp, mut yeti, mut image, flip) in &mut yetis {
+        match yeti.pose {
+            YetiPose::Burrowed => {
+                yeti.timer.tick(dt);
+                if yeti.timer.just_finished() {
+                    image.path = "images/sprYetiAppear.png";
+                    image.frames = 12;
+                    image.phase = 0.0;
+                    image.image_speed = 0.4;
+                    image.looping = false;
+                    image.finished = false;
+                    yeti.pose = YetiPose::Appear;
+                }
+            }
+            YetiPose::Appear => {
+                if image.finished {
+                    image.path = "images/sprYetiIdle.png";
+                    image.frames = 5;
+                    image.phase = 0.0;
+                    image.image_speed = 0.4;
+                    image.looping = true;
+                    image.finished = false;
+                    yeti.pose = YetiPose::Idle;
+                    yeti.timer = GTimer::from_seconds(15.0 / 30.0, TimerMode::Once);
+                }
+            }
+            YetiPose::Idle => {
+                yeti.timer.tick(dt);
+                if yeti.timer.just_finished() {
+                    image.path = "images/sprYetiDisappear.png";
+                    image.frames = 8;
+                    image.phase = 0.0;
+                    image.image_speed = 0.4;
+                    image.looping = false;
+                    image.finished = false;
+                    yeti.pose = YetiPose::Disappear;
+                } else if let Some(mut flip) = flip
+                    && let Ok(ppos) = player_q.single()
+                {
+                    flip.0 = ppos.0.x < yp.0.x;
+                }
+            }
+            YetiPose::Disappear => {
+                if image.finished {
+                    commands.entity(e).despawn();
+                }
+            }
         }
     }
     // GML `SnowFlake/Step_0`: descend on the `sin`-sway offsets, then

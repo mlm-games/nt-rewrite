@@ -44,6 +44,8 @@ pub struct NtInput {
 
     pub spec_held: bool,
     spec_pressed: bool,
+    /// GML `KeyCont.press_horn`: the horn emote edge (unbound by default).
+    pub horn_pressed: bool,
     weapon_slot: Option<usize>,
     cycle_weapon: i8,
     /// Menu cursor steps staged by `feed_input` for keyboard nav where no
@@ -170,6 +172,7 @@ impl Default for NtInput {
             pad_face2_pressed: false,
             spec_held: false,
             spec_pressed: false,
+            horn_pressed: false,
             weapon_slot: None,
             cycle_weapon: 0,
             menu_nav_v: 0,
@@ -311,6 +314,7 @@ impl NtInput {
         self.interact_pressed = false;
         self.spec_pressed = false;
         self.spec_held = false;
+        self.horn_pressed = false;
         self.weapon_slot = None;
         self.cycle_weapon = 0;
         self.menu_nav_v = 0;
@@ -581,6 +585,15 @@ pub fn sample_keyboard_mapped(
         }
         _ => swap_pressed || just_pressed.contains(&KeyCode::Space),
     };
+
+    // GML `InputHandling.gml:261`: the `horn` row edge (no default bind).
+    if let Some(state) = keymap {
+        let horn = state
+            .session
+            .map
+            .active(&crate::keymap::NtAction::Horn, false);
+        output.horn_pressed |= entry_pressed(&horn, just_pressed, mouse, false);
+    }
 
     let ability_pressed = spec_pressed_now;
     let spec_held = spec_held_now;
@@ -918,6 +931,7 @@ pub fn sample_gamepad_mapped(
         if pad_pressed(&swap_row, pad) {
             cycle_weapon = cycle_weapon.saturating_add(1);
         }
+        output.horn_pressed |= pad_pressed(&map.gamepad(&NtAction::Horn), pad);
     }
 
     if pad.dpad_left_pressed {

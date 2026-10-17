@@ -271,6 +271,8 @@ pub enum CuzStrip {
     InteractTo,
     InteractFrom,
     Heya,
+    /// GML `Player/Step_0.gml:768` `sprite_index = sprCuzHorn` on the horn.
+    Horn,
 }
 
 #[derive(Component, Clone, Debug, PartialEq)]
@@ -304,6 +306,7 @@ impl YungCuz {
                 CuzStrip::InteractTo => "images/sprCuzInteractTo.png",
                 CuzStrip::InteractFrom => "images/sprCuzInteractFrom.png",
                 CuzStrip::Heya => "images/sprCuzInteract.png",
+                CuzStrip::Horn => "images/sprCuzHorn.png",
             }
         }
     }

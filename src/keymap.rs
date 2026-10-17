@@ -21,10 +21,13 @@ pub enum NtAction {
     South,
     West,
     East,
+    /// GML `InputHandling.gml:37` `"horn"`: the YV/Cuz horn emote. No
+    /// default binding (the player maps it on the REMAP page, like GML).
+    Horn,
 }
 
 impl NtAction {
-    pub const ALL: [NtAction; 8] = [
+    pub const ALL: [NtAction; 9] = [
         NtAction::Fire,
         NtAction::Spec,
         NtAction::Swap,
@@ -33,6 +36,7 @@ impl NtAction {
         NtAction::South,
         NtAction::West,
         NtAction::East,
+        NtAction::Horn,
     ];
 
     pub fn name(self) -> &'static str {
@@ -45,6 +49,7 @@ impl NtAction {
             NtAction::South => "south",
             NtAction::West => "west",
             NtAction::East => "east",
+            NtAction::Horn => "horn",
         }
     }
 
@@ -58,6 +63,7 @@ impl NtAction {
             NtAction::South => "WALK DOWN",
             NtAction::West => "WALK LEFT",
             NtAction::East => "WALK RIGHT",
+            NtAction::Horn => "HORN",
         }
     }
 
@@ -71,6 +77,7 @@ impl NtAction {
             "south" => NtAction::South,
             "west" => NtAction::West,
             "east" => NtAction::East,
+            "horn" => NtAction::Horn,
             _ => return None,
         })
     }
