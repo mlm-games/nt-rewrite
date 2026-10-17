@@ -3335,7 +3335,7 @@ pub fn tick_beams(
     // `scr_can_hit.gml:9` lets `team = 0` through, so the `Team::None`
     // chest in `targets` above is a legal beam victim and needs no
     // special case here.
-    for (beam_e, beam_pos, mut beam) in beams.iter_mut() {
+    for (beam_e, mut beam_pos, mut beam) in beams.iter_mut() {
         beam.timer.tick(time.delta_secs);
         let expired = beam.timer.just_finished();
         beam.tick.tick(time.delta_secs);
@@ -3363,7 +3363,7 @@ pub fn tick_beams(
         }
         if stop == beam.length {
             let mut enemy_stop = stop;
-            for (_, target_pos, target_team, _, _) in targets.iter() {
+            for (_, target_pos, target_team, _, _) in targets.iter_mut() {
                 if *target_team == beam.team {
                     continue;
                 }
@@ -3382,8 +3382,7 @@ pub fn tick_beams(
         }
         if stop != beam.length {
             beam.length = stop;
-            let center = near + dir * (stop * 0.5);
-            commands.entity(beam_e).insert(Pos(center));
+            beam_pos.0 = near + dir * (stop * 0.5);
         }
 
         let a = near;
