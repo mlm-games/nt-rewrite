@@ -718,6 +718,26 @@ fn spawn_dust_ring(commands: &mut Commands, particles_on: bool, pos: glam::Vec2,
     }
 }
 
+/// GML `scrRavenLift:3-7` / `RavenFly/Other_10.gml:4-6`: six `Dust` at
+/// `x + random(16) - 8, y + random(16)`, each `motion_add(random_angle,
+/// 3 + random(1))`.
+pub fn spawn_raven_dust(commands: &mut Commands, particles_on: bool, pos: glam::Vec2) {
+    if !particles_on {
+        return;
+    }
+    let mut rng = rand::rng();
+    for _ in 0..6 {
+        let p = pos + glam::Vec2::new(rng.random_range(-8.0..8.0), rng.random_range(0.0..16.0));
+        spawn_native_dust_mote(
+            commands,
+            true,
+            p,
+            glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU)),
+            3.0 + rng.random_range(0.0..1.0),
+        );
+    }
+}
+
 pub fn spawn_dust_ring_12(commands: &mut Commands, particles_on: bool, pos: glam::Vec2) {
     if !particles_on {
         return;

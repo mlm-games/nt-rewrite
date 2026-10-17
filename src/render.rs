@@ -1078,7 +1078,7 @@ fn enemy_gun_art(kind: EnemyKind) -> Option<&'static str> {
         EnemyKind::IdpdElite => Some("images/sprElitePopoGun.png"),
         EnemyKind::JungleBandit => Some("images/sprJungleBanditGun.png"),
         EnemyKind::Sniper => Some("images/sprSniperGun.png"),
-        EnemyKind::MeleeBandit => Some("images/sprPipe.png"),
+        EnemyKind::MeleeBandit | EnemyKind::Assassin => Some("images/sprPipe.png"),
         EnemyKind::LilHunter => Some("images/sprLilHunterGun.png"),
         EnemyKind::Molefish => Some("images/sprMolefishGun.png"),
         EnemyKind::Molesarge => Some("images/sprMolesargeGun.png"),
@@ -3150,8 +3150,11 @@ pub fn world_instances_cached(
             Option<&HurtAnim>,
             Option<&MaggotSpawnCharge>,
             Option<&DogGuardianLeap>,
+            Option<&crate::comps_b::RavenFlight>,
         )>();
-        for (pos, enemy, _vel, _aim, _anim, _flash, brain, _hurt, _charge, _leap) in q.iter(world) {
+        for (pos, enemy, _vel, _aim, _anim, _flash, brain, _hurt, _charge, _leap, _flight) in
+            q.iter(world)
+        {
             if enemy.kind != EnemyKind::Sniper {
                 continue;
             }
@@ -3172,7 +3175,9 @@ pub fn world_instances_cached(
             }
         }
         // Guns behind.
-        for (pos, enemy, vel, aim, _anim, _flash, brain, _hurt, _charge, _leap) in q.iter(world) {
+        for (pos, enemy, vel, aim, _anim, _flash, brain, _hurt, _charge, _leap, flight) in
+            q.iter(world)
+        {
             let Some(gun_path) = enemy_gun_art(enemy.kind) else {
                 continue;
             };
@@ -3180,12 +3185,17 @@ pub fn world_instances_cached(
                 continue;
             };
             let gunangle = brain.gunangle;
-            let draw_angle = if enemy.kind == EnemyKind::MeleeBandit {
+            let draw_angle = if matches!(
+                enemy.kind,
+                EnemyKind::MeleeBandit | EnemyKind::Assassin
+            ) {
                 gunangle + brain.wepangle
             } else {
                 gunangle
             };
-            let gun_pos = pos.0 + Vec2::new(draw_angle.cos(), draw_angle.sin()) * (-brain.wkick);
+            let gun_pos = pos.0
+                + Vec2::new(draw_angle.cos(), draw_angle.sin()) * (-brain.wkick)
+                + Vec2::new(0.0, flight.map_or(0.0, |f| f.z));
             if gunangle.to_degrees().rem_euclid(360.0) > 180.0 {
                 continue;
             }
@@ -3198,7 +3208,8 @@ pub fn world_instances_cached(
             }
         }
         // Bodies.
-        for (pos, enemy, vel, aim, anim, flash, brain, hurt, charge, leap) in q.iter(world) {
+        for (pos, enemy, vel, aim, anim, flash, brain, hurt, charge, leap, flight) in q.iter(world)
+        {
             let (mut path, mut frame) = if hurt.is_none()
                 && let Some(charge) = charge
             {
@@ -3209,7 +3220,12 @@ pub fn world_instances_cached(
                     None => (crate::enemy_data::enemy_def(enemy.kind).sprite, 0),
                 }
             };
+            // GML `RavenFly/Draw_0:8` draws at `y + z` (`z` negative while
+            // airborne); the ground passes keep their y.
             let mut at = pos.0;
+            if let Some(flight) = flight {
+                at.y += flight.z;
+            }
             let mut tint = flash_tint(flash);
             if let Some(leap) = leap {
                 match leap.pose {
@@ -3245,12 +3261,40 @@ pub fn world_instances_cached(
                 vel.map(|v| v.0.x < 0.0).unwrap_or(false)
                     || aim.map(|a| a.0.x < 0.0).unwrap_or(false)
             };
-            if let Some(s) = assets.sprite_for(path, frame, at, flip, 0.0, tint) {
+            // GML `ScrapBossMissile/Draw_0.gml:4-5` (and the identical
+            // `BigDogMissile/Draw_0`): the body and its exhaust strip are
+            // drawn at `direction`, not unrotated.
+            let rotation = if enemy.kind == EnemyKind::ScrapBossMissile {
+                vel.filter(|v| v.0.length_squared() > 1e-6)
+                    .map(|v| v.0.y.atan2(v.0.x))
+                    .unwrap_or(0.0)
+            } else {
+                0.0
+            };
+            if let Some(s) = assets.sprite_for(path, frame, at, flip, rotation, tint) {
                 out.push(s);
+            }
+            if enemy.kind == EnemyKind::ScrapBossMissile {
+                let trail_frames =
+                    strip_frames(assets, "images/sprScrapBossMissileTrail.png").max(1);
+                let trail_frame = (frame.rem_euclid(trail_frames as i32)) as i32;
+                if let Some(mut trail) = assets.sprite_for(
+                    "images/sprScrapBossMissileTrail.png",
+                    trail_frame,
+                    at,
+                    false,
+                    rotation,
+                    [1.0; 4],
+                ) {
+                    trail.z += 0.001;
+                    out.push(trail);
+                }
             }
         }
         // Guns in front.
-        for (pos, enemy, vel, aim, _anim, _flash, brain, _hurt, _charge, _leap) in q.iter(world) {
+        for (pos, enemy, vel, aim, _anim, _flash, brain, _hurt, _charge, _leap, flight) in
+            q.iter(world)
+        {
             let Some(gun_path) = enemy_gun_art(enemy.kind) else {
                 continue;
             };
@@ -3258,12 +3302,17 @@ pub fn world_instances_cached(
                 continue;
             };
             let gunangle = brain.gunangle;
-            let draw_angle = if enemy.kind == EnemyKind::MeleeBandit {
+            let draw_angle = if matches!(
+                enemy.kind,
+                EnemyKind::MeleeBandit | EnemyKind::Assassin
+            ) {
                 gunangle + brain.wepangle
             } else {
                 gunangle
             };
-            let gun_pos = pos.0 + Vec2::new(draw_angle.cos(), draw_angle.sin()) * (-brain.wkick);
+            let gun_pos = pos.0
+                + Vec2::new(draw_angle.cos(), draw_angle.sin()) * (-brain.wkick)
+                + Vec2::new(0.0, flight.map_or(0.0, |f| f.z));
             if gunangle.to_degrees().rem_euclid(360.0) <= 180.0 {
                 continue;
             }

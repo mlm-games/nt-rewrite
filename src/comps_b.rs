@@ -624,6 +624,38 @@ pub struct EnemyBrain {
     /// `charge += 0.1`): the radial spray's per-tick bullet count is
     /// `round(charge + 1)`, paid for out of the enemy's `raddrop`.
     pub charge: f32,
+
+    /// Port-only signal set by `Raven/Alarm_1` for [`tick_ravens`]:
+    /// `1` = `scrRavenLift()` on self plus the furthest raven,
+    /// `2` = the flock arm (nearby ravens, each `random(3) < 2`).
+    pub raven_call: u8,
+}
+
+/// GML `objects/RavenFly` on the `Raven` kind: `becomenemy` has no events,
+/// so the recreation keeps the same instance and only swaps the sprite and
+/// moves it by hand. The port keeps the raven entity and drives this state:
+/// lift (`z -= 3`), fly (6 px/frame toward `target`), land (`z += 3`).
+#[derive(Component)]
+pub struct RavenFlight {
+    pub phase: RavenPhase,
+    /// GML `z` (negative = up); drawn as `y + z`.
+    pub z: f32,
+    /// GML `targetx`/`targety`, picked by `scrRavenLift`.
+    pub target: glam::Vec2,
+    /// GML `alarm[0]`: the fly-time budget in frames, `distance / 6`.
+    pub alarm0: f32,
+    /// GML `emergencylanding` (0.05/step flying, 1/step landing).
+    pub emergency: f32,
+    /// GML `nofly`: take-off is blocked until it decays to 0.
+    pub nofly: f32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RavenPhase {
+    Ground,
+    Lift,
+    Fly,
+    Land,
 }
 
 pub const SCRAP_BOSS_MISSILE_HP: i32 = 22;

@@ -424,7 +424,7 @@ fn hit_family(stem: &str) -> bool {
     HIT_FAMILY.binary_search(&stem).is_ok()
 }
 
-const SFX_SLIDER_POWER: [(&str, i32); 367] = [
+const SFX_SLIDER_POWER: [(&str, i32); 372] = [
     ("sndAmmoChest", 1),
     ("sndAmmoPickup", 1),
     ("sndAssassinAttack", 1),
@@ -730,6 +730,11 @@ const SFX_SLIDER_POWER: [(&str, i32); 367] = [
     ("sndPortalStrikeEmpty", 1),
     ("sndQuadMachinegun", 2),
     ("sndRadPickup", 1),
+    ("sndRavenDie", 1),
+    ("sndRavenHit", 1),
+    ("sndRavenLand", 1),
+    ("sndRavenLift", 1),
+    ("sndRavenScreech", 1),
     ("sndRebelUltraA", 1),
     ("sndRebelUltraB", 1),
     ("sndRestart", 1),

@@ -234,6 +234,11 @@ fn spawn_enemy_impl(
     } else {
         spawn_hp(kind, def.hp, loops)
     };
+    // GML `JungleAssassinHide` runs `MeleeFake/Create_0:4` `max_hp = 8`
+    // against the awake `MeleeBandit/Create_0:2` `max_hp = 7`; the port
+    // spawns every Assassin dormant, so the sleeping body carries the 8
+    // and `tick_melee_fakes` heals it back to 7 on wake.
+    let hp = hp + i32::from(kind == EnemyKind::Assassin);
     let weapon_chance = if heavy_heart || context.heavy_heart {
         def.weapon_chance + 9
     } else {
@@ -245,7 +250,15 @@ fn spawn_enemy_impl(
         kind,
         score: def.score,
         touch_damage: def.touch_damage,
-        rad_drop: def.rad_drop,
+        // GML `MeleeFake/Destroy_0:5-8`: the dormant body's Destroy runs
+        // the real object's create/destroy pair and then overwrites
+        // `raddrop = 16` - twice the awake drop - so a sleeping assassin
+        // killed in the bush pays double. The wake path restores 8.
+        rad_drop: if kind == EnemyKind::Assassin {
+            16
+        } else {
+            def.rad_drop
+        },
         drop_chance: def.drop_chance,
         weapon_chance,
         give_kill: give_kill && !matches!(kind, EnemyKind::FastRat | EnemyKind::ScrapBossMissile),
@@ -312,6 +325,18 @@ fn spawn_enemy_impl(
         if let Some(hurt) = catalog.def("images/sprScrapBossMissileHurt.png") {
             ec.insert(SpriteAnim::new("images/sprScrapBossMissileHurt.png", hurt));
         }
+    }
+    if kind == EnemyKind::Raven {
+        // GML `Raven/Create_0:24` `nofly = 30`: the first lift unlocks 60
+        // steps in (`Other_10:9` decays it by 0.5).
+        ec.insert(crate::comps_b::RavenFlight {
+            phase: crate::comps_b::RavenPhase::Ground,
+            z: 0.0,
+            target: glam::Vec2::ZERO,
+            alarm0: 0.0,
+            emergency: 0.0,
+            nofly: 30.0,
+        });
     }
     if kind == EnemyKind::DogGuardian {
         ec.insert(DogGuardianLeap {
@@ -478,6 +503,7 @@ fn spawn_enemy_impl(
         maggot_spawn_charging: false,
         maggot_spawn_charge_ticks: 0.0,
         maggot_spawn_facing: 1.0,
+        raven_call: 0,
     });
     if def.boss {
         ec.insert(BossBrain::new(kind, pos));
@@ -1979,6 +2005,12 @@ fn raven_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
                 d.speed(0.4);
                 d.brain.walk = 20.0 + rnd(rng, 10.0);
                 d.aim(d.toward().to_degrees());
+                if gml_chance(rng, 5.0) {
+                    // GML `Raven/Alarm_1:26-32`: the flock arm - each other
+                    // raven within 120 px rolls `random(3) < 2` with a clear
+                    // line to the target (`tick_ravens` resolves it).
+                    d.brain.raven_call = 2;
+                }
             }
         } else {
             d.direction(d.away() + (rnd(rng, 20.0) - 10.0).to_radians());
@@ -1994,8 +2026,9 @@ fn raven_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
         d.aim(d.brain.heading.to_degrees());
         d.face_hspeed();
     } else if (d.hp < d.max_hp || gml_chance(rng, 50.0)) && gml_chance(rng, 2.0) {
-        // GML `scrRavenLift()` on self and the furthest raven; the port has
-        // no lift for the raven, so only the roll is spent.
+        // GML `Raven/Alarm_1:48-50`: `scrRavenLift()` on self and on the
+        // furthest raven; `tick_ravens` performs both lifts.
+        d.brain.raven_call = 1;
     }
 }
 
@@ -2471,6 +2504,7 @@ pub fn enemy_ai(
             Option<&HurtAnim>,
             Option<&mut DogGuardianLeap>,
             Option<&mut NextHurt>,
+            Option<&crate::comps_b::RavenFlight>,
         ),
         (With<Enemy>, Without<Prop>),
     >,
@@ -2495,7 +2529,7 @@ pub fn enemy_ai(
     // symmetric collision event and keeps no such snapshot.
     let positions: Vec<(Entity, glam::Vec2, i32, f32)> = enemies
         .iter()
-        .map(|(e, enemy, _, _, pos, _, _, _, _, _, _)| {
+        .map(|(e, enemy, _, _, pos, _, _, _, _, _, _, _)| {
             (
                 e,
                 pos.0,
@@ -2520,8 +2554,14 @@ pub fn enemy_ai(
         hurt,
         mut dog_pose,
         mut next_hurt,
+        raven_flight,
     ) in &mut enemies
     {
+        // GML `RavenFly` is a different object with no `Alarm_1`: while a
+        // raven is airborne only `tick_ravens` runs on it.
+        if raven_flight.is_some_and(|f| f.phase != crate::comps_b::RavenPhase::Ground) {
+            continue;
+        }
         let epos = pos.0;
         let to_player = player_pos - epos;
         let dist = to_player.length();
@@ -7374,6 +7414,266 @@ pub fn tick_toxic_gas(
     }
 }
 
+/// GML `scrRavenLift` on one raven: six `Dust`, `sndRavenLift`, and the
+/// take-off itself - the target is 128 px out along the cursor-to-player
+/// bearing `+/-25` degrees, snapped to a random walkable cell within `+-48`
+/// (`scrRavenLift:19-37`). Only lifts a grounded raven with `nofly` run out.
+#[allow(clippy::too_many_arguments)]
+fn lift_raven(
+    commands: &mut Commands,
+    cues: &mut Queue<AudioCue>,
+    catalog: &repame_anim::AnimCatalog,
+    mask: &FloorMask,
+    aim_angle: f32,
+    pos: &mut Pos,
+    brain: &mut EnemyBrain,
+    vel: &mut Velocity,
+    flight: &mut crate::comps_b::RavenFlight,
+    mut anim: Option<&mut SpriteAnim>,
+) {
+    use crate::comps_b::RavenPhase;
+    if flight.phase != RavenPhase::Ground || flight.nofly > 0.0 {
+        return;
+    }
+    let mut rng = rand::rng();
+    crate::environment::spawn_raven_dust(commands, true, pos.0);
+    enemy_cue(cues, "sndRavenLift");
+    flight.z = 0.0;
+    let mut target = pos.0;
+    for _ in 0..16 {
+        let ang =
+            aim_angle + std::f32::consts::PI + (rng.random_range(-25.0_f32..25.0)).to_radians();
+        let cand = pos.0 + glam::Vec2::from_angle(ang) * 128.0;
+        let base = mask.cell_center(mask.world_to_cell(cand));
+        let jitter = base
+            + glam::Vec2::new(
+                rng.random_range(-48.0_f32..48.0),
+                rng.random_range(-48.0_f32..48.0),
+            );
+        target = mask.cell_center(mask.world_to_cell(jitter));
+        if mask.is_walkable(target) {
+            break;
+        }
+    }
+    if pos.0.distance(target) > 16.0 {
+        if let Some(anim) = anim.as_deref_mut()
+            && let Some(def) = catalog.def("images/sprRavenLift.png")
+        {
+            anim.set_path_at_rate("images/sprRavenLift.png", def.frames.max(1), 12.0, true);
+        }
+        flight.phase = RavenPhase::Lift;
+        flight.target = target;
+        flight.nofly = 50.0;
+        flight.alarm0 = 0.0;
+        flight.emergency = 0.0;
+        brain.walk = 0.0;
+        vel.0 = glam::Vec2::ZERO;
+    }
+}
+
+/// GML `objects/RavenFly` (`Step_0` + `Other_7` + `Alarm_0` + `Other_10`) and
+/// the `scrRavenLift` calls from `Raven/Alarm_1`. `RavenFlight` keeps the
+/// raven entity; this tick mirrors the swap's state machine: the lift strip
+/// runs while `z -= 3`, then the fly strip steers 6 px/frame at `target` for
+/// `alarm[0] = distance / 6`, then the land strip drops `z += 3` and the
+/// landing throws dust again and hands the raven back to the ground.
+pub fn tick_ravens(
+    time: Res<SimTime>,
+    mut commands: Commands,
+    mut cues: ResMut<Queue<AudioCue>>,
+    catalog: Res<repame_anim::AnimCatalog>,
+    mask: Res<FloorMask>,
+    player_q: Query<(&Pos, &crate::comps_a::AimDir), (With<Player>, Without<Enemy>)>,
+    mut enemies: Query<
+        (
+            Entity,
+            &Enemy,
+            &mut EnemyBrain,
+            &mut crate::comps_b::RavenFlight,
+            &mut Pos,
+            &mut Velocity,
+            Option<&mut SpriteAnim>,
+            Option<&HurtAnim>,
+        ),
+        (With<Enemy>, Without<Player>, Without<Prop>),
+    >,
+) {
+    use crate::comps_b::RavenPhase;
+    let Ok((ppos, aim)) = player_q.single() else {
+        return;
+    };
+    let player_pos = ppos.0;
+    let aim_angle = aim.0.y.atan2(aim.0.x);
+    let dt = time.delta_secs;
+    let frames = dt * crate::SIM_HZ as f32;
+    if enemies.is_empty() {
+        return;
+    }
+    let raven_positions: Vec<(Entity, glam::Vec2)> = enemies
+        .iter()
+        .filter(|(_, e, ..)| e.kind == EnemyKind::Raven)
+        .map(|(id, _, _, _, p, ..)| (id, p.0))
+        .collect();
+    let mut lifts: Vec<Entity> = Vec::new();
+
+    for (entity, enemy, mut brain, mut flight, mut pos, mut vel, mut anim, hurt) in &mut enemies {
+        if enemy.kind != EnemyKind::Raven {
+            continue;
+        }
+        match flight.phase {
+            RavenPhase::Ground => {
+                // GML `Raven/Other_10:9` `nofly -= 0.5`.
+                flight.nofly = (flight.nofly - 0.5 * frames).max(0.0);
+                match brain.raven_call {
+                    1 => {
+                        brain.raven_call = 0;
+                        lifts.push(entity);
+                        if let Some((far, _)) = raven_positions
+                            .iter()
+                            .filter(|(id, _)| *id != entity)
+                            .max_by(|a, b| {
+                                a.1.distance_squared(pos.0)
+                                    .total_cmp(&b.1.distance_squared(pos.0))
+                            })
+                        {
+                            lifts.push(*far);
+                        }
+                    }
+                    2 => {
+                        brain.raven_call = 0;
+                        let mut rng = rand::rng();
+                        for (id, p) in &raven_positions {
+                            if *id != entity
+                                && p.distance(pos.0) < 120.0
+                                && has_line_of_sight(*p, player_pos, &mask)
+                                && rng.random_range(0.0..3.0) < 2.0
+                            {
+                                lifts.push(*id);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            RavenPhase::Lift => {
+                // GML `RavenFly/Step_0:6-7` `z -= 3`; `Other_7:1-4` swaps
+                // to the fly strip and arms `alarm[0]` when the lift ends.
+                flight.z -= 3.0 * frames;
+                vel.0 = glam::Vec2::ZERO;
+                if let Some(anim) = anim.as_deref_mut()
+                    && anim.finished
+                {
+                    flight.phase = RavenPhase::Fly;
+                    flight.alarm0 = (flight.target.distance(pos.0) / 6.0).max(1.0);
+                    flight.emergency = 0.0;
+                    if let Some(def) = catalog.def("images/sprRavenFly.png") {
+                        anim.set_path_at_rate(
+                            "images/sprRavenFly.png",
+                            def.frames.max(1),
+                            12.0,
+                            false,
+                        );
+                    }
+                }
+            }
+            RavenPhase::Fly => {
+                vel.0 = glam::Vec2::ZERO;
+                if let Some(anim) = anim.as_deref_mut()
+                    && hurt.is_none()
+                    && anim.path != "images/sprRavenFly.png"
+                    && let Some(def) = catalog.def("images/sprRavenFly.png")
+                {
+                    anim.set_path_at_rate("images/sprRavenFly.png", def.frames.max(1), 12.0, false);
+                }
+                let delta = flight.target - pos.0;
+                let step = 6.0 * frames;
+                if delta.length() <= step {
+                    pos.0 = flight.target;
+                } else {
+                    pos.0 += delta.normalize_or_zero() * step;
+                }
+                flight.alarm0 -= frames;
+                flight.emergency += 0.05 * frames;
+                if flight.alarm0 <= 0.0 || flight.emergency >= 20.0 {
+                    // GML `RavenFly/Alarm_0.gml:1-2`.
+                    flight.phase = RavenPhase::Land;
+                    if let Some(anim) = anim.as_deref_mut()
+                        && let Some(def) = catalog.def("images/sprRavenLand.png")
+                    {
+                        anim.set_path_at_rate(
+                            "images/sprRavenLand.png",
+                            def.frames.max(1),
+                            12.0,
+                            true,
+                        );
+                    }
+                }
+            }
+            RavenPhase::Land => {
+                // GML `RavenFly/Step_0:9-15`: `z += 3`, `emergencylanding
+                // += timescale`, the landing at 10.
+                flight.z += 3.0 * frames;
+                flight.emergency += frames;
+                if flight.emergency >= 10.0 {
+                    crate::environment::spawn_raven_dust(&mut commands, true, pos.0);
+                    enemy_cue(&mut cues, "sndRavenLand");
+                    let mut rng = rand::rng();
+                    for (id, p) in &raven_positions {
+                        let d = p.distance(pos.0);
+                        if *id != entity
+                            && d > 32.0
+                            && d < 120.0
+                            && has_line_of_sight(*p, player_pos, &mask)
+                            && rng.random_range(0.0..3.0) < 2.0
+                        {
+                            lifts.push(*id);
+                        }
+                    }
+                    flight.phase = RavenPhase::Ground;
+                    flight.z = 0.0;
+                    flight.emergency = 0.0;
+                    flight.nofly = 50.0;
+                    brain.walk = 0.0;
+                    brain.attack = GTimer::from_seconds(
+                        (20.0 + rng.random_range(0.0..10.0)) / 30.0,
+                        TimerMode::Once,
+                    );
+                    vel.0 = glam::Vec2::ZERO;
+                    if let Some(anim) = anim.as_deref_mut()
+                        && let Some(def) =
+                            catalog.def(crate::enemy_data::enemy_def(enemy.kind).sprite)
+                    {
+                        anim.set_path_at_rate(
+                            crate::enemy_data::enemy_def(enemy.kind).sprite,
+                            def.frames.max(1),
+                            12.0,
+                            false,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    for e in lifts {
+        if let Ok((_, _, mut brain, mut flight, mut pos, mut vel, mut anim, _)) = enemies.get_mut(e)
+        {
+            lift_raven(
+                &mut commands,
+                &mut cues,
+                &catalog,
+                &mask,
+                aim_angle,
+                &mut pos,
+                &mut brain,
+                &mut vel,
+                &mut flight,
+                anim.as_deref_mut(),
+            );
+        }
+    }
+}
+
 /// Verbatim `objects/Throne2Ball` law (`Step_0`): friction 0.25 bleeds speed;
 /// once stalled, `timeout` accrues and past 15 ticks the ball sprays an
 /// `EnemyBullet2` (Horror stats: damage 2 at 10 px/tick) along the latched
@@ -8823,7 +9123,13 @@ pub fn tick_melee_fakes(
     player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
     enemies: Query<&Pos, (With<Enemy>, Without<Player>)>,
     mut fakes: Query<
-        (Entity, &Enemy, &Pos, &Health, Option<&mut SpriteAnim>),
+        (
+            Entity,
+            &mut Enemy,
+            &Pos,
+            &mut Health,
+            Option<&mut SpriteAnim>,
+        ),
         (With<Enemy>, Without<Player>, Without<Prop>),
     >,
     portals: Query<(), (With<crate::comps_b::Portal>, Without<Enemy>)>,
@@ -8838,7 +9144,7 @@ pub fn tick_melee_fakes(
     // GML `!instance_number(enemy)`: any other live enemy keeps it asleep.
     let alive: Vec<glam::Vec2> = enemies.iter().map(|p| p.0).collect();
 
-    for (entity, enemy, pos, health, anim) in &mut fakes {
+    for (entity, mut enemy, pos, mut health, anim) in &mut fakes {
         let jungle_hide = enemy.kind == EnemyKind::Assassin;
         if enemy.kind != EnemyKind::MeleeFake && !jungle_hide {
             continue;
@@ -8855,8 +9161,14 @@ pub fn tick_melee_fakes(
         enemy_cue(&mut cues, "sndAssassinGetUp");
         if jungle_hide {
             // GML `Step_0:17-19` with `JungleAssassin` as the spawn object:
-            // the bush becomes the assassin without leaving its spot.
+            // the bush becomes the assassin without leaving its spot. The
+            // fresh instance's `Create` re-runs `MeleeBandit/Create_0`
+            // (`max_hp = 7`, `hp = max_hp`) and drops the `MeleeFake`
+            // double-rad to the awake 8.
             commands.entity(entity).try_remove::<AssassinSleeping>();
+            health.max = (health.max - 1).max(1);
+            health.hp = health.max;
+            enemy.rad_drop = crate::enemy_data::enemy_def(EnemyKind::Assassin).rad_drop;
             if let Some(mut anim) = anim
                 && let Some(def) = catalog.def("images/sprJungleAssassinIdle.png")
             {

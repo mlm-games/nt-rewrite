@@ -419,6 +419,9 @@ pub fn build_sim_schedule() -> Schedule {
                     enemies::tick_super_frogs
                         .in_set(NtSimSet::Combat)
                         .run_if(gameplay_active),
+                    enemies::tick_ravens
+                        .in_set(NtSimSet::Combat)
+                        .run_if(gameplay_active),
                 )
                     .chain(),
                 (

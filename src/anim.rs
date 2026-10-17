@@ -229,12 +229,18 @@ pub fn enemy_anim_switch(
             Option<&MaggotSpawnCharge>,
             Option<&crate::comps_b::EnemyBrain>,
             Option<&crate::enemies::AssassinSleeping>,
+            Option<&crate::comps_b::RavenFlight>,
         ),
         (With<Enemy>, Without<HurtAnim>, Without<FireAnim>),
     >,
 ) {
-    for (vel, sprites, mut anim, charge, brain, sleeping) in &mut q {
+    for (vel, sprites, mut anim, charge, brain, sleeping, flight) in &mut q {
         if charge.is_some() || (anim.oneshot && !anim.finished) {
+            continue;
+        }
+        // GML `RavenFly` has no idle/walk logic: the flight strips own the
+        // sprite until the raven lands.
+        if flight.is_some_and(|f| f.phase != crate::comps_b::RavenPhase::Ground) {
             continue;
         }
         // GML `JungleAssassinHide` never swaps strips: the bush owns the
