@@ -8880,6 +8880,120 @@ fn push_pickup_shadow(
     }
 }
 
+/// One OG bitmap-font glyph: a sub-rect of the font page in the atlas,
+/// top-left anchored at `top_left`.
+fn glyph_draw(
+    assets: &RenderAssets,
+    font: crate::font_data::Font,
+    g: &crate::font_data::Glyph,
+    top_left: Vec2,
+    scale: f32,
+    z: f32,
+    tint: [f32; 4],
+) -> Option<ActorDraw> {
+    let (uv, def) = assets.uv(font.path(), 0)?;
+    let pw = def.w as f32;
+    let ph = def.h as f32;
+    if pw <= 0.0 || ph <= 0.0 {
+        return None;
+    }
+    let span_u = uv.max[0] - uv.min[0];
+    let span_v = uv.max[1] - uv.min[1];
+    let min = [
+        uv.min[0] + span_u * f32::from(g.x) / pw,
+        uv.min[1] + span_v * f32::from(g.y) / ph,
+    ];
+    let max = [
+        uv.min[0] + span_u * f32::from(g.x + g.w) / pw,
+        uv.min[1] + span_v * f32::from(g.y + g.h) / ph,
+    ];
+    let mut draw = raster_draw(
+        uv.page,
+        min,
+        max,
+        [f32::from(g.w), f32::from(g.h)],
+        top_left,
+        Vec2::splat(scale),
+        0.0,
+        [0.0, 0.0],
+        tint,
+    );
+    draw.z = z;
+    Some(draw)
+}
+
+/// GUI text as OG bitmap glyphs: GML `draw_text_nt` renders `fntM1` with
+/// three 1-px black shadows at `(1,0)`, `(0,1)` and `(1,1)`, and
+/// `draw_text_bigname` renders `fntBig` at `0.65`. Rows arrive in dp from
+/// [`gui_texts_dp`]; they are mapped back to the GML GUI pixels and drawn
+/// through [`hud_gui_to_world`] like every other HUD sprite, so the glyphs
+/// land on the GML's own coordinates.
+pub fn gui_text_sprites(
+    assets: &RenderAssets,
+    canvas_dp: [f32; 2],
+    view: [f32; 4],
+    rows: &[GuiRow],
+) -> Vec<ActorDraw> {
+    use crate::font_data::{Font, glyph, text_width};
+    let vw = gml_view_size(canvas_dp)[0];
+    let w = canvas_dp[0].max(1.0);
+    let h = canvas_dp[1].max(1.0);
+    let k = (h / 240.0).min(w / 320.0).max(1e-6);
+    let ox = (w - vw * k) * 0.5;
+    let oy = (h - 240.0 * k) * 0.5;
+    let gm = hud_gui_map(view);
+    let mut out = Vec::new();
+    for (segs, off, _px, centered, box_w, right, bold) in rows {
+        let font = if *bold { Font::Big } else { Font::Main };
+        let scale = if *bold { 0.65 } else { 1.0 };
+        let ink: f32 = segs
+            .iter()
+            .map(|(text, _)| text_width(font, text) as f32 * scale)
+            .sum();
+        let left = (off[0] - ox) / k;
+        let box_gui = box_w / k;
+        let start_pen = if *centered {
+            left + (box_gui - ink) * 0.5
+        } else if *right {
+            left + box_gui - ink
+        } else {
+            left
+        };
+        let mut pen = start_pen;
+        // `gui_texts_dp` subtracts a 2 GUI px baseline bias for Silkscreen;
+        // the GML bitmap ink starts on the draw y.
+        let mut top = (off[1] - oy) / k + FONT_TOP_BIAS_GUI;
+        let line_h = font.line_height() as f32 * scale;
+        for (text, color) in segs {
+            for ch in text.chars() {
+                if ch == '\n' {
+                    pen = start_pen;
+                    top += line_h;
+                    continue;
+                }
+                let Some(g) = glyph(font, ch) else {
+                    pen += 4.0 * scale;
+                    continue;
+                };
+                let gx = pen + f32::from(g.offset) * scale;
+                for (dx, dy, tint, z) in [
+                    (1.0, 0.0, [0.0, 0.0, 0.0, color[3]], 0.001),
+                    (0.0, 1.0, [0.0, 0.0, 0.0, color[3]], 0.001),
+                    (1.0, 1.0, [0.0, 0.0, 0.0, color[3]], 0.001),
+                    (0.0, 0.0, *color, 0.002),
+                ] {
+                    let at = hud_gui_to_world(gm, view, gx + dx, top + dy);
+                    if let Some(draw) = glyph_draw(assets, font, g, at, scale, z, tint) {
+                        out.push(draw);
+                    }
+                }
+                pen += f32::from(g.shift) * scale;
+            }
+        }
+    }
+    out
+}
+
 /// GML `scrDarkness` light stamps for the darkness mask, inverted for the
 /// multiply composite: gray discs (half lit) around every light first, then
 /// white cores (fully lit) over them. The player is the main light; GML also

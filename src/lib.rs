@@ -134,6 +134,7 @@ pub mod input;
 pub mod keymap;
 
 pub mod dark_pass;
+pub mod font_data;
 pub mod loop_transition;
 pub mod msg;
 pub mod pickups;
@@ -4668,10 +4669,31 @@ impl App {
         if let Some(placeholder) = placeholder_view {
             layers.push(placeholder);
         }
-        let hud_rows_layer = (!pending_pick && !hud_rows.is_empty()).then(|| {
+        // GML draws all UI text with the OG bitmap fonts (`draw_text_nt`
+        // through `fntM1`, `draw_text_bigname` through `fntBig`). The rows
+        // carry the GML positions as dp; they are drawn back in GUI pixels
+        // through the atlas. Without assets (headless boot) the Silkscreen
+        // widget path stays as the fallback.
+        let text_layer = |rows: &[crate::render::GuiRow]| -> View {
+            if let Some(assets) = self.assets.as_ref() {
+                let view = view_rect_world(viewport_dp, world_size, &self.cam);
+                let sprites = crate::render::gui_text_sprites(assets, viewport_dp, view, rows);
+                if !sprites.is_empty() {
+                    let atlas = Rc::new(assets.raster_atlas("viewport2d.chrome.text"));
+                    return actors_view_mixed(
+                        actor_library.clone(),
+                        Rc::new(ActorDrawList::from_draws(sprites)),
+                        self.cam,
+                        world_size,
+                        _ctx.clone(),
+                        Some(atlas),
+                    );
+                }
+            }
             ZStack(Modifier::new().fill_max_size().hit_passthrough())
-                .child(hud_rows.iter().map(gui_text_layer).collect::<Vec<_>>())
-        });
+                .child(rows.iter().map(gui_text_layer).collect::<Vec<_>>())
+        };
+        let hud_rows_layer = (!pending_pick && !hud_rows.is_empty()).then(|| text_layer(&hud_rows));
         if vortex_above {
             if let Some(vortex) = vortex_layer.take() {
                 layers.push(vortex);
@@ -4886,10 +4908,7 @@ impl App {
             }
             if !rows.is_empty() {
                 // Plain text rows (GML draws the buttons as text;
-                layers.push(
-                    ZStack(Modifier::new().fill_max_size().hit_passthrough())
-                        .child(rows.iter().map(gui_text_layer).collect::<Vec<_>>()),
-                );
+                layers.push(text_layer(&rows));
             }
             if gen_cover && let Some(chrome) = chrome_view.take() {
                 layers.push(chrome);
@@ -4902,10 +4921,7 @@ impl App {
         }
         if pending_pick {
             if !hud_rows.is_empty() {
-                layers.push(
-                    ZStack(Modifier::new().fill_max_size().hit_passthrough())
-                        .child(hud_rows.iter().map(gui_text_layer).collect::<Vec<_>>()),
-                );
+                layers.push(text_layer(&hud_rows));
             }
             if let Some(hud) = cover_hud_view {
                 layers.push(hud);
