@@ -475,6 +475,13 @@ pub fn setup_continued_run(world: &mut World, save: &crate::run_save::RunSave) {
 
 fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save::RunSave>) {
     teardown_session_entities(world);
+    // GML keeps the `WantBoss`/`CanOasis` state in per-room objects, so a
+    // retry or a new run starts clean. The port holds it in a runtime
+    // resource, and leaving it alone let a dead run's oasis promotion keep
+    // the last-subarea threshold on the next run's 1-1: the breach armed
+    // and the Big Bandit came through there (#12). `vaults_entered` and the
+    // queued secret are per run too.
+    world.insert_resource(crate::secrets::SecretTriggers::default());
 
     world.init_resource::<Score>();
     world.init_resource::<Run>();
