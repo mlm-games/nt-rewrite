@@ -13,8 +13,8 @@
 
 use std::sync::Arc;
 
-use repame_actors::ActorDraw;
-use repame_sprite::{AtlasUpload, BatchDesc, Camera2d, SpriteBatch, draw_batch_with_id};
+use repame_view2d::ActorDraw;
+use repame_view2d::{AtlasUpload, BatchDesc, Camera2d, SpriteBatch, draw_batch_with_id};
 use repose_render_wgpu::{CallbackRenderPass, CallbackResources, ScreenDescriptor, WgpuCallback};
 
 /// Batch id for the darkness mask. Stable, so the engine reuses the atlas

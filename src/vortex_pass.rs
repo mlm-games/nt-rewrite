@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use repame_sprite::{FullscreenDesc, FullscreenPass, FullscreenTextureUpload, TextureFilter};
+use repame_view2d::{FullscreenDesc, FullscreenPass, FullscreenTextureUpload, TextureFilter};
 use repose_render_wgpu::{CallbackRenderPass, CallbackResources, ScreenDescriptor, WgpuCallback};
 
 pub const VORTEX_WISPS: usize = 128;

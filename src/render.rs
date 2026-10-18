@@ -31,11 +31,11 @@ use std::sync::Arc;
 use bevy_ecs::prelude::*;
 use glam::{DVec2, DVec4, Vec2};
 use rand::RngExt;
-use repame_actors::{ActorDraw, ActorItem};
+use repame_view2d::{ActorDraw, ActorItem};
 use repame_anim::{AnimCatalog, AnimDef, AtlasDesc, UvRect, frame_key};
 use repame_atlas::AtlasId;
 use repame_fx::{DamageNumber, Particle, particle_sprites};
-use repame_sprite::{
+use repame_view2d::{
     AtlasUpload, BatchDesc, Camera2d, FitMode, SpriteBlend, SpriteInstance, WorldText, dp_to_world,
     effective_fit, world_to_dp,
 };
@@ -188,8 +188,8 @@ impl RenderAssets {
 
     /// Atlas resources backing [`ActorItem::Raster`] placements. `id`
     /// names the view's batch so GPU resources are not shared across views.
-    pub fn raster_atlas(&self, id: &str) -> repame_actors::RasterAtlas {
-        repame_actors::RasterAtlas {
+    pub fn raster_atlas(&self, id: &str) -> repame_view2d::RasterAtlas {
+        repame_view2d::RasterAtlas {
             desc: self.batch_desc(),
             uploads: self.take_uploads(),
             batch_id: id.to_string(),
@@ -410,6 +410,7 @@ pub(crate) fn to_sprite_instance(d: &ActorDraw) -> Option<SpriteInstance> {
             repose_core::BlendMode::Multiply => SpriteBlend::Multiply,
             _ => SpriteBlend::Alpha,
         },
+        light_mask: 1,
     })
 }
 
@@ -12546,7 +12547,7 @@ pub fn hud_texts_dp(
 #[cfg(test)]
 mod raster_offscreen {
     use super::*;
-    use repame_sprite::{SpriteBatch, screen_camera};
+    use repame_view2d::{SpriteBatch, screen_camera};
     use repose_core::{Color, Rect, Scene, SceneNode};
     use repose_render_wgpu::Callback;
     use repose_render_wgpu::offscreen::OffscreenRenderer;

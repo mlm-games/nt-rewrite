@@ -60,14 +60,14 @@ use crate::vortex_pass::{VARD_VARIANTS, VortexPass, VortexTexture};
 use bevy_ecs::prelude::*;
 use glam::{DVec2, DVec4, Vec2};
 use rand::RngExt;
-use repame_actors::{
+use repame_view2d::{
     ActorDraw, ActorDrawList, ActorItem, ActorLibrary, RasterAtlas, actors_view_mixed,
     actors_view_mixed_with_events,
 };
 use repame_anim::{AnimCatalog, AtlasDesc};
 use repame_sim::{Sim, SimTime};
-use repame_sprite::fullscreen::SOLID_WGSL;
-use repame_sprite::{
+use repame_view2d::fullscreen::SOLID_WGSL;
+use repame_view2d::{
     Camera2d, FullscreenDesc, FullscreenPass, PickEvent, TextureFilter, WorldText, effective_fit,
     rgba8, world_to_dp_with_roll,
 };
@@ -1761,7 +1761,7 @@ impl App {
 
     /// Live cursor in world coords: polled window-physical px
     /// unprojected through this frame's camera. Pure viewport math
-    /// lives in [`repame_sprite::unproject_px`]; the NT wrappings
+    /// lives in [`repame_view2d::unproject_px`]; the NT wrappings
     /// (`Option` polling, NT's dp-viewport fields) stay here.
     fn live_cursor_world(&self) -> Option<Vec2> {
         self.px_to_world(self.polled_pointer_px)
@@ -1769,11 +1769,11 @@ impl App {
 
     /// Unproject one window-physical px point through this frame's
     /// camera. Pure viewport math lives in
-    /// [`repame_sprite::unproject_px`]; the NT wrappings (`Option`
+    /// [`repame_view2d::unproject_px`]; the NT wrappings (`Option`
     /// polling, NT's dp-viewport fields) stay here.
     fn px_to_world(&self, px: Option<Vec2>) -> Option<Vec2> {
         let px = px?;
-        Some(repame_sprite::unproject_px(
+        Some(repame_view2d::unproject_px(
             px,
             self.view_viewport_dp,
             self.view_world_size,
@@ -1784,7 +1784,7 @@ impl App {
 
     //// Decode the live `sprCrosshair` frame + `opt_cursorcol` tint into the
     /// hardware cursor payload (`cursor_img`); mechanical pixel work lives in
-    /// [`repame_sprite::cursor_frame`], this owns settings reads, file IO and
+    /// [`repame_view2d::cursor_frame`], this owns settings reads, file IO and
     /// the `cursor_img` cache. GML draws the raw strip cell at GUI mouse
     /// (`Draw_75`, no lerp, alpha 1) with the catalog-origin hotspot (crosshair
     /// strips center on (8,8)). Missing assets clear the payload and callers
@@ -1827,7 +1827,7 @@ impl App {
         let mag = (self.view_density.max(1e-6) * self.gml_frame().dp_per_world)
             .round()
             .clamp(1.0, 8.0) as u32;
-        let Some(built) = repame_sprite::cursor_frame(
+        let Some(built) = repame_view2d::cursor_frame(
             &rgba,
             sw,
             sh,
@@ -4426,7 +4426,7 @@ impl App {
                             ActorItem::Rect { half } => ([half[0] * 2.0, half[1] * 2.0], draw.tint),
                             ActorItem::Rig { .. } => continue,
                         };
-                        let [dx, dy] = repame_sprite::world_to_dp(
+                        let [dx, dy] = repame_view2d::world_to_dp(
                             [draw.world.x as f32, draw.world.y as f32],
                             world_size,
                             center,
