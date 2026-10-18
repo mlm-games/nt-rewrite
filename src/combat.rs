@@ -260,15 +260,6 @@ pub fn contact_damage(
             continue;
         }
 
-        // Crystal's right-click shield (GML `CrystalShield`) absorbs melee
-        // contact: no HP or feel sinks, but the blocked hit still burns the
-        // enemy's attack cooldown (GML clears `canmelee` on a failed
-        // `scr_hit` too).
-        if shield.is_some_and(|s| !s.timer.is_finished()) {
-            brain.melee = GTimer::from_seconds(1.0, TimerMode::Once);
-            continue;
-        }
-
         health.hp -= damage;
         took_damage = damage;
         health.invuln = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
