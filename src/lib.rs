@@ -4675,6 +4675,8 @@ impl App {
         // through the atlas. Without assets (headless boot) the Silkscreen
         // widget path stays as the fallback.
         let text_layer = |rows: &[crate::render::GuiRow]| -> View {
+            static FONT_WARN: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
             if let Some(assets) = self.assets.as_ref() {
                 let view = view_rect_world(viewport_dp, world_size, &self.cam);
                 let sprites = crate::render::gui_text_sprites(assets, viewport_dp, view, rows);
@@ -4687,6 +4689,11 @@ impl App {
                         world_size,
                         _ctx.clone(),
                         Some(atlas),
+                    );
+                }
+                if !rows.is_empty() && !FONT_WARN.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    log::warn!(
+                        "nt: OG font pages missing from assets (images/fntM1.png / images/fntBig.png); UI text falls back to Silkscreen"
                     );
                 }
             }

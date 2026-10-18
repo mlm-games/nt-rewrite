@@ -8934,7 +8934,7 @@ pub fn gui_text_sprites(
     view: [f32; 4],
     rows: &[GuiRow],
 ) -> Vec<ActorDraw> {
-    use crate::font_data::{Font, glyph, text_width};
+    use crate::font_data::{Font, glyph};
     let vw = gml_view_size(canvas_dp)[0];
     let w = canvas_dp[0].max(1.0);
     let h = canvas_dp[1].max(1.0);
@@ -8946,32 +8946,46 @@ pub fn gui_text_sprites(
     for (segs, off, _px, centered, box_w, right, bold) in rows {
         let font = if *bold { Font::Big } else { Font::Main };
         let scale = if *bold { 0.65 } else { 1.0 };
-        let ink: f32 = segs
-            .iter()
-            .map(|(text, _)| text_width(font, text) as f32 * scale)
-            .sum();
         let left = (off[0] - ox) / k;
         let box_gui = box_w / k;
-        let start_pen = if *centered {
-            left + (box_gui - ink) * 0.5
-        } else if *right {
-            left + box_gui - ink
-        } else {
-            left
-        };
-        let mut pen = start_pen;
+        // GML `draw_text` line breaks: '#' starts a new line and `\#` is a
+        // literal hash. Alignment applies to every line on its own ink.
+        let mut lines: Vec<Vec<(char, [f32; 4])>> = vec![Vec::new()];
+        for (text, color) in segs {
+            let mut chars = text.chars().peekable();
+            while let Some(ch) = chars.next() {
+                match ch {
+                    '\n' | '#' => lines.push(Vec::new()),
+                    '\\' if chars.peek() == Some(&'#') => {
+                        chars.next();
+                        lines.last_mut().unwrap().push(('#', *color));
+                    }
+                    '\\' if chars.peek() == Some(&'\\') => {
+                        chars.next();
+                        lines.last_mut().unwrap().push(('\\', *color));
+                    }
+                    _ => lines.last_mut().unwrap().push((ch, *color)),
+                }
+            }
+        }
         // `gui_texts_dp` subtracts a 2 GUI px baseline bias for Silkscreen;
         // the GML bitmap ink starts on the draw y.
         let mut top = (off[1] - oy) / k + FONT_TOP_BIAS_GUI;
         let line_h = font.line_height() as f32 * scale;
-        for (text, color) in segs {
-            for ch in text.chars() {
-                if ch == '\n' {
-                    pen = start_pen;
-                    top += line_h;
-                    continue;
-                }
-                let Some(g) = glyph(font, ch) else {
+        for line in &lines {
+            let ink: f32 = line
+                .iter()
+                .map(|(ch, _)| glyph(font, *ch).map_or(4.0, |g| f32::from(g.shift)) * scale)
+                .sum();
+            let mut pen = if *centered {
+                left + (box_gui - ink) * 0.5
+            } else if *right {
+                left + box_gui - ink
+            } else {
+                left
+            };
+            for (ch, color) in line {
+                let Some(g) = glyph(font, *ch) else {
                     pen += 4.0 * scale;
                     continue;
                 };
@@ -8989,6 +9003,7 @@ pub fn gui_text_sprites(
                 }
                 pen += f32::from(g.shift) * scale;
             }
+            top += line_h;
         }
     }
     out
