@@ -4785,9 +4785,9 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "repame-anim"
-version = "0.3.29"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd3a32289a8edc08016fb06d542f79d002f74952f1598c3768526437ca27ce8c"
+checksum = "65fb0349473eea1cc2b0137acc25e532710ffee10545499bedaf7c2f004a414f"
 dependencies = [
  "bevy_ecs",
  "repame-atlas",
@@ -4798,15 +4798,15 @@ dependencies = [
 
 [[package]]
 name = "repame-atlas"
-version = "0.3.29"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "873c73ecb3af4351ffc555545cb449bc6305ea5281b2bdfc5850bf4d9c13d12d"
+checksum = "0f1d01684fe843177a73a76e30e574ce7115d99b12af8ff10cd80e8ada1eb355"
 
 [[package]]
 name = "repame-audio"
-version = "0.3.29"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9deb384b169b12636f2eb7fe4bb46992ff5eb130411850437bf0efb6c76eec05"
+checksum = "a9668e0a505ad37886618d5a827e2b9e86329b4f849a9f43ad038925baf1b5b0"
 dependencies = [
  "anyhow",
  "cpal",
@@ -4819,9 +4819,9 @@ dependencies = [
 
 [[package]]
 name = "repame-fx"
-version = "0.3.29"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2754399e4d47ec40c3f5ad3ce03ba031c9c1795d9aaf8238c5c2d834b705d060"
+checksum = "f19593598083ae8d2eda2baf9e55da7c0bdbac994d8d98674c395efe904f6bb4"
 dependencies = [
  "bevy_ecs",
  "getrandom 0.4.3",
@@ -4838,9 +4838,9 @@ dependencies = [
 
 [[package]]
 name = "repame-input"
-version = "0.3.29"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a87fc91a0e2d7f8bc4414da12a2272cadcd51a87630a8efe43dc70ef8c3582f7"
+checksum = "a90dc0c8b54508d57fe18a5825b95998d5428a56e708352253fa6edbbd411958"
 dependencies = [
  "bevy_ecs",
  "glam",
@@ -4851,9 +4851,9 @@ dependencies = [
 
 [[package]]
 name = "repame-shell"
-version = "0.3.29"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "600e15089fc7d6decf6c0e2ca11f852aac4ba37b0692f45ba6a55efa31cbdf9f"
+checksum = "8a9ade32d4f02ac2a4e634befada3806c5ea438dde3a93c92e0d1f3c195324f5"
 dependencies = [
  "anyhow",
  "glam",
@@ -4873,9 +4873,9 @@ dependencies = [
 
 [[package]]
 name = "repame-sim"
-version = "0.3.29"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "832362dc1ea20cdd4ee0b64e9c145ba716b11882b153f2b4a9ff295aa1485475"
+checksum = "32f601ebc09e5ac211b0a46977bac5195847d8458cb30f8ec6a2ea80e9dc7071"
 dependencies = [
  "bevy_ecs",
  "glam",
@@ -4886,9 +4886,9 @@ dependencies = [
 
 [[package]]
 name = "repame-view2d"
-version = "0.3.29"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64918898d3d593ea065ff5348799ea370d433caf55e262610d9296082d489adc"
+checksum = "56fffff6c8bff8cd88adbf266334f2db951b637d936ebc621617b416f7ad29b5"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -4908,9 +4908,9 @@ dependencies = [
 
 [[package]]
 name = "repame-view3d"
-version = "0.3.29"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36dbe263d03f5405f2474b0a690b866cab8e2ff424cf4fcb34fdfc932b30e0ee"
+checksum = "00b47f3fb721c12fa0a2032d98a48b366210c7bdc446c25790f54056937173a5"
 dependencies = [
  "bytemuck",
  "glam",
