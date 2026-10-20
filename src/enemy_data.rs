@@ -1,5 +1,5 @@
 use super::data::EnemyKind;
-use rand::RngExt;
+use repame_sim::rng::{Rng, SimRng};
 
 #[derive(Clone, Copy)]
 #[allow(dead_code)]
@@ -170,25 +170,29 @@ const CHOOSE_DEAD: &[&str] = &[
     "sndEnemyDie",
 ];
 
-fn gendered(table: &[(&'static str, &'static str)], kind: EnemyKind) -> &'static str {
+fn gendered(
+    table: &[(&'static str, &'static str)],
+    kind: EnemyKind,
+    rng: &mut SimRng,
+) -> &'static str {
     let idx = match kind {
         EnemyKind::IdpdGrunt => 0,
         EnemyKind::IdpdShield => 1,
         _ => 2,
     };
     let (male, female) = table[idx];
-    if rand::rng().random_range(0..2) == 1 {
+    if rng.random_range(0..2) == 1 {
         female
     } else {
         male
     }
 }
 
-fn choose(options: &[&'static str]) -> &'static str {
-    options[rand::rng().random_range(0..options.len())]
+fn choose(options: &[&'static str], rng: &mut SimRng) -> &'static str {
+    options[rng.random_range(0..options.len())]
 }
 
-pub fn gml_snd_hurt(kind: EnemyKind, oasis: bool, hp_frac: f32) -> &'static str {
+pub fn gml_snd_hurt(kind: EnemyKind, oasis: bool, hp_frac: f32, rng: &mut SimRng) -> &'static str {
     use EnemyKind::*;
     let base: &'static str = match kind {
         // GML `TutorialTarget/Create_0.gml:13-19`.
@@ -260,13 +264,13 @@ pub fn gml_snd_hurt(kind: EnemyKind, oasis: bool, hp_frac: f32) -> &'static str 
         Crab | BoneFish => "sndOasisHurt",
         IdpdVan => "sndVanHurt",
         Turtle => "sndTurtleHurt",
-        IdpdGrunt => gendered(GENDERED_HURT, IdpdGrunt),
-        IdpdShield => gendered(GENDERED_HURT, IdpdShield),
-        IdpdInspector => gendered(GENDERED_HURT, IdpdInspector),
+        IdpdGrunt => gendered(GENDERED_HURT, IdpdGrunt, rng),
+        IdpdShield => gendered(GENDERED_HURT, IdpdShield, rng),
+        IdpdInspector => gendered(GENDERED_HURT, IdpdInspector, rng),
         IdpdElite => "sndEliteGruntHurt",
         EliteInspector => "sndEliteInspectorHurt",
         EliteShielder => "sndEliteShielderHurt",
-        InvSpider | InvLaserCrystal => choose(CHOOSE_HURT),
+        InvSpider | InvLaserCrystal => choose(CHOOSE_HURT, rng),
     };
     if oasis && OASIS_OVERRIDING.contains(&kind) {
         "sndOasisHurt"
@@ -284,7 +288,7 @@ pub fn boss_drops_rads(kind: EnemyKind) -> bool {
     !matches!(kind, EnemyKind::Throne | EnemyKind::ThroneII)
 }
 
-fn gml_dead_stem(kind: EnemyKind, oasis: bool) -> &'static str {
+fn gml_dead_stem(kind: EnemyKind, oasis: bool, rng: &mut SimRng) -> &'static str {
     use EnemyKind::*;
     let base: &'static str = match kind {
         EnemyKind::TutorialTarget => {
@@ -346,7 +350,7 @@ fn gml_dead_stem(kind: EnemyKind, oasis: bool) -> &'static str {
         RadMaggot => "sndRadMaggotDie",
         MaggotSpawn => "sndMaggotSpawnDie",
         Turtle => {
-            let idx = rand::rng().random_range(1..=4);
+            let idx = rng.random_range(1..=4);
             match idx {
                 2 => "sndTurtleDead2",
                 3 => "sndTurtleDead3",
@@ -354,13 +358,13 @@ fn gml_dead_stem(kind: EnemyKind, oasis: bool) -> &'static str {
                 _ => "sndTurtleDead1",
             }
         }
-        IdpdGrunt => gendered(GENDERED_DEAD, IdpdGrunt),
-        IdpdShield => gendered(GENDERED_DEAD, IdpdShield),
-        IdpdInspector => gendered(GENDERED_DEAD, IdpdInspector),
+        IdpdGrunt => gendered(GENDERED_DEAD, IdpdGrunt, rng),
+        IdpdShield => gendered(GENDERED_DEAD, IdpdShield, rng),
+        IdpdInspector => gendered(GENDERED_DEAD, IdpdInspector, rng),
         IdpdElite => "sndEliteGruntDead",
         EliteInspector => "sndEliteInspectorDead",
         EliteShielder => "sndEliteShielderDead",
-        InvSpider | InvLaserCrystal => choose(CHOOSE_DEAD),
+        InvSpider | InvLaserCrystal => choose(CHOOSE_DEAD, rng),
         _ => unreachable!("handled by gml_death_cues"),
     };
     if oasis && OASIS_OVERRIDING.contains(&kind) {
@@ -374,6 +378,7 @@ pub fn gml_death_cues(
     kind: EnemyKind,
     oasis: bool,
     kind_count: usize,
+    rng: &mut SimRng,
 ) -> Vec<crate::audio::AudioCue> {
     let q = |name: &'static str, variance: f32| crate::audio::AudioCue {
         name,
@@ -394,7 +399,7 @@ pub fn gml_death_cues(
             },
             0.0,
         )],
-        _ => vec![q(gml_dead_stem(kind, oasis), 0.0)],
+        _ => vec![q(gml_dead_stem(kind, oasis, rng), 0.0)],
     }
 }
 

@@ -8,7 +8,9 @@
 //! port's own hazard tints.
 
 use bevy_ecs::prelude::*;
-use rand::RngExt;
+use repame_sim::rng::{Rng, SimRng};
+
+use crate::rng_streams::SimStreams;
 use repame_sim::SimTime;
 
 use crate::anim::SpriteAnim;
@@ -268,6 +270,7 @@ pub fn tick_environment_hazards(
             Without<Explosion>,
         ),
     >,
+    mut streams: ResMut<SimStreams>,
 ) {
     let dt = time.delta_secs;
     step_fire_traps(
@@ -277,6 +280,7 @@ pub fn tick_environment_hazards(
         !portals.is_empty(),
         &walls,
         &mut traps,
+        &mut streams.environment,
     );
 
     for (hazard_entity, hazard_pos, mut hazard) in hazards.iter_mut() {
@@ -458,6 +462,8 @@ pub fn tick_prop_drops(
     cache: Res<crate::pickups::GunDecideCache>,
     audio: Res<crate::audio::GameAudio>,
     mut cues: ResMut<crate::msg::Queue<crate::audio::AudioCue>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
     let decide = cache.ctx.as_ref();
     let Ok((player, inv, health)) = player_q.single() else {
@@ -504,6 +510,7 @@ pub fn tick_prop_drops(
                 run.loop_count,
                 decide,
                 &chest_ctx,
+                &mut streams.pickups,
             );
         }
         if drop.weaken_nothing && run.loop_count == 0 && generators_left <= 1 {
@@ -711,14 +718,19 @@ impl PropDeathEffect {
 
 /// Directed dust ring (GML `var _ang = random_angle; repeat 10 { ...
 /// motion_add(_ang, 3); _ang += 36 }`).
-fn spawn_dust_ring(commands: &mut Commands, particles_on: bool, pos: glam::Vec2, count: u8) {
+fn spawn_dust_ring(
+    commands: &mut Commands,
+    particles_on: bool,
+    pos: glam::Vec2,
+    count: u8,
+    rng: &mut SimRng,
+) {
     if !particles_on {
         return;
     }
-    let mut rng = rand::rng();
     let mut ang = rng.random_range(0.0..std::f32::consts::TAU);
     for _ in 0..count {
-        spawn_native_dust_mote(commands, true, pos, glam::Vec2::from_angle(ang), 3.0);
+        spawn_native_dust_mote(commands, true, pos, glam::Vec2::from_angle(ang), 3.0, rng);
         ang += 36.0_f32.to_radians();
     }
 }
@@ -726,33 +738,46 @@ fn spawn_dust_ring(commands: &mut Commands, particles_on: bool, pos: glam::Vec2,
 /// GML `scrRavenLift:3-7` / `RavenFly/Other_10.gml:4-6`: six `Dust` at
 /// `x + random(16) - 8, y + random(16)`, each `motion_add(random_angle,
 /// 3 + random(1))`.
-pub fn spawn_raven_dust(commands: &mut Commands, particles_on: bool, pos: glam::Vec2) {
+pub fn spawn_raven_dust(
+    commands: &mut Commands,
+    particles_on: bool,
+    pos: glam::Vec2,
+    rng: &mut SimRng,
+) {
     if !particles_on {
         return;
     }
-    let mut rng = rand::rng();
     for _ in 0..6 {
-        let p = pos + glam::Vec2::new(rng.random_range(-8.0..8.0), rng.random_range(0.0..16.0));
+        let p = pos
+            + glam::Vec2::new(
+                rng.random_range(-8.0_f32..8.0),
+                rng.random_range(0.0_f32..16.0),
+            );
         spawn_native_dust_mote(
             commands,
             true,
             p,
             glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU)),
-            3.0 + rng.random_range(0.0..1.0),
+            3.0 + rng.random_range(0.0_f32..1.0),
+            rng,
         );
     }
 }
 
-pub fn spawn_dust_ring_12(commands: &mut Commands, particles_on: bool, pos: glam::Vec2) {
+pub fn spawn_dust_ring_12(
+    commands: &mut Commands,
+    particles_on: bool,
+    pos: glam::Vec2,
+    rng: &mut SimRng,
+) {
     if !particles_on {
         return;
     }
-    let mut rng = rand::rng();
     let mut ang = rng.random_range(0.0..std::f32::consts::TAU);
     for _ in 0..12 {
         let dir = glam::Vec2::from_angle(ang);
         let vel = glam::Vec2::new(dir.x * 3.0, dir.y * 2.4) * 30.0;
-        spawn_native_dust_mote_vel(commands, true, pos, vel);
+        spawn_native_dust_mote_vel(commands, true, pos, vel, rng);
         ang += 30.0_f32.to_radians();
     }
 }
@@ -816,6 +841,7 @@ pub fn spawn_prop_death_effect(
     hasted: bool,
     audio: &crate::audio::GameAudio,
     cues: &mut crate::msg::Queue<crate::audio::AudioCue>,
+    rng: &mut SimRng,
 ) {
     let effect = explicit.or_else(|| legacy_explosive.then_some(PropDeathEffect::legacy_barrel()));
 
@@ -834,12 +860,11 @@ pub fn spawn_prop_death_effect(
     }
 
     if effect.rad_chest {
-        spawn_rad_chest_burst(commands, particles_on, pos);
+        spawn_rad_chest_burst(commands, particles_on, pos, rng);
         audio.play_exp_chest(cues);
     }
 
     if let Some(explosion) = effect.explosion {
-        let mut rng = rand::rng();
         for _ in 0..effect.blasts.max(1) {
             let jitter = effect.blast_jitter;
             let off = if jitter > 0.0 {
@@ -867,7 +892,6 @@ pub fn spawn_prop_death_effect(
     }
 
     if effect.small_blasts > 0 {
-        let mut rng = rand::rng();
         for _ in 0..effect.small_blasts {
             let j = effect.blast_jitter;
             let off = if j > 0.0 {
@@ -896,30 +920,29 @@ pub fn spawn_prop_death_effect(
     }
 
     if effect.toxic_gas > 0 {
-        let mut rng = rand::rng();
         for _ in 0..effect.toxic_gas {
             let angle = rng.random_range(0.0..std::f32::consts::TAU);
-            let speed = rng.random_range(0.2..1.7) * 30.0;
+            let speed = rng.random_range(0.2_f32..1.7) * 30.0;
             let mut gas = crate::comps_b::ToxicGasState::new();
-            gas.grow_speed = 0.003 + rng.random_range(0.0..0.002);
-            gas.rot =
-                (1.0 + rng.random_range(0.0..=3.0)) * if rng.random_bool(0.5) { 1.0 } else { -1.0 };
+            gas.grow_speed = 0.003 + rng.random_range(0.0_f32..0.002);
+            gas.rot = (1.0 + rng.random_range(0.0_f32..=3.0_f32))
+                * if rng.random_bool(0.5) { 1.0 } else { -1.0 };
             crate::enemies::spawn_toxic_gas(
                 commands,
                 pos,
                 glam::Vec2::from_angle(angle) * speed,
                 gas,
+                rng,
             );
         }
     }
 
     if effect.mine_ring {
         // GML `WaterMineExplode/Step_0.gml:15-24`: an even 360/16 ring.
-        let mut rng = rand::rng();
         let mut ang = rng.random_range(0.0..std::f32::consts::TAU);
         for _ in 0..16 {
             let dir = glam::Vec2::new(ang.cos(), ang.sin());
-            let speed = rng.random_range(5.0..12.0) * 30.0;
+            let speed = rng.random_range(5.0_f32..12.0) * 30.0;
             commands.spawn((
                 GameCleanup,
                 LevelCleanup,
@@ -963,7 +986,6 @@ pub fn spawn_prop_death_effect(
 
     if effect.ground_flames > 0 {
         let jitter = effect.flame_jitter;
-        let mut rng = rand::rng();
         for _ in 0..effect.ground_flames {
             let off = if jitter > 0.0 {
                 glam::Vec2::new(
@@ -980,21 +1002,28 @@ pub fn spawn_prop_death_effect(
                     glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU)) * dist
                 })
                 .unwrap_or(glam::Vec2::ZERO);
-            spawn_ground_flame(commands, pos + off, false, launch);
+            spawn_ground_flame(commands, pos + off, false, launch, rng);
         }
     }
 
     if effect.dust_ring > 0 {
-        spawn_dust_ring(commands, particles_on, pos, effect.dust_ring);
+        spawn_dust_ring(commands, particles_on, pos, effect.dust_ring, rng);
     }
 
     if effect.portal_l_ring > 0 {
-        let mut rng = rand::rng();
         let (lo, hi) = (effect.bbox_min, effect.bbox_max);
         for _ in 0..effect.portal_l_ring {
             let at =
                 pos + glam::Vec2::new(rng.random_range(lo.x..hi.x), rng.random_range(lo.y..hi.y));
-            spawn_motes(commands, catalog, particles_on, at, MoteStrip::PortalL, 1);
+            spawn_motes(
+                commands,
+                catalog,
+                particles_on,
+                at,
+                MoteStrip::PortalL,
+                1,
+                rng,
+            );
         }
     }
 
@@ -1009,12 +1038,12 @@ pub fn spawn_prop_death_effect(
                 hasted,
                 effect.rad_chest,
                 true,
+                rng,
             );
         }
     }
 
     if let Some(feather) = effect.feather_burst {
-        let mut rng = rand::rng();
         let count = rng.random_range(feather.min..=feather.max.max(feather.min));
         spawn_motes(
             commands,
@@ -1023,6 +1052,7 @@ pub fn spawn_prop_death_effect(
             pos,
             feather.strip,
             count as usize,
+            rng,
         );
     }
 }
@@ -1031,20 +1061,25 @@ pub fn spawn_prop_death_effect(
 /// `motion_add(random_angle, random(3))`, then one `ExploderExplo`
 /// (6 more `Smoke` plus `BackCont.shake += 6`; no `damage`, no
 /// `Collision_Player`, so opening a rad cache never hurts the player).
-pub fn spawn_rad_chest_burst(commands: &mut Commands, particles_on: bool, pos: glam::Vec2) {
-    let mut rng = rand::rng();
+pub fn spawn_rad_chest_burst(
+    commands: &mut Commands,
+    particles_on: bool,
+    pos: glam::Vec2,
+    rng: &mut SimRng,
+) {
     for _ in 0..4 {
         let ang = rng.random_range(0.0..std::f32::consts::TAU);
-        let speed = rng.random_range(0.0..3.0);
+        let speed = rng.random_range(0.0_f32..3.0);
         spawn_native_smoke_mote(
             commands,
             particles_on,
             pos,
             glam::Vec2::from_angle(ang),
             speed,
+            rng,
         );
     }
-    spawn_exploder_explo(commands, particles_on, pos, glam::Vec2::ZERO, 0.0);
+    spawn_exploder_explo(commands, particles_on, pos, glam::Vec2::ZERO, 0.0, rng);
 }
 
 pub fn spawn_native_smoke_mote(
@@ -1053,16 +1088,17 @@ pub fn spawn_native_smoke_mote(
     pos: glam::Vec2,
     direction: glam::Vec2,
     speed: f32,
+    rng: &mut SimRng,
 ) {
     if !particles_on {
         return;
     }
-    let mut rng = rand::rng();
     let angle = rng.random_range(0.0..std::f32::consts::TAU);
     let motion_angle = rng.random_range(0.0..std::f32::consts::TAU);
-    let spin = (1.0 + rng.random_range(0.0..=3.0)) * if rng.random_bool(0.5) { 1.0 } else { -1.0 };
+    let spin =
+        (1.0 + rng.random_range(0.0_f32..=3.0_f32)) * if rng.random_bool(0.5) { 1.0 } else { -1.0 };
     let mut image = GmlImage::new("images/sprSmoke.png", 5, 0.0);
-    image.phase = rng.random_range(0.0..5.0);
+    image.phase = rng.random_range(0.0_f32..5.0);
     let motion = if direction.length_squared() > 0.0 {
         direction.normalize_or_zero()
     } else {
@@ -1079,7 +1115,7 @@ pub fn spawn_native_smoke_mote(
         Mote {
             friction: 0.1,
             spin,
-            grow: rng.random_range(0.0..0.005),
+            grow: rng.random_range(0.0_f32..0.005),
             grow_decay: 0.001,
             sway: false,
             lifetime: None,
@@ -1102,12 +1138,14 @@ fn spawn_native_dust_mote(
     pos: glam::Vec2,
     direction: glam::Vec2,
     speed: f32,
+    rng: &mut SimRng,
 ) {
     spawn_native_dust_mote_vel(
         commands,
         particles_on,
         pos,
         direction.normalize_or_zero() * speed * 30.0,
+        rng,
     );
 }
 
@@ -1116,14 +1154,15 @@ fn spawn_native_dust_mote_vel(
     particles_on: bool,
     pos: glam::Vec2,
     vel: glam::Vec2,
+    rng: &mut SimRng,
 ) {
     if !particles_on {
         return;
     }
-    let mut rng = rand::rng();
-    let spin = (1.0 + rng.random_range(0.0..=3.0)) * if rng.random_bool(0.5) { 1.0 } else { -1.0 };
+    let spin =
+        (1.0 + rng.random_range(0.0_f32..=3.0_f32)) * if rng.random_bool(0.5) { 1.0 } else { -1.0 };
     let mut image = GmlImage::new("images/sprDust.png", 5, 0.0);
-    image.phase = rng.random_range(0.0..5.0);
+    image.phase = rng.random_range(0.0_f32..5.0);
     commands.spawn((
         GameCleanup,
         LevelCleanup,
@@ -1135,7 +1174,7 @@ fn spawn_native_dust_mote_vel(
         Mote {
             friction: 0.3,
             spin,
-            grow: rng.random_range(0.05..0.10),
+            grow: rng.random_range(0.05_f32..0.10),
             grow_decay: 0.02,
             sway: false,
             lifetime: None,
@@ -1189,8 +1228,8 @@ pub fn spawn_exploder_explo(
     pos: glam::Vec2,
     direction: glam::Vec2,
     speed: f32,
+    rng: &mut SimRng,
 ) -> Entity {
-    let mut rng = rand::rng();
     let start = rng.random_range(0.0..std::f32::consts::TAU);
     for i in 0..6 {
         let angle = start + i as f32 * std::f32::consts::TAU / 6.0;
@@ -1199,7 +1238,8 @@ pub fn spawn_exploder_explo(
             particles_on,
             pos,
             glam::Vec2::from_angle(angle),
-            4.0 + rng.random_range(0.0..1.0),
+            4.0 + rng.random_range(0.0_f32..1.0),
+            rng,
         );
     }
     let motion = direction.normalize_or_zero();
@@ -1228,8 +1268,8 @@ pub fn spawn_ground_flame(
     pos: glam::Vec2,
     big: bool,
     launch: glam::Vec2,
+    rng: &mut SimRng,
 ) -> Entity {
-    let mut rng = rand::rng();
     let (base, _, frames) = if big {
         (
             "images/sprGroundFlameBig.png",
@@ -1251,7 +1291,7 @@ pub fn spawn_ground_flame(
             LevelCleanup,
             Pos(pos),
             GroundFlame {
-                alarm: 300.0 + rng.random_range(0.0..120.0),
+                alarm: 300.0 + rng.random_range(0.0_f32..120.0),
                 big,
                 disappearing: false,
                 launch,
@@ -1270,6 +1310,7 @@ pub fn spawn_trap_fire(
     speed: f32,
     team: Team,
     source: Option<DamageSource>,
+    rng: &mut SimRng,
 ) -> Entity {
     spawn_trap_fire_with_image(
         commands,
@@ -1280,6 +1321,7 @@ pub fn spawn_trap_fire(
         source,
         "images/sprTrapFire.png",
         None,
+        rng,
     )
 }
 
@@ -1292,10 +1334,10 @@ pub fn spawn_trap_fire_with_image(
     source: Option<DamageSource>,
     path: &'static str,
     image_angle: Option<f32>,
+    rng: &mut impl Rng,
 ) -> Entity {
-    let mut rng = rand::rng();
     let frames = 7;
-    let image_speed = 0.2 + rng.random_range(0.0..0.1);
+    let image_speed = 0.2 + rng.random_range(0.0_f32..0.1);
     let image = GmlImage::new(path, frames, image_speed);
     let native_angle = image_angle.unwrap_or_else(|| rng.random_range(0.0..std::f32::consts::TAU));
     commands
@@ -1353,6 +1395,7 @@ pub fn spawn_native_explosion_visual(
     pos: glam::Vec2,
     kind: NativeExplosionKind,
     on_floor: bool,
+    rng: &mut SimRng,
 ) -> Entity {
     let (path, frames) = match kind {
         NativeExplosionKind::Standard => ("images/sprExplosion.png", 9),
@@ -1361,7 +1404,6 @@ pub fn spawn_native_explosion_visual(
         NativeExplosionKind::Meat => ("images/sprMeatExplosion.png", 6),
         NativeExplosionKind::Popo => ("images/sprPopoExplo.png", 8),
     };
-    let mut rng = rand::rng();
     match kind {
         NativeExplosionKind::Standard | NativeExplosionKind::Green => {
             let count = 20;
@@ -1372,13 +1414,21 @@ pub fn spawn_native_explosion_visual(
                     particles_on,
                     pos,
                     glam::Vec2::from_angle(a),
-                    2.0 + rng.random_range(0.0..3.0),
+                    2.0 + rng.random_range(0.0_f32..3.0),
+                    rng,
                 );
             }
             let start = rng.random_range(0.0..std::f32::consts::TAU);
             for i in 0..count {
                 let a = start + i as f32 * std::f32::consts::TAU / count as f32;
-                spawn_native_dust_mote(commands, particles_on, pos, glam::Vec2::from_angle(a), 6.0);
+                spawn_native_dust_mote(
+                    commands,
+                    particles_on,
+                    pos,
+                    glam::Vec2::from_angle(a),
+                    6.0,
+                    rng,
+                );
             }
         }
         NativeExplosionKind::Small => {
@@ -1390,13 +1440,21 @@ pub fn spawn_native_explosion_visual(
                     particles_on,
                     pos,
                     glam::Vec2::from_angle(a),
-                    2.0 + rng.random_range(0.0..3.0),
+                    2.0 + rng.random_range(0.0_f32..3.0),
+                    rng,
                 );
             }
             let start = rng.random_range(0.0..std::f32::consts::TAU);
             for i in 0..count {
                 let a = start + i as f32 * std::f32::consts::TAU / count as f32;
-                spawn_native_dust_mote(commands, particles_on, pos, glam::Vec2::from_angle(a), 6.0);
+                spawn_native_dust_mote(
+                    commands,
+                    particles_on,
+                    pos,
+                    glam::Vec2::from_angle(a),
+                    6.0,
+                    rng,
+                );
             }
         }
         NativeExplosionKind::Meat => {
@@ -1407,7 +1465,8 @@ pub fn spawn_native_explosion_visual(
                     particles_on,
                     pos,
                     glam::Vec2::from_angle(start + i as f32 * std::f32::consts::TAU / 6.0),
-                    4.0 + rng.random_range(0.0..1.0),
+                    4.0 + rng.random_range(0.0_f32..1.0),
+                    rng,
                 );
             }
         }
@@ -1419,13 +1478,21 @@ pub fn spawn_native_explosion_visual(
                     particles_on,
                     pos,
                     glam::Vec2::from_angle(a),
-                    2.0 + rng.random_range(0.0..3.0),
+                    2.0 + rng.random_range(0.0_f32..3.0),
+                    rng,
                 );
             }
             let start = rng.random_range(0.0..std::f32::consts::TAU);
             for i in 0..20 {
                 let a = start + i as f32 * std::f32::consts::TAU / 20.0;
-                spawn_native_dust_mote(commands, particles_on, pos, glam::Vec2::from_angle(a), 6.0);
+                spawn_native_dust_mote(
+                    commands,
+                    particles_on,
+                    pos,
+                    glam::Vec2::from_angle(a),
+                    6.0,
+                    rng,
+                );
             }
             for _ in 0..10 {
                 let a = rng.random_range(0.0..std::f32::consts::TAU);
@@ -1434,13 +1501,21 @@ pub fn spawn_native_explosion_visual(
                     particles_on,
                     pos,
                     glam::Vec2::from_angle(a),
-                    1.0 + rng.random_range(0.0..2.0),
+                    1.0 + rng.random_range(0.0_f32..2.0),
+                    rng,
                 );
             }
             let start = rng.random_range(0.0..std::f32::consts::TAU);
             for i in 0..20 {
                 let a = start + i as f32 * std::f32::consts::TAU / 20.0;
-                spawn_native_dust_mote(commands, particles_on, pos, glam::Vec2::from_angle(a), 6.0);
+                spawn_native_dust_mote(
+                    commands,
+                    particles_on,
+                    pos,
+                    glam::Vec2::from_angle(a),
+                    6.0,
+                    rng,
+                );
             }
         }
     }
@@ -1533,11 +1608,13 @@ pub struct FireTrap {
     pub fire: i32,
 }
 
-impl Default for FireTrap {
-    fn default() -> Self {
+impl FireTrap {
+    /// GML `Trap/Create_0.gml`: `side = choose(0, 1)`, `alarm[0] =
+    /// 90 + random(30)`.
+    pub fn seeded(rng: &mut SimRng) -> Self {
         Self {
-            side: rand::rng().random_bool(0.5),
-            alarm: 90.0 + rand::rng().random_range(0.0..30.0),
+            side: rng.random_bool(0.5),
+            alarm: 90.0 + rng.random_range(0.0_f32..30.0),
             fire: 0,
         }
     }
@@ -1555,6 +1632,7 @@ fn step_fire_traps(
     portal_open: bool,
     walls: &Query<&Pos, With<WallTile>>,
     traps: &mut Query<(Entity, &Pos, &mut FireTrap), With<Prop>>,
+    rng: &mut SimRng,
 ) {
     let steps = dt * crate::SIM_HZ as f32;
     let emit = !paused && !portal_open;
@@ -1605,6 +1683,7 @@ fn step_fire_traps(
                         6.0 * 30.0,
                         Team::Enemy,
                         None,
+                        rng,
                     );
                 }
             }
@@ -1671,8 +1750,8 @@ pub fn spawn_shell_casing(
     aim: glam::Vec2,
     speed_bonus: f32,
     spread: (f32, f32),
+    rng: &mut SimRng,
 ) {
-    let mut rng = rand::rng();
     let right = if aim.length_squared() > 0.0 {
         crate::player::gml_player_right_back_from_aim(aim).0
     } else {
@@ -1680,9 +1759,9 @@ pub fn spawn_shell_casing(
     };
     let base_deg = aim.y.atan2(aim.x).to_degrees();
     let dir = (base_deg + right * 100.0 + rng.random_range(spread.0..spread.1)).to_radians();
-    let speed = (rng.random_range(2.0..4.0) + speed_bonus) * 30.0;
-    let life = (90.0 + rng.random_range(0.0..30.0) + 22.0) / 30.0;
-    spawn_shell_casing_at(commands, catalog, art, pos, dir, speed, life, 0.2, 0);
+    let speed = (rng.random_range(2.0_f32..4.0) + speed_bonus) * 30.0;
+    let life = (90.0 + rng.random_range(0.0_f32..30.0) + 22.0) / 30.0;
+    spawn_shell_casing_at(commands, catalog, art, pos, dir, speed, life, 0.2, 0, rng);
 }
 
 /// Explicit-heading casing spawn shared by the shot eject, the BuffGator
@@ -1699,11 +1778,11 @@ pub fn spawn_shell_casing_at(
     life_secs: f32,
     friction: f32,
     frame: u32,
+    rng: &mut SimRng,
 ) {
     let Some(def) = catalog.def(art) else {
         return;
     };
-    let mut rng = rand::rng();
     let mut anim = crate::anim::SpriteAnim::oneshot(art, def);
     // GML `Shell/Create_0` never sets `image_speed` and the sweat pins it
     // with `image_speed = 0`: the casing art is parked.
@@ -1786,11 +1865,11 @@ pub fn spawn_motes(
     pos: glam::Vec2,
     strip: MoteStrip,
     count: usize,
+    rng: &mut SimRng,
 ) {
     if !particles_on {
         return;
     }
-    let mut rng = rand::rng();
     for _ in 0..count {
         if matches!(strip, MoteStrip::Smoke) {
             spawn_native_smoke_mote(
@@ -1799,6 +1878,7 @@ pub fn spawn_motes(
                 pos,
                 glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU)),
                 0.5,
+                rng,
             );
             continue;
         }
@@ -1853,7 +1933,7 @@ pub fn spawn_motes(
                     1.0,
                     0.0,
                     true,
-                    Some((150.0 + rng.random_range(0.0..30.0)) / 30.0),
+                    Some((150.0 + rng.random_range(0.0_f32..30.0)) / 30.0),
                     if matches!(strip, MoteStrip::Money | MoteStrip::Raven) {
                         0.0
                     } else {
@@ -1874,7 +1954,7 @@ pub fn spawn_motes(
                 0.0,
                 false,
                 None,
-                0.3 + rng.random_range(0.0..0.1),
+                0.3 + rng.random_range(0.0_f32..0.1),
                 0,
             ),
             // GML `PortalL/Create_0.gml`: `sprite_index = choose(sprPortalL1..5)`,
@@ -1899,7 +1979,7 @@ pub fn spawn_motes(
                 0.0,
                 false,
                 None,
-                0.3 + rng.random_range(0.0..0.1),
+                0.3 + rng.random_range(0.0_f32..0.1),
                 0,
             ),
             MoteStrip::Smoke => unreachable!(),
@@ -1915,27 +1995,27 @@ pub fn spawn_motes(
         };
         if matches!(strip, MoteStrip::Curse) {
             vel = glam::Vec2::new(
-                rng.random_range(-0.2..0.2) * 30.0,
-                -(0.5 + rng.random_range(0.0..0.5)) * 30.0,
+                rng.random_range(-0.2_f32..0.2) * 30.0,
+                -(0.5 + rng.random_range(0.0_f32..0.5)) * 30.0,
             );
         }
         if sway {
-            vel.y -= rng.random_range(0.9..1.2) * 30.0;
+            vel.y -= rng.random_range(0.9_f32..1.2) * 30.0;
         }
         let spin = if sway {
-            rng.random_range(-3.0..3.0)
+            rng.random_range(-3.0_f32..3.0)
         } else if spin_max > 0.0 {
-            rng.random_range(1.0..=spin_max) * if rng.random_bool(0.5) { 1.0 } else { -1.0 }
+            rng.random_range(1.0_f32..=spin_max) * if rng.random_bool(0.5) { 1.0 } else { -1.0 }
         } else {
             0.0
         };
         let fall = if sway {
-            Some(40.0 + rng.random_range(0.0..30.0))
+            Some(40.0 + rng.random_range(0.0_f32..30.0))
         } else {
             None
         };
         let grow = match strip {
-            MoteStrip::Dust => rng.random_range(0.05..0.10),
+            MoteStrip::Dust => rng.random_range(0.05_f32..0.10),
             _ => grow,
         };
         // `Curse` and `PortalL` both die at `animation_end`
@@ -2025,6 +2105,7 @@ pub fn tick_motes(
     )>,
     floor: Option<Res<crate::comps_a::FloorMask>>,
     spiral: Option<Res<crate::vortex::SpiralCtl>>,
+    mut streams: ResMut<SimStreams>,
 ) {
     let dt = time.delta_secs;
     let steps = dt * crate::SIM_HZ as f32;
@@ -2052,7 +2133,7 @@ pub fn tick_motes(
     // around the camera (the port stands the camera in for the player)
     // and the draw offset starts 320 px above it.
     if run.area == crate::data::AreaId::FrozenCity || date.events.xmas {
-        let mut rng = rand::rng();
+        let rng = &mut streams.environment;
         if rng.random_range(0..35) == 0
             && let Ok(ppos) = player_q.single()
         {
@@ -2062,7 +2143,7 @@ pub fn tick_motes(
                     rng.random_range(-crate::vortex::GUI_H..crate::vortex::GUI_H),
                 );
             let mut image = GmlImage::new("images/sprSnowFlake.png", 3, 0.0);
-            image.phase = rng.random_range(0.0..3.0);
+            image.phase = rng.random_range(0.0_f32..3.0);
             commands.spawn((
                 GameCleanup,
                 LevelCleanup,
@@ -2218,13 +2299,14 @@ pub fn spawn_explosion_motes(
     particles_on: bool,
     pos: glam::Vec2,
     small: bool,
+    rng: &mut SimRng,
 ) {
     let kind = if small {
         NativeExplosionKind::Small
     } else {
         NativeExplosionKind::Standard
     };
-    spawn_native_explosion_visual(commands, particles_on, pos, kind, false);
+    spawn_native_explosion_visual(commands, particles_on, pos, kind, false, rng);
 }
 
 /// Area-fog scroll (GML `objects/TopCont`: `Create_0` sets

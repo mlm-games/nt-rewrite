@@ -14,8 +14,10 @@ use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
 use bevy_ecs::system::EntityCommands;
-use rand::RngExt;
-use rand::seq::IteratorRandom;
+use repame_sim::rng::{Rng, SimRng};
+
+use crate::rng_streams::SimStreams;
+
 use repame_fx::Trauma;
 use repame_sim::SimTime;
 
@@ -146,6 +148,8 @@ pub fn spawn_enemy(
     scarier_face: bool,
     heavy_heart: bool,
     loops: u32,
+
+    rng: &mut impl Rng,
 ) -> Entity {
     spawn_enemy_with_context(
         commands,
@@ -157,6 +161,7 @@ pub fn spawn_enemy(
         heavy_heart,
         loops,
         EnemySpawnContext::default(),
+        rng,
     )
 }
 
@@ -170,8 +175,9 @@ pub fn spawn_enemy_with_context(
     heavy_heart: bool,
     loops: u32,
     context: EnemySpawnContext,
+
+    rng: &mut impl Rng,
 ) -> Entity {
-    let mut rng = rand::rng();
     spawn_enemy_impl(
         commands,
         catalog,
@@ -184,7 +190,7 @@ pub fn spawn_enemy_with_context(
         context,
         true,
         None,
-        &mut rng,
+        rng,
     )
 }
 
@@ -200,7 +206,7 @@ fn spawn_enemy_impl(
     context: EnemySpawnContext,
     give_kill: bool,
     birth: Option<&PendingEnemySpawn>,
-    rng: &mut impl RngExt,
+    rng: &mut impl Rng,
 ) -> Entity {
     let def = enemy_def(kind);
     let e = crate::setup::spawn_enemy(commands, kind, pos, true);
@@ -349,40 +355,42 @@ fn spawn_enemy_impl(
     let attack_frames = match kind {
         EnemyKind::MaggotSpawn | EnemyKind::FiredMaggot => 0.0,
         EnemyKind::Rat | EnemyKind::Bandit | EnemyKind::SnowBandit | EnemyKind::JungleBandit => {
-            30.0 + rng.random_range(0.0..90.0)
+            30.0 + rng.random_range(0.0_f32..90.0)
         }
-        EnemyKind::FastRat | EnemyKind::Ratking => 1.0 + rng.random_range(0.0..90.0),
+        EnemyKind::FastRat | EnemyKind::Ratking => 1.0 + rng.random_range(0.0_f32..90.0),
         EnemyKind::RobotGuard => 80.0,
         EnemyKind::Maggot
         | EnemyKind::RadMaggot
         | EnemyKind::FireBaller
-        | EnemyKind::SuperFireBaller => 10.0 + rng.random_range(0.0..10.0),
-        EnemyKind::BigMaggot => 45.0 + rng.random_range(0.0..10.0),
-        EnemyKind::JungleFly => 50.0 + rng.random_range(0.0..10.0),
-        EnemyKind::Scorpion | EnemyKind::GoldScorpion => 30.0 + rng.random_range(0.0..90.0),
-        EnemyKind::Sniper => 60.0 + rng.random_range(0.0..90.0),
-        EnemyKind::MeleeBandit | EnemyKind::Assassin => 90.0 + rng.random_range(0.0..90.0),
-        EnemyKind::Ballguy => 40.0 + rng.random_range(0.0..40.0),
-        EnemyKind::Turret => 60.0 + rng.random_range(0.0..60.0),
-        EnemyKind::SnowTank => 30.0 + rng.random_range(0.0..10.0),
-        EnemyKind::GoldSnowtank => 120.0 + rng.random_range(0.0..10.0),
-        EnemyKind::LaserCrystal | EnemyKind::LightningCrystal => 50.0 + rng.random_range(0.0..90.0),
-        EnemyKind::InvLaserCrystal => 30.0 + rng.random_range(0.0..90.0),
-        EnemyKind::Guardian | EnemyKind::CrownGuardian => 40.0 + rng.random_range(0.0..10.0),
-        EnemyKind::DogGuardian => 120.0 + rng.random_range(0.0..10.0),
+        | EnemyKind::SuperFireBaller => 10.0 + rng.random_range(0.0_f32..10.0),
+        EnemyKind::BigMaggot => 45.0 + rng.random_range(0.0_f32..10.0),
+        EnemyKind::JungleFly => 50.0 + rng.random_range(0.0_f32..10.0),
+        EnemyKind::Scorpion | EnemyKind::GoldScorpion => 30.0 + rng.random_range(0.0_f32..90.0),
+        EnemyKind::Sniper => 60.0 + rng.random_range(0.0_f32..90.0),
+        EnemyKind::MeleeBandit | EnemyKind::Assassin => 90.0 + rng.random_range(0.0_f32..90.0),
+        EnemyKind::Ballguy => 40.0 + rng.random_range(0.0_f32..40.0),
+        EnemyKind::Turret => 60.0 + rng.random_range(0.0_f32..60.0),
+        EnemyKind::SnowTank => 30.0 + rng.random_range(0.0_f32..10.0),
+        EnemyKind::GoldSnowtank => 120.0 + rng.random_range(0.0_f32..10.0),
+        EnemyKind::LaserCrystal | EnemyKind::LightningCrystal => {
+            50.0 + rng.random_range(0.0_f32..90.0)
+        }
+        EnemyKind::InvLaserCrystal => 30.0 + rng.random_range(0.0_f32..90.0),
+        EnemyKind::Guardian | EnemyKind::CrownGuardian => 40.0 + rng.random_range(0.0_f32..10.0),
+        EnemyKind::DogGuardian => 120.0 + rng.random_range(0.0_f32..10.0),
         // `20 + random(10)` for the freaks and the ExploGuardian.
         EnemyKind::Freak
         | EnemyKind::ExploFreak
         | EnemyKind::RhinoFreak
         | EnemyKind::PopoFreak
-        | EnemyKind::ExploGuardian => 20.0 + rng.random_range(0.0..10.0),
+        | EnemyKind::ExploGuardian => 20.0 + rng.random_range(0.0_f32..10.0),
         // IDPD `30 + random(15)`; `EliteGrunt` is a fixed 25.
         EnemyKind::IdpdElite => 25.0,
         EnemyKind::IdpdGrunt
         | EnemyKind::IdpdShield
         | EnemyKind::IdpdInspector
         | EnemyKind::EliteInspector
-        | EnemyKind::EliteShielder => 30.0 + rng.random_range(0.0..15.0),
+        | EnemyKind::EliteShielder => 30.0 + rng.random_range(0.0_f32..15.0),
         // `30 + random(90)` covers Gator, BuffGator, Raven, Spider,
         // InvSpider, BoneFish, Turtle, Molefish, Molesarge, Jock and
         // Necromancer.
@@ -396,20 +404,20 @@ fn spawn_enemy_impl(
         | EnemyKind::Molefish
         | EnemyKind::Molesarge
         | EnemyKind::Jock
-        | EnemyKind::Necromancer => 30.0 + rng.random_range(0.0..90.0),
-        EnemyKind::Crab => 50.0 + rng.random_range(0.0..90.0),
+        | EnemyKind::Necromancer => 30.0 + rng.random_range(0.0_f32..90.0),
+        EnemyKind::Crab => 50.0 + rng.random_range(0.0_f32..90.0),
         // `Wolf/Create_0:18` `60 + random(40)`, `HostileHorror/Create_0:16`
         // `60 + random(10)`, `LilHunter/Create_0:22` `irandom_range(30, 120)`.
-        EnemyKind::Wolf => 60.0 + rng.random_range(0.0..40.0),
-        EnemyKind::HostileHorror => 60.0 + rng.random_range(0.0..10.0),
-        EnemyKind::LilHunter => rng.random_range(30.0..121.0),
-        EnemyKind::Salamander => 60.0 + rng.random_range(0.0..90.0),
+        EnemyKind::Wolf => 60.0 + rng.random_range(0.0_f32..40.0),
+        EnemyKind::HostileHorror => 60.0 + rng.random_range(0.0_f32..10.0),
+        EnemyKind::LilHunter => rng.random_range(30.0_f32..121.0),
+        EnemyKind::Salamander => 60.0 + rng.random_range(0.0_f32..90.0),
         EnemyKind::Mimic | EnemyKind::SuperMimic | EnemyKind::WepMimic => {
-            90.0 + rng.random_range(0.0..150.0)
+            90.0 + rng.random_range(0.0_f32..150.0)
         }
         EnemyKind::FrogEgg => 120.0,
-        EnemyKind::SuperFrog => 40.0 + rng.random_range(0.0..40.0),
-        _ => def.attack_cooldown * 30.0 * rng.random_range(0.5..1.5),
+        EnemyKind::SuperFrog => 40.0 + rng.random_range(0.0_f32..40.0),
+        _ => def.attack_cooldown * 30.0 * rng.random_range(0.5_f32..1.5),
     };
     let attack = if matches!(kind, EnemyKind::MaggotSpawn | EnemyKind::FiredMaggot) {
         GTimer::disarmed()
@@ -423,7 +431,7 @@ fn spawn_enemy_impl(
         burst_timer: ready_timer(),
         dash: 0.0,
         strafe_dir: if rng.random_bool(0.5) { 1.0 } else { -1.0 },
-        strafe_timer: GTimer::from_seconds(rng.random_range(0.8..1.6), TimerMode::Once),
+        strafe_timer: GTimer::from_seconds(rng.random_range(0.8_f32..1.6), TimerMode::Once),
         melee: ready_timer(),
         wkick: 0.0,
         walk: if kind == EnemyKind::IdpdElite {
@@ -476,7 +484,7 @@ fn spawn_enemy_impl(
         walkdir: initial_heading,
         // GML `Salamander/Create_0:5` `wave = random(6.2)`;
         // `HostileHorror/Create_0:19` `charge = 0`.
-        wave: rng.random_range(0.0..6.2),
+        wave: rng.random_range(0.0_f32..6.2),
         charge: 0.0,
         gunangle: initial_gunangle,
         heading: initial_heading,
@@ -576,12 +584,18 @@ fn spawn_enemy_impl(
     if kind == EnemyKind::SuperFrog {
         for _ in 0..10 {
             let angle = rng.random_range(0.0..std::f32::consts::TAU);
-            let speed = rng.random_range(0.2..1.7) * 30.0;
+            let speed = rng.random_range(0.2_f32..1.7) * 30.0;
             let mut gas = ToxicGasState::new();
-            gas.grow_speed = 0.003 + rng.random_range(0.0..0.002);
-            gas.rot =
-                (1.0 + rng.random_range(0.0..=3.0)) * if rng.random_bool(0.5) { 1.0 } else { -1.0 };
-            spawn_toxic_gas(commands, pos, glam::Vec2::from_angle(angle) * speed, gas);
+            gas.grow_speed = 0.003 + rng.random_range(0.0_f32..0.002);
+            gas.rot = (1.0 + rng.random_range(0.0_f32..=3.0_f32))
+                * if rng.random_bool(0.5) { 1.0 } else { -1.0 };
+            spawn_toxic_gas(
+                commands,
+                pos,
+                glam::Vec2::from_angle(angle) * speed,
+                gas,
+                rng,
+            );
         }
     }
     if kind == EnemyKind::Scorpion {
@@ -590,7 +604,7 @@ fn spawn_enemy_impl(
         } else {
             30.0
         };
-        let morph_roll = rng.random_range(0.0..morph_limit);
+        let morph_roll = rng.random_range(0.0_f32..morph_limit);
         if morph_roll < 1.0 + loops as f32 * 5.0 && context.subarea > 1 {
             let gold = spawn_enemy_impl(
                 commands,
@@ -625,6 +639,8 @@ pub fn spawn_enemy_at(
     heavy_heart: bool,
     loops: u32,
     context: EnemySpawnContext,
+
+    rng: &mut impl Rng,
 ) -> Entity {
     spawn_enemy_with_context(
         commands,
@@ -636,6 +652,7 @@ pub fn spawn_enemy_at(
         heavy_heart,
         loops,
         context,
+        rng,
     )
 }
 
@@ -646,14 +663,18 @@ pub fn flush_pending_enemy_spawns(
     scarier: Res<ScarierFace>,
     heavy_heart: Res<HeavyHeart>,
     pending: Query<(Entity, &PendingEnemySpawn)>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let context = EnemySpawnContext {
         subarea: run.floor_in_area,
         blood_crown: run.blood_crown,
         scarier_face: scarier.0,
         heavy_heart: heavy_heart.0,
     };
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     for (entity, spawn) in pending.iter() {
         spawn_enemy_impl(
             &mut commands,
@@ -667,10 +688,11 @@ pub fn flush_pending_enemy_spawns(
             context,
             spawn.give_kill,
             Some(spawn),
-            &mut rng,
+            rng,
         );
         commands.entity(entity).despawn();
     }
+    streams.enemies = enemies_rng;
 }
 
 /// GML `Bandit/Create_0.gml:27-36`: a 10% spawn roll dresses normal
@@ -686,11 +708,15 @@ pub fn roll_bandit_costumes(
         (Entity, &Enemy, Option<&mut crate::comps_b::EnemySprites>),
         Without<crate::comps_b::CostumeRolled>,
     >,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut fx_rng = streams.fx;
+
     if !date.events.xmas && !date.events.halloween {
         return;
     }
-    let mut rng = rand::rng();
+    let rng = &mut fx_rng;
     for (entity, enemy, sprites) in &mut new_enemies {
         commands
             .entity(entity)
@@ -722,6 +748,7 @@ pub fn roll_bandit_costumes(
                 .insert(crate::anim::SpriteAnim::new(idle, def));
         }
     }
+    streams.fx = fx_rng;
 }
 
 /// Enemies that spawned inside a solid cell (the secret-entrance guard ring in
@@ -740,7 +767,7 @@ pub fn unstuck_enemies(mask: Res<FloorMask>, mut q: Query<(&mut Pos, &mut Veloci
 /// rejection tries, then the right-edge fallback. Port-only: GML has no
 /// such roll - it spawns on the `Floor` instances `scrMakeFloor` laid
 /// down (`scrPopEnemies.gml:2-5`).
-pub fn random_spawn_pos(rng: &mut impl RngExt, min_from_center: f32) -> glam::Vec2 {
+pub fn random_spawn_pos(rng: &mut impl Rng, min_from_center: f32) -> glam::Vec2 {
     for _ in 0..64 {
         let x = rng.random_range(-ARENA_W / 2.0 + 80.0..ARENA_W / 2.0 - 80.0);
         let y = rng.random_range(-ARENA_H / 2.0 + 80.0..ARENA_H / 2.0 - 80.0);
@@ -802,7 +829,7 @@ fn has_dedicated_tick(kind: EnemyKind) -> bool {
 /// GML `collision_line(x, y, target.x, target.y, Wall, 0, 0) < 0` plus each
 /// object's own `Alarm_1` fire condition, in GML short-circuit order so the
 /// roll sequence matches.
-fn gml_wants_fire(kind: EnemyKind, los: bool, dist: f32, rng: &mut rand::rngs::ThreadRng) -> bool {
+fn gml_wants_fire(kind: EnemyKind, los: bool, dist: f32, rng: &mut impl Rng) -> bool {
     if !los {
         return false;
     }
@@ -829,7 +856,7 @@ fn gml_wants_fire(kind: EnemyKind, los: bool, dist: f32, rng: &mut rand::rngs::T
     }
 }
 
-fn gml_fire_rearm_secs(kind: EnemyKind, rng: &mut impl RngExt) -> f32 {
+fn gml_fire_rearm_secs(kind: EnemyKind, rng: &mut impl Rng) -> f32 {
     match kind {
         EnemyKind::FireBaller | EnemyKind::SuperFireBaller => 8.0 / 30.0,
         EnemyKind::Molefish => (20.0 + rnd(rng, 5.0)) / 30.0,
@@ -1246,6 +1273,8 @@ fn integrate_verbatim(
     loops: u32,
     frame: u64,
     law: EnemyWallLaw,
+
+    rng: &mut impl Rng,
 ) {
     // `enemy/Create_0.gml` `friction = 0.4`
     apply_gml_friction(&mut vel.0, brain.friction, dt);
@@ -1288,7 +1317,7 @@ fn integrate_verbatim(
     }
 
     if separate_enemies {
-        separate(positions, entity, epos, &mut vel.0, kind, loops, frame);
+        separate(positions, entity, epos, &mut vel.0, kind, loops, frame, rng);
     }
     sync_heading(brain, vel);
 }
@@ -1360,10 +1389,11 @@ pub fn spawn_toxic_gas(
     pos: glam::Vec2,
     velocity: glam::Vec2,
     state: ToxicGasState,
+
+    rng: &mut impl Rng,
 ) -> Entity {
-    let mut rng = rand::rng();
     let mut image = GmlImage::new("images/sprToxicGas.png", 5, 0.0);
-    image.phase = rng.random_range(0.0..5.0);
+    image.phase = rng.random_range(0.0_f32..5.0);
     commands
         .spawn((
             GameCleanup,
@@ -1431,26 +1461,26 @@ fn queue_conversion_maggot(
 
 /// GML `random(n) < 1`: a 1-in-n roll.
 #[inline]
-fn gml_chance(rng: &mut (impl RngExt + ?Sized), n: f32) -> bool {
+fn gml_chance(rng: &mut (impl Rng + ?Sized), n: f32) -> bool {
     rng.random::<f32>() < 1.0 / n
 }
 
 /// GML `random(n) < k`: the literal form the source writes, e.g.
 /// `random(4) < 3` (three in four) or `random(3) < 2`.
 #[inline]
-fn gml_roll(rng: &mut (impl RngExt + ?Sized), n: f32, k: f32) -> bool {
+fn gml_roll(rng: &mut (impl Rng + ?Sized), n: f32, k: f32) -> bool {
     rnd(rng, n) < k
 }
 
 /// GML `random_angle` (`random(360)`), radians.
 #[inline]
-fn gml_random_angle(rng: &mut (impl RngExt + ?Sized)) -> f32 {
+fn gml_random_angle(rng: &mut (impl Rng + ?Sized)) -> f32 {
     rng.random_range(0.0..std::f32::consts::TAU)
 }
 
 /// GML `choose(a, b, c)`.
 #[inline]
-fn gml_choose(rng: &mut (impl RngExt + ?Sized), options: &[f32]) -> f32 {
+fn gml_choose(rng: &mut (impl Rng + ?Sized), options: &[f32]) -> f32 {
     options[rng.random_range(0..options.len())]
 }
 
@@ -1570,20 +1600,20 @@ impl GmlDecide<'_> {
 /// costs the RNG value GML spends and yields 0 (`random_range` panics on a
 /// zero-width range).
 #[inline]
-fn rnd<R: RngExt + ?Sized>(rng: &mut R, n: f32) -> f32 {
-    rng.random_range(0.0..1.0) * n
+fn rnd<R: Rng + ?Sized>(rng: &mut R, n: f32) -> f32 {
+    rng.random_range(0.0_f32..1.0) * n
 }
 
 /// GML `random(n) - n/2` and `random(n) + n/2` as one `[-n, n]` draw.
 #[inline]
-fn sym<R: RngExt + ?Sized>(rng: &mut R, n: f32) -> f32 {
+fn sym<R: Rng + ?Sized>(rng: &mut R, n: f32) -> f32 {
     rnd(rng, n * 2.0) - n
 }
 
 /// GML `orandom(n)`: one draw in `±n/2`, i.e. the `(random(80) - 40)`
 /// shape the sources write, so a +/- spread costs one RNG value like GML.
 #[inline]
-fn spread<R: RngExt + ?Sized>(rng: &mut R, n: f32) -> f32 {
+fn spread<R: Rng + ?Sized>(rng: &mut R, n: f32) -> f32 {
     rnd(rng, n) - n * 0.5
 }
 
@@ -1601,7 +1631,9 @@ fn gml_alarm_2_volley(
     player_pos: glam::Vec2,
     brain: &mut EnemyBrain,
     particles_on: bool,
-    rng: &mut impl RngExt,
+    rng: &mut impl Rng,
+
+    fx_rng: &mut SimRng,
 ) {
     let gunangle = brain.gunangle;
     match kind {
@@ -1696,6 +1728,7 @@ fn gml_alarm_2_volley(
                     Some(DamageSource::enemy(entity, kind)),
                     "images/sprTrapFire.png",
                     None,
+                    rng,
                 );
                 if particles_on {
                     crate::environment::spawn_native_smoke_mote(
@@ -1704,6 +1737,7 @@ fn gml_alarm_2_volley(
                         epos,
                         glam::Vec2::ZERO,
                         0.0,
+                        fx_rng,
                     );
                 }
             } else {
@@ -1776,7 +1810,7 @@ fn hostile_horror_spray(
     player_pos: glam::Vec2,
     enemy: &mut Enemy,
     brain: &mut EnemyBrain,
-    rng: &mut impl RngExt,
+    rng: &mut impl Rng,
 ) {
     if brain.ammo == 0 {
         brain.charge = 0.0;
@@ -1830,7 +1864,7 @@ fn hostile_horror_spray(
 /// the registers, so the decide's cadence is unchanged; only the objects
 /// whose `Alarm_2` the port models (the Wolf roll, below) draw the volley.
 #[allow(clippy::too_many_arguments)]
-fn gml_alarm_1_decide<R: RngExt + ?Sized>(
+fn gml_alarm_1_decide<R: Rng + ?Sized>(
     kind: EnemyKind,
     pos: glam::Vec2,
     target: glam::Vec2,
@@ -1898,14 +1932,14 @@ fn gml_alarm_1_decide<R: RngExt + ?Sized>(
 /// Every kind above re-arms inside its own transcribe; this arm only exists
 /// so a kind added to the generic path without a transcription does not spin
 /// on `brain.attack`'s initial duration forever.
-fn gml_alarm_1_fallback(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+fn gml_alarm_1_fallback(d: &mut GmlDecide<'_>, rng: &mut (impl Rng + ?Sized)) {
     d.arm(30.0 + rnd(rng, 20.0));
 }
 
 /// GML `Freak/Alarm_1:1-9` (impulse `random(80) - 40`) with
 /// `ExploFreak/Alarm_1:1-9` / `RhinoFreak/Alarm_1:1-9`
 /// (`random(180) - 90`) - identical but for that spread.
-fn freak_alarm_1(d: &mut GmlDecide<'_>, spread_n: f32, rng: &mut (impl RngExt + ?Sized)) {
+fn freak_alarm_1(d: &mut GmlDecide<'_>, spread_n: f32, rng: &mut (impl Rng + ?Sized)) {
     d.arm(6.0 + rnd(rng, 5.0));
     if d.sees {
         d.brain.walk = 20.0;
@@ -1917,7 +1951,7 @@ fn freak_alarm_1(d: &mut GmlDecide<'_>, spread_n: f32, rng: &mut (impl RngExt + 
 
 /// GML `PopoFreak/Alarm_1`: `walk = 20` on sight, and the burst arm trades it
 /// for `walk = 6` plus 30 extra frames on the decide.
-fn popo_freak_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+fn popo_freak_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl Rng + ?Sized)) {
     d.arm(15.0 + rnd(rng, 5.0));
     if d.sees {
         d.brain.walk = 20.0;
@@ -1941,7 +1975,7 @@ fn popo_freak_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
 /// GML `Rat/Alarm_1` (and `FastRat/Alarm_1`, which differs only in
 /// `random(20) - 10` for `orandom(10)`): `walk = 40 + random(10)` on ANY
 /// line of sight and `alarm[1] = walk`, so the rat's cadence IS its walk.
-fn rat_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+fn rat_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl Rng + ?Sized)) {
     d.arm(10.0 + rnd(rng, 30.0));
     if d.sees {
         let jitter = if d.kind == EnemyKind::FastRat {
@@ -1962,7 +1996,7 @@ fn rat_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
 
 /// GML `Wolf/Alarm_1:2-3`: `alarm[1] = 30 + random(20); walk = alarm[1]` on
 /// every path, so the wolf's walk length IS its decide period.
-fn wolf_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+fn wolf_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl Rng + ?Sized)) {
     d.arm(30.0 + rnd(rng, 20.0));
     d.brain.walk = d.armed();
     if d.sees {
@@ -1989,7 +2023,7 @@ fn wolf_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
 
 /// GML `Raven/Alarm_1`: the close branch turns the bird AWAY from the target
 /// (`point_direction(target.x, target.y, x, y)`), the far branch walks.
-fn raven_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+fn raven_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl Rng + ?Sized)) {
     d.arm(20.0 + rnd(rng, 10.0));
     if d.sees {
         if d.dist > 64.0 {
@@ -2035,7 +2069,7 @@ fn raven_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
 /// GML `Spider/Alarm_1` and `InvSpider/Alarm_1` (identical): the chase needs
 /// sight AND `point_distance < 96`, and it is the only path that raises
 /// `maxspeed` from 3 to 5.
-fn spider_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+fn spider_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl Rng + ?Sized)) {
     d.arm(20.0 + rnd(rng, 10.0));
     d.brain.maxspeed = 3.0;
     if d.sees {
@@ -2059,7 +2093,7 @@ fn spider_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
 
 /// GML `Crab/Alarm_1`: the charge arm re-arms on a SHORTER period than the
 /// default, and the `walk = 50` arm on a longer one.
-fn crab_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+fn crab_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl Rng + ?Sized)) {
     d.arm(10.0 + rnd(rng, 10.0));
     if d.sees {
         if gml_chance(rng, 2.0) {
@@ -2091,7 +2125,7 @@ fn crab_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
 /// `alarm[1] /= 2` - the turtle's long walk is bought with a doubled
 /// cadence, not a longer one. The else arm covers BOTH "no sight" and
 /// "too far", so a blocked turtle still turns and still rolls.
-fn turtle_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+fn turtle_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl Rng + ?Sized)) {
     d.arm(50.0 + rnd(rng, 10.0));
     d.brain.walk = 0.0;
     if d.sees && d.dist < 320.0 {
@@ -2115,7 +2149,7 @@ fn turtle_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
 /// frames to the decide rather than replacing it. The first arm is
 /// `!collision_line && random(2) < 1`, so a blocked salamander falls
 /// through to the same two arms a sighted one does.
-fn salamander_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+fn salamander_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl Rng + ?Sized)) {
     d.arm(10.0 + rnd(rng, 10.0));
     d.brain.walk = 0.0;
     if d.sees && gml_chance(rng, 2.0) {
@@ -2137,7 +2171,7 @@ fn salamander_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
 
 /// GML `BoneFish/Alarm_1`: `alarm[1] = 5` (a very fast decide) but every
 /// sight re-arms it to the full `walk`.
-fn bone_fish_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+fn bone_fish_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl Rng + ?Sized)) {
     d.arm(5.0);
     if d.sees {
         d.direction(d.toward() + (rnd(rng, 20.0) - 10.0).to_radians());
@@ -2155,7 +2189,7 @@ fn bone_fish_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
 /// re-arm), and the "do nothing" arm still sets `walk = 30`. `meleedamage` is
 /// both what `Other_10:8` tests for the charge strip and what raises the
 /// sled's speed cap from 3 to 8.
-fn snow_bot_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+fn snow_bot_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl Rng + ?Sized)) {
     d.arm(40.0);
     d.enemy.touch_damage = 0;
     if d.sees {
@@ -2182,7 +2216,7 @@ fn snow_bot_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
 /// The spray arm's chance scales with distance (`random(2 +
 /// point_distance / 100)`, the argument floored), and the walk arm picks a
 /// side with `choose(1, -1)`.
-fn hostile_horror_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+fn hostile_horror_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl Rng + ?Sized)) {
     d.arm(10.0 + rnd(rng, 10.0));
     if !d.sees && !gml_chance(rng, 6.0) {
         // GML's `else if random(4) < 1` arm.
@@ -2216,7 +2250,7 @@ fn hostile_horror_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized
 
 /// GML `Maggot/Alarm_1` / `RadMaggot/Alarm_1` / `SuperFrog/Alarm_1`: turn on
 /// sight, otherwise scatter. The maggot's own ticker uses the same shape.
-fn maggot_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized), base: f32, spread: f32) {
+fn maggot_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl Rng + ?Sized), base: f32, spread: f32) {
     d.arm(base + rnd(rng, spread));
     if d.sees {
         d.direction(d.toward() + (rnd(rng, 20.0) - 10.0).to_radians());
@@ -2225,7 +2259,7 @@ fn maggot_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized), base:
     }
 }
 
-fn molefish_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+fn molefish_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl Rng + ?Sized)) {
     d.arm(15.0 + rnd(rng, 10.0));
     if d.sees {
         if d.dist > 96.0 {
@@ -2258,7 +2292,7 @@ fn molefish_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
     }
 }
 
-fn molesarge_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+fn molesarge_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl Rng + ?Sized)) {
     d.arm(15.0 + rnd(rng, 10.0));
     if d.sees {
         if d.dist < 120.0 {
@@ -2292,7 +2326,7 @@ fn molesarge_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
     }
 }
 
-fn fireballer_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+fn fireballer_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl Rng + ?Sized)) {
     d.arm(20.0 + rnd(rng, 10.0));
     if d.sees {
         if gml_chance(rng, 3.0) {
@@ -2307,7 +2341,7 @@ fn fireballer_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
     }
 }
 
-fn super_fireballer_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+fn super_fireballer_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl Rng + ?Sized)) {
     d.arm(20.0 + rnd(rng, 10.0));
     if d.sees {
         if rnd(rng, 5.0) >= 4.0 {
@@ -2324,7 +2358,7 @@ fn super_fireballer_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Siz
     }
 }
 
-fn guardian_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
+fn guardian_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl Rng + ?Sized)) {
     let justfired = d.armed() == 12.0;
     d.arm(10.0 + rnd(rng, 40.0));
     if justfired {
@@ -2354,15 +2388,15 @@ fn guardian_alarm_1(d: &mut GmlDecide<'_>, rng: &mut (impl RngExt + ?Sized)) {
 /// still far enough from both the target and the old spot, and slide
 /// `100 + random(60)` px along bearing `200 + random(140)`.
 fn guardian_reappear(
-    rng: &mut rand::rngs::ThreadRng,
+    rng: &mut impl Rng,
     from: glam::Vec2,
     target: glam::Vec2,
     mask: &FloorMask,
 ) -> glam::Vec2 {
-    let reach = 64.0 + rng.random_range(0.0..120.0);
+    let reach = 64.0 + rng.random_range(0.0_f32..120.0);
     let mut spot = target;
     for _ in 0..64 {
-        let angle = rng.random_range(0.0..std::f32::consts::TAU);
+        let angle = rng.random_range(0.0_f32..std::f32::consts::TAU);
         spot = mask.cell_center(
             mask.world_to_cell(target + glam::Vec2::new(angle.cos(), angle.sin()) * reach),
         );
@@ -2376,7 +2410,7 @@ fn guardian_reappear(
     crate::spatial::move_contact_solid(
         &mut spot,
         glam::Vec2::from_angle(rng.random_range(200.0f32..=340.0).to_radians())
-            * rng.random_range(100.0..=160.0),
+            * rng.random_range(100.0_f32..=160.0_f32),
         14.0,
         &[],
         Some(mask),
@@ -2438,11 +2472,7 @@ fn dog_leap_airborne(brain: &mut EnemyBrain, vel: &mut Velocity, leap: &mut DogL
     leap.zspeed -= 0.5 * frames;
 }
 
-fn dog_guardian_alarm_1(
-    d: &mut GmlDecide<'_>,
-    leap: &mut DogLeap,
-    rng: &mut (impl RngExt + ?Sized),
-) {
+fn dog_guardian_alarm_1(d: &mut GmlDecide<'_>, leap: &mut DogLeap, rng: &mut (impl Rng + ?Sized)) {
     d.arm(30.0 + rnd(rng, 20.0));
     leap.walking = true;
     leap.pose = DogGuardianPose::Ground;
@@ -2484,8 +2514,7 @@ pub fn enemy_ai(
     mut trauma: ResMut<Trauma>,
     euphoria: Res<Euphoria>,
     mask: Res<FloorMask>,
-    run: Res<Run>,
-    save: Res<crate::savedata_part::SaveData>,
+    (run, save): (Res<Run>, Res<crate::savedata_part::SaveData>),
     mut cues: ResMut<Queue<AudioCue>>,
     mut charge_state: Local<HashMap<Entity, GTimer>>,
     mut snowbot_fire: Local<HashMap<Entity, SnowBotFire>>,
@@ -2512,13 +2541,18 @@ pub fn enemy_ai(
     props: Query<(Entity, &Prop, &Pos), With<Prop>>,
     corpses: Query<(Entity, &Corpse, &Pos), (With<Corpse>, Without<Enemy>)>,
     catalog: Res<repame_anim::AnimCatalog>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+    let mut fx_rng = streams.fx;
+
     let Ok((player_pos, player)) = player_q.single() else {
         return;
     };
     let player_pos = player_pos.0;
     let dt = time.delta_secs;
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
 
     let euphoria = euphoria.0 || player.euphoria;
     // GML `Smoke/Create_0.gml:15` self-gates on `UberCont.opt_prtcls`.
@@ -2665,7 +2699,7 @@ pub fn enemy_ai(
                     player_pos,
                     &mut enemy,
                     &mut brain,
-                    &mut rng,
+                    rng,
                 );
             }
 
@@ -2707,6 +2741,7 @@ pub fn enemy_ai(
                                 &mut commands,
                                 particles_on,
                                 epos + glam::Vec2::new(0.0, 10.0),
+                                &mut fx_rng,
                             );
                         }
                     }
@@ -2832,7 +2867,7 @@ pub fn enemy_ai(
 
         if enemy.kind == EnemyKind::Raven && !was_dashing && brain.melee.is_finished() {
             brain.dash = 0.2;
-            brain.melee = GTimer::from_seconds(rng.random_range(0.9..1.8), TimerMode::Once);
+            brain.melee = GTimer::from_seconds(rng.random_range(0.9_f32..1.8), TimerMode::Once);
             let side = glam::Vec2::new(-dir.y, dir.x) * brain.strafe_dir;
             vel.0 = (dir * -0.35 + side).normalize() * 420.0;
         }
@@ -2848,7 +2883,8 @@ pub fn enemy_ai(
                 player_pos,
                 &mut brain,
                 particles_on,
-                &mut rng,
+                rng,
+                &mut fx_rng,
             );
         }
 
@@ -2859,13 +2895,13 @@ pub fn enemy_ai(
         {
             let want = def.preferred_range.max(140.0);
             let jump_dir = if dist > want { dir } else { -dir };
-            let cand = epos + jump_dir * rng.random_range(70.0..130.0);
+            let cand = epos + jump_dir * rng.random_range(70.0_f32..130.0);
             if mask.is_walkable(cand) {
                 pos.0 = cand;
                 vel.0 = glam::Vec2::ZERO;
                 spawn_burst(
                     &mut commands,
-                    &mut rng,
+                    rng,
                     epos,
                     8,
                     [0.3, 1.0, 0.45, 1.0],
@@ -2936,7 +2972,7 @@ pub fn enemy_ai(
                     &mut brain,
                     &mut vel,
                     dt,
-                    &mut rng,
+                    rng,
                     entity,
                     &mut dog_leaps,
                 );
@@ -2955,7 +2991,7 @@ pub fn enemy_ai(
                 } else {
                     0
                 };
-                pos.0 = guardian_reappear(&mut rng, epos, player_pos, &mask);
+                pos.0 = guardian_reappear(rng, epos, player_pos, &mask);
                 vel.0 = glam::Vec2::ZERO;
             }
 
@@ -3068,6 +3104,7 @@ pub fn enemy_ai(
             enemy.kind,
             run.loop_count,
             current_frame,
+            rng,
         );
 
         // GML keeps `direction`/`speed` authoritative: `motion_add` and
@@ -3147,7 +3184,7 @@ pub fn enemy_ai(
                         // 14 bullets 24 deg apart.
                         fire_guardian_volley(
                             &mut commands,
-                            &mut rng,
+                            rng,
                             entity,
                             enemy.kind,
                             epos,
@@ -3168,6 +3205,7 @@ pub fn enemy_ai(
                             enemy.kind,
                             epos,
                             brain.gunangle,
+                            &mut fx_rng,
                         );
                         brain.burst_left = def.bullets_per_shot.saturating_sub(1);
                         brain.burst_timer =
@@ -3178,7 +3216,7 @@ pub fn enemy_ai(
                             GTimer::from_seconds(def.burst_interval, TimerMode::Once);
                         fire_enemy_bullet(
                             &mut commands,
-                            &mut rng,
+                            rng,
                             entity,
                             &*enemy,
                             def,
@@ -3226,7 +3264,7 @@ pub fn enemy_ai(
                     // `walk` on `alarm[1] - 1` and leans at the target, so
                     // the guardian actually closes.
                     if enemy.kind == EnemyKind::ExploGuardian {
-                        let frames = 6.0 + rng.random_range(0.0..5.0);
+                        let frames = 6.0 + rng.random_range(0.0_f32..5.0);
                         brain.walk = frames - 1.0;
                         if los {
                             gml_motion_add_clamp(
@@ -3314,25 +3352,27 @@ pub fn enemy_ai(
                             // vanish instead of firing.
                             brain.fire = 1;
                             brain.attack = GTimer::from_seconds(
-                                (10.0 + rng.random_range(0.0..40.0) + 60.0) / 30.0,
+                                (10.0 + rng.random_range(0.0_f32..40.0) + 60.0) / 30.0,
                                 TimerMode::Once,
                             );
                             continue;
                         }
                         let cd_secs = match enemy.kind {
-                            EnemyKind::SnowTank => (40.0 + rng.random_range(0.0..30.0)) / 30.0,
-                            EnemyKind::GoldSnowtank => (15.0 + rng.random_range(0.0..5.0)) / 30.0,
+                            EnemyKind::SnowTank => (40.0 + rng.random_range(0.0_f32..30.0)) / 30.0,
+                            EnemyKind::GoldSnowtank => {
+                                (15.0 + rng.random_range(0.0_f32..5.0)) / 30.0
+                            }
                             // `Guardian/Alarm_1:3,7`: a volley re-arms at 12 and
                             // the tick that consumes it adds 10 more.
                             EnemyKind::Guardian => {
                                 if guardian_justfired {
-                                    (20.0 + rng.random_range(0.0..40.0)) / 30.0
+                                    (20.0 + rng.random_range(0.0_f32..40.0)) / 30.0
                                 } else {
-                                    (10.0 + rng.random_range(0.0..40.0)) / 30.0
+                                    (10.0 + rng.random_range(0.0_f32..40.0)) / 30.0
                                 }
                             }
                             EnemyKind::LaserCrystal | EnemyKind::InvLaserCrystal => {
-                                (30.0 + rng.random_range(0.0..10.0)) / 30.0
+                                (30.0 + rng.random_range(0.0_f32..10.0)) / 30.0
                             }
                             _ => def.attack_cooldown,
                         };
@@ -3342,7 +3382,7 @@ pub fn enemy_ai(
                                 dir.y.atan2(dir.x) + std::f32::consts::FRAC_PI_2 * brain.strafe_dir;
                             let wdir = glam::Vec2::new(base.cos(), base.sin());
                             vel.0 = wdir * (0.6 * 30.0);
-                            brain.walk = 20.0 + rng.random_range(0.0..10.0);
+                            brain.walk = 20.0 + rng.random_range(0.0_f32..10.0);
                         } else if matches!(
                             enemy.kind,
                             EnemyKind::LaserCrystal | EnemyKind::InvLaserCrystal
@@ -3399,9 +3439,9 @@ pub fn enemy_ai(
                             brain.attack = GTimer::from_seconds(
                                 match enemy.kind {
                                     EnemyKind::SnowTank => {
-                                        (40.0 + rng.random_range(0.0..30.0)) / 30.0
+                                        (40.0 + rng.random_range(0.0_f32..30.0)) / 30.0
                                     }
-                                    _ => (15.0 + rng.random_range(0.0..5.0)) / 30.0,
+                                    _ => (15.0 + rng.random_range(0.0_f32..5.0)) / 30.0,
                                 },
                                 TimerMode::Once,
                             );
@@ -3418,6 +3458,7 @@ pub fn enemy_ai(
                             enemy.kind,
                             epos,
                             brain.gunangle,
+                            &mut fx_rng,
                         );
                         brain.burst_left = brain.burst_left.saturating_sub(1);
                         if brain.burst_left == 0 {
@@ -3431,7 +3472,7 @@ pub fn enemy_ai(
                         let gdir = glam::Vec2::new(brain.gunangle.cos(), brain.gunangle.sin());
                         fire_enemy_bullet(
                             &mut commands,
-                            &mut rng,
+                            rng,
                             entity,
                             &*enemy,
                             def,
@@ -3507,7 +3548,7 @@ pub fn enemy_ai(
                             -10.0
                         };
                         brain.attack = GTimer::from_seconds(
-                            (20.0 + rng.random_range(0.0..10.0)) / 30.0,
+                            (20.0 + rng.random_range(0.0_f32..10.0)) / 30.0,
                             TimerMode::Once,
                         );
                     } else if dist <= 48.0 || dist >= 128.0 {
@@ -3515,26 +3556,26 @@ pub fn enemy_ai(
                             (-dir).y.atan2((-dir).x) + rng.random_range(-10_f32..10.0).to_radians();
                         let wdir = glam::Vec2::new(ang.cos(), ang.sin());
                         vel.0 = wdir * (0.4 * 30.0);
-                        brain.walk = 40.0 + rng.random_range(0.0..10.0);
+                        brain.walk = 40.0 + rng.random_range(0.0_f32..10.0);
                         brain.gunangle = dir.y.atan2(dir.x);
                         brain.attack = GTimer::from_seconds(
-                            (20.0 + rng.random_range(0.0..10.0)) / 30.0,
+                            (20.0 + rng.random_range(0.0_f32..10.0)) / 30.0,
                             TimerMode::Once,
                         );
                     } else {
                         let ang = dir.y.atan2(dir.x) + rng.random_range(-90_f32..90.0).to_radians();
                         let wdir = glam::Vec2::new(ang.cos(), ang.sin());
                         vel.0 = wdir * (0.4 * 30.0);
-                        brain.walk = 10.0 + rng.random_range(0.0..10.0);
+                        brain.walk = 10.0 + rng.random_range(0.0_f32..10.0);
                         brain.gunangle = dir.y.atan2(dir.x);
                         brain.attack = GTimer::from_seconds(
-                            (20.0 + rng.random_range(0.0..10.0)) / 30.0,
+                            (20.0 + rng.random_range(0.0_f32..10.0)) / 30.0,
                             TimerMode::Once,
                         );
                     }
                 } else {
                     brain.attack = GTimer::from_seconds(
-                        (20.0 + rng.random_range(0.0..10.0)) / 30.0,
+                        (20.0 + rng.random_range(0.0_f32..10.0)) / 30.0,
                         TimerMode::Once,
                     );
                 }
@@ -3547,13 +3588,13 @@ pub fn enemy_ai(
                     if enemy.kind == EnemyKind::BuffGator {
                         enemy_cue(&mut cues, "sndFlakCannon");
                         let ang = brain.gunangle + rng.random_range(-25_f32..25.0).to_radians();
-                        let spd = rng.random_range(240.0..300.0);
+                        let spd = rng.random_range(240.0_f32..300.0);
                         fire_enemy_flak(&mut commands, entity, enemy.kind, epos, ang, spd);
                     } else {
                         enemy_cue(&mut cues, "sndShotgun");
                         for _ in 0..6 {
                             let ang = brain.gunangle + rng.random_range(-25_f32..25.0).to_radians();
-                            let spd = rng.random_range(300.0..420.0);
+                            let spd = rng.random_range(300.0_f32..420.0);
                             fire_enemy_shell(&mut commands, entity, enemy.kind, epos, ang, spd);
                         }
                     }
@@ -3578,9 +3619,9 @@ pub fn enemy_ai(
                     enemy_cue(&mut cues, "sndMimicSlurp");
                 }
                 let cd_secs = if enemy.kind == EnemyKind::SuperMimic {
-                    (150.0 + rng.random_range(0.0..180.0)) / 30.0
+                    (150.0 + rng.random_range(0.0_f32..180.0)) / 30.0
                 } else {
-                    (90.0 + rng.random_range(0.0..150.0)) / 30.0
+                    (90.0 + rng.random_range(0.0_f32..150.0)) / 30.0
                 };
                 brain.attack = GTimer::from_seconds(cd_secs, TimerMode::Once);
             }
@@ -3627,7 +3668,7 @@ pub fn enemy_ai(
                             hurt.is_some(),
                         );
                         brain.attack = GTimer::from_seconds(
-                            (30.0 + rng.random_range(0.0..20.0)) / 30.0,
+                            (30.0 + rng.random_range(0.0_f32..20.0)) / 30.0,
                             TimerMode::Once,
                         );
                     }
@@ -3641,7 +3682,7 @@ pub fn enemy_ai(
                     } else {
                         brain.walk = 50.0;
                         brain.attack = GTimer::from_seconds(
-                            (30.0 + rng.random_range(0.0..20.0)) / 30.0,
+                            (30.0 + rng.random_range(0.0_f32..20.0)) / 30.0,
                             TimerMode::Once,
                         );
                     }
@@ -3699,15 +3740,15 @@ pub fn enemy_ai(
                                 dir.y.atan2(dir.x) + rng.random_range(-40_f32..40.0).to_radians();
                             let wdir = glam::Vec2::new(ang.cos(), ang.sin());
                             vel.0 = wdir * (0.4 * 30.0);
-                            brain.walk = 10.0 + rng.random_range(0.0..10.0);
+                            brain.walk = 10.0 + rng.random_range(0.0_f32..10.0);
                             brain.gunangle = dir.y.atan2(dir.x);
                             brain.attack = GTimer::from_seconds(
-                                (20.0 + rng.random_range(0.0..10.0)) / 30.0,
+                                (20.0 + rng.random_range(0.0_f32..10.0)) / 30.0,
                                 TimerMode::Once,
                             );
                         } else {
                             brain.attack = GTimer::from_seconds(
-                                (20.0 + rng.random_range(0.0..10.0)) / 30.0,
+                                (20.0 + rng.random_range(0.0_f32..10.0)) / 30.0,
                                 TimerMode::Once,
                             );
                         }
@@ -3715,24 +3756,24 @@ pub fn enemy_ai(
                         let ang = dir.y.atan2(dir.x) + rng.random_range(-5_f32..5.0).to_radians();
                         let wdir = glam::Vec2::new(ang.cos(), ang.sin());
                         vel.0 = wdir * (0.4 * 30.0);
-                        brain.walk = 40.0 + rng.random_range(0.0..10.0);
+                        brain.walk = 40.0 + rng.random_range(0.0_f32..10.0);
                         brain.gunangle = dir.y.atan2(dir.x);
                         brain.attack = GTimer::from_seconds(
-                            (20.0 + rng.random_range(0.0..10.0)) / 30.0,
+                            (20.0 + rng.random_range(0.0_f32..10.0)) / 30.0,
                             TimerMode::Once,
                         );
                     }
                 } else if rng.random::<f32>() < 0.25 {
                     let ang = rng.random_range(0.0..std::f32::consts::TAU);
                     vel.0 = glam::Vec2::new(ang.cos(), ang.sin()) * (0.4 * 30.0);
-                    brain.walk = 20.0 + rng.random_range(0.0..10.0);
+                    brain.walk = 20.0 + rng.random_range(0.0_f32..10.0);
                     brain.attack = GTimer::from_seconds(
-                        (brain.walk + 10.0 + rng.random_range(0.0..30.0)) / 30.0,
+                        (brain.walk + 10.0 + rng.random_range(0.0_f32..30.0)) / 30.0,
                         TimerMode::Once,
                     );
                 } else {
                     brain.attack = GTimer::from_seconds(
-                        (20.0 + rng.random_range(0.0..10.0)) / 30.0,
+                        (20.0 + rng.random_range(0.0_f32..10.0)) / 30.0,
                         TimerMode::Once,
                     );
                 }
@@ -3767,22 +3808,20 @@ pub fn enemy_ai(
         {
             let fire_due = brain.fire_alarm.just_finished();
             if fire_due {
-                brain.fire_alarm = GTimer::from_seconds(
-                    gml_fire_rearm_secs(enemy.kind, &mut rng),
-                    TimerMode::Once,
-                );
+                brain.fire_alarm =
+                    GTimer::from_seconds(gml_fire_rearm_secs(enemy.kind, rng), TimerMode::Once);
             }
             // GML gates every shooter on sight plus a per-object distance and
             // roll, in `Alarm_1` short-circuit order. `shoot_range` was
             // standing in for that and let anything shoot through walls.
             let los = has_line_of_sight(epos, player_pos, &mask);
-            if gml_wants_fire(enemy.kind, los, dist, &mut rng) {
+            if gml_wants_fire(enemy.kind, los, dist, rng) {
                 if def.burst {
                     if brain.burst_left > 0 {
                         if brain.burst_timer.just_finished() {
                             fire_enemy_bullet(
                                 &mut commands,
-                                &mut rng,
+                                rng,
                                 entity,
                                 &*enemy,
                                 def,
@@ -3801,7 +3840,7 @@ pub fn enemy_ai(
                             brain.burst_left -= 1;
                             if brain.burst_left == 0 {
                                 brain.fire_alarm = GTimer::from_seconds(
-                                    gml_fire_rearm_secs(enemy.kind, &mut rng),
+                                    gml_fire_rearm_secs(enemy.kind, rng),
                                     TimerMode::Once,
                                 );
                             }
@@ -3812,7 +3851,7 @@ pub fn enemy_ai(
                             GTimer::from_seconds(def.burst_interval, TimerMode::Once);
                         fire_enemy_bullet(
                             &mut commands,
-                            &mut rng,
+                            rng,
                             entity,
                             &*enemy,
                             def,
@@ -3831,7 +3870,7 @@ pub fn enemy_ai(
                         brain.burst_left -= 1;
                     }
                 } else if fire_due {
-                    fire_enemy_shot(&mut commands, &mut rng, entity, &*enemy, def, epos, dir);
+                    fire_enemy_shot(&mut commands, rng, entity, &*enemy, def, epos, dir);
                     show_enemy_fire(
                         &mut commands,
                         &catalog,
@@ -3844,6 +3883,8 @@ pub fn enemy_ai(
             }
         }
     }
+    streams.enemies = enemies_rng;
+    streams.fx = fx_rng;
 }
 
 pub fn tick_bandit(
@@ -3858,7 +3899,11 @@ pub fn tick_bandit(
         (With<Enemy>, Without<Prop>),
     >,
     props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player_pos = player_q.single().ok().map(|p| p.0);
@@ -3874,7 +3919,7 @@ pub fn tick_bandit(
         })
         .collect();
     let solids = prop_shapes(&props);
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     for (entity, enemy, mut brain, mut vel, mut pos) in &mut enemies {
         if !matches!(enemy.kind, EnemyKind::Bandit | EnemyKind::SnowBandit) {
             continue;
@@ -3884,8 +3929,10 @@ pub fn tick_bandit(
         sync_heading(&mut brain, &vel);
         brain.attack.tick(dt);
         if brain.attack.just_finished() {
-            brain.attack =
-                GTimer::from_seconds((20.0 + rng.random_range(0.0..10.0)) / 30.0, TimerMode::Once);
+            brain.attack = GTimer::from_seconds(
+                (20.0 + rng.random_range(0.0_f32..10.0)) / 30.0,
+                TimerMode::Once,
+            );
             if let Some(target) = player_pos {
                 let delta = target - epos;
                 let target_dir = delta.y.atan2(delta.x);
@@ -3916,7 +3963,7 @@ pub fn tick_bandit(
                             enemy_cue(&mut cues, "sndEnemyFire");
                             brain.gunangle = target_dir;
                             brain.attack = GTimer::from_seconds(
-                                (20.0 + rng.random_range(0.0..5.0)) / 30.0,
+                                (20.0 + rng.random_range(0.0_f32..5.0)) / 30.0,
                                 TimerMode::Once,
                             );
                         } else {
@@ -3926,7 +3973,7 @@ pub fn tick_bandit(
                                 target_dir + rng.random_range(-90.0_f32..90.0).to_radians(),
                             );
                             set_gml_speed(&mut brain, &mut vel, 0.4);
-                            brain.walk = 10.0 + rng.random_range(0.0..10.0);
+                            brain.walk = 10.0 + rng.random_range(0.0_f32..10.0);
                             brain.gunangle = target_dir;
                         }
                     } else {
@@ -3942,15 +3989,15 @@ pub fn tick_bandit(
                                 + rng.random_range(-10.0_f32..10.0).to_radians(),
                         );
                         set_gml_speed(&mut brain, &mut vel, 0.4);
-                        brain.walk = 40.0 + rng.random_range(0.0..10.0);
+                        brain.walk = 40.0 + rng.random_range(0.0_f32..10.0);
                         brain.gunangle = target_dir;
                     }
                 } else if rng.random::<f32>() < 0.25 {
                     let angle = rng.random_range(0.0..std::f32::consts::TAU);
                     add_gml_motion(&mut brain, &mut vel, angle, 0.4, dt);
-                    brain.walk = 20.0 + rng.random_range(0.0..10.0);
+                    brain.walk = 20.0 + rng.random_range(0.0_f32..10.0);
                     brain.attack = GTimer::from_seconds(
-                        (brain.walk + 10.0 + rng.random_range(0.0..30.0)) / 30.0,
+                        (brain.walk + 10.0 + rng.random_range(0.0_f32..30.0)) / 30.0,
                         TimerMode::Once,
                     );
                     brain.gunangle = brain.heading;
@@ -3958,9 +4005,9 @@ pub fn tick_bandit(
             } else if rng.random::<f32>() < 0.1 {
                 let angle = rng.random_range(0.0..std::f32::consts::TAU);
                 add_gml_motion(&mut brain, &mut vel, angle, 0.4, dt);
-                brain.walk = 20.0 + rng.random_range(0.0..10.0);
+                brain.walk = 20.0 + rng.random_range(0.0_f32..10.0);
                 brain.attack = GTimer::from_seconds(
-                    (brain.walk + 10.0 + rng.random_range(0.0..30.0)) / 30.0,
+                    (brain.walk + 10.0 + rng.random_range(0.0_f32..30.0)) / 30.0,
                     TimerMode::Once,
                 );
                 brain.gunangle = brain.heading;
@@ -3983,6 +4030,7 @@ pub fn tick_bandit(
             run.loop_count,
             current_frame,
             wall_law(enemy.kind),
+            rng,
         );
         zero_damage_contact_push(
             &mut brain,
@@ -3993,6 +4041,7 @@ pub fn tick_bandit(
             dt,
         );
     }
+    streams.enemies = enemies_rng;
 }
 
 pub fn tick_maggot(
@@ -4012,7 +4061,11 @@ pub fn tick_maggot(
         (With<Enemy>, Without<Prop>),
     >,
     props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player_pos = player_q.single().ok().map(|p| p.0);
@@ -4028,7 +4081,7 @@ pub fn tick_maggot(
         })
         .collect();
     let solids = prop_shapes(&props);
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     for (entity, enemy, mut brain, mut vel, mut pos, hurt) in &mut enemies {
         if enemy.kind != EnemyKind::Maggot {
             continue;
@@ -4038,8 +4091,10 @@ pub fn tick_maggot(
         sync_heading(&mut brain, &vel);
         brain.attack.tick(dt);
         if brain.attack.just_finished() {
-            brain.attack =
-                GTimer::from_seconds((30.0 + rng.random_range(0.0..20.0)) / 30.0, TimerMode::Once);
+            brain.attack = GTimer::from_seconds(
+                (30.0 + rng.random_range(0.0_f32..20.0)) / 30.0,
+                TimerMode::Once,
+            );
             if let Some(target) = player_pos
                 && has_line_of_sight(epos, target, &mask)
             {
@@ -4083,8 +4138,10 @@ pub fn tick_maggot(
             run.loop_count,
             current_frame,
             wall_law(enemy.kind),
+            rng,
         );
     }
+    streams.enemies = enemies_rng;
 }
 
 pub fn tick_maggot_spawn(
@@ -4107,7 +4164,11 @@ pub fn tick_maggot_spawn(
         (With<Enemy>, Without<Prop>),
     >,
     props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player_pos = player_q.single().ok().map(|p| p.0);
@@ -4129,7 +4190,7 @@ pub fn tick_maggot_spawn(
             (enemy.kind == EnemyKind::MaggotSpawn).then_some((entity, pos.0))
         })
         .collect();
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     for (entity, enemy, mut brain, mut vel, mut pos, mut health, hurt, mut charge) in &mut enemies {
         if enemy.kind != EnemyKind::MaggotSpawn {
             continue;
@@ -4186,6 +4247,7 @@ pub fn tick_maggot_spawn(
             run.loop_count,
             current_frame,
             wall_law(enemy.kind),
+            rng,
         );
         let radius = enemy_def(enemy.kind).radius;
         for (other_entity, other_pos) in &spawns {
@@ -4195,7 +4257,10 @@ pub fn tick_maggot_spawn(
             if pos.0.distance(*other_pos) > radius * 2.0 {
                 continue;
             }
-            let jitter = glam::Vec2::new(rng.random_range(-1.0..1.0), rng.random_range(-1.0..1.0));
+            let jitter = glam::Vec2::new(
+                rng.random_range(-1.0_f32..1.0),
+                rng.random_range(-1.0_f32..1.0),
+            );
             let to_other = *other_pos + jitter - pos.0;
             let angle = to_other.y.atan2(to_other.x);
             let mx = angle.cos() * 8.0;
@@ -4218,6 +4283,7 @@ pub fn tick_maggot_spawn(
             dt,
         );
     }
+    streams.enemies = enemies_rng;
 }
 
 pub fn tick_bigmaggot(
@@ -4241,7 +4307,11 @@ pub fn tick_bigmaggot(
     >,
     props: Query<(Entity, &Prop, &Pos), With<Prop>>,
     catalog: Res<repame_anim::AnimCatalog>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player_pos = player_q.single().ok().map(|p| p.0);
@@ -4257,7 +4327,7 @@ pub fn tick_bigmaggot(
         })
         .collect();
     let solids = prop_shapes(&props);
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     for (entity, enemy, mut brain, mut vel, mut pos, health, hurt, mut anim) in &mut enemies {
         if enemy.kind != EnemyKind::BigMaggot || brain.burrow_state != 0 {
             continue;
@@ -4267,8 +4337,10 @@ pub fn tick_bigmaggot(
         sync_heading(&mut brain, &vel);
         brain.attack.tick(dt);
         if brain.attack.just_finished() {
-            brain.attack =
-                GTimer::from_seconds((20.0 + rng.random_range(0.0..20.0)) / 30.0, TimerMode::Once);
+            brain.attack = GTimer::from_seconds(
+                (20.0 + rng.random_range(0.0_f32..20.0)) / 30.0,
+                TimerMode::Once,
+            );
             let mut burrow = false;
             if let Some(target) = player_pos {
                 let target_dir = (target - epos).y.atan2((target - epos).x);
@@ -4351,8 +4423,10 @@ pub fn tick_bigmaggot(
             run.loop_count,
             current_frame,
             wall_law(enemy.kind),
+            rng,
         );
     }
+    streams.enemies = enemies_rng;
 }
 
 pub fn tick_bigmaggot_burrow(
@@ -4374,10 +4448,15 @@ pub fn tick_bigmaggot_burrow(
     >,
     props: Query<(Entity, &Prop, &Pos), With<Prop>>,
     catalog: Res<repame_anim::AnimCatalog>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+    let mut fx_rng = streams.fx;
+
     let dt = time.delta_secs;
     let player_pos = player_q.single().ok().map(|p| p.0);
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     for (_entity, enemy, mut brain, mut vel, mut pos, mut anim) in &mut enemies {
         if enemy.kind != EnemyKind::BigMaggot || brain.burrow_state == 0 {
             continue;
@@ -4415,7 +4494,7 @@ pub fn tick_bigmaggot_burrow(
                         brain.attack = GTimer::from_seconds((5.0 / 0.4) / 30.0, TimerMode::Once);
                         spawn_burst(
                             &mut commands,
-                            &mut rng,
+                            rng,
                             dest,
                             10,
                             [0.6, 0.45, 0.3, 1.0],
@@ -4425,7 +4504,12 @@ pub fn tick_bigmaggot_burrow(
                         // recreation's own marker at this exact spot
                         // (`//dust ring here plz`): the ring the drill-out
                         // was always meant to throw.
-                        crate::environment::spawn_dust_ring_12(&mut commands, true, dest);
+                        crate::environment::spawn_dust_ring_12(
+                            &mut commands,
+                            true,
+                            dest,
+                            &mut fx_rng,
+                        );
                     } else {
                         brain.burrow_alarm0 = 1.0;
                     }
@@ -4436,7 +4520,7 @@ pub fn tick_bigmaggot_burrow(
             if brain.burrow_alarm1 <= 0.0 {
                 brain.burrow_state = 0;
                 brain.attack = GTimer::from_seconds(
-                    (10.0 + rng.random_range(0.0..10.0)) / 30.0,
+                    (10.0 + rng.random_range(0.0_f32..10.0)) / 30.0,
                     TimerMode::Once,
                 );
                 brain.walk = 0.0;
@@ -4445,6 +4529,8 @@ pub fn tick_bigmaggot_burrow(
             }
         }
     }
+    streams.enemies = enemies_rng;
+    streams.fx = fx_rng;
 }
 #[allow(clippy::too_many_arguments)]
 pub fn tick_jungle_fly(
@@ -4466,7 +4552,11 @@ pub fn tick_jungle_fly(
         (With<Enemy>, Without<Prop>),
     >,
     props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player_pos = player_q.single().ok().map(|p| p.0);
@@ -4482,7 +4572,7 @@ pub fn tick_jungle_fly(
         })
         .collect();
     let solids = prop_shapes(&props);
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     for (entity, enemy, mut brain, mut vel, mut pos, hurt) in &mut enemies {
         if enemy.kind != EnemyKind::JungleFly {
             continue;
@@ -4493,8 +4583,10 @@ pub fn tick_jungle_fly(
         brain.attack.tick(dt);
         brain.burst_timer.tick(dt);
         if brain.attack.just_finished() {
-            brain.attack =
-                GTimer::from_seconds((15.0 + rng.random_range(0.0..5.0)) / 30.0, TimerMode::Once);
+            brain.attack = GTimer::from_seconds(
+                (15.0 + rng.random_range(0.0_f32..5.0)) / 30.0,
+                TimerMode::Once,
+            );
             if let Some(target) = player_pos {
                 let target_dir = (target - epos).y.atan2((target - epos).x);
                 if has_line_of_sight(epos, target, &mask) && rng.random::<f32>() > 0.2 {
@@ -4577,8 +4669,10 @@ pub fn tick_jungle_fly(
             run.loop_count,
             current_frame,
             wall_law(enemy.kind),
+            rng,
         );
     }
+    streams.enemies = enemies_rng;
 }
 
 pub fn tick_fired_maggot(
@@ -4650,7 +4744,11 @@ pub fn tick_scorpion(
     >,
     props: Query<(Entity, &Prop, &Pos), With<Prop>>,
     catalog: Res<repame_anim::AnimCatalog>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player_pos = player_q.single().ok().map(|p| p.0);
@@ -4666,7 +4764,7 @@ pub fn tick_scorpion(
         })
         .collect();
     let solids = prop_shapes(&props);
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     for (entity, enemy, mut brain, mut vel, mut pos, mut anim, hurt) in &mut enemies {
         if enemy.kind != EnemyKind::Scorpion {
             continue;
@@ -4677,8 +4775,10 @@ pub fn tick_scorpion(
         brain.attack.tick(dt);
         brain.burst_timer.tick(dt);
         if brain.attack.just_finished() {
-            brain.attack =
-                GTimer::from_seconds((30.0 + rng.random_range(0.0..10.0)) / 30.0, TimerMode::Once);
+            brain.attack = GTimer::from_seconds(
+                (30.0 + rng.random_range(0.0_f32..10.0)) / 30.0,
+                TimerMode::Once,
+            );
             if let Some(target) = player_pos {
                 let target_dir = (target - epos).y.atan2((target - epos).x);
                 set_gml_direction(
@@ -4688,14 +4788,14 @@ pub fn tick_scorpion(
                         + rng.random_range(-60.0_f32..60.0).to_radians()
                         + std::f32::consts::PI,
                 );
-                brain.walk = rng.random_range(10.0..20.0);
+                brain.walk = rng.random_range(10.0_f32..20.0);
                 set_gml_speed(&mut brain, &mut vel, 0.4);
                 if has_line_of_sight(epos, target, &mask)
                     && epos.distance(target) <= 210.0
                     && rng.random::<f32>() < 0.5
                 {
                     brain.attack = GTimer::from_seconds(
-                        (30.0 + rng.random_range(0.0..5.0)) / 30.0,
+                        (30.0 + rng.random_range(0.0_f32..5.0)) / 30.0,
                         TimerMode::Once,
                     );
                     brain.burst_timer = GTimer::from_seconds(1.0 / 30.0, TimerMode::Once);
@@ -4719,7 +4819,7 @@ pub fn tick_scorpion(
                     0.4,
                     dt,
                 );
-                brain.walk = rng.random_range(10.0..20.0);
+                brain.walk = rng.random_range(10.0_f32..20.0);
                 brain.attack = GTimer::from_seconds(
                     (brain.walk + rng.random_range(10..=30) as f32) / 30.0,
                     TimerMode::Once,
@@ -4758,7 +4858,7 @@ pub fn tick_scorpion(
                 );
             } else {
                 brain.attack = GTimer::from_seconds(
-                    (40.0 + rng.random_range(0.0..10.0)) / 30.0,
+                    (40.0 + rng.random_range(0.0_f32..10.0)) / 30.0,
                     TimerMode::Once,
                 );
             }
@@ -4780,8 +4880,10 @@ pub fn tick_scorpion(
             run.loop_count,
             current_frame,
             wall_law(enemy.kind),
+            rng,
         );
     }
+    streams.enemies = enemies_rng;
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4806,7 +4908,11 @@ pub fn tick_gold_scorpion(
     >,
     props: Query<(Entity, &Prop, &Pos), With<Prop>>,
     catalog: Res<repame_anim::AnimCatalog>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player_pos = player_q.single().ok().map(|p| p.0);
@@ -4822,7 +4928,7 @@ pub fn tick_gold_scorpion(
         })
         .collect();
     let solids = prop_shapes(&props);
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     for (entity, enemy, mut brain, mut vel, mut pos, mut anim, hurt) in &mut enemies {
         if enemy.kind != EnemyKind::GoldScorpion {
             continue;
@@ -4833,8 +4939,10 @@ pub fn tick_gold_scorpion(
         brain.attack.tick(dt);
         brain.burst_timer.tick(dt);
         if brain.attack.just_finished() {
-            brain.attack =
-                GTimer::from_seconds((30.0 + rng.random_range(0.0..10.0)) / 30.0, TimerMode::Once);
+            brain.attack = GTimer::from_seconds(
+                (30.0 + rng.random_range(0.0_f32..10.0)) / 30.0,
+                TimerMode::Once,
+            );
             if let Some(target) = player_pos {
                 let target_dir = (target - epos).y.atan2((target - epos).x);
                 if has_line_of_sight(epos, target, &mask) && rng.random::<f32>() < 0.5 {
@@ -4844,7 +4952,7 @@ pub fn tick_gold_scorpion(
                     enemy_cue(&mut cues, "sndGoldScorpionFire");
                     brain.gunangle = target_dir;
                     brain.attack = GTimer::from_seconds(
-                        (20.0 + rng.random_range(0.0..5.0)) / 30.0,
+                        (20.0 + rng.random_range(0.0_f32..5.0)) / 30.0,
                         TimerMode::Once,
                     );
                 }
@@ -4855,7 +4963,7 @@ pub fn tick_gold_scorpion(
                 );
                 set_gml_speed(&mut brain, &mut vel, 0.4);
                 if brain.ammo == 0 {
-                    brain.walk = 10.0 + rng.random_range(0.0..10.0);
+                    brain.walk = 10.0 + rng.random_range(0.0_f32..10.0);
                 }
                 if epos.distance(target) < 64.0 {
                     brain.walk = 40.0;
@@ -4876,9 +4984,9 @@ pub fn tick_gold_scorpion(
                     0.4,
                     dt,
                 );
-                brain.walk = 10.0 + rng.random_range(0.0..10.0);
+                brain.walk = 10.0 + rng.random_range(0.0_f32..10.0);
                 brain.attack = GTimer::from_seconds(
-                    (brain.walk + 10.0 + rng.random_range(0.0..30.0)) / 30.0,
+                    (brain.walk + 10.0 + rng.random_range(0.0_f32..30.0)) / 30.0,
                     TimerMode::Once,
                 );
                 brain.gunangle = brain.heading;
@@ -4895,7 +5003,7 @@ pub fn tick_gold_scorpion(
                     entity,
                     enemy.kind,
                     epos,
-                    glam::Vec2::from_angle(angle1) * (5.0 + rng.random_range(0.0..1.0)) * 30.0,
+                    glam::Vec2::from_angle(angle1) * (5.0 + rng.random_range(0.0_f32..1.0)) * 30.0,
                     2,
                     3.0,
                     4.0,
@@ -4907,7 +5015,7 @@ pub fn tick_gold_scorpion(
                     entity,
                     enemy.kind,
                     epos,
-                    glam::Vec2::from_angle(angle2) * (1.5 + rng.random_range(0.0..0.5)) * 30.0,
+                    glam::Vec2::from_angle(angle2) * (1.5 + rng.random_range(0.0_f32..0.5)) * 30.0,
                     2,
                     3.0,
                     4.0,
@@ -4927,7 +5035,7 @@ pub fn tick_gold_scorpion(
                 );
             } else {
                 brain.attack = GTimer::from_seconds(
-                    (40.0 + rng.random_range(0.0..10.0)) / 30.0,
+                    (40.0 + rng.random_range(0.0_f32..10.0)) / 30.0,
                     TimerMode::Once,
                 );
             }
@@ -4952,8 +5060,10 @@ pub fn tick_gold_scorpion(
             run.loop_count,
             current_frame,
             wall_law(enemy.kind),
+            rng,
         );
     }
+    streams.enemies = enemies_rng;
 }
 
 pub fn tick_sniper(
@@ -4968,7 +5078,11 @@ pub fn tick_sniper(
         (With<Enemy>, Without<Prop>),
     >,
     props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player_pos = player_q.single().ok().map(|p| p.0);
@@ -4984,7 +5098,7 @@ pub fn tick_sniper(
         })
         .collect();
     let solids = prop_shapes(&props);
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     for (entity, enemy, mut brain, mut vel, mut pos) in &mut enemies {
         if enemy.kind != EnemyKind::Sniper {
             continue;
@@ -4995,8 +5109,10 @@ pub fn tick_sniper(
         brain.attack.tick(dt);
         brain.burst_timer.tick(dt);
         if brain.attack.just_finished() {
-            brain.attack =
-                GTimer::from_seconds((20.0 + rng.random_range(0.0..10.0)) / 30.0, TimerMode::Once);
+            brain.attack = GTimer::from_seconds(
+                (20.0 + rng.random_range(0.0_f32..10.0)) / 30.0,
+                TimerMode::Once,
+            );
             if !brain.sniper_aiming {
                 if let Some(target) = player_pos {
                     let target_dir = (target - epos).y.atan2((target - epos).x);
@@ -5015,7 +5131,7 @@ pub fn tick_sniper(
                                     target_dir + rng.random_range(-80.0_f32..80.0).to_radians(),
                                 );
                                 set_gml_speed(&mut brain, &mut vel, 0.4);
-                                brain.walk = 10.0 + rng.random_range(0.0..10.0);
+                                brain.walk = 10.0 + rng.random_range(0.0_f32..10.0);
                                 brain.gunangle = target_dir;
                             }
                         } else {
@@ -5025,7 +5141,7 @@ pub fn tick_sniper(
                                 target_dir + rng.random_range(-10.0_f32..10.0).to_radians(),
                             );
                             set_gml_speed(&mut brain, &mut vel, 0.4);
-                            brain.walk = 40.0 + rng.random_range(0.0..10.0);
+                            brain.walk = 40.0 + rng.random_range(0.0_f32..10.0);
                             brain.gunangle = target_dir;
                         }
                     } else if rng.random::<f32>() < 0.25 {
@@ -5036,9 +5152,9 @@ pub fn tick_sniper(
                             0.4,
                             dt,
                         );
-                        brain.walk = 20.0 + rng.random_range(0.0..10.0);
+                        brain.walk = 20.0 + rng.random_range(0.0_f32..10.0);
                         brain.attack = GTimer::from_seconds(
-                            (brain.walk + 2.0 + rng.random_range(0.0..5.0)) / 30.0,
+                            (brain.walk + 2.0 + rng.random_range(0.0_f32..5.0)) / 30.0,
                             TimerMode::Once,
                         );
                         brain.gunangle = brain.heading;
@@ -5051,9 +5167,9 @@ pub fn tick_sniper(
                         0.4,
                         dt,
                     );
-                    brain.walk = 20.0 + rng.random_range(0.0..10.0);
+                    brain.walk = 20.0 + rng.random_range(0.0_f32..10.0);
                     brain.attack = GTimer::from_seconds(
-                        (brain.walk + 10.0 + rng.random_range(0.0..30.0)) / 30.0,
+                        (brain.walk + 10.0 + rng.random_range(0.0_f32..30.0)) / 30.0,
                         TimerMode::Once,
                     );
                     brain.gunangle = brain.heading;
@@ -5085,8 +5201,10 @@ pub fn tick_sniper(
             if let Some(target) = player_pos {
                 brain.gunangle = (target - epos).y.atan2((target - epos).x);
             }
-            brain.attack =
-                GTimer::from_seconds((40.0 + rng.random_range(0.0..5.0)) / 30.0, TimerMode::Once);
+            brain.attack = GTimer::from_seconds(
+                (40.0 + rng.random_range(0.0_f32..5.0)) / 30.0,
+                TimerMode::Once,
+            );
             brain.sniper_aiming = false;
         }
         walk_step(&mut brain, &mut vel, 0.8, 1.5, dt);
@@ -5113,6 +5231,7 @@ pub fn tick_sniper(
             run.loop_count,
             current_frame,
             wall_law(enemy.kind),
+            rng,
         );
         zero_damage_contact_push(
             &mut brain,
@@ -5123,6 +5242,7 @@ pub fn tick_sniper(
             dt,
         );
     }
+    streams.enemies = enemies_rng;
 }
 
 pub fn tick_jungle_bandit(
@@ -5137,7 +5257,11 @@ pub fn tick_jungle_bandit(
         (With<Enemy>, Without<Prop>),
     >,
     props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player_pos = player_q.single().ok().map(|p| p.0);
@@ -5153,7 +5277,7 @@ pub fn tick_jungle_bandit(
         })
         .collect();
     let solids = prop_shapes(&props);
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     for (entity, enemy, mut brain, mut vel, mut pos) in &mut enemies {
         if enemy.kind != EnemyKind::JungleBandit {
             continue;
@@ -5164,8 +5288,10 @@ pub fn tick_jungle_bandit(
         brain.attack.tick(dt);
         brain.burst_timer.tick(dt);
         if brain.attack.just_finished() {
-            brain.attack =
-                GTimer::from_seconds((10.0 + rng.random_range(0.0..5.0)) / 30.0, TimerMode::Once);
+            brain.attack = GTimer::from_seconds(
+                (10.0 + rng.random_range(0.0_f32..5.0)) / 30.0,
+                TimerMode::Once,
+            );
             if let Some(target) = player_pos {
                 let target_dir = (target - epos).y.atan2((target - epos).x);
                 if has_line_of_sight(epos, target, &mask) {
@@ -5176,7 +5302,7 @@ pub fn tick_jungle_bandit(
                             brain.ammo = 6;
                             brain.burst_timer = GTimer::from_seconds(1.0 / 30.0, TimerMode::Once);
                             brain.attack = GTimer::from_seconds(
-                                (20.0 + rng.random_range(0.0..5.0)) / 30.0,
+                                (20.0 + rng.random_range(0.0_f32..5.0)) / 30.0,
                                 TimerMode::Once,
                             );
                         } else {
@@ -5186,7 +5312,7 @@ pub fn tick_jungle_bandit(
                                 target_dir + rng.random_range(-90.0_f32..90.0).to_radians(),
                             );
                             set_gml_speed(&mut brain, &mut vel, 0.4);
-                            brain.walk = 10.0 + rng.random_range(0.0..10.0);
+                            brain.walk = 10.0 + rng.random_range(0.0_f32..10.0);
                             brain.gunangle = target_dir;
                         }
                     } else {
@@ -5198,7 +5324,7 @@ pub fn tick_jungle_bandit(
                                 + rng.random_range(-10.0_f32..10.0).to_radians(),
                         );
                         set_gml_speed(&mut brain, &mut vel, 0.4);
-                        brain.walk = 40.0 + rng.random_range(0.0..10.0);
+                        brain.walk = 40.0 + rng.random_range(0.0_f32..10.0);
                         brain.gunangle = target_dir;
                     }
                 } else if rng.random::<f32>() < 0.25 {
@@ -5209,9 +5335,9 @@ pub fn tick_jungle_bandit(
                         0.4,
                         dt,
                     );
-                    brain.walk = 20.0 + rng.random_range(0.0..10.0);
+                    brain.walk = 20.0 + rng.random_range(0.0_f32..10.0);
                     brain.attack = GTimer::from_seconds(
-                        (brain.walk + 10.0 + rng.random_range(0.0..30.0)) / 30.0,
+                        (brain.walk + 10.0 + rng.random_range(0.0_f32..30.0)) / 30.0,
                         TimerMode::Once,
                     );
                     brain.gunangle = brain.heading;
@@ -5224,9 +5350,9 @@ pub fn tick_jungle_bandit(
                     0.4,
                     dt,
                 );
-                brain.walk = 20.0 + rng.random_range(0.0..10.0);
+                brain.walk = 20.0 + rng.random_range(0.0_f32..10.0);
                 brain.attack = GTimer::from_seconds(
-                    (brain.walk + 10.0 + rng.random_range(0.0..30.0)) / 30.0,
+                    (brain.walk + 10.0 + rng.random_range(0.0_f32..30.0)) / 30.0,
                     TimerMode::Once,
                 );
                 brain.gunangle = brain.heading;
@@ -5280,6 +5406,7 @@ pub fn tick_jungle_bandit(
             run.loop_count,
             current_frame,
             wall_law(enemy.kind),
+            rng,
         );
         zero_damage_contact_push(
             &mut brain,
@@ -5290,6 +5417,7 @@ pub fn tick_jungle_bandit(
             dt,
         );
     }
+    streams.enemies = enemies_rng;
 }
 
 pub fn tick_melee_bandit(
@@ -5311,7 +5439,11 @@ pub fn tick_melee_bandit(
         (With<Enemy>, Without<Prop>),
     >,
     props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player_pos = player_q.single().ok().map(|p| p.0);
@@ -5327,7 +5459,7 @@ pub fn tick_melee_bandit(
         })
         .collect();
     let solids = prop_shapes(&props);
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     for (entity, enemy, mut brain, mut vel, mut pos, sleeping) in &mut enemies {
         // GML `JungleAssassin` declares `MeleeBandit` as its parent object, so
         // it inherits every one of MeleeBandit's events.
@@ -5352,8 +5484,10 @@ pub fn tick_melee_bandit(
         }
         brain.attack.tick(dt);
         if brain.attack.just_finished() {
-            brain.attack =
-                GTimer::from_seconds((10.0 + rng.random_range(0.0..5.0)) / 30.0, TimerMode::Once);
+            brain.attack = GTimer::from_seconds(
+                (10.0 + rng.random_range(0.0_f32..5.0)) / 30.0,
+                TimerMode::Once,
+            );
             if let Some(target) = player_pos {
                 let aim_dir = (target - epos).y.atan2((target - epos).x);
                 let far_dir = (epos - target).y.atan2((epos - target).x);
@@ -5369,7 +5503,7 @@ pub fn tick_melee_bandit(
                         slash_armed_this_tick = true;
                         spawn_hit_warning(&mut commands, epos);
                         brain.attack = GTimer::from_seconds(
-                            (50.0 + rng.random_range(0.0..6.0)) / 30.0,
+                            (50.0 + rng.random_range(0.0_f32..6.0)) / 30.0,
                             TimerMode::Once,
                         );
                     } else {
@@ -5379,7 +5513,7 @@ pub fn tick_melee_bandit(
                             far_dir + rng.random_range(-10.0_f32..10.0).to_radians(),
                         );
                         set_gml_speed(&mut brain, &mut vel, 0.4);
-                        brain.walk = 40.0 + rng.random_range(0.0..10.0);
+                        brain.walk = 40.0 + rng.random_range(0.0_f32..10.0);
                         brain.gunangle = aim_dir;
                     }
                 } else if rng.random::<f32>() < 0.25 {
@@ -5390,9 +5524,9 @@ pub fn tick_melee_bandit(
                         0.4,
                         dt,
                     );
-                    brain.walk = 20.0 + rng.random_range(0.0..10.0);
+                    brain.walk = 20.0 + rng.random_range(0.0_f32..10.0);
                     brain.attack = GTimer::from_seconds(
-                        (brain.walk + 10.0 + rng.random_range(0.0..30.0)) / 30.0,
+                        (brain.walk + 10.0 + rng.random_range(0.0_f32..30.0)) / 30.0,
                         TimerMode::Once,
                     );
                     brain.gunangle = brain.heading;
@@ -5405,9 +5539,9 @@ pub fn tick_melee_bandit(
                     0.4,
                     dt,
                 );
-                brain.walk = 20.0 + rng.random_range(0.0..10.0);
+                brain.walk = 20.0 + rng.random_range(0.0_f32..10.0);
                 brain.attack = GTimer::from_seconds(
-                    (brain.walk + 10.0 + rng.random_range(0.0..30.0)) / 30.0,
+                    (brain.walk + 10.0 + rng.random_range(0.0_f32..30.0)) / 30.0,
                     TimerMode::Once,
                 );
                 brain.gunangle = brain.heading;
@@ -5474,6 +5608,7 @@ pub fn tick_melee_bandit(
             run.loop_count,
             current_frame,
             wall_law(enemy.kind),
+            rng,
         );
         zero_damage_contact_push(
             &mut brain,
@@ -5484,6 +5619,7 @@ pub fn tick_melee_bandit(
             dt,
         );
     }
+    streams.enemies = enemies_rng;
 }
 
 pub fn tick_ballguy(
@@ -5505,7 +5641,11 @@ pub fn tick_ballguy(
         (With<Enemy>, Without<Prop>),
     >,
     props: Query<(Entity, &Prop, &Pos), With<Prop>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let dt = time.delta_secs;
     let current_frame = (time.elapsed_secs / dt as f64) as u64;
     let player = player_q.single().ok().map(|(p, h)| (p.0, h.hp > 0));
@@ -5521,7 +5661,7 @@ pub fn tick_ballguy(
         })
         .collect();
     let solids = prop_shapes(&props);
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     for (entity, enemy, mut brain, mut vel, mut pos, mut health, hurt) in &mut enemies {
         if enemy.kind != EnemyKind::Ballguy {
             continue;
@@ -5539,8 +5679,10 @@ pub fn tick_ballguy(
         }
         brain.attack.tick(dt);
         if brain.attack.just_finished() {
-            brain.attack =
-                GTimer::from_seconds((30.0 + rng.random_range(0.0..20.0)) / 30.0, TimerMode::Once);
+            brain.attack = GTimer::from_seconds(
+                (30.0 + rng.random_range(0.0_f32..20.0)) / 30.0,
+                TimerMode::Once,
+            );
             if let Some(target) = player.map(|(p, _)| p) {
                 if has_line_of_sight(epos, target, &mask) {
                     set_gml_direction(
@@ -5589,6 +5731,7 @@ pub fn tick_ballguy(
             run.loop_count,
             current_frame,
             wall_law(enemy.kind),
+            rng,
         );
         if let Some((target, true)) = player
             && pos.0.distance(target) <= 8.0 + enemy_def(enemy.kind).radius
@@ -5603,6 +5746,7 @@ pub fn tick_ballguy(
             );
         }
     }
+    streams.enemies = enemies_rng;
 }
 
 pub fn tick_bigmaggot_inspector(
@@ -5846,6 +5990,8 @@ fn fire_enemy_laser(
     kind: EnemyKind,
     from: glam::Vec2,
     angle: f32,
+
+    fx_rng: &mut SimRng,
 ) {
     let dir = glam::Vec2::from_angle(angle);
     let mut end = from;
@@ -5872,12 +6018,12 @@ fn fire_enemy_laser(
             source: Some(DamageSource::enemy(owner, kind)),
         },
     ));
-    crate::environment::spawn_native_smoke_mote(commands, true, end, dir, 4.0);
+    crate::environment::spawn_native_smoke_mote(commands, true, end, dir, 4.0, fx_rng);
 }
 
 pub fn fire_enemy_bullet(
     commands: &mut Commands,
-    rng: &mut impl RngExt,
+    rng: &mut impl Rng,
     owner: Entity,
     enemy: &Enemy,
     def: EnemyDef,
@@ -5934,7 +6080,7 @@ pub fn explosive_kind(kind: EnemyKind) -> bool {
 /// Alarm_2` fires 14 `ExploguardianBullet`s at 10 px/step, 24 deg apart.
 fn fire_guardian_volley(
     commands: &mut Commands,
-    rng: &mut impl RngExt,
+    rng: &mut impl Rng,
     owner: Entity,
     kind: EnemyKind,
     pos: glam::Vec2,
@@ -6057,7 +6203,7 @@ fn gml_fan(kind: EnemyKind, total: usize, table_spread: f32) -> ([f32; 8], f32) 
 #[allow(clippy::too_many_arguments)]
 pub fn fire_enemy_shot(
     commands: &mut Commands,
-    rng: &mut impl RngExt,
+    rng: &mut impl Rng,
     owner: Entity,
     enemy: &Enemy,
     def: EnemyDef,
@@ -6073,7 +6219,7 @@ pub fn fire_enemy_shot(
         let shot_dir = glam::Vec2::new(angle.cos(), angle.sin());
         // `Molesarge/Alarm_1` re-rolls `10 + random(2)` per pellet.
         let speed = if enemy.kind == EnemyKind::Molesarge {
-            rng.random_range(10.0..12.0) * crate::SIM_HZ as f32
+            rng.random_range(10.0_f32..12.0) * crate::SIM_HZ as f32
         } else if enemy.kind == EnemyKind::SuperFireBaller {
             [90.0, 120.0, 150.0][(i as usize).min(2)]
         } else {
@@ -6105,6 +6251,7 @@ pub fn tick_lil_hunter_escapes(
     mask: Res<FloorMask>,
     player_q: Query<&crate::comps_a::RaceState, (With<Player>, Without<Enemy>)>,
     mut escapes: Query<(Entity, &crate::comps_b::LilHunterEscape)>,
+    mut streams: ResMut<SimStreams>,
 ) {
     for (entity, escape) in &mut escapes {
         let at = mask
@@ -6118,7 +6265,7 @@ pub fn tick_lil_hunter_escapes(
             })
             .map(|c| mask.cell_center(c))
             .unwrap_or(escape.at);
-        crate::idpd::spawn_idpd_spawn(&mut commands, &mut run, 0, at);
+        crate::idpd::spawn_idpd_spawn(&mut commands, &mut run, 0, at, &mut streams.idpd);
         if player_q
             .iter()
             .any(|r| r.race == crate::data::RaceId::Rogue)
@@ -6156,14 +6303,18 @@ pub fn tick_big_guardian_bullets(
             Without<Prop>,
         ),
     >,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let solids = prop_shapes(&props);
     let Ok((player_pos, player, inv, health)) = player_q.single() else {
         return;
     };
     let dt = time.delta_secs;
     let step = dt * crate::SIM_HZ as f32;
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     let count = 7 + run.loop_count as usize;
     let ring = std::f32::consts::TAU / count as f32;
     for (entity, mut pos, vel, mut ball) in &mut balls {
@@ -6206,6 +6357,7 @@ pub fn tick_big_guardian_bullets(
                 health,
                 run.loop_count,
                 None,
+                &mut streams.pickups,
             );
         }
         let mut ang = rng.random_range(0.0..std::f32::consts::TAU);
@@ -6234,6 +6386,7 @@ pub fn tick_big_guardian_bullets(
             speed += 0.5;
         }
     }
+    streams.enemies = enemies_rng;
 }
 
 /// GML `objects/LastBall` (`Create_0` + `Destroy_0`): a 12-damage shell
@@ -6261,12 +6414,16 @@ pub fn tick_last_balls(
             Without<Prop>,
         ),
     >,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let solids = prop_shapes(&props);
     let Ok((player_pos, player, inv, health)) = player_q.single() else {
         return;
     };
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     for (entity, mut pos, vel, _) in &mut balls {
         let mut at = pos.0;
         let hit = crate::spatial::move_contact_solid(
@@ -6304,6 +6461,7 @@ pub fn tick_last_balls(
                 health,
                 run.loop_count,
                 None,
+                &mut streams.pickups,
             );
         }
         // GML `Destroy_0:7-19`: `_ang` runs across the whole salvo, so each
@@ -6334,6 +6492,7 @@ pub fn tick_last_balls(
             speed += 0.6;
         }
     }
+    streams.enemies = enemies_rng;
 }
 
 /// GML `objects/WantRevivePopoFreak` + `objects/RevivePopoFreak`. The
@@ -6420,9 +6579,13 @@ pub fn tick_frog_queen_deaths(
     mut commands: Commands,
     mut cues: ResMut<Queue<AudioCue>>,
     mut q: Query<(Entity, &Pos, &mut crate::comps_b::FrogQueenDeath)>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let dt = time.delta_secs;
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     for (entity, pos, mut death) in &mut q {
         death.timer.tick(dt);
         if !death.timer.just_finished() {
@@ -6479,6 +6642,7 @@ pub fn tick_frog_queen_deaths(
             Pos(pos.0),
         ));
     }
+    streams.enemies = enemies_rng;
 }
 
 /// GML `objects/TutorialTarget/Step_2.gml` plus `Create_0`'s `alarm[1] = -1`:
@@ -6558,7 +6722,11 @@ pub fn tick_want_van(
     player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
     enemies: Query<(), With<Enemy>>,
     mut markers: Query<(Entity, &mut crate::comps_b::WantVan)>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     if markers.is_empty() {
         return;
     }
@@ -6566,7 +6734,7 @@ pub fn tick_want_van(
         return;
     };
     let live = enemies.iter().count();
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     let mut raised = 0u32;
     for (entity, mut marker) in &mut markers {
         if !marker.canspawn {
@@ -6576,7 +6744,7 @@ pub fn tick_want_van(
             continue;
         }
         marker.canspawn = false;
-        let at = crate::idpd::van_spawn_site(&mut rng, player_pos, &mask);
+        let at = crate::idpd::van_spawn_site(rng, player_pos, &mask);
         crate::idpd::spawn_van(
             &mut commands,
             &catalog,
@@ -6592,11 +6760,13 @@ pub fn tick_want_van(
                 scarier_face: scarier.0,
                 heavy_heart: heavy_heart.0,
             },
+            rng,
         );
         raised += 1;
         commands.entity(entity).despawn();
     }
     let _ = raised;
+    streams.enemies = enemies_rng;
 }
 
 /// GML `objects/WantPopo` (`Create_0` + `Step_0`). Each marker spends
@@ -6610,6 +6780,7 @@ pub fn tick_want_popo(
     races: Query<&crate::comps_a::RaceState, (With<Player>, Without<Enemy>)>,
     enemies: Query<(), With<Enemy>>,
     mut markers: Query<(Entity, &mut crate::comps_b::WantPopo)>,
+    mut streams: ResMut<SimStreams>,
 ) {
     if markers.is_empty() {
         return;
@@ -6636,7 +6807,13 @@ pub fn tick_want_popo(
             // IDPDSpawn)`; `Create_0` walks the portal to a floor tile near
             // the player, so the marker position only seeds the roll.
             for _ in 0..2 {
-                crate::idpd::spawn_idpd_spawn(&mut commands, &mut run, 0, player_pos);
+                crate::idpd::spawn_idpd_spawn(
+                    &mut commands,
+                    &mut run,
+                    0,
+                    player_pos,
+                    &mut streams.idpd,
+                );
             }
         }
     }
@@ -6656,15 +6833,20 @@ pub fn tick_want_lil_hunter(
     mask: Res<FloorMask>,
     mut markers: Query<(Entity, &mut crate::comps_b::WantLh)>,
     players: Query<&Pos, (With<Player>, Without<Enemy>)>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let dt = time.delta_secs * crate::SIM_HZ as f32;
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     for (marker_e, mut marker) in &mut markers {
         marker.steps -= dt;
         if marker.steps > 0.0 {
             continue;
         }
-        let Some(player_pos) = players.iter().choose(&mut rng).map(|p| p.0) else {
+        let positions: Vec<glam::Vec2> = players.iter().map(|p| p.0).collect();
+        let Some(&player_pos) = rng.pick(&positions) else {
             continue;
         };
         let spot = mask
@@ -6688,10 +6870,12 @@ pub fn tick_want_lil_hunter(
                 false,
                 run.loop_count,
                 EnemySpawnContext::default(),
+                rng,
             );
         }
         commands.entity(marker_e).despawn();
     }
+    streams.enemies = enemies_rng;
 }
 
 /// GML `WantBoss/Alarm_0.gml:7-45` - the wall tile the bandit climbs out of.
@@ -6716,6 +6900,8 @@ fn breach_wall(
         ),
         With<crate::comps_a::WallTile>,
     >,
+
+    rng: &mut impl Rng,
 ) -> Option<glam::Vec2> {
     if !from_wall {
         return None;
@@ -6757,9 +6943,11 @@ fn breach_wall(
         }
         candidates.push(p);
     }
-    let mut rng = rand::rng();
-    let probe =
-        player_pos + glam::Vec2::new(rng.random_range(-30.0..30.0), rng.random_range(-30.0..30.0));
+    let probe = player_pos
+        + glam::Vec2::new(
+            rng.random_range(-30.0_f32..30.0),
+            rng.random_range(-30.0_f32..30.0),
+        );
     candidates.into_iter().min_by(|a, b| {
         a.distance_squared(probe)
             .total_cmp(&b.distance_squared(probe))
@@ -6800,7 +6988,11 @@ pub fn tick_delayed_boss_spawns(
         ),
         With<crate::comps_a::WallTile>,
     >,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     // GML `instance_number(enemy)` counts every enemy instance, bandits
     // included, and `instance_number(RadMaggot)` is read live each step rather
     // than snapshotted.
@@ -6840,6 +7032,7 @@ pub fn tick_delayed_boss_spawns(
                 &mut toast,
                 &player_q,
                 &walls,
+                &mut enemies_rng,
             )
         {
             live += 1;
@@ -6866,6 +7059,7 @@ pub fn tick_delayed_boss_spawns(
             }
         }
     }
+    streams.enemies = enemies_rng;
 }
 
 /// One GML `WantBoss/Alarm_0` pass. Returns whether a bandit actually broke
@@ -6893,6 +7087,8 @@ fn breach_bandit(
         ),
         With<crate::comps_a::WallTile>,
     >,
+
+    rng: &mut impl Rng,
 ) -> bool {
     // GML `WantBoss/Alarm_0.gml:1-6`: no target means a 5 step retry, and
     // `:46` re-arms at 1 either way so the marker tries again next step.
@@ -6907,6 +7103,7 @@ fn breach_bandit(
         pending_boss.from_wall,
         mask,
         walls,
+        rng,
     );
     pending_boss.at = player_pos;
     let Some(spawn_pos) = spawn_pos else {
@@ -6918,12 +7115,15 @@ fn breach_bandit(
     pending_boss.arm_delay = 1.0 / 30.0;
     trauma.add(0.3);
 
-    let mut rng = rand::rng();
     spawn_enemy_at(
         commands,
         catalog,
         pending_boss.kind,
-        spawn_pos + glam::Vec2::new(rng.random_range(-2.0..2.0), rng.random_range(-2.0..2.0)),
+        spawn_pos
+            + glam::Vec2::new(
+                rng.random_range(-2.0_f32..2.0),
+                rng.random_range(-2.0_f32..2.0),
+            ),
         difficulty_multiplier(run.floor),
         false,
         false,
@@ -6934,6 +7134,7 @@ fn breach_bandit(
             scarier_face,
             heavy_heart,
         },
+        rng,
     );
 
     commands.spawn((
@@ -6956,8 +7157,12 @@ pub fn tick_frog_eggs(
     mut cues: ResMut<Queue<AudioCue>>,
     run: Res<Run>,
     mut q: Query<(Entity, &Enemy, &mut EnemyBrain, &Pos), With<Enemy>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
-    let mut rng = rand::rng();
+    let mut enemies_rng = streams.enemies;
+
+    let rng = &mut enemies_rng;
     for (e, enemy, mut brain, pos) in &mut q {
         if enemy.kind != EnemyKind::FrogEgg {
             continue;
@@ -6969,7 +7174,7 @@ pub fn tick_frog_eggs(
         let hatch = pos.0;
         commands.entity(e).despawn();
         // GML `FrogEgg/Alarm_1.gml:14`.
-        let opening = ["sndFrogEggOpen1", "sndFrogEggOpen2"][rng.random_range(0..2)];
+        let opening = ["sndFrogEggOpen1", "sndFrogEggOpen2"][rng.random_range(0..2usize)];
         enemy_cue(&mut cues, opening);
 
         queue_enemy_spawn(
@@ -6994,6 +7199,7 @@ pub fn tick_frog_eggs(
             );
         }
     }
+    streams.enemies = enemies_rng;
 }
 
 /// GML `LilHunter/Destroy_0:13-21` head spawn (`LilHunterDie/Create_0`):
@@ -7008,8 +7214,9 @@ pub fn spawn_lil_hunter_die(
     team: Team,
     target: Option<Entity>,
     target_pos: Option<glam::Vec2>,
+
+    rng: &mut impl Rng,
 ) -> Entity {
-    let mut rng = rand::rng();
     let dir = target_pos
         .map(|t| (t - pos).normalize_or_zero())
         .filter(|d| d.length_squared() > 0.001)
@@ -7020,7 +7227,7 @@ pub fn spawn_lil_hunter_die(
             LevelCleanup,
             team,
             LilHunterDie {
-                trn: (rng.random_range(0.0..5.0) + 5.0)
+                trn: (rng.random_range(0.0_f32..5.0) + 5.0)
                     * if rng.random_bool(0.5) { 1.0 } else { -1.0 },
                 bounces: 0,
                 target,
@@ -7051,13 +7258,17 @@ pub fn spawn_lil_hunter_die(
 /// GML `LilHunter/Destroy_0` 80-`TrapFire` ring (`sprFireLilHunter`,
 /// speed 2+random(0.2) px/step stepping 4.5°, `move_contact_solid`
 /// baked as a clamped ≤12 px slide, team inherited).
-pub fn spawn_lil_hunter_trapfire(commands: &mut Commands, at: glam::Vec2, team: Team) {
-    let mut rng = rand::rng();
+pub fn spawn_lil_hunter_trapfire(
+    commands: &mut Commands,
+    at: glam::Vec2,
+    team: Team,
+    rng: &mut SimRng,
+) {
     let mut ang = rng.random_range(0.0..std::f32::consts::TAU);
     for _ in 0..80 {
         ang += 4.5f32.to_radians();
         let d = glam::Vec2::from_angle(ang);
-        let speed = (2.0 + rng.random_range(0.0..0.2)) * 30.0;
+        let speed = (2.0 + rng.random_range(0.0_f32..0.2)) * 30.0;
         let mut p = at + d * 12.0;
         p.x = p.x.clamp(-ARENA_W * 0.5 + 8.0, ARENA_W * 0.5 - 8.0);
         p.y = p.y.clamp(-ARENA_H * 0.5 + 8.0, ARENA_H * 0.5 - 8.0);
@@ -7070,6 +7281,7 @@ pub fn spawn_lil_hunter_trapfire(commands: &mut Commands, at: glam::Vec2, team: 
             None,
             "images/sprFireLilHunter.png",
             Some(d.y.atan2(d.x)),
+            rng,
         );
     }
 }
@@ -7089,9 +7301,13 @@ pub fn tick_lil_hunter_die(
         &mut LilHunterDie,
         Option<&mut FxAngle>,
     )>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut fx_rng = streams.fx;
+
     let dt = time.delta_secs;
-    let mut rng = rand::rng();
+    let rng = &mut fx_rng;
     for (e, mut pos, mut vel, mut die, angle) in &mut q {
         die.ticks += 1;
         if die.ticks > 15 * 30 {
@@ -7100,7 +7316,7 @@ pub fn tick_lil_hunter_die(
         }
         spawn_burst(
             &mut commands,
-            &mut rng,
+            rng,
             pos.0,
             1,
             [0.7, 0.7, 0.7, 1.0],
@@ -7119,7 +7335,7 @@ pub fn tick_lil_hunter_die(
             }
             speed += 0.05;
             dir_ang += die.trn.to_radians();
-            die.trn += rng.random_range(0.0..1.0) - 0.5;
+            die.trn += rng.random_range(0.0_f32..1.0) - 0.5;
         } else {
             dir_ang += 59.0f32.to_radians();
         }
@@ -7159,6 +7375,7 @@ pub fn tick_lil_hunter_die(
         }
         let _ = e;
     }
+    streams.fx = fx_rng;
 }
 
 /// GML `objects/BigDogExplo` (`Step_0` + `Alarm_0`): a 50-step emitter.
@@ -7171,28 +7388,33 @@ pub fn tick_big_dog_explo(
     time: Res<SimTime>,
     mut commands: Commands,
     mut q: Query<(Entity, &Pos, &mut crate::comps_b::BigDogExplo)>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let dt = time.delta_secs;
     for (entity, pos, mut explo) in &mut q {
         explo.timer.tick(dt);
-        let mut rng = rand::rng();
+        let rng = &mut enemies_rng;
         if !explo.timer.just_finished() {
             if rng.random_range(0..8) == 0 {
-                spawn_scrap_explosion(&mut commands, pos.0, 24.0, 24.0, &mut rng);
+                spawn_scrap_explosion(&mut commands, pos.0, 24.0, 24.0, rng);
             }
             if rng.random_range(0..4) == 0 {
-                spawn_scrap_explosion(&mut commands, pos.0, 12.0, 12.0, &mut rng);
+                spawn_scrap_explosion(&mut commands, pos.0, 12.0, 12.0, rng);
             }
             continue;
         }
         for _ in 0..32 {
-            spawn_scrap_explosion(&mut commands, pos.0, 32.0, 12.0, &mut rng);
+            spawn_scrap_explosion(&mut commands, pos.0, 32.0, 12.0, rng);
         }
         for _ in 0..32 {
-            spawn_scrap_explosion(&mut commands, pos.0, 48.0, 24.0, &mut rng);
+            spawn_scrap_explosion(&mut commands, pos.0, 48.0, 24.0, rng);
         }
         commands.entity(entity).despawn();
     }
+    streams.enemies = enemies_rng;
 }
 
 /// GML `Explosion` is a 48px sprite and `SmallExplosion` a 24px one, so
@@ -7202,7 +7424,7 @@ fn spawn_scrap_explosion(
     at: glam::Vec2,
     spread: f32,
     radius: f32,
-    rng: &mut rand::rngs::ThreadRng,
+    rng: &mut impl Rng,
 ) {
     let off = glam::Vec2::new(
         rng.random_range(-spread..spread),
@@ -7556,14 +7778,18 @@ pub fn tick_snowbot_cars(
         (With<Enemy>, Without<Player>, Without<Prop>),
     >,
     cars: Query<(Entity, &Pos, &crate::comps_b::PropSprites), (With<Prop>, Without<Enemy>)>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let dt = time.delta_secs;
     let frames = dt * crate::SIM_HZ as f32;
     let Ok(ppos) = player_q.single() else {
         return;
     };
     let player_pos = ppos.0;
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
 
     // Mount pass: GML's per-step `Collision_Car`.
     let mut mounts: Vec<(Entity, glam::Vec2, bool)> = Vec::new();
@@ -7705,6 +7931,7 @@ pub fn tick_snowbot_cars(
             brain.walk = 30.0;
         }
     }
+    streams.enemies = enemies_rng;
 }
 
 /// GML `CarThrow` (`Step_1` speed 12, `Collision_Wall`, `Collision_hitme`,
@@ -7732,7 +7959,11 @@ pub fn tick_thrown_cars(
     mut secrets: ResMut<crate::secrets::SecretTriggers>,
     mut last_damage: ResMut<LastDamageTaken>,
     mut trauma: ResMut<Trauma>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let dt = time.delta_secs;
     let mut player = player_q.single_mut().ok();
     for (e, car, mut pos, health) in &mut cars {
@@ -7774,10 +8005,13 @@ pub fn tick_thrown_cars(
             }
         }
         if boom {
-            let mut rng = rand::rng();
+            let rng = &mut enemies_rng;
             for _ in 0..4 {
                 let at = pos.0
-                    + glam::Vec2::new(rng.random_range(-3.0..3.0), rng.random_range(-3.0..3.0));
+                    + glam::Vec2::new(
+                        rng.random_range(-3.0_f32..3.0),
+                        rng.random_range(-3.0_f32..3.0),
+                    );
                 commands.spawn((
                     GameCleanup,
                     LevelCleanup,
@@ -7794,8 +8028,17 @@ pub fn tick_thrown_cars(
             }
             for _ in 0..6 {
                 let at = pos.0
-                    + glam::Vec2::new(rng.random_range(-16.0..16.0), rng.random_range(-16.0..16.0));
-                crate::environment::spawn_ground_flame(&mut commands, at, false, glam::Vec2::ZERO);
+                    + glam::Vec2::new(
+                        rng.random_range(-16.0_f32..16.0),
+                        rng.random_range(-16.0_f32..16.0),
+                    );
+                crate::environment::spawn_ground_flame(
+                    &mut commands,
+                    at,
+                    false,
+                    glam::Vec2::ZERO,
+                    &mut streams.pickups,
+                );
             }
             enemy_cue(&mut cues, "sndExplosionCar");
             commands.spawn((
@@ -7808,6 +8051,7 @@ pub fn tick_thrown_cars(
             commands.entity(e).despawn();
         }
     }
+    streams.enemies = enemies_rng;
 }
 
 /// GML `Laser/Step_0` + `Collision_hitme`: the beam fades over five steps
@@ -7881,13 +8125,14 @@ fn lift_raven(
     vel: &mut Velocity,
     flight: &mut crate::comps_b::RavenFlight,
     mut anim: Option<&mut SpriteAnim>,
+
+    rng: &mut SimRng,
 ) {
     use crate::comps_b::RavenPhase;
     if flight.phase != RavenPhase::Ground || flight.nofly > 0.0 {
         return;
     }
-    let mut rng = rand::rng();
-    crate::environment::spawn_raven_dust(commands, true, pos.0);
+    crate::environment::spawn_raven_dust(commands, true, pos.0, rng);
     enemy_cue(cues, "sndRavenLift");
     flight.z = 0.0;
     let mut target = pos.0;
@@ -7948,7 +8193,12 @@ pub fn tick_ravens(
         ),
         (With<Enemy>, Without<Player>, Without<Prop>),
     >,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+    let mut fx_rng = streams.fx;
+
     use crate::comps_b::RavenPhase;
     let Ok((ppos, aim)) = player_q.single() else {
         return;
@@ -7992,7 +8242,7 @@ pub fn tick_ravens(
                     }
                     2 => {
                         brain.raven_call = 0;
-                        let mut rng = rand::rng();
+                        let rng = &mut enemies_rng;
                         for (id, p) in &raven_positions {
                             if *id != entity
                                 && p.distance(pos.0) < 120.0
@@ -8066,9 +8316,9 @@ pub fn tick_ravens(
                 flight.z += 3.0 * frames;
                 flight.emergency += frames;
                 if flight.emergency >= 10.0 {
-                    crate::environment::spawn_raven_dust(&mut commands, true, pos.0);
+                    crate::environment::spawn_raven_dust(&mut commands, true, pos.0, &mut fx_rng);
                     enemy_cue(&mut cues, "sndRavenLand");
-                    let mut rng = rand::rng();
+                    let rng = &mut enemies_rng;
                     for (id, p) in &raven_positions {
                         let d = p.distance(pos.0);
                         if *id != entity
@@ -8086,7 +8336,7 @@ pub fn tick_ravens(
                     flight.nofly = 50.0;
                     brain.walk = 0.0;
                     brain.attack = GTimer::from_seconds(
-                        (20.0 + rng.random_range(0.0..10.0)) / 30.0,
+                        (20.0 + rng.random_range(0.0_f32..10.0)) / 30.0,
                         TimerMode::Once,
                     );
                     vel.0 = glam::Vec2::ZERO;
@@ -8120,9 +8370,12 @@ pub fn tick_ravens(
                 &mut vel,
                 &mut flight,
                 anim.as_deref_mut(),
+                &mut fx_rng,
             );
         }
     }
+    streams.enemies = enemies_rng;
+    streams.fx = fx_rng;
 }
 
 /// Verbatim `objects/Throne2Ball` law (`Step_0`): friction 0.25 bleeds speed;
@@ -8137,13 +8390,17 @@ pub fn tick_throne_balls(
     run: Res<Run>,
     player_q: Query<&Pos, (With<Player>, Without<Enemy>)>,
     mut q: Query<(Entity, &mut Velocity, &Pos, &mut ThroneBall), With<Projectile>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let Ok(player_pos) = player_q.single() else {
         return;
     };
     let dt = time.delta_secs;
     let cap = 40.0 + run.loop_count as f32 * 10.0;
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     for (entity, mut vel, pos, mut ball) in &mut q {
         crate::comps_a::apply_gml_friction(&mut vel.0, 0.25, dt);
         if vel.0.length() >= 1.0 {
@@ -8178,6 +8435,7 @@ pub fn tick_throne_balls(
             ball.angle = aim + rng.random_range(-30.0..=30.0_f32).to_radians();
         }
     }
+    streams.enemies = enemies_rng;
 }
 
 /// Verbatim `objects/MomProjectile/Step_0`: every tick the gas mortar
@@ -8185,24 +8443,30 @@ pub fn tick_throne_balls(
 pub fn tick_mom_shots(
     mut commands: Commands,
     q: Query<(&Team, &Pos), (With<Projectile>, With<MomShot>)>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
-    let mut rng = rand::rng();
+    let mut combat_rng = streams.combat;
+
+    let rng = &mut combat_rng;
     for (team, pos) in &q {
-        let off = glam::Vec2::new(rng.random_range(-2.0..=2.0), 0.0);
+        let off = glam::Vec2::new(rng.random_range(-2.0_f32..=2.0_f32), 0.0);
         let a = rng.random_range(0.0..std::f32::consts::TAU);
-        let speed = rng.random_range(0.2..1.7) * 30.0;
+        let speed = rng.random_range(0.2_f32..1.7) * 30.0;
         let mut gas = ToxicGasState::new();
-        gas.grow_speed = 0.003 + rng.random_range(0.0..0.002);
-        gas.rot =
-            (1.0 + rng.random_range(0.0..=3.0)) * if rng.random_bool(0.5) { 1.0 } else { -1.0 };
+        gas.grow_speed = 0.003 + rng.random_range(0.0_f32..0.002);
+        gas.rot = (1.0 + rng.random_range(0.0_f32..=3.0_f32))
+            * if rng.random_bool(0.5) { 1.0 } else { -1.0 };
         spawn_toxic_gas(
             &mut commands,
             pos.0 + off,
             glam::Vec2::from_angle(a) * speed,
             gas,
+            rng,
         );
         let _ = team;
     }
+    streams.combat = combat_rng;
 }
 
 /// Verbatim `objects/SuperFrog/Alarm_2`: `Create_0:22` arms it for 5 ticks,
@@ -8212,8 +8476,12 @@ pub fn tick_super_frogs(
     mut commands: Commands,
     mut ticks: Local<HashMap<Entity, u8>>,
     q: Query<(Entity, &Enemy, &Pos), With<Enemy>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
-    let mut rng = rand::rng();
+    let mut enemies_rng = streams.enemies;
+
+    let rng = &mut enemies_rng;
     for (entity, enemy, pos) in &q {
         if enemy.kind != EnemyKind::SuperFrog {
             continue;
@@ -8241,6 +8509,7 @@ pub fn tick_super_frogs(
             Pos(pos.0),
         ));
     }
+    streams.enemies = enemies_rng;
 }
 
 /// GML `scrRight(0)`: `hspeed > 0 ? 1 : -1`.
@@ -8293,7 +8562,12 @@ pub fn tick_popo_rolls(
     save: Res<crate::savedata_part::SaveData>,
     mut headings: Local<HashMap<Entity, glam::Vec2>>,
     mut males: Local<HashMap<Entity, bool>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+    let mut fx_rng = streams.fx;
+
     let Ok((player_pos, player_vel, player_cd)) = player_q.single() else {
         return;
     };
@@ -8301,7 +8575,7 @@ pub fn tick_popo_rolls(
     let can_shoot = player_cd.timer.is_finished();
     let dt = time.delta_secs;
     let frames = dt * crate::SIM_HZ as f32;
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     headings.retain(|e, _| enemies.contains(*e));
     males.retain(|e, _| enemies.contains(*e));
     let nades_live = nades.iter().count() as f32;
@@ -8362,9 +8636,13 @@ pub fn tick_popo_rolls(
                 &mut commands,
                 &catalog,
                 particles_on,
-                epos + glam::Vec2::new(rng.random_range(-3.0..3.0), rng.random_range(-3.0..3.0)),
+                epos + glam::Vec2::new(
+                    rng.random_range(-3.0_f32..3.0),
+                    rng.random_range(-3.0_f32..3.0),
+                ),
                 crate::comps_b::MoteStrip::Dust,
                 1,
+                &mut fx_rng,
             );
         } else {
             // `Grunt/Other_10:24-33`
@@ -8378,9 +8656,13 @@ pub fn tick_popo_rolls(
                 &mut commands,
                 &catalog,
                 particles_on,
-                epos + glam::Vec2::new(rng.random_range(-3.0..3.0), rng.random_range(0.0..6.0)),
+                epos + glam::Vec2::new(
+                    rng.random_range(-3.0_f32..3.0),
+                    rng.random_range(0.0_f32..6.0),
+                ),
                 crate::comps_b::MoteStrip::Dust,
                 1,
+                &mut fx_rng,
             );
         }
 
@@ -8398,7 +8680,7 @@ pub fn tick_popo_rolls(
                         epos,
                         brain.gunangle,
                         10.0,
-                        rng.random_range(-2.0..2.0),
+                        rng.random_range(-2.0_f32..2.0),
                         2.0,
                     );
                     brain.ammo -= 1;
@@ -8417,13 +8699,13 @@ pub fn tick_popo_rolls(
         // GML `Grunt/Alarm_1:1` and `EliteGrunt/Alarm_1:1-2`, which also
         // carries the elite's `if random(3) < 1 roll = 0` roll-out.
         let mut next = if elite {
-            let base = rng.random_range(13.0..18.0);
-            if rng.random_range(0.0..3.0) < 1.0 {
+            let base = rng.random_range(13.0_f32..18.0);
+            if rng.random_range(0.0_f32..3.0) < 1.0 {
                 brain.roll = false;
             }
             base
         } else {
-            rng.random_range(15.0..35.0)
+            rng.random_range(15.0_f32..35.0)
         };
 
         let roll_chance = if elite {
@@ -8443,18 +8725,18 @@ pub fn tick_popo_rolls(
         if !brain.roll {
             if elite {
                 // `EliteGrunt/Alarm_1:8-24`
-                if dist < 64.0 && rng.random_range(0.0..4.0) < 3.0 {
+                if dist < 64.0 && rng.random_range(0.0_f32..4.0) < 3.0 {
                     brain.gunangle = aim;
                     brain.roll = false;
                     gml_motion_add_clamp(&mut vel.0, glam::Vec2::from_angle(aim), 10.0, 3.0, dt);
-                    brain.walk = 20.0 + rng.random_range(0.0..10.0);
+                    brain.walk = 20.0 + rng.random_range(0.0_f32..10.0);
                     brain.right = gml_right_from_hspeed(vel.0);
                     next /= 3.0;
-                } else if rng.random_range(0.0..2.0) < 1.0 && brain.freeze > 40.0 {
+                } else if rng.random_range(0.0_f32..2.0) < 1.0 && brain.freeze > 40.0 {
                     let turn: f32 = if dist > 150.0 {
-                        rng.random_range(-30.0..=30.0)
+                        rng.random_range(-30.0_f32..=30.0_f32)
                     } else {
-                        rng.random_range(70.0..=130.0)
+                        rng.random_range(70.0_f32..=130.0_f32)
                             * if rng.random_bool(0.5) { 1.0 } else { -1.0 }
                     };
                     *headings.get_mut(&entity).unwrap() =
@@ -8470,15 +8752,16 @@ pub fn tick_popo_rolls(
                         epos,
                         crate::comps_b::MoteStrip::Dust,
                         1,
+                        &mut fx_rng,
                     );
                 }
             } else {
                 // `Grunt/Alarm_1:5-9`
-                if rng.random_range(0.0..1.0) < roll_chance && brain.freeze > 40.0 {
+                if rng.random_range(0.0_f32..1.0) < roll_chance && brain.freeze > 40.0 {
                     let turn: f32 = if dist > 150.0 {
-                        rng.random_range(-30.0..=30.0)
+                        rng.random_range(-30.0_f32..=30.0_f32)
                     } else {
-                        (70.0 + rng.random_range(0.0..60.0))
+                        (70.0 + rng.random_range(0.0_f32..60.0))
                             * if rng.random_bool(0.5) { 1.0 } else { -1.0 }
                     };
                     *headings.get_mut(&entity).unwrap() =
@@ -8494,6 +8777,7 @@ pub fn tick_popo_rolls(
                         epos,
                         crate::comps_b::MoteStrip::Dust,
                         1,
+                        &mut fx_rng,
                     );
                 }
             }
@@ -8522,7 +8806,7 @@ pub fn tick_popo_rolls(
                 if elite {
                     brain.ammo = 3;
                     brain.burst_timer = GTimer::from_seconds(1.0 / 30.0, TimerMode::Once);
-                    next = 14.0 + rng.random_range(0.0..2.0);
+                    next = 14.0 + rng.random_range(0.0_f32..2.0);
                 } else {
                     enemy_cue(&mut cues, "sndGruntFire");
                     brain.wkick = 4.0;
@@ -8533,23 +8817,23 @@ pub fn tick_popo_rolls(
                         epos,
                         brain.gunangle,
                         8.0,
-                        rng.random_range(-3.0..3.0),
+                        rng.random_range(-3.0_f32..3.0),
                         3.0,
                     );
-                    next = 3.0 + rng.random_range(0.0..2.0);
+                    next = 3.0 + rng.random_range(0.0_f32..2.0);
                 }
             } else {
                 let turn: f32 = if dist > 48.0 {
-                    rng.random_range(-25.0..=25.0)
+                    rng.random_range(-25.0_f32..=25.0_f32)
                 } else {
-                    180.0 + rng.random_range(-25.0..=25.0)
+                    180.0 + rng.random_range(-25.0_f32..=25.0_f32)
                 };
                 *headings.get_mut(&entity).unwrap() =
                     glam::Vec2::from_angle(aim + turn.to_radians());
                 vel.0 = glam::Vec2::from_angle(aim + turn.to_radians()) * 0.4 * 30.0;
-                brain.walk = 10.0 + rng.random_range(0.0..10.0);
+                brain.walk = 10.0 + rng.random_range(0.0_f32..10.0);
                 if brain.freeze < 40.0 {
-                    next += rng.random_range(0.0..30.0);
+                    next += rng.random_range(0.0_f32..30.0);
                 }
             }
         } else if rng.random_range(0.0..4.0) < 1.0 {
@@ -8558,7 +8842,7 @@ pub fn tick_popo_rolls(
             let d = glam::Vec2::from_angle(a);
             *headings.get_mut(&entity).unwrap() = d;
             gml_motion_add_clamp(&mut vel.0, d, 0.4, 3.0, dt);
-            brain.walk = 20.0 + rng.random_range(0.0..10.0);
+            brain.walk = 20.0 + rng.random_range(0.0_f32..10.0);
             if elite {
                 brain.gunangle = a;
                 brain.right = gml_right_from_hspeed(vel.0);
@@ -8621,7 +8905,7 @@ pub fn tick_popo_rolls(
                     enemy.kind,
                     epos,
                     brain.gunangle,
-                    rng.random_range(-10.0_f32..=10.0).to_radians(),
+                    rng.random_range(-10.0_f32..=10.0_f32).to_radians(),
                     10.0,
                 );
             }
@@ -8629,6 +8913,8 @@ pub fn tick_popo_rolls(
 
         brain.attack = GTimer::from_seconds(next / 30.0, TimerMode::Once);
     }
+    streams.enemies = enemies_rng;
+    streams.fx = fx_rng;
 }
 
 /// GML `IDPDBullet` (inherits `EnemyBullet1`: damage 3, `typ = 1`
@@ -8813,8 +9099,12 @@ pub fn tick_special_props(
     >,
     mut pedestals: Query<Entity, (With<CrownPedestal>, Without<Prop>)>,
     mut couches: Query<(Entity, &Pos), (With<YvCouch>, Without<Prop>)>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
-    let mut rng = rand::rng();
+    let mut environment_rng = streams.environment;
+
+    let rng = &mut environment_rng;
     let dying: Vec<(Entity, glam::Vec2, SpecialPropDeath)> = props
         .iter()
         .filter_map(|(e, prop, pos, kind, _, _)| {
@@ -8896,6 +9186,7 @@ pub fn tick_special_props(
         }
         commands.entity(entity).despawn();
     }
+    streams.environment = environment_rng;
 }
 
 /// GML `objects/NewCarPlz` (`Create_0` + `Alarm_1`): the crib's replacement car
@@ -8906,12 +9197,16 @@ pub fn tick_new_car_plz(
     catalog: Res<repame_anim::AnimCatalog>,
     run: Res<Run>,
     mut q: Query<(Entity, &Pos, &mut crate::comps_b::NewCarPlz)>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     if q.is_empty() {
         return;
     }
     let dt = time.delta_secs;
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     for (entity, pos, mut plz) in &mut q {
         plz.timer.tick(dt);
         if !plz.timer.just_finished() {
@@ -8923,10 +9218,16 @@ pub fn tick_new_car_plz(
             &catalog,
             &run,
             crate::worldgen::PropKind::CarVenusFixed,
-            pos.0 + glam::Vec2::new(rng.random_range(-3.0..3.0), rng.random_range(-3.0..3.0)),
+            pos.0
+                + glam::Vec2::new(
+                    rng.random_range(-3.0_f32..3.0),
+                    rng.random_range(-3.0_f32..3.0),
+                ),
             false,
+            rng,
         );
     }
+    streams.enemies = enemies_rng;
 }
 
 /// GML `objects/BecomeScrapBoss/Step_0.gml`: the sleeper counts steps of
@@ -8987,11 +9288,15 @@ pub fn tick_ice_flowers(
     mut enemies: Query<(Entity, &mut Health), With<Enemy>>,
     mut last_damage: ResMut<LastDamageTaken>,
     mut inited: Local<std::collections::HashSet<Entity>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     if flowers.is_empty() {
         return;
     }
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     inited.retain(|e| flowers.contains(*e));
     let pressed = input.peek_interact_pressed();
     let Ok((mut player, mut ppos, mut php)) = player_q.single_mut() else {
@@ -9058,9 +9363,11 @@ pub fn tick_ice_flowers(
                 &mut enemies,
                 entity,
                 pos.0,
+                rng,
             );
         }
     }
+    streams.enemies = enemies_rng;
 }
 
 /// GML `objects/Shielder` and `objects/Inspector` - the two non-rolling IDPD
@@ -9095,7 +9402,11 @@ pub fn tick_popo_gunners(
     mut trauma: ResMut<Trauma>,
     mut headings: Local<HashMap<Entity, glam::Vec2>>,
     mut males: Local<HashMap<Entity, bool>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let Ok((pvel, mut ppos, player_cd)) = player_q.single_mut() else {
         return;
     };
@@ -9104,7 +9415,7 @@ pub fn tick_popo_gunners(
     let player_at = ppos.0;
     let dt = time.delta_secs;
     let frames = dt * crate::SIM_HZ as f32;
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     headings.retain(|e, _| enemies.contains(*e));
     males.retain(|e, _| enemies.contains(*e));
     let nades_live = nades.iter().count() as f32;
@@ -9204,7 +9515,7 @@ pub fn tick_popo_gunners(
             continue;
         }
         if shielder {
-            let mut next = rng.random_range(15.0..20.0);
+            let mut next = rng.random_range(15.0_f32..20.0);
             if los {
                 brain.gunangle = aim;
                 brain.right = if player_at.x < epos.x {
@@ -9233,22 +9544,22 @@ pub fn tick_popo_gunners(
                     brain.walk = 0.0;
                 } else {
                     let turn: f32 = if dist > 64.0 {
-                        rng.random_range(-25.0..=25.0)
+                        rng.random_range(-25.0_f32..=25.0_f32)
                     } else {
-                        180.0 + rng.random_range(-45.0..=45.0)
+                        180.0 + rng.random_range(-45.0_f32..=45.0_f32)
                     };
                     set_heading(&mut headings, entity, aim + turn.to_radians());
                     vel.0 = glam::Vec2::from_angle(aim + turn.to_radians()) * 0.4 * 30.0;
-                    brain.walk = 10.0 + rng.random_range(0.0..10.0);
+                    brain.walk = 10.0 + rng.random_range(0.0_f32..10.0);
                     if brain.freeze < 40.0 {
-                        next += rng.random_range(0.0..30.0);
+                        next += rng.random_range(0.0_f32..30.0);
                     }
                 }
             } else if rng.random_range(0.0..3.0) < 1.0 {
                 let a = rng.random_range(0.0..std::f32::consts::TAU);
                 set_heading(&mut headings, entity, a);
                 gml_motion_add_clamp(&mut vel.0, glam::Vec2::from_angle(a), 0.4, 3.5, dt);
-                brain.walk = 20.0 + rng.random_range(0.0..10.0);
+                brain.walk = 20.0 + rng.random_range(0.0_f32..10.0);
                 brain.gunangle = a;
                 brain.right = gml_right_from_hspeed(vel.0);
             } else if brain.freeze > 40.0 && rng.random_range(0.0..4.0) < 1.0 && dist < 96.0 {
@@ -9273,7 +9584,7 @@ pub fn tick_popo_gunners(
         }
 
         // GML `Inspector/Alarm_1`
-        let mut next = rng.random_range(20.0..40.0);
+        let mut next = rng.random_range(20.0_f32..40.0);
         let was_control = brain.control;
         brain.control = false;
         if rng.random_range(0.0..3.0) < 1.0 && brain.freeze > 40.0 {
@@ -9310,25 +9621,25 @@ pub fn tick_popo_gunners(
                 ));
                 brain.wkick = 8.0;
                 trauma.add(3.0 / 20.0);
-                next = 20.0 + rng.random_range(0.0..10.0);
+                next = 20.0 + rng.random_range(0.0_f32..10.0);
             } else {
                 let turn: f32 = if dist > 48.0 {
-                    rng.random_range(-25.0..=25.0)
+                    rng.random_range(-25.0_f32..=25.0_f32)
                 } else {
-                    180.0 + rng.random_range(-25.0..=25.0)
+                    180.0 + rng.random_range(-25.0_f32..=25.0_f32)
                 };
                 set_heading(&mut headings, entity, aim + turn.to_radians());
                 vel.0 = glam::Vec2::from_angle(aim + turn.to_radians()) * 0.4 * 30.0;
-                brain.walk = 10.0 + rng.random_range(0.0..10.0);
+                brain.walk = 10.0 + rng.random_range(0.0_f32..10.0);
                 if brain.freeze < 40.0 {
-                    next += rng.random_range(0.0..30.0);
+                    next += rng.random_range(0.0_f32..30.0);
                 }
             }
         } else if rng.random_range(0.0..4.0) < 1.0 {
             let a = rng.random_range(0.0..std::f32::consts::TAU);
             set_heading(&mut headings, entity, a);
             gml_motion_add_clamp(&mut vel.0, glam::Vec2::from_angle(a), 0.4, 3.0, dt);
-            brain.walk = 20.0 + rng.random_range(0.0..10.0);
+            brain.walk = 20.0 + rng.random_range(0.0_f32..10.0);
             brain.gunangle = a;
             brain.right = gml_right_from_hspeed(vel.0);
         } else {
@@ -9384,6 +9695,7 @@ pub fn tick_popo_gunners(
         }
         brain.attack = GTimer::from_seconds(next / 30.0, TimerMode::Once);
     }
+    streams.enemies = enemies_rng;
 }
 
 fn set_heading(headings: &mut HashMap<Entity, glam::Vec2>, entity: Entity, angle: f32) {
@@ -9476,12 +9788,16 @@ pub fn tick_turrets(
     >,
     walls: Query<(&Pos, &WallCell), (With<WallTile>, Without<Enemy>, Without<Player>)>,
     mut inited: Local<std::collections::HashSet<Entity>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let Ok(player_pos) = player_q.single() else {
         return;
     };
     let dt = time.delta_secs;
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     inited.retain(|e| enemies.contains(*e));
     let wall_snapshot: Vec<(glam::Vec2, (i32, i32))> =
         walls.iter().map(|(p, c)| (p.0, (c.0, c.1))).collect();
@@ -9519,8 +9835,10 @@ pub fn tick_turrets(
                 enemy_cue(&mut cues, "sndTurretFire");
             } else {
                 // GML `Alarm_2:12-13`: back to idle and poll again soon.
-                brain.attack =
-                    GTimer::from_seconds(rng.random_range(10.0..=15.0) / 30.0, TimerMode::Once);
+                brain.attack = GTimer::from_seconds(
+                    rng.random_range(10.0_f32..=15.0_f32) / 30.0,
+                    TimerMode::Once,
+                );
             }
         }
 
@@ -9529,20 +9847,21 @@ pub fn tick_turrets(
         if !brain.attack.just_finished() {
             continue;
         }
-        let next = rng.random_range(50.0..=60.0);
+        let next = rng.random_range(50.0_f32..=60.0_f32);
         let to_player = player_pos.0 - epos;
         let dist = to_player.length();
         if has_line_of_sight(epos, player_pos.0, &mask)
-            && rng.random_range(0.0..4.0) < 3.0
+            && rng.random_range(0.0_f32..4.0) < 3.0
             && dist < 160.0
         {
             brain.ammo = 10;
             brain.burst_timer = GTimer::from_seconds(10.0 / 30.0, TimerMode::Once);
-            let offset = rng.random_range(-5.0..=5.0_f32);
+            let offset = rng.random_range(-5.0_f32..=5.0_f32);
             brain.gunangle = to_player.y.atan2(to_player.x) + offset.to_radians();
         }
         brain.attack = GTimer::from_seconds(next / 30.0, TimerMode::Once);
     }
+    streams.enemies = enemies_rng;
 }
 
 /// GML `JungleAssassinHide` (`MeleeFake` subclass): a dormant jungle
@@ -9661,13 +9980,17 @@ pub fn tick_ratking(
     walls: Query<(&Pos, &WallCell), (With<WallTile>, Without<Enemy>, Without<Player>)>,
     mut headings: Local<HashMap<Entity, glam::Vec2>>,
     mut cues: ResMut<Queue<AudioCue>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let Ok(player_pos) = player_q.single() else {
         return;
     };
     let dt = time.delta_secs;
     let frames = dt * crate::SIM_HZ as f32;
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     headings.retain(|e, _| enemies.contains(*e));
     let wall_snapshot: Vec<(glam::Vec2, (i32, i32))> =
         walls.iter().map(|(p, c)| (p.0, (c.0, c.1))).collect();
@@ -9734,12 +10057,14 @@ pub fn tick_ratking(
                     1.0,
                     run.loop_count,
                     false,
-                    Some(glam::Vec2::from_angle(a) * rng.random_range(3.0..=4.0) * 30.0),
+                    Some(glam::Vec2::from_angle(a) * rng.random_range(3.0_f32..=4.0_f32) * 30.0),
                     false,
                 );
             } else {
-                brain.attack =
-                    GTimer::from_seconds(rng.random_range(40.0..=50.0) / 30.0, TimerMode::Once);
+                brain.attack = GTimer::from_seconds(
+                    rng.random_range(40.0_f32..=50.0_f32) / 30.0,
+                    TimerMode::Once,
+                );
                 if brain.ratking_spawns > 24.0 && rng.random_range(0.0..4.0) < 3.0 {
                     brain.ratking_rage = true;
                     brain.walk = 0.0;
@@ -9753,17 +10078,18 @@ pub fn tick_ratking(
         if !brain.attack.just_finished() {
             continue;
         }
-        let mut next = rng.random_range(30.0..=40.0);
+        let mut next = rng.random_range(30.0_f32..=40.0_f32);
         if brain.ratking_rage {
             // GML `RatkingRage/Alarm_1:4-15`
             if dist < 100.0 {
                 // GML `RatkingRage/Alarm_1:11` `meleedamage = 4`.
                 enemy.touch_damage = 4;
-                brain.walk = 40.0 + rng.random_range(0.0..10.0);
+                brain.walk = 40.0 + rng.random_range(0.0_f32..10.0);
                 // GML `RatkingRage/Alarm_1.gml:6`.
                 enemy_cue(&mut cues, "sndRatkingCharge");
-                let d =
-                    glam::Vec2::from_angle(aim + rng.random_range(-10.0..=10.0_f32).to_radians());
+                let d = glam::Vec2::from_angle(
+                    aim + rng.random_range(-10.0_f32..=10.0_f32).to_radians(),
+                );
                 *headings.get_mut(&entity).unwrap() = d;
                 vel.0 = d * 0.4 * 30.0;
                 if player_pos.0.x < epos.x {
@@ -9774,28 +10100,28 @@ pub fn tick_ratking(
             }
         } else {
             // GML `Ratking/Alarm_1:4-30`
-            next = rng.random_range(30.0..=40.0);
-            brain.walk = 10.0 + rng.random_range(0.0..10.0);
+            next = rng.random_range(30.0_f32..=40.0_f32);
+            brain.walk = 10.0 + rng.random_range(0.0_f32..10.0);
             if has_line_of_sight(epos, player_pos.0, &mask) && rng.random_range(0.0..3.0) < 1.0 {
-                brain.ammo = [3.0, 4.0, 5.0][rng.random_range(0..3)] as u8;
+                brain.ammo = [3.0, 4.0, 5.0][rng.random_range(0..3usize)] as u8;
                 brain.burst_timer = GTimer::from_seconds(1.0 / 30.0, TimerMode::Once);
                 brain.gunangle = aim;
                 // GML `Ratking/Alarm_1.gml:9`.
                 enemy_cue(&mut cues, "sndRatKingVomit");
-                next = rng.random_range(30.0..=35.0);
-                brain.walk = 40.0 + rng.random_range(0.0..10.0);
+                next = rng.random_range(30.0_f32..=35.0_f32);
+                brain.walk = 40.0 + rng.random_range(0.0_f32..10.0);
             }
             let away = aim + std::f32::consts::PI;
             let mut d = away + rng.random_range(-40.0..=40.0_f32).to_radians();
             vel.0 = glam::Vec2::ZERO;
             if dist < 64.0 {
-                brain.walk = 40.0 + rng.random_range(0.0..10.0);
+                brain.walk = 40.0 + rng.random_range(0.0_f32..10.0);
                 let flip: f32 = if rng.random_range(0.0..3.0) < 2.0 {
                     180.0
                 } else {
                     0.0
                 };
-                d = away + rng.random_range(-20.0..=20.0_f32).to_radians() + flip.to_radians();
+                d = away + rng.random_range(-20.0_f32..=20.0_f32).to_radians() + flip.to_radians();
             }
             set_heading(&mut headings, entity, d);
             vel.0 = glam::Vec2::from_angle(d) * 0.4 * 30.0;
@@ -9807,6 +10133,7 @@ pub fn tick_ratking(
         }
         brain.attack = GTimer::from_seconds(next / 30.0, TimerMode::Once);
     }
+    streams.enemies = enemies_rng;
 }
 
 /// Verbatim `objects/EliteInspector` law (`Alarm_1`/`Alarm_2`/`Other_10`):
@@ -9844,7 +10171,11 @@ pub fn tick_elite_inspectors(
     mut last_seen: Local<HashMap<Entity, glam::Vec2>>,
     mut headings: Local<HashMap<Entity, glam::Vec2>>,
     mut inited: Local<std::collections::HashSet<Entity>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let Ok((player_pos, player_cd)) = player_q.single() else {
         return;
     };
@@ -9854,7 +10185,7 @@ pub fn tick_elite_inspectors(
         .map(|v| v.0.length_squared())
         .unwrap_or(0.0);
     let dt = time.delta_secs;
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     inited.retain(|e| enemies.contains(*e));
     last_seen.retain(|e, _| enemies.contains(*e));
     headings.retain(|e, _| enemies.contains(*e));
@@ -9875,8 +10206,10 @@ pub fn tick_elite_inspectors(
             brain.strafe_dir = 0.0;
             brain.slash_delay = 0.0;
             brain.gunangle = rng.random_range(0.0..std::f32::consts::TAU);
-            brain.attack =
-                GTimer::from_seconds(rng.random_range(30.0..=45.0) / 30.0, TimerMode::Once);
+            brain.attack = GTimer::from_seconds(
+                rng.random_range(30.0_f32..=45.0_f32) / 30.0,
+                TimerMode::Once,
+            );
             last_seen.insert(entity, epos);
         }
 
@@ -9952,16 +10285,20 @@ pub fn tick_elite_inspectors(
                     Velocity(sdir * 60.0),
                     Pos(epos + sdir * 12.0),
                 ));
-                brain.attack =
-                    GTimer::from_seconds(rng.random_range(15.0..=20.0) / 30.0, TimerMode::Once);
+                brain.attack = GTimer::from_seconds(
+                    rng.random_range(15.0_f32..=20.0_f32) / 30.0,
+                    TimerMode::Once,
+                );
             }
         }
 
         // GML `Alarm_1` (brain).
         brain.attack.tick(dt);
         if brain.attack.just_finished() {
-            brain.attack =
-                GTimer::from_seconds(rng.random_range(20.0..=30.0) / 30.0, TimerMode::Once);
+            brain.attack = GTimer::from_seconds(
+                rng.random_range(20.0_f32..=30.0_f32) / 30.0,
+                TimerMode::Once,
+            );
             if brain.strafe_dir == 1.0 && rng.random::<f32>() < 0.5 {
                 brain.strafe_dir = 0.0;
             }
@@ -9986,7 +10323,7 @@ pub fn tick_elite_inspectors(
                     );
                     headings.insert(entity, head);
                     vel.0 = head * 12.0;
-                    brain.walk = rng.random_range(30.0..=40.0);
+                    brain.walk = rng.random_range(30.0_f32..=40.0_f32);
                     let d = brain.attack.duration() / 2.0;
                     brain.attack = GTimer::from_seconds(d, TimerMode::Once);
                 }
@@ -9994,7 +10331,7 @@ pub fn tick_elite_inspectors(
                 let head = glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU));
                 headings.insert(entity, head);
                 brain.gunangle = head.y.atan2(head.x);
-                brain.walk = rng.random_range(20.0..=30.0);
+                brain.walk = rng.random_range(20.0_f32..=30.0_f32);
                 vel.0 = head * 12.0;
             } else {
                 // `PopoNade` at the last-seen position (budget-gated).
@@ -10046,6 +10383,7 @@ pub fn tick_elite_inspectors(
         pos.0 += vel.0 * dt;
         clamp_to_arena(&mut pos.0, 10.0);
     }
+    streams.enemies = enemies_rng;
 }
 
 /// Verbatim `objects/EliteShielder` law (`Alarm_1`/`Alarm_2`/`Other_10`):
@@ -10075,13 +10413,17 @@ pub fn tick_elite_shielders(
     >,
     mut headings: Local<HashMap<Entity, glam::Vec2>>,
     mut inited: Local<std::collections::HashSet<Entity>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let Ok((player_pos, player_v, player_cd)) = player_q.single() else {
         return;
     };
     let can_shoot = player_cd.timer.is_finished();
     let dt = time.delta_secs;
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     inited.retain(|e| enemies.contains(*e));
     headings.retain(|e, _| enemies.contains(*e));
 
@@ -10099,8 +10441,10 @@ pub fn tick_elite_shielders(
             brain.freeze = 20.0;
             brain.slash_delay = 0.0;
             brain.gunangle = rng.random_range(0.0..std::f32::consts::TAU);
-            brain.attack =
-                GTimer::from_seconds(rng.random_range(30.0..=45.0) / 30.0, TimerMode::Once);
+            brain.attack = GTimer::from_seconds(
+                rng.random_range(30.0_f32..=45.0_f32) / 30.0,
+                TimerMode::Once,
+            );
             headings.insert(entity, glam::Vec2::X);
         }
 
@@ -10168,8 +10512,10 @@ pub fn tick_elite_shielders(
         // GML `Alarm_1` (brain).
         brain.attack.tick(dt);
         if brain.attack.just_finished() {
-            brain.attack =
-                GTimer::from_seconds(rng.random_range(15.0..=20.0) / 30.0, TimerMode::Once);
+            brain.attack = GTimer::from_seconds(
+                rng.random_range(15.0_f32..=20.0_f32) / 30.0,
+                TimerMode::Once,
+            );
             if los {
                 brain.gunangle = aim;
                 if rng.random::<f32>() < 3.0 / 4.0 && freeze > 40.0 && dist < 150.0 {
@@ -10209,9 +10555,10 @@ pub fn tick_elite_shielders(
                     };
                     headings.insert(entity, head);
                     vel.0 = head * 12.0;
-                    brain.walk = rng.random_range(10.0..=20.0);
+                    brain.walk = rng.random_range(10.0_f32..=20.0_f32);
                     if freeze < 40.0 {
-                        let d = brain.attack.duration() + rng.random_range(0.0..=30.0) / 30.0;
+                        let d =
+                            brain.attack.duration() + rng.random_range(0.0_f32..=30.0_f32) / 30.0;
                         brain.attack = GTimer::from_seconds(d, TimerMode::Once);
                     }
                 }
@@ -10219,7 +10566,7 @@ pub fn tick_elite_shielders(
                 let head = glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU));
                 headings.insert(entity, head);
                 brain.gunangle = head.y.atan2(head.x);
-                brain.walk = rng.random_range(20.0..=30.0);
+                brain.walk = rng.random_range(20.0_f32..=30.0_f32);
                 vel.0 = head * 12.0;
             } else if freeze > 40.0 && rng.random::<f32>() < 0.25 {
                 // GML `EliteShielder/Alarm_1:35-42`: same shield, no sight.
@@ -10243,6 +10590,7 @@ pub fn tick_elite_shielders(
         pos.0 += vel.0 * dt;
         clamp_to_arena(&mut pos.0, 11.0);
     }
+    streams.enemies = enemies_rng;
 }
 
 pub fn tick_elite_blockers(
@@ -10261,9 +10609,13 @@ pub fn tick_elite_blockers(
         ),
         (With<Projectile>, Without<Enemy>),
     >,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     let dt = time.delta_secs;
-    let mut rng = rand::rng();
+    let rng = &mut enemies_rng;
     for (b, bpos, mut blocker) in &mut blockers {
         for (s, spos, mut team, mut vel, typ) in &mut shots {
             if *team != Team::Player {
@@ -10308,12 +10660,13 @@ pub fn tick_elite_blockers(
         let Ok((mut opos, mut brain)) = owners.get_mut(blocker.owner) else {
             continue;
         };
-        let len = 120.0 + rng.random_range(0.0..180.0);
-        let dir = rng.random_range(0.0..std::f32::consts::TAU);
+        let len = 120.0 + rng.random_range(0.0_f32..180.0);
+        let dir = rng.random_range(0.0_f32..std::f32::consts::TAU);
         opos.0 = mask
             .cell_center(mask.world_to_cell(opos.0 + glam::Vec2::new(dir.cos(), dir.sin()) * len));
         brain.attack = GTimer::from_seconds(1.0, TimerMode::Once);
     }
+    streams.enemies = enemies_rng;
 }
 
 /// Verbatim `objects/ProtoStatue` law (`Step_0`): fed rads past 24 charge
@@ -10324,7 +10677,11 @@ pub fn tick_proto_statues(
     mut run: ResMut<Run>,
     mut cues: ResMut<Queue<AudioCue>>,
     mut q: Query<(Entity, &Enemy, &mut Health, &Pos, &mut ProtoGuardian), With<Enemy>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut enemies_rng = streams.enemies;
+
     for (_, enemy, mut health, pos, mut statue) in &mut q {
         if enemy.kind != EnemyKind::ProtoStatue {
             continue;
@@ -10342,12 +10699,18 @@ pub fn tick_proto_statues(
         }
         for _ in 0..waves {
             run.popolevel += 1.0;
-            for kind in crate::idpd::roll_idpd_table(run.loop_count, run.area, run.popolevel, false)
-            {
+            for kind in crate::idpd::roll_idpd_table(
+                run.loop_count,
+                run.area,
+                run.popolevel,
+                false,
+                &mut enemies_rng,
+            ) {
                 queue_enemy_spawn(&mut commands, kind, pos.0, 1.0, run.loop_count);
             }
         }
     }
+    streams.enemies = enemies_rng;
 }
 
 /// Boss intro banner lifetime: the marker despawns when its timer
@@ -10431,6 +10794,8 @@ fn separate(
     kind: EnemyKind,
     loops: u32,
     current_frame: u64,
+
+    rng: &mut impl Rng,
 ) {
     let size = crate::enemy_data::gml_size(kind);
     let radius = crate::enemy_data::enemy_def(kind).radius;
@@ -10438,7 +10803,6 @@ fn separate(
     if gated {
         return;
     }
-    let mut rng = rand::rng();
     for (other_entity, other, other_size, other_radius) in positions {
         // GML collision events only fire against *other* instances. The
         // snapshot includes self at distance 0, so it always passed the overlap
@@ -10458,7 +10822,10 @@ fn separate(
         if epos.distance(*other) >= radius + *other_radius {
             continue;
         }
-        let jitter = glam::Vec2::new(rng.random_range(-1.0..1.0), rng.random_range(-1.0..1.0));
+        let jitter = glam::Vec2::new(
+            rng.random_range(-1.0_f32..1.0),
+            rng.random_range(-1.0_f32..1.0),
+        );
         let away = (epos - (*other + jitter)).normalize_or_zero();
         *vel += away * crate::SIM_HZ as f32;
     }
@@ -10630,6 +10997,7 @@ mod gml_volley_cadence_tests {
                 false,
                 false,
                 0,
+                &mut SimRng::seeded(1),
             );
         }
         world.flush();
@@ -10656,7 +11024,7 @@ mod gml_volley_cadence_tests {
     /// post-volley window, so pin both.
     #[test]
     fn crab_rest_after_a_volley_is_longer_than_before() {
-        let mut rng = rand::rng();
+        let mut rng = SimRng::seeded(7);
         for _ in 0..64 {
             let before = 10.0 + rnd(&mut rng, 10.0);
             let after = 40.0 + rnd(&mut rng, 10.0);
@@ -10803,7 +11171,7 @@ mod gml_rorand_tests {
 
     #[test]
     fn orandom_samples_plus_minus_half() {
-        let mut rng = rand::rng();
+        let mut rng = SimRng::seeded(7);
         for n in [1.0_f32, 3.0, 10.0, 15.0, 16.0] {
             for _ in 0..256 {
                 let v = spread(&mut rng, n);

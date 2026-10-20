@@ -325,7 +325,11 @@ impl FloorMask {
         }
     }
 
-    pub fn random_floor_pos(&self, rng: &mut impl rand::RngExt, min_from_origin: f32) -> Vec2 {
+    pub fn random_floor_pos(
+        &self,
+        rng: &mut impl repame_sim::rng::Rng,
+        min_from_origin: f32,
+    ) -> Vec2 {
         if self.cells.is_empty() {
             return Vec2::ZERO;
         }

@@ -5,10 +5,11 @@
 //! its normal wording (the port carries no date-event flags).
 
 use bevy_ecs::prelude::*;
-use rand::RngExt;
+use repame_sim::rng::Rng;
 
 use crate::comps_a::{CrownState, Health, Inventory, Player, RaceState, Run};
 use crate::data::MutationId;
+use crate::rng_streams::SimStreams;
 
 /// Everything `scrTips` reads off the live player + run.
 pub struct TipCtx {
@@ -30,7 +31,7 @@ pub struct TipCtx {
     pub april_fools: bool,
 }
 
-fn pick(arr: &[&'static str], rng: &mut impl RngExt) -> &'static str {
+fn pick(arr: &[&'static str], rng: &mut impl Rng) -> &'static str {
     if arr.is_empty() {
         ""
     } else {
@@ -78,15 +79,15 @@ pub fn pick_loading_tip_world(world: &mut World) -> String {
         }
         ctx.skills = player.mutations.clone();
     }
-    let mut rng = rand::rng();
-    pick_tip(&ctx, &mut rng).to_string()
+    let mut streams = world.resource_mut::<SimStreams>();
+    pick_tip(&ctx, &mut streams.fx).to_string()
 }
 
 /// GML `scrTips:9` `choose(0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 4, 5,
 /// 6, 7)`: 18-way roll, general double-weighted twice over.
 const WEIGHTS: [u8; 18] = [0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 4, 5, 6, 7];
 
-pub fn pick_tip(ctx: &TipCtx, rng: &mut impl RngExt) -> &'static str {
+pub fn pick_tip(ctx: &TipCtx, rng: &mut impl Rng) -> &'static str {
     let mut tip_type = WEIGHTS[rng.random_range(0..WEIGHTS.len())];
     if !ctx.has_player {
         tip_type = 0;

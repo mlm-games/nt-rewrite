@@ -18,8 +18,10 @@
 
 use bevy_ecs::prelude::*;
 use rand::rngs::StdRng;
+
 use rand::{RngExt, SeedableRng};
 use repame_anim::AnimCatalog;
+use repame_sim::rng::{Rng, SimRng};
 
 use crate::anim::{PlayerAnim, SpriteAnim};
 use crate::comps_a::{
@@ -455,7 +457,10 @@ pub fn teardown_session_entities(world: &mut World) {
 }
 
 pub fn setup_run(world: &mut World) {
-    let seed: u64 = rand::rng().random_range(0..u64::MAX);
+    // The run's entropy source, GML `scrRunStart`'s fresh seed: this *is*
+    // the seed every stream is opened from, so it is drawn from the thread
+    // RNG on purpose and never routed through a stream.
+    let seed: u64 = rand::random();
     setup_run_with_seed(world, seed);
 }
 
@@ -530,6 +535,13 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
     // Area-fog scroll persists like GML's persistent TopCont
     // (init-only: never reset mid-run).
     world.init_resource::<crate::environment::FogState>();
+    // GML `scrRngStatesInit(_seed)`: the run's seed opens every subsystem
+    // stream, so a run drawn from `seed` replays the same way.
+    world.insert_resource(crate::rng_streams::SimStreams::from_run_seed(seed));
+    // The floor-setup draws (`GenCont/Destroy_0`) run off the `setup` stream.
+    // `SimRng` is `Copy` and this function owns the world, so it is read out
+    // here and written back once the floor is built.
+    let mut setup_rng = world.resource::<crate::rng_streams::SimStreams>().setup;
 
     world.remove_resource::<crate::comps_a::PendingMutation>();
     world.remove_resource::<crate::comps_a::PendingUltra>();
@@ -808,6 +820,7 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
                     0,
                     false,
                     false,
+                    &mut setup_rng,
                 );
             })
         })
@@ -872,10 +885,9 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
                 a.1.distance_squared(sentinel)
                     .total_cmp(&b.1.distance_squared(sentinel))
             });
-        let mut rng = rand::rng();
         if let Some((enemy_e, at)) = nearest
             && at.distance(sentinel) < 160.0
-            && rng.random_range(0..100) == 0
+            && setup_rng.random_range(0..100) == 0
         {
             world.despawn(enemy_e);
             world.spawn((
@@ -885,7 +897,7 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
                 crate::environment::Yeti {
                     pose: crate::environment::YetiPose::Burrowed,
                     timer: crate::time::GTimer::from_seconds(
-                        15.0 / 30.0 + rng.random_range(0.0..1.0),
+                        15.0 / 30.0 + setup_rng.random_range(0.0_f32..1.0),
                         crate::time::TimerMode::Once,
                     ),
                 },
@@ -894,6 +906,7 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
             ));
         }
     }
+    world.resource_mut::<crate::rng_streams::SimStreams>().setup = setup_rng;
 
     // GML `scrSavegamePlayers:219-230`: the restored `Player` instance is
     // written over the loadout-built one, field for field, once the floor
@@ -922,6 +935,7 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
                         base + glam::Vec2::new(ang.cos(), ang.sin()) * 24.0,
                         0,
                         false,
+                        &mut setup_rng,
                     );
                 }
             });
@@ -953,7 +967,12 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
                 if entry != crate::state::LevelEntry::LevCont {
                     return Some((entry, None));
                 }
-                let offer = crate::progression::level_entry_draft(&mut run, &mut player, race);
+                let offer = crate::progression::level_entry_draft(
+                    &mut run,
+                    &mut player,
+                    race,
+                    &mut setup_rng,
+                );
                 Some((entry, Some(offer)))
             })
         })
@@ -1428,6 +1447,7 @@ pub fn spawn_prop_sim(
     kind: PropKind,
     pos: glam::Vec2,
     styleb: bool,
+    rng: &mut SimRng,
 ) -> Option<Entity> {
     if kind == PropKind::None {
         return None;
@@ -1642,7 +1662,7 @@ pub fn spawn_prop_sim(
         }
         // GML `Trap/Create_0.gml:2-6` + a `TrapScorchMark` decal.
         PropKind::Trap => {
-            ec.insert(crate::environment::FireTrap::default());
+            ec.insert(crate::environment::FireTrap::seeded(rng));
             ec.insert(crate::comps_b::GroundDetail {
                 path: "images/sprTrapScorchMark.png",
                 frame: 0,
@@ -1770,6 +1790,7 @@ pub fn spawn_secret_entrances(
     heavy_heart: bool,
     crownvisits: u8,
     plan: &LevelPlan,
+    rng: &mut SimRng,
 ) {
     if crownvisits >= 3 || plan.floor_cells.is_empty() {
         return;
@@ -1801,10 +1822,12 @@ pub fn spawn_secret_entrances(
     let Some(furthest) = furthest else {
         return;
     };
-    let mut rng = rand::rng();
     let probe = centre(furthest) * 2.0 * 0.33 + glam::Vec2::splat(0.0);
-    let jittered =
-        probe + glam::Vec2::new(rng.random_range(-64.0..64.0), rng.random_range(-64.0..64.0));
+    let jittered = probe
+        + glam::Vec2::new(
+            rng.random_range(-64.0_f32..64.0),
+            rng.random_range(-64.0_f32..64.0),
+        );
     let Some(cell) = plan.floor_cells.iter().copied().min_by(|a, b| {
         centre(*a)
             .distance_squared(jittered)
@@ -1873,7 +1896,10 @@ pub fn spawn_secret_entrances(
         ec.insert(SpriteAnim::new("images/sprPStat1Idle.png", def));
     }
     for _ in 0..4 {
-        let off = glam::Vec2::new(rng.random_range(-6.0..6.0), rng.random_range(-6.0..6.0));
+        let off = glam::Vec2::new(
+            rng.random_range(-6.0_f32..6.0),
+            rng.random_range(-6.0_f32..6.0),
+        );
         spawn_enemy_at(
             commands,
             catalog,
@@ -1889,6 +1915,7 @@ pub fn spawn_secret_entrances(
                 scarier_face,
                 heavy_heart,
             },
+            rng,
         );
     }
 }
@@ -2076,6 +2103,7 @@ pub fn spawn_level(
     // GML `GenCont/Destroy_0.gml:112`: FrozenCity subarea 1 with LAST WISH
     // turns a prop (or an enemy) into the Jungle's only entrance.
     ice_flower: bool,
+    rng: &mut SimRng,
 ) {
     *mask = build_floor_mask(plan);
 
@@ -2102,6 +2130,7 @@ pub fn spawn_level(
         heavy_heart,
         crownvisits,
         plan,
+        rng,
     );
 
     spawn_ground_details(commands, catalog, run, plan);
@@ -2223,7 +2252,7 @@ pub fn spawn_level(
     for event in &events {
         match *event {
             PopulationEvent::Prop { kind, pos } => {
-                spawn_prop_sim(commands, catalog, run, kind, pos, plan.styleb);
+                spawn_prop_sim(commands, catalog, run, kind, pos, plan.styleb, rng);
             }
             PopulationEvent::Chest(chest) => {
                 // GML resolves `sprite_index` / `spr_dead`, the Crown of
@@ -2240,12 +2269,12 @@ pub fn spawn_level(
                     order: chest_order,
                 };
                 chest_order += 1;
-                let mut spawn = |kind: ChestKind, p: glam::Vec2| {
-                    crate::pickups::spawn_chest_with(commands, catalog, kind, p, &ctx)
+                let mut spawn = |kind: ChestKind, p: glam::Vec2, rng: &mut SimRng| {
+                    crate::pickups::spawn_chest_with(commands, catalog, kind, p, &ctx, rng)
                 };
                 match chest {
                     ChestSpawn::Weapon(p) if run.area == AreaId::CursedCaves => {
-                        spawn(ChestKind::CursedBig, p);
+                        spawn(ChestKind::CursedBig, p, rng);
                         commands.spawn((
                             GameCleanup,
                             LevelCleanup,
@@ -2264,7 +2293,7 @@ pub fn spawn_level(
                     ChestSpawn::Custom(ChestKind::BigWeapon, p)
                         if run.area == AreaId::CursedCaves =>
                     {
-                        spawn(ChestKind::CursedBig, p);
+                        spawn(ChestKind::CursedBig, p, rng);
                         commands.spawn((
                             GameCleanup,
                             LevelCleanup,
@@ -2281,10 +2310,10 @@ pub fn spawn_level(
                     // GML `GenCont/Alarm_1.gml:89-94`: in Y.V. Mansion
                     // every weapon chest is a `GoldChest`.
                     ChestSpawn::Weapon(p) if run.area == AreaId::City => {
-                        spawn(ChestKind::Gold, p);
+                        spawn(ChestKind::Gold, p, rng);
                     }
                     ChestSpawn::Weapon(p) => {
-                        spawn(ChestKind::Weapon, p);
+                        spawn(ChestKind::Weapon, p, rng);
                     }
                     ChestSpawn::Ammo(p) => {
                         // GML `AmmoChest/Create_0.gml:5-14`, per chest, in
@@ -2299,7 +2328,6 @@ pub fn spawn_level(
                                 );
                         let mut kind = ChestKind::Ammo;
                         if !palace_finale {
-                            let mut rng = rand::rng();
                             let gml_area = crate::worldgen::gml_area_from_run(run) as i32;
                             let idpd_ok = gml_area >= 4 || run.loop_count > 0;
                             if idpd_ok && rng.random_range(0..40) == 0 {
@@ -2308,10 +2336,10 @@ pub fn spawn_level(
                                 kind = ChestKind::Mystery;
                             }
                         }
-                        spawn(kind, p);
+                        spawn(kind, p, rng);
                     }
                     ChestSpawn::Custom(kind, p) => {
-                        spawn(kind, p);
+                        spawn(kind, p, rng);
                     }
                     ChestSpawn::Rad(p) => {
                         spawn_rad_container(commands, catalog, run.gen_seed, p);
@@ -2330,6 +2358,7 @@ pub fn spawn_level(
                     false,
                     run.loop_count,
                     spawn_context,
+                    rng,
                 );
             }
             PopulationEvent::PortalClear { pos, scale } => {
@@ -2345,13 +2374,12 @@ pub fn spawn_level(
             }
             PopulationEvent::WantVan => {
                 // GML `WantVan/Create_0.gml:8-10`.
-                let mut rng = rand::rng();
                 commands.spawn((
                     GameCleanup,
                     LevelCleanup,
                     crate::comps_b::WantVan {
                         enemies: enemy_count,
-                        spawnmoment: 0.2 + rng.random_range(0.0..0.4),
+                        spawnmoment: 0.2 + rng.random_range(0.0_f32..0.4),
                         canspawn: false,
                     },
                 ));
@@ -2359,13 +2387,12 @@ pub fn spawn_level(
             PopulationEvent::WantPopo { rogue_only } => {
                 // GML `WantPopo/Create_0.gml:7-8` snapshots the floor's
                 // enemy count and rolls its spawn moment.
-                let mut rng = rand::rng();
                 commands.spawn((
                     GameCleanup,
                     LevelCleanup,
                     crate::comps_b::WantPopo {
                         enemies: enemy_count,
-                        spawnmoment: 0.2 + rng.random_range(0.0..0.6),
+                        spawnmoment: 0.2 + rng.random_range(0.0_f32..0.6),
                         rogue_only,
                         counted: false,
                     },
@@ -2375,7 +2402,8 @@ pub fn spawn_level(
     }
     let mut idpd_stings: Vec<&'static str> = Vec::new();
     for (i, pos) in plan.idpd_portals.iter().copied().enumerate() {
-        let (_, elite) = crate::idpd::spawn_idpd_spawn(commands, run, live_portals + i as u32, pos);
+        let (_, elite) =
+            crate::idpd::spawn_idpd_spawn(commands, run, live_portals + i as u32, pos, rng);
         idpd_stings.push(if elite {
             "sndEliteIDPDPortalSpawn"
         } else {
@@ -2505,6 +2533,7 @@ pub fn spawn_level(
                     false,
                     run.loop_count,
                     spawn_context,
+                    rng,
                 );
             }
         }
@@ -2535,7 +2564,7 @@ pub fn spawn_level(
             CrownKind::Curses,
             CrownKind::Hatred,
         ];
-        let kind = pool[rand::rng().random_range(0..pool.len())];
+        let kind = pool[rng.random_range(0..pool.len())];
         let pedestal = glam::Vec2::new(0.0, 40.0);
         commands.spawn((
             GameCleanup,
@@ -2545,14 +2574,13 @@ pub fn spawn_level(
         ));
         // GML `CrownPickup/Create_0.gml:37-50`: the pedestal's guard
         // statues, 128 px out on the chosen angles.
-        let mut statue_rng = StdRng::seed_from_u64(run.gen_seed ^ 0x5734_7475);
         crate::crown::spawn_crown_vault_statues(
             commands,
             catalog,
             pedestal,
             crownvisits,
             crown_object,
-            &mut statue_rng,
+            rng,
         );
     }
 }
@@ -2656,14 +2684,15 @@ pub fn setup_title_campfire(world: &mut World) {
     // jitters BOTH axes. In cells (px/32): `(dix_c + col + mody_c,
     // 1 + row + mody_c)` with `dix_c = 1` on row 0 else 0, `mody_c in {1,0,-1}`.
     // Drawn off the live global RNG, so every title visit differs; the port
-    // rolls live entropy too.
-    let mut rng = rand::rng();
+    // rolls its presentation stream (`fx`), which keeps advancing, so the
+    // title still differs visit to visit.
+    let mut rng = world.resource::<crate::rng_streams::SimStreams>().fx;
     let mut seen = std::collections::HashSet::new();
     let mut floors: Vec<(i32, i32)> = Vec::new();
     for row in 0..3 {
         let dix_c = if row == 0 { 1 } else { 0 };
         for col in 0..4 {
-            let mody_c: i32 = [1, 0, -1][rng.random_range(0..3)];
+            let mody_c: i32 = [1, 0, -1][rng.random_range(0..3usize)];
             let bx = dix_c + col + mody_c;
             let by = 1 + row + mody_c;
             for ox in -1..=1 {
@@ -2768,9 +2797,9 @@ pub fn setup_title_campfire(world: &mut World) {
         for iter in 0..100usize {
             let dist = 32.0
                 + iter as f32 * 2.0
-                + rng.random_range(0.0..32.0)
-                + rng.random_range(0.0..64.0) * rng.random_range(0.0..1.0);
-            let ang = rng.random_range(0.0..std::f32::consts::TAU);
+                + rng.random_range(0.0_f32..32.0)
+                + rng.random_range(0.0_f32..64.0) * rng.random_range(0.0_f32..1.0);
+            let ang = rng.random_range(0.0_f32..std::f32::consts::TAU);
             let cand = camp_px + glam::Vec2::from_angle(ang) * dist;
             let cand = nearest_floor(cand);
             let clear = campers.iter().all(|c| c.distance(cand) >= 32.0);
@@ -2871,6 +2900,7 @@ pub fn setup_title_campfire(world: &mut World) {
                         crate::worldgen::PropKind::NightCactus,
                         at,
                         false,
+                        &mut rng,
                     );
                 }
                 // `Alarm_1` topdecal half: night-desert top decals ride the
@@ -2884,6 +2914,7 @@ pub fn setup_title_campfire(world: &mut World) {
                         crate::worldgen::PropKind::GroundDecal,
                         at,
                         false,
+                        &mut rng,
                     );
                 }
                 // `scrCampfireMenuCreate` actors in world px: Campfire (64,64) +
@@ -2978,8 +3009,8 @@ pub fn setup_title_campfire(world: &mut World) {
                         LevelCleanup,
                         crate::comps_b::TitleTv,
                         Pos(glam::Vec2::new(
-                            at.x + rng.random_range(-2.0..2.0),
-                            at.y - 32.0 + rng.random_range(-4.0..4.0),
+                            at.x + rng.random_range(-2.0_f32..2.0),
+                            at.y - 32.0 + rng.random_range(-4.0_f32..4.0),
                         )),
                     ));
                     if let Some(def) = catalog.def("images/sprTV.png") {
@@ -3039,6 +3070,7 @@ pub fn setup_title_campfire(world: &mut World) {
         })
     });
     world.flush();
+    world.resource_mut::<crate::rng_streams::SimStreams>().fx = rng;
     reset_menu_room_resources(world);
 }
 
@@ -3466,6 +3498,7 @@ mod verbatim_title_to_first_level {
         use crate::audio::UiAction;
         use crate::state::AppState;
         use crate::state::menus::{MenuState, apply_menu_action};
+
         let mut world = World::new();
         world.insert_resource(SaveData {
             tutorial_done: true,
@@ -3494,8 +3527,9 @@ mod verbatim_title_to_first_level {
     #[test]
     fn title_entry_rebuilds_campfire_room() {
         use crate::audio::UiAction;
-        use crate::comps_b::TitleCampfire;
         use crate::state::AppState;
+
+        use crate::comps_b::TitleCampfire;
         use crate::state::menus::apply_menu_action;
         let mut world = World::new();
         world.insert_resource(SaveData::default());
@@ -3530,9 +3564,10 @@ mod verbatim_title_to_first_level {
     /// per screen so a gate edit must keep all four exact.
     #[test]
     fn transition_cover_law_matches_gml_per_screen() {
+        use crate::state::AppState;
+
         use crate::comps_a::{PendingMutation, PendingUltra};
         use crate::comps_b::FloorTransition;
-        use crate::state::AppState;
         use crate::state::OverlayMenu;
         use crate::state::menus::MenuState;
         use crate::{MenuOverlay, menu_overlay_kind};
@@ -3660,6 +3695,7 @@ mod verbatim_title_to_first_level {
     #[test]
     fn loading_enter_clears_title_camp() {
         use crate::state::{AppState, goto_state};
+
         let mut world = World::new();
         world.insert_resource(SaveData::default());
         world.insert_resource(AppState::Title);

@@ -4,9 +4,11 @@
 //! carries, pixels belong to rendering.
 
 use bevy_ecs::prelude::*;
-use rand::RngExt;
 use repame_anim::AnimCatalog;
 use repame_sim::SimTime;
+use repame_sim::rng::Rng;
+
+use crate::rng_streams::SimStreams;
 
 use crate::comps_a::{GmlHurtSprite, Health, Player, Velocity};
 use crate::comps_b::{
@@ -130,14 +132,18 @@ impl SpriteAnim {
 /// native `image_index += image_speed` each step: a looping strip wraps
 /// at `image_number`, and a one-shot parks on its last frame the way
 /// `Corpse/Other_7.gml:1-2` parks with `image_speed = 0`.
-pub fn animate_sprites(time: Res<SimTime>, mut q: Query<&mut SpriteAnim>) {
-    let mut rng = rand::rng();
+pub fn animate_sprites(
+    time: Res<SimTime>,
+    mut streams: ResMut<SimStreams>,
+    mut q: Query<&mut SpriteAnim>,
+) {
+    let rng = &mut streams.fx;
     for mut anim in &mut q {
         if anim.finished {
             continue;
         }
         if anim.frame0_rate > 0.0 && !anim.oneshot && anim.frame == 0 {
-            anim.frame0_phase += anim.frame0_rate * rng.random_range(0.0..1.0);
+            anim.frame0_phase += anim.frame0_rate * rng.random_range(0.0_f32..1.0);
             if anim.frame0_phase >= 1.0 {
                 anim.frame0_phase = 0.0;
                 anim.frame = (anim.frame + 1) % anim.frames.max(1);
@@ -163,14 +169,15 @@ pub fn animate_sprites(time: Res<SimTime>, mut q: Query<&mut SpriteAnim>) {
 
 pub fn tick_gml_images(
     time: Res<SimTime>,
+    mut streams: ResMut<SimStreams>,
     mut commands: Commands,
     mut q: Query<(Entity, &mut GmlImage)>,
 ) {
     let steps = time.delta_secs * crate::SIM_HZ as f32;
-    let mut rng = rand::rng();
+    let rng = &mut streams.fx;
     for (entity, mut image) in &mut q {
         let draw = if image.first_jitter > 0.0 && image.phase < 1.0 {
-            rng.random_range(0.0..1.0)
+            rng.random_range(0.0_f32..1.0)
         } else {
             1.0
         };

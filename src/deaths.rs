@@ -8,8 +8,8 @@
 //! `scrStrongSpiritRefill.gml:1-12`).
 
 use bevy_ecs::prelude::*;
-use rand::RngExt;
 use repame_fx::Trauma;
+use repame_sim::rng::Rng;
 
 use crate::anim::{PlayerAnim, SpriteAnim};
 use crate::audio::{AudioCue, GameAudio};
@@ -23,6 +23,7 @@ use crate::data::RaceId;
 use crate::effects::{FlashWhite, RumbleRequest, flash_white};
 use crate::msg::Queue;
 use crate::pickups::spawn_pickup;
+use crate::rng_streams::SimStreams;
 use crate::savedata_part::SaveData;
 use crate::spatial::Pos;
 use crate::time::{GTimer, TimerMode};
@@ -50,6 +51,7 @@ pub fn resolve_player_revives(
         (With<Player>, Without<Enemy>),
     >,
     enemies: Query<(&Pos, &Team, &Health, Option<&Enemy>), With<Enemy>>,
+    mut streams: ResMut<SimStreams>,
 ) {
     let Ok((player_e, player_pos, mut player, mut phealth, _pinv, mut race_state)) =
         player_q.single_mut()
@@ -71,10 +73,9 @@ pub fn resolve_player_revives(
         phealth.invuln = GTimer::from_seconds(1.5, TimerMode::Once);
         crate::combat::HitFlash::apply(&mut commands, player_e, [1.0, 0.95, 0.6, 1.0], 0.25);
         audio.play_pickup(&mut cues);
-        let mut rng = rand::rng();
         crate::effects::spawn_burst(
             &mut commands,
-            &mut rng,
+            &mut streams.fx,
             player_pos.0,
             12,
             [1.0, 0.95, 0.6, 1.0],
@@ -137,10 +138,9 @@ pub fn resolve_player_revives(
                 flash_white(&mut flash, 0.08);
                 trauma.add(0.35);
                 audio.play_portal(&mut cues);
-                let mut rng = rand::rng();
                 crate::effects::spawn_burst(
                     &mut commands,
-                    &mut rng,
+                    &mut streams.fx,
                     ppos,
                     28,
                     [0.9, 0.9, 1.0, 1.0],
@@ -175,8 +175,9 @@ pub fn tick_revive(
 pub fn resolve_player_gameover(
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
-    mut save: ResMut<SaveData>,
-    mut dirty: ResMut<crate::comps_a::SaveDirty>,
+    // Folded into one param: the system is already at bevy_ecs's 16-param
+    // cap, and the death roll needs a 17th.
+    (mut save, mut dirty): (ResMut<SaveData>, ResMut<crate::comps_a::SaveDirty>),
     mut paused: ResMut<crate::state::Paused>,
     mut run: ResMut<crate::comps_a::Run>,
     mut toast: ResMut<crate::comps_a::Toast>,
@@ -188,6 +189,7 @@ pub fn resolve_player_gameover(
     mut cues: ResMut<Queue<AudioCue>>,
     mut rumble_queue: ResMut<Queue<RumbleRequest>>,
     last_damage: Res<LastDamageTaken>,
+    mut streams: ResMut<SimStreams>,
     mut player_q: Query<(
         Entity,
         &Pos,
@@ -264,11 +266,12 @@ pub fn resolve_player_gameover(
         .map(|a| a.x)
         .unwrap_or_else(|| vel_opt.map(|v| v.0.x).unwrap_or(0.0))
         < 0.0;
-    let mut rng = rand::rng();
+    let mut rng = streams.deaths;
+    let mut fx = streams.fx;
     let angle = rng.random_range(0.0..std::f32::consts::TAU);
     let dir = glam::Vec2::new(angle.cos(), angle.sin());
     let extra_frames = ((-phealth.hp as f32) / 5.0).max(0.0);
-    let corpse_frames = (rng.random_range(1.0..3.0) + extra_frames).clamp(1.0, 16.0);
+    let corpse_frames = (rng.random_range(1.0_f32..3.0) + extra_frames).clamp(1.0, 16.0);
     let dead_path = pa_opt
         .map(|pa| crate::dead_path_part::derive_dead_path(pa.idle))
         .unwrap_or("images/sprMutant1Dead.png");
@@ -277,7 +280,7 @@ pub fn resolve_player_gameover(
         LevelCleanup,
         crate::comps_b::GroundPhysics {
             vel: dir * corpse_frames * 30.0,
-            rotspeed: rng.random_range(-3.0..3.0),
+            rotspeed: rng.random_range(-3.0_f32..3.0),
         },
         PickupLifetime {
             timer: GTimer::from_seconds(12.0, TimerMode::Once),
@@ -306,9 +309,13 @@ pub fn resolve_player_gameover(
                 &mut commands,
                 &catalog,
                 PickupKind::Weapon(wid),
-                pos + glam::Vec2::new(rng.random_range(-10.0..10.0), rng.random_range(-10.0..10.0)),
+                pos + glam::Vec2::new(
+                    rng.random_range(-10.0_f32..10.0),
+                    rng.random_range(-10.0_f32..10.0),
+                ),
                 0,
                 false,
+                &mut rng,
             );
             if pinv.cursed[slot] {
                 commands.entity(e).insert(crate::comps_b::PickupCurse);
@@ -330,12 +337,13 @@ pub fn resolve_player_gameover(
             player.crown == crate::data::CrownKind::Haste,
             false,
             false,
+            &mut streams.pickups,
         );
     }
     if player.crown == crate::data::CrownKind::Death {
         crate::effects::spawn_burst(
             &mut commands,
-            &mut rng,
+            &mut fx,
             pos,
             60,
             [1.0, 0.5, 0.15, 1.0],
@@ -343,7 +351,7 @@ pub fn resolve_player_gameover(
         );
         crate::effects::spawn_burst(
             &mut commands,
-            &mut rng,
+            &mut fx,
             pos,
             30,
             [1.0, 0.9, 0.5, 1.0],
@@ -354,7 +362,7 @@ pub fn resolve_player_gameover(
     if race_state.race == RaceId::BigDog {
         crate::effects::spawn_burst(
             &mut commands,
-            &mut rng,
+            &mut fx,
             pos,
             40,
             [1.0, 0.4, 0.1, 1.0],
@@ -392,14 +400,17 @@ pub fn resolve_player_gameover(
         // GML `Player/Destroy_0` blood-gib speeds verbatim (px/step at
         // 30 Hz): corpse slide law below (`tick_gib_physics`, friction
         // 0.4) settles them like `BloodStreak` instead of coasting.
-        let s = rng.random_range(50.0..160.0);
+        let s = rng.random_range(50.0_f32..160.0);
         commands.spawn((
             GameCleanup,
             LevelCleanup,
             crate::comps_b::GroundPhysics {
                 vel: d * s
-                    + glam::Vec2::new(rng.random_range(-10.0..10.0), rng.random_range(-10.0..10.0)),
-                rotspeed: rng.random_range(-6.0..6.0),
+                    + glam::Vec2::new(
+                        rng.random_range(-10.0_f32..10.0),
+                        rng.random_range(-10.0_f32..10.0),
+                    ),
+                rotspeed: rng.random_range(-6.0_f32..6.0),
             },
             PickupLifetime {
                 timer: GTimer::from_seconds(0.9, TimerMode::Once),
@@ -413,7 +424,7 @@ pub fn resolve_player_gameover(
 
     crate::effects::spawn_burst(
         &mut commands,
-        &mut rng,
+        &mut fx,
         pos,
         10,
         [0.82, 0.08, 0.12, 1.0],
@@ -458,6 +469,8 @@ pub fn resolve_player_gameover(
     hitstop.trigger(0.1, 0.25);
     crate::effects::slow_motion(&mut slow_mo, 0.3, 1.4);
     crate::effects::rumble(&mut rumble_queue, 0.9, 1.0, 0.6);
+    streams.deaths = rng;
+    streams.fx = fx;
 }
 
 /// Blood-gib marker: positionally spawned gore the renderer draws as

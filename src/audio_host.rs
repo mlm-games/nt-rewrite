@@ -3,10 +3,11 @@ use std::path::{Path, PathBuf};
 
 use web_time::{Duration, Instant};
 
-use rand::RngExt;
 use repame_audio::{Audio, AudioChannel, CueDef, CueRequest, Variation};
+use repame_sim::rng::{Rng, SimRng};
 
 use crate::App;
+use crate::rng_streams::SimStreams;
 
 const EXTS: [&str; 4] = ["ogg", "wav", "mp3", "flac"];
 const STOP_PREFIX: &str = "stop_";
@@ -110,15 +111,26 @@ impl AudioHost {
             music_volume,
             ambience_volume,
         );
+        // Presentation stream: the pitch jitter is the shell's own, so it
+        // draws off `fx` (read out, written back) and cannot move a sim draw.
+        let mut fx = app
+            .sim
+            .world
+            .get_resource_mut::<SimStreams>()
+            .map(|streams| streams.fx)
+            .unwrap_or_else(|| SimRng::seeded(0));
         for cue in app.drain_audio_cues() {
-            self.play_cue(&cue, slider);
+            self.play_cue(&cue, slider, &mut fx);
         }
-        self.flush_pending();
+        self.flush_pending(&mut fx);
+        if let Some(mut streams) = app.sim.world.get_resource_mut::<SimStreams>() {
+            streams.fx = fx;
+        }
         self.sync_music(music.and_then(crate::audio::music_path));
         self.sync_ambience(ambience.and_then(crate::audio::ambience_path));
     }
 
-    fn play_cue(&mut self, cue: &repame_audio::Cue, slider: f32) {
+    fn play_cue(&mut self, cue: &repame_audio::Cue, slider: f32, rng: &mut SimRng) {
         // A `stop_`-prefixed cue is GML `audio_stop_sound`: the loop stems
         // have no such file on disk, so the prefix is the only marker that
         // the bank owns a live voice to silence.
@@ -143,7 +155,7 @@ impl AudioHost {
             AudioChannel::Ui if hit_family(cue.name) => volume *= slider,
             _ => {}
         }
-        if self.request_cue(cue.name) && self.play(cue.name, volume, cue.variance) {
+        if self.request_cue(cue.name) && self.play(cue.name, volume, cue.variance, rng) {
             return;
         }
         // The decode is still in flight and this cue is already gone from
@@ -162,7 +174,7 @@ impl AudioHost {
     }
 
     /// Retry the cues whose first decode had not landed yet.
-    fn flush_pending(&mut self) {
+    fn flush_pending(&mut self, rng: &mut SimRng) {
         if !self.sfx.is_live() {
             self.pending.clear();
             return;
@@ -172,7 +184,7 @@ impl AudioHost {
             if self.missing.contains(pending.stem) {
                 continue;
             }
-            if !self.play(pending.stem, pending.volume, pending.variance) {
+            if !self.play(pending.stem, pending.volume, pending.variance, rng) {
                 still_decoding.push(pending);
             }
         }
@@ -180,8 +192,8 @@ impl AudioHost {
     }
 
     /// False while the bank has no decoded stem under that name yet.
-    fn play(&mut self, stem: &str, volume: f32, variance: f32) -> bool {
-        let jitter = rand::rng().random::<f32>();
+    fn play(&mut self, stem: &str, volume: f32, variance: f32, rng: &mut SimRng) -> bool {
+        let jitter = rng.random::<f32>();
         let rate = 1.0 + (2.0 * jitter - 1.0) * variance * 0.5;
         let now_ms = self.epoch.elapsed().as_millis() as u64;
         self.sfx

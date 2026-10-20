@@ -18,9 +18,9 @@
 //! `loop_ready`, `campfire_active`).
 
 use bevy_ecs::prelude::*;
-use rand::RngExt;
 use repame_fx::Trauma;
 use repame_sim::SimTime;
+use repame_sim::rng::{Rng, SimRng};
 
 use crate::audio::AudioCue;
 use crate::combat::{queue_enemy_spawn, queue_enemy_spawn_birth};
@@ -31,18 +31,19 @@ use crate::comps_b::{
     Enemy, GmlImage, IdpdShieldUnit, NativeMotion, NativeWallMotion, PickupLifetime, PortalClear,
 };
 use crate::data::{AreaId, EnemyKind};
-use crate::decide_wep::WeaponDropsRng;
 use crate::enemies::{EnemySpawnContext, spawn_enemy_at};
+use crate::gml_rng::GmlRng;
 use crate::msg::Queue;
+use crate::rng_streams::SimStreams;
 use crate::spatial::Pos;
 use crate::time::{GTimer, TimerMode};
 
 /// GML `IDPDSpawn/Create_0` elite law: 1-in-5 once loops are deep
 /// enough (`loops > 1` on area 0 = campfire, any loop past it).
-pub fn idpd_elite_roll(loop_count: u32, area: AreaId) -> bool {
+pub fn idpd_elite_roll(loop_count: u32, area: AreaId, rng: &mut SimRng) -> bool {
     let eligible = (loop_count > 1 && area == AreaId::Campfire)
         || (loop_count > 0 && area != AreaId::Campfire);
-    eligible && rand::rng().random::<f32>() < 0.2
+    eligible && rng.random::<f32>() < 0.2
 }
 
 /// GML `IDPDSpawn/Alarm_1` spawn table: a lone `PopoFreak` on deep loops
@@ -55,17 +56,17 @@ pub fn roll_idpd_table(
     area: AreaId,
     popolevel: f32,
     lil_hunter_alive: bool,
+    rng: &mut SimRng,
 ) -> Vec<EnemyKind> {
     if loop_count.saturating_sub(if area == AreaId::Campfire { 1 } else { 0 }) >= 3 {
         return vec![EnemyKind::PopoFreak];
     }
-    let mut rng = rand::rng();
     let dir = roll_idpd_dir(
         &mut || rng.random::<f32>(),
         popolevel,
         loop_count == 0 && lil_hunter_alive,
     );
-    let elite = idpd_elite_roll(loop_count, area);
+    let elite = idpd_elite_roll(loop_count, area, rng);
     match dir {
         2 => vec![if elite {
             EnemyKind::EliteShielder
@@ -149,8 +150,9 @@ pub fn spawn_idpd_spawn(
     run: &mut Run,
     live_portals: u32,
     pos: glam::Vec2,
+    rng: &mut SimRng,
 ) -> (Entity, bool) {
-    let elite = idpd_elite_roll(run.loop_count, run.area);
+    let elite = idpd_elite_roll(run.loop_count, run.area, rng);
     // `Create_0.gml:1`
     run.popolevel += 1.0;
     let alarm0 = IDPD_SPAWN_OPEN_BASE + (live_portals as f32 + 1.0) * IDPD_SPAWN_OPEN_PER_LIVE;
@@ -224,10 +226,11 @@ fn idpd_portals(
     cues: &mut Queue<AudioCue>,
     live_portals: u32,
     pos: glam::Vec2,
+    rng: &mut SimRng,
 ) -> u32 {
     let mut elites = 0;
     for live in 0..6u32 {
-        let (_, elite) = spawn_idpd_spawn(commands, run, live_portals + live, pos);
+        let (_, elite) = spawn_idpd_spawn(commands, run, live_portals + live, pos, rng);
         if elite {
             elites += 1;
         }
@@ -255,8 +258,9 @@ pub fn raise_idpd_portals(
     cues: &mut Queue<AudioCue>,
     live_portals: u32,
     pos: glam::Vec2,
+    rng: &mut SimRng,
 ) {
-    idpd_portals(commands, run, cues, live_portals, pos);
+    idpd_portals(commands, run, cues, live_portals, pos, rng);
 }
 
 /// GML `IDPDSpawn/Create_0.gml:6-22` (the `do..until` relocation)
@@ -264,11 +268,7 @@ pub fn raise_idpd_portals(
 /// `RNGStates.Popo`, snap the result onto the nearest `Floor` tile, and
 /// retry until the site is both `place_free` and further than 64 px.
 /// The retry loop is unbounded in GML; 64 draws is the port's hang guard.
-pub fn idpd_spawn_site(
-    rng: &mut WeaponDropsRng,
-    player_pos: glam::Vec2,
-    mask: &FloorMask,
-) -> glam::Vec2 {
+pub fn idpd_spawn_site(rng: &mut GmlRng, player_pos: glam::Vec2, mask: &FloorMask) -> glam::Vec2 {
     let mut p = player_pos;
     for _ in 0..64 {
         let ang = rng.float(360.0);
@@ -310,12 +310,12 @@ fn spawn_idpd_child(
     player_pos: glam::Vec2,
     loops: u32,
     charge: bool,
+    rng: &mut SimRng,
 ) {
-    let mut rng = rand::rng();
     let at = at
         + glam::Vec2::new(
-            rng.random_range(0.0..4.0) - 2.0,
-            rng.random_range(0.0..4.0) - 2.0,
+            rng.random_range(0.0_f32..4.0) - 2.0,
+            rng.random_range(0.0_f32..4.0) - 2.0,
         );
     let velocity = if charge {
         let base = (player_pos - at).y.atan2((player_pos - at).x);
@@ -339,6 +339,8 @@ pub fn tick_idpd_spawns(
     mask: &FloorMask,
     player_pos: glam::Vec2,
     lil_hunter_alive: bool,
+    popo: &mut GmlRng,
+    rng: &mut SimRng,
     portals: &mut Query<
         (Entity, &mut Pos, &mut IdpdSpawnPortal),
         (With<IdpdSpawnPortal>, Without<Player>, Without<Enemy>),
@@ -346,14 +348,13 @@ pub fn tick_idpd_spawns(
 ) {
     let steps = (dt * crate::SIM_HZ as f32).round();
     // GML `Create_0.gml:8,13` draw the relocation off `RNGStates.Popo`;
-    // `Alarm_1.gml:11` draws the dir off the same stream. The port keeps
-    // one local `Popo` stream per tick, seeded off the run.
-    let mut popo = WeaponDropsRng::new((run.gen_seed as i32) ^ 0x50_50);
+    // `Alarm_1.gml:11` draws the dir off the same stream, and the port keeps
+    // that stream in `SimStreams::idpd`.
     let mut fired: Vec<(glam::Vec2, bool)> = Vec::new();
     for (entity, mut pos, mut portal) in portals.iter_mut() {
         if !portal.placed {
             // `Create_0.gml:5-24`
-            pos.0 = idpd_spawn_site(&mut popo, player_pos, mask);
+            pos.0 = idpd_spawn_site(popo, player_pos, mask);
             portal.placed = true;
         }
         // `IDPDSpawn/Alarm_0.gml:1-3` and `IDPDSpawn/Alarm_1` run back to
@@ -419,7 +420,6 @@ pub fn tick_idpd_spawns(
     if fired.is_empty() {
         return;
     }
-    let mut rng = rand::rng();
     for (at, elite) in fired {
         commands.spawn((
             GameCleanup,
@@ -438,8 +438,8 @@ pub fn tick_idpd_spawns(
             >= 3
         {
             let jitter = glam::Vec2::new(
-                rng.random_range(0.0..2.0) - 1.0,
-                rng.random_range(0.0..2.0) - 1.0,
+                rng.random_range(0.0_f32..2.0) - 1.0,
+                rng.random_range(0.0_f32..2.0) - 1.0,
             );
             queue_enemy_spawn_birth(
                 commands,
@@ -470,6 +470,7 @@ pub fn tick_idpd_spawns(
                 player_pos,
                 run.loop_count,
                 !elite,
+                rng,
             ),
             3 => spawn_idpd_child(
                 commands,
@@ -482,6 +483,7 @@ pub fn tick_idpd_spawns(
                 player_pos,
                 run.loop_count,
                 !elite,
+                rng,
             ),
             _ => {
                 if elite {
@@ -492,6 +494,7 @@ pub fn tick_idpd_spawns(
                         player_pos,
                         run.loop_count,
                         false,
+                        rng,
                     );
                 } else {
                     for _ in 0..2 {
@@ -502,6 +505,7 @@ pub fn tick_idpd_spawns(
                             player_pos,
                             run.loop_count,
                             true,
+                            rng,
                         );
                     }
                 }
@@ -527,9 +531,11 @@ fn spawn_at(
     difficulty: f32,
     loops: u32,
     context: EnemySpawnContext,
+
+    rng: &mut SimRng,
 ) -> Entity {
     spawn_enemy_at(
-        commands, catalog, kind, pos, difficulty, false, false, loops, context,
+        commands, catalog, kind, pos, difficulty, false, false, loops, context, rng,
     )
 }
 
@@ -547,6 +553,7 @@ pub fn tick_idpd_spawn_world(
         (Entity, &mut Pos, &mut IdpdSpawnPortal),
         (With<IdpdSpawnPortal>, Without<Player>, Without<Enemy>),
     >,
+    mut streams: ResMut<SimStreams>,
 ) {
     let Ok(player_pos) = player_q.single().map(|p| p.0) else {
         return;
@@ -554,6 +561,7 @@ pub fn tick_idpd_spawn_world(
     let lil_hunter_alive = enemies_q
         .iter()
         .any(|e| matches!(e.kind, EnemyKind::LilHunter));
+    let mut popo = GmlRng::seeded((run.gen_seed as i32) ^ 0x50_50);
     tick_idpd_spawns(
         &mut commands,
         time.delta_secs,
@@ -561,6 +569,8 @@ pub fn tick_idpd_spawn_world(
         &mask,
         player_pos,
         lil_hunter_alive,
+        &mut popo,
+        &mut streams.idpd,
         &mut spawn_q,
     );
 }
@@ -568,18 +578,14 @@ pub fn tick_idpd_spawn_world(
 /// GML `objects/VanSpawn/Create_0.gml:8-34`: a floor tile `96 + random(24)`
 /// to one side of a random player (sign per attempt), +-60 vertically,
 /// rejected while it is off floor or within 8 px of another spawn site.
-pub fn van_spawn_site(
-    rng: &mut rand::rngs::ThreadRng,
-    player_pos: glam::Vec2,
-    mask: &FloorMask,
-) -> glam::Vec2 {
+pub fn van_spawn_site(rng: &mut SimRng, player_pos: glam::Vec2, mask: &FloorMask) -> glam::Vec2 {
     let mut site = player_pos;
     for _ in 0..250 {
         let flip = if rng.random_bool(0.5) { 1.0 } else { -1.0 };
         let spot = player_pos
             + glam::Vec2::new(
-                rng.random_range(96.0..120.0) * flip,
-                rng.random_range(-60.0..60.0),
+                rng.random_range(96.0_f32..120.0) * flip,
+                rng.random_range(-60.0_f32..60.0),
             );
         site = mask.cell_center(mask.world_to_cell(spot));
         if !mask.is_walkable(site) {
@@ -602,6 +608,7 @@ pub(crate) fn spawn_van(
     difficulty: f32,
     loops: u32,
     context: EnemySpawnContext,
+    rng: &mut SimRng,
 ) -> Entity {
     // GML `Van/Create_0.gml:14-23`: `right = choose(1, -1)`, overridden to
     // face the player when one exists. `Alarm_1` places its payload at
@@ -616,6 +623,7 @@ pub(crate) fn spawn_van(
         difficulty,
         loops,
         context,
+        rng,
     );
     commands.entity(e).insert(IdpdVanDeploy {
         right,
@@ -664,10 +672,17 @@ pub struct PendingRoguePortal {
 pub fn tick_pending_rogue_portals(
     mut commands: Commands,
     mut run: ResMut<Run>,
+    mut streams: ResMut<SimStreams>,
     mut q: Query<(Entity, &PendingRoguePortal)>,
 ) {
     for (entity, pending) in &mut q {
-        spawn_idpd_spawn(&mut commands, &mut run, pending.stagger, pending.at);
+        spawn_idpd_spawn(
+            &mut commands,
+            &mut run,
+            pending.stagger,
+            pending.at,
+            &mut streams.idpd,
+        );
         commands.entity(entity).despawn();
     }
 }
@@ -718,6 +733,7 @@ pub fn tick_idpd_vans(
     mut cues: ResMut<Queue<AudioCue>>,
     player_q: Query<(&Pos, &Player, &Inventory, &Health), (With<Player>, Without<Enemy>)>,
     mut vans: Query<(Entity, &Pos, &mut IdpdVanDeploy), (With<Enemy>, Without<IdpdVanDeployed>)>,
+    mut streams: ResMut<SimStreams>,
 ) {
     let steps = (time.delta_secs * crate::SIM_HZ as f32).round();
     let context = enemy_spawn_context(&run, scarier.0, heavy_heart.0);
@@ -750,15 +766,16 @@ pub fn tick_idpd_vans(
                 &run,
                 pos.0,
                 &player_q,
+                &mut streams.idpd,
             );
             continue;
         }
 
         // GML `Van/Alarm_1.gml:14-15`
-        let mut rng = rand::rng();
+        let rng = &mut streams.idpd;
         let back = pos.0 + glam::Vec2::new(-55.0 * van.right, 0.0);
         for _ in 0..3 + run.loop_count {
-            let y = rng.random_range(-5.0..5.0);
+            let y = rng.random_range(-5.0_f32..5.0);
             spawn_at(
                 &mut commands,
                 &catalog,
@@ -767,6 +784,7 @@ pub fn tick_idpd_vans(
                 1.0,
                 run.loop_count,
                 context,
+                rng,
             );
         }
         // GML `Alarm_1.gml:17-32`
@@ -778,7 +796,7 @@ pub fn tick_idpd_vans(
                 EnemyKind::IdpdShield
             };
             for _ in 0..1 + run.loop_count {
-                let y = rng.random_range(-5.0..5.0);
+                let y = rng.random_range(-5.0_f32..5.0);
                 spawn_at(
                     &mut commands,
                     &catalog,
@@ -787,6 +805,7 @@ pub fn tick_idpd_vans(
                     1.0,
                     run.loop_count,
                     context,
+                    rng,
                 );
             }
         } else {
@@ -796,7 +815,7 @@ pub fn tick_idpd_vans(
                 _ => EnemyKind::EliteShielder,
             };
             for _ in 0..run.loop_count {
-                let y = rng.random_range(-5.0..5.0);
+                let y = rng.random_range(-5.0_f32..5.0);
                 spawn_at(
                     &mut commands,
                     &catalog,
@@ -805,6 +824,7 @@ pub fn tick_idpd_vans(
                     1.0,
                     run.loop_count,
                     context,
+                    rng,
                 );
             }
         }
@@ -824,11 +844,11 @@ fn van_destroy(
     run: &Run,
     pos: glam::Vec2,
     player_q: &Query<(&Pos, &Player, &Inventory, &Health), (With<Player>, Without<Enemy>)>,
+    rng: &mut SimRng,
 ) {
     let Ok((_, player, inv, health)) = player_q.single() else {
         return;
     };
-    let mut rng = rand::rng();
     for _ in 0..3 {
         crate::pickups::maybe_spawn_drop_ctx(
             commands,
@@ -842,13 +862,14 @@ fn van_destroy(
             run.loop_count,
             None,
             &crate::pickups::ChestCtx::default(),
+            rng,
         );
     }
     for _ in 0..3 {
         let at = pos
             + glam::Vec2::new(
-                rng.random_range(0.0..40.0) - 20.0,
-                rng.random_range(0.0..20.0) - 10.0,
+                rng.random_range(0.0_f32..40.0) - 20.0,
+                rng.random_range(0.0_f32..20.0) - 10.0,
             );
         commands.spawn((
             GameCleanup,
@@ -867,8 +888,8 @@ fn van_destroy(
     for _ in 0..3 {
         let at = pos
             + glam::Vec2::new(
-                rng.random_range(0.0..16.0) - 8.0,
-                rng.random_range(0.0..16.0) - 8.0,
+                rng.random_range(0.0_f32..16.0) - 8.0,
+                rng.random_range(0.0_f32..16.0) - 8.0,
             );
         queue_enemy_spawn(commands, EnemyKind::PopoFreak, at, 1.0, run.loop_count);
     }

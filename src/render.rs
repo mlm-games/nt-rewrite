@@ -30,11 +30,11 @@ use std::sync::Arc;
 
 use bevy_ecs::prelude::*;
 use glam::{DVec2, DVec4, Vec2};
-use rand::RngExt;
-use repame_view2d::{ActorDraw, ActorItem};
 use repame_anim::{AnimCatalog, AnimDef, AtlasDesc, UvRect, frame_key};
 use repame_atlas::AtlasId;
 use repame_fx::{DamageNumber, Particle, particle_sprites};
+use repame_sim::rng::{Rng, SimRng};
+use repame_view2d::{ActorDraw, ActorItem};
 use repame_view2d::{
     AtlasUpload, BatchDesc, Camera2d, FitMode, SpriteBlend, SpriteInstance, WorldText, dp_to_world,
     effective_fit, world_to_dp,
@@ -2308,6 +2308,12 @@ pub fn world_instances_cached(
     let cached_wall_top = reuse.then(|| cache.wall_top.clone());
     let cached_wall_centers = reuse.then(|| cache.wall_centers.clone());
     let cached_wall_shadows = reuse.then(|| cache.wall_shadows.clone());
+    // Presentation jitter (shield `orandom`) draws off `fx`: read out here
+    // because the body re-borrows `world`, written back at the tail.
+    let mut fx_rng = world
+        .get_resource_mut::<crate::rng_streams::SimStreams>()
+        .map(|streams| streams.fx)
+        .unwrap_or_else(|| SimRng::seeded(0));
     let mut out = cached_prefix
         .as_deref()
         .map(|sprites| sprites.to_vec())
@@ -3760,8 +3766,7 @@ pub fn world_instances_cached(
                 };
                 let time = shield.timer.elapsed_secs() * 30.0;
                 let jitter = if time >= 28.0 {
-                    let mut rng = rand::rng();
-                    rng.random_range(0.0f32..(time / 28.0))
+                    fx_rng.random_range(0.0f32..(time / 28.0))
                 } else {
                     0.0
                 };
@@ -4260,6 +4265,9 @@ pub fn world_instances_cached(
     out.extend(wall_out);
     out.extend(wall_trans);
     out.extend(wall_top);
+    if let Some(mut streams) = world.get_resource_mut::<crate::rng_streams::SimStreams>() {
+        streams.fx = fx_rng;
+    }
     out
 }
 
@@ -9017,7 +9025,10 @@ pub fn gui_text_sprites(
 /// crystals, allies, snares, I.D.P.D. spawns, crown pedestals and the sewer
 /// `styleb` floor tiles.
 pub fn darkness_light_stamps(world: &mut World, assets: &RenderAssets) -> Vec<ActorDraw> {
-    let mut rng = rand::rng();
+    let mut fx_rng = world
+        .get_resource_mut::<crate::rng_streams::SimStreams>()
+        .map(|streams| streams.fx)
+        .unwrap_or_else(|| SimRng::seeded(0));
     const DISC: &str = "images/sprPortalClear.png";
     let mut lights: Vec<(glam::Vec2, f32, f32)> = Vec::new();
     {
@@ -9113,7 +9124,7 @@ pub fn darkness_light_stamps(world: &mut World, assets: &RenderAssets) -> Vec<Ac
     let mut out = Vec::new();
     let dim = crate::dark_pass::DARK_DIM;
     for (pos, radius, _) in &lights {
-        let r = *radius + rng.random_range(0.0..4.0);
+        let r = *radius + fx_rng.random_range(0.0_f32..4.0);
         if let Some(s) =
             assets.sprite_scaled_rotated(DISC, 0, *pos, r * 2.0 / 64.0, 0.0, [dim, dim, dim, 1.0])
         {
@@ -9124,11 +9135,14 @@ pub fn darkness_light_stamps(world: &mut World, assets: &RenderAssets) -> Vec<Ac
         if *core <= 0.0 {
             continue;
         }
-        let r = *core + rng.random_range(0.0..3.0);
+        let r = *core + fx_rng.random_range(0.0_f32..3.0);
         if let Some(s) = assets.sprite_scaled_rotated(DISC, 0, *pos, r * 2.0 / 64.0, 0.0, [1.0; 4])
         {
             out.push(s);
         }
+    }
+    if let Some(mut streams) = world.get_resource_mut::<crate::rng_streams::SimStreams>() {
+        streams.fx = fx_rng;
     }
     out
 }

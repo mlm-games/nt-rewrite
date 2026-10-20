@@ -29,6 +29,7 @@ use crate::data::EnemyKind;
 use crate::effects::spawn_burst;
 use crate::environment::PropDeathEffect;
 use crate::msg::Queue;
+use crate::rng_streams::SimStreams;
 use crate::spatial::Pos;
 use crate::worldgen::WALL_PX;
 
@@ -51,6 +52,7 @@ pub fn apply_pending_wall_breaks(
     mut trauma: ResMut<Trauma>,
     run: Res<Run>,
     mut cues: ResMut<Queue<AudioCue>>,
+    mut streams: ResMut<SimStreams>,
     pending: Query<(Entity, &PendingWallBreak)>,
     walls: Query<(Entity, &WallCell, &Pos), With<WallTile>>,
 ) {
@@ -113,10 +115,10 @@ pub fn apply_pending_wall_breaks(
             }
             broken.push(((cell.0, cell.1), wpos));
 
-            let mut rng = rand::rng();
+            let rng = &mut streams.fx;
             spawn_burst(
                 &mut commands,
-                &mut rng,
+                rng,
                 wpos,
                 8,
                 [0.7, 0.65, 0.55, 1.0],

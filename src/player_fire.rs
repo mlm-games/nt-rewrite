@@ -15,7 +15,7 @@
 //!
 //! Headless adaptations (no render engine):
 //! - `Transform` -> [`Pos`]; `Timer` -> [`GTimer`]; `Time<Fixed>` ->
-//!   [`SimTime`]; thread rng -> `rand::rng()`.
+//!   [`SimTime`]; thread rng -> the subsystem's `SimStreams` field.
 //! - Audio spawns -> [`AudioCue`]s pushed into [`Queue`] (the platform
 //!   layer plays them). Stems keep the GML sound names (`sndEmpty`,
 //!   `sndShotgun`, `sndMeleeFlip`, …); GML plays these through
@@ -39,9 +39,9 @@
 use crate::anim::SpriteAnim;
 use bevy_ecs::prelude::*;
 use glam::Vec2;
-use rand::RngExt;
 use repame_fx::Trauma;
 use repame_sim::SimTime;
+use repame_sim::rng::{Rng, SimRng};
 
 use crate::audio::{AudioCue, GameAudio, MainVol};
 use crate::combat::Explosion;
@@ -77,6 +77,7 @@ use crate::environment::{
 use crate::input::NtInput;
 use crate::msg::Queue;
 use crate::pickups::{spawn_chest_with, spawn_flung_weapon_pickup, spawn_pickup, spawn_rad_burst};
+use crate::rng_streams::SimStreams;
 use crate::savedata_part::{SaveData, character_def, check_progress_unlocks};
 use crate::secrets::SecretTriggers;
 use crate::spatial::{PLAYER_RADIUS, Pos, move_bounce_solid, move_contact_solid};
@@ -572,8 +573,9 @@ pub fn player_fire(
     )>,
     mut input: ResMut<NtInput>,
     mut commands: Commands,
-    mut trauma: ResMut<Trauma>,
-    mut hitstop: ResMut<HitStop>,
+    // Folded into one param: the system already sits at bevy_ecs's 16-param
+    // cap and the fire draws need a 17th.
+    (mut trauma, mut hitstop): (ResMut<Trauma>, ResMut<HitStop>),
     mut cues: ResMut<Queue<AudioCue>>,
     mut rumble_q: ResMut<Queue<RumbleRequest>>,
     mut toast: ResMut<Toast>,
@@ -595,6 +597,7 @@ pub fn player_fire(
     mut vis_q: Query<&mut WeaponVisual>,
     catalog: Res<repame_anim::AnimCatalog>,
     mut tut: Option<ResMut<crate::state::TutorialState>>,
+    mut streams: ResMut<SimStreams>,
     mut crib_sitters: ParamSet<(
         Query<&mut crate::comps_b::YvCouch>,
         Query<&mut crate::comps_b::YungCuz>,
@@ -710,11 +713,11 @@ pub fn player_fire(
     // 0.25, destroyed 8 steps later (`alarm[0] = 8` with `time = 0`).
     if player.stress && health.hp > 0 {
         let stress_drop = (1.0 - health.hp as f32 / health.max.max(1) as f32).max(0.0);
-        let mut rng = rand::rng();
-        if rng.random_range(0.0..2.0) < stress_drop {
+        let rng = &mut streams.player_fire;
+        if rng.random_range(0.0_f32..2.0) < stress_drop {
             let base_deg = aim.0.y.atan2(aim.0.x).to_degrees();
-            let dir = (base_deg + 180.0 + rng.random_range(0.0..45.0)).to_radians();
-            let speed = (2.0 + rng.random_range(0.0..2.0)) * 30.0;
+            let dir = (base_deg + 180.0 + rng.random_range(0.0_f32..45.0)).to_radians();
+            let speed = (2.0 + rng.random_range(0.0_f32..2.0)) * 30.0;
             spawn_shell_casing_at(
                 &mut commands,
                 &catalog,
@@ -724,7 +727,8 @@ pub fn player_fire(
                 speed,
                 8.0 / 30.0,
                 0.25,
-                rng.random_range(0..3),
+                rng.random_range(0u32..3),
+                &mut streams.fx,
             );
         }
     }
@@ -762,7 +766,14 @@ pub fn player_fire(
         if primary_def.melee.is_none() {
             run.shots_fired += 1;
         }
-        fire_burst_volley(&mut commands, &mut fx, &shot, &player, &mut vis_q);
+        fire_burst_volley(
+            &mut commands,
+            &mut fx,
+            &shot,
+            &player,
+            &mut vis_q,
+            &mut streams,
+        );
         cooldown.burst_left -= 1;
         cooldown.burst_timer = GTimer::from_seconds(primary_def.burst_interval, TimerMode::Once);
     }
@@ -783,7 +794,14 @@ pub fn player_fire(
         if secondary_def.melee.is_none() {
             run.shots_fired += 1;
         }
-        fire_burst_volley(&mut commands, &mut fx, &shot, &player, &mut vis_q);
+        fire_burst_volley(
+            &mut commands,
+            &mut fx,
+            &shot,
+            &player,
+            &mut vis_q,
+            &mut streams,
+        );
         cooldown.burst_left_b -= 1;
         cooldown.burst_timer_b =
             GTimer::from_seconds(secondary_def.burst_interval, TimerMode::Once);
@@ -828,6 +846,7 @@ pub fn player_fire(
             &mut cooldown,
             true,
             &mut vis_q,
+            &mut streams,
         );
     }
 
@@ -856,6 +875,7 @@ pub fn player_fire(
             &mut cooldown,
             true,
             &mut vis_q,
+            &mut streams,
         );
     }
 
@@ -868,13 +888,14 @@ fn fire_burst_volley(
     shot: &GunShot,
     player: &Player,
     vis_q: &mut Query<&mut WeaponVisual>,
+    streams: &mut SimStreams,
 ) {
     for mut wv in vis_q.iter_mut() {
         if wv.owner == shot.player_ent && wv.slot == shot.visual_slot {
             wv.wkick = shot.def.recoil;
         }
     }
-    spawn_pellets(commands, fx, shot, player);
+    spawn_pellets(commands, fx, shot, player, streams);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -889,6 +910,7 @@ fn fire_one_gun(
     cooldown: &mut FireCooldown,
     consume_ammo: bool,
     vis_q: &mut Query<&mut WeaponVisual>,
+    streams: &mut SimStreams,
 ) {
     let def = shot.def;
     let archetype = projectile_arch(shot.weapon_id);
@@ -978,11 +1000,13 @@ fn fire_one_gun(
     *timer = GTimer::from_seconds(cd.max(0.03), TimerMode::Once);
 
     if let Some(melee) = def.melee {
-        melee_attack(commands, fx, shot, player, health, vel, melee, vis_q);
+        melee_attack(
+            commands, fx, shot, player, health, vel, melee, vis_q, streams,
+        );
         return;
     }
 
-    spawn_pellets(commands, fx, shot, player);
+    spawn_pellets(commands, fx, shot, player, streams);
     vel.0 -= shot.aim.normalize_or_zero() * gml_fire_push_px_s(shot.def.name);
     for mut wv in vis_q.iter_mut() {
         if wv.owner == shot.player_ent && wv.slot == shot.visual_slot {
@@ -1416,7 +1440,13 @@ fn weapon_fire_cues(fx: &mut FireFx, id: WeaponId, burst: bool, player: &Player,
     }
 }
 
-fn spawn_pellets(commands: &mut Commands, fx: &mut FireFx, shot: &GunShot, player: &Player) {
+fn spawn_pellets(
+    commands: &mut Commands,
+    fx: &mut FireFx,
+    shot: &GunShot,
+    player: &Player,
+    streams: &mut SimStreams,
+) {
     let id = shot.weapon_id;
     let sleep = weapon_sleep_secs(id);
     if sleep > 0.0 {
@@ -1440,10 +1470,9 @@ fn spawn_pellets(commands: &mut Commands, fx: &mut FireFx, shot: &GunShot, playe
     // Firing logic untouched: bursts/pellets/beams below are unchanged.
     commands.spawn(FiredWeapon::new(muzzle, shot.aim));
     if shot.def.muzzle_burst > 0 {
-        let mut rng = rand::rng();
         spawn_burst(
             commands,
-            &mut rng,
+            &mut streams.fx,
             muzzle,
             shot.def.muzzle_burst,
             [1.0, 0.85, 0.25, 1.0],
@@ -1526,6 +1555,7 @@ fn spawn_pellets(commands: &mut Commands, fx: &mut FireFx, shot: &GunShot, playe
             shot.pos,
             shot.aim.normalize_or_zero(),
             Team::Player,
+            &mut streams.player_fire,
         );
         return;
     }
@@ -1539,11 +1569,12 @@ fn spawn_pellets(commands: &mut Commands, fx: &mut FireFx, shot: &GunShot, playe
                 ultra_spin: matches!(player.ultra, Some(UltraMutationId::BigDogHeavyArtillery)),
                 ..spin
             },
+            &mut streams.player_fire,
         );
         return;
     }
 
-    let mut rng = rand::rng();
+    let rng = &mut streams.player_fire;
     let spread = def.spread * player.spread_mult * player.accuracy;
 
     let pierce = if archetype.chain.is_some() {
@@ -1559,7 +1590,7 @@ fn spawn_pellets(commands: &mut Commands, fx: &mut FireFx, shot: &GunShot, playe
         let angle = base_angle + rng.random_range(-spread..spread);
         let dir = Vec2::new(angle.cos(), angle.sin());
         let speed = if def.ammo == AmmoKind::Shells {
-            rng.random_range(360.0..540.0)
+            rng.random_range(360.0_f32..540.0)
         } else {
             def.speed
         };
@@ -1614,14 +1645,20 @@ fn spawn_pellets(commands: &mut Commands, fx: &mut FireFx, shot: &GunShot, playe
                 shot.aim,
                 bonus,
                 (0.0, 25.0),
+                rng,
             );
         }
     }
 }
 
 /// GML `scrFire.gml:789-796` / `DogSpinAttack/Create_0.gml:1-7`.
-fn spawn_dog_spin_attack(commands: &mut Commands, pos: Vec2, creator: Entity, spec: SpinSpawn) {
-    let mut rng = rand::rng();
+fn spawn_dog_spin_attack(
+    commands: &mut Commands,
+    pos: Vec2,
+    creator: Entity,
+    spec: SpinSpawn,
+    rng: &mut SimRng,
+) {
     commands.spawn((
         LevelCleanup,
         SpinAttack {
@@ -1714,13 +1751,9 @@ pub fn slash_life_secs(frames: u32) -> f32 {
 
 /// GML scrFire melee: `wepangle *= -1` on every swing, so the held weapon
 /// alternates sides each click (fresh roll only if it was somehow 0).
-pub fn flip_melee_angle(wep_angle: f32) -> f32 {
+pub fn flip_melee_angle(wep_angle: f32, rng: &mut SimRng) -> f32 {
     if wep_angle == 0.0 {
-        if rand::rng().random_bool(0.5) {
-            120.0
-        } else {
-            -120.0
-        }
+        if rng.random_bool(0.5) { 120.0 } else { -120.0 }
     } else {
         -wep_angle
     }
@@ -1736,6 +1769,7 @@ fn melee_attack(
     vel: &mut Velocity,
     melee: MeleeDef,
     vis_q: &mut Query<&mut WeaponVisual>,
+    streams: &mut SimStreams,
 ) {
     let _ = melee;
     fx.trauma.add(shot.def.shake.max(0.12) * fx.shake_scale);
@@ -1744,7 +1778,7 @@ fn melee_attack(
     for mut wv in vis_q.iter_mut() {
         if wv.owner == shot.player_ent && wv.slot == shot.visual_slot {
             wv.wkick = gml_melee_wkick(shot.def.name);
-            wv.wep_angle = flip_melee_angle(wv.wep_angle);
+            wv.wep_angle = flip_melee_angle(wv.wep_angle, &mut streams.player_fire);
         }
     }
 
@@ -1777,6 +1811,7 @@ fn melee_attack(
         player_pos,
         MoteStrip::Dust,
         1,
+        &mut streams.fx,
     );
 
     // Slash life reads the fired strip's frame count (GML swaps in the
@@ -1973,6 +2008,7 @@ pub fn tick_ion_charges(
     players: Query<(), With<Player>>,
     mut charges: Query<(Entity, &mut IonCharge)>,
     mut enemies: Query<(Entity, &Pos, &Hitbox, &mut Health, Option<&mut NextHurt>), With<Enemy>>,
+    mut streams: ResMut<SimStreams>,
 ) {
     let dt = time.delta_secs;
     // GML `IonBurst/Other_11` aim source: a keyboard-driven player reads
@@ -2039,6 +2075,7 @@ pub fn tick_ion_charges(
                 at,
                 MoteStrip::Smoke,
                 3,
+                &mut streams.fx,
             );
             trauma.add(0.06);
         }
@@ -2511,6 +2548,7 @@ pub fn hammerhead_chew(
     audio: Res<GameAudio>,
     mut cues: ResMut<Queue<AudioCue>>,
     player_q: Query<(Entity, &Pos, &Player, &Velocity), With<Player>>,
+    mut streams: ResMut<SimStreams>,
     mut props: Query<
         (
             Entity,
@@ -2607,6 +2645,7 @@ pub fn hammerhead_chew(
                 crate::pickups::haste_crown(player) > 0,
                 &audio,
                 &mut cues,
+                &mut streams.environment,
             );
             if let Ok(entrance) = entrances.get(prop_e) {
                 secrets.queue(entrance.target);
@@ -2726,7 +2765,7 @@ fn plant_tangle(
     creator: Entity,
     throne_butt: bool,
     trapper: bool,
-    rng: &mut rand::rngs::ThreadRng,
+    rng: &mut SimRng,
 ) {
     let ultra = if trapper {
         "sndPlantSnareTrapperTB"
@@ -2741,7 +2780,7 @@ fn plant_tangle(
     cue(cues, if throne_butt { ultra } else { plain }, 1.0, 0.0);
     // GML `Tangle/Create_0.gml:4-5`: `image_xscale = choose(1, -1)`,
     // `image_speed = 0.4` over the 6-frame strip.
-    let body = |commands: &mut Commands, at: Vec2, rng: &mut rand::rngs::ThreadRng| {
+    let body = |commands: &mut Commands, at: Vec2, rng: &mut SimRng| {
         commands.spawn((
             LevelCleanup,
             Tangle { creator, team },
@@ -2763,7 +2802,7 @@ fn plant_tangle(
     if trapper {
         let mut ang = rng.random_range(0.0..std::f32::consts::TAU);
         for _ in 0..5 {
-            let at = pos + Vec2::new(ang.cos(), ang.sin()) * rng.random_range(26.0..34.0);
+            let at = pos + Vec2::new(ang.cos(), ang.sin()) * rng.random_range(26.0_f32..34.0);
             body(commands, at, rng);
             ang += 72.0_f32.to_radians();
         }
@@ -2808,6 +2847,7 @@ pub fn tick_snare_zones(
             Without<Tangle>,
         ),
     >,
+    mut streams: ResMut<SimStreams>,
 ) {
     let dt = time.delta_secs;
     let (throne_butt, team) = player_q
@@ -2818,7 +2858,7 @@ pub fn tick_snare_zones(
 
     // Seed travel: GML `TangleSeed` keeps `speed = 12` forever and is
     // consumed by the first body or wall it reaches.
-    let mut rng = rand::rng();
+    let rng = &mut streams.player_fire;
     for (e, mut spos, seed, vel) in &mut seeds {
         spos.0 += vel.0 * dt;
         let hit_wall = !walkable(spos.0);
@@ -2839,7 +2879,7 @@ pub fn tick_snare_zones(
                 seed.creator,
                 throne_butt,
                 seed.trapper,
-                &mut rng,
+                rng,
             );
             commands.entity(e).despawn();
         }
@@ -2911,6 +2951,7 @@ pub fn tick_portal_strikes(
         (With<PortalStrike>, Without<Player>, Without<Enemy>),
     >,
     mut enemies: Query<(&Pos, &mut Health), (With<Enemy>, Without<Player>)>,
+    mut streams: ResMut<SimStreams>,
 ) {
     let dt = time.delta_secs;
 
@@ -2946,6 +2987,7 @@ pub fn tick_portal_strikes(
             at,
             NativeExplosionKind::Popo,
             false,
+            &mut streams.fx,
         );
 
         let step = strike.heading * strike.size;
@@ -3024,6 +3066,7 @@ pub fn robot_eat_drops(
     auto_collect: bool,
     run_area: crate::data::AreaId,
     gen_seed: u64,
+    mut rng: &mut SimRng,
 ) {
     let tb = u32::from(player.throne_butt);
     let life_crown = player.crown == CrownKind::Life;
@@ -3032,7 +3075,6 @@ pub fn robot_eat_drops(
     // (2, 4 with Second Stomach, +1 with Haste) - no crown or ultra
     // multiplier exists on this path.
     let medkit_num = crate::pickups::hppickup_num(player);
-    let mut rng = rand::rng();
 
     // One HP-or-ammo drop; `hp_amount` is the medkit size when HP wins.
     let drop_hp_or_ammo = |commands: &mut Commands,
@@ -3040,14 +3082,17 @@ pub fn robot_eat_drops(
                            player: &Player,
                            health: &mut Health,
                            inv: &mut Inventory,
-                           rng: &mut rand::rngs::ThreadRng,
+                           rng: &mut SimRng,
                            hp_amount: i32| {
         let wants_hp = !life_crown && rng.random_range(0..health.max.max(1)) as i32 > health.hp;
         if wants_hp {
             if auto_collect {
                 health.hp = (health.hp + hp_amount).min(health.max);
             } else {
-                let off = Vec2::new(rng.random_range(-12.0..12.0), rng.random_range(-12.0..12.0));
+                let off = Vec2::new(
+                    rng.random_range(-12.0_f32..12.0),
+                    rng.random_range(-12.0_f32..12.0),
+                );
                 spawn_pickup(
                     commands,
                     catalog,
@@ -3055,6 +3100,7 @@ pub fn robot_eat_drops(
                     pos + off,
                     0,
                     false,
+                    rng,
                 );
             }
         } else {
@@ -3070,7 +3116,10 @@ pub fn robot_eat_drops(
                 let slot = inv.ammo_mut(kind);
                 *slot = (*slot + ammo_pickup_amount(kind)).min(cap);
             } else {
-                let off = Vec2::new(rng.random_range(-12.0..12.0), rng.random_range(-12.0..12.0));
+                let off = Vec2::new(
+                    rng.random_range(-12.0_f32..12.0),
+                    rng.random_range(-12.0_f32..12.0),
+                );
                 // GML `scrPowers.gml:637,655` `__spawn_pickup(AmmoPickup,
                 // _auto_collect)` creates a real `AmmoPickup`, so
                 // `AmmoPickup/Create_0.gml:13-18`'s `CursedPickup` conversion applies
@@ -3085,6 +3134,7 @@ pub fn robot_eat_drops(
                     pos + off,
                     0,
                     false,
+                    rng,
                 );
             }
         }
@@ -3113,17 +3163,17 @@ pub fn robot_eat_drops(
             order: 0,
         };
         if player.crown == CrownKind::Love {
-            spawn_chest_with(commands, catalog, ChestKind::Ammo, pos, &ctx);
+            spawn_chest_with(commands, catalog, ChestKind::Ammo, pos, &ctx, rng);
         } else if rng.random_range(0..health.max.max(1)) as i32 > health.hp
             && rng.random_range(0..3) < 2
         {
-            spawn_chest_with(commands, catalog, ChestKind::Health, pos, &ctx);
+            spawn_chest_with(commands, catalog, ChestKind::Health, pos, &ctx, rng);
         } else {
             let kind = match rng.random_range(0..3) {
                 0 => ChestKind::Weapon,
                 _ => ChestKind::Ammo,
             };
-            spawn_chest_with(commands, catalog, kind, pos, &ctx);
+            spawn_chest_with(commands, catalog, kind, pos, &ctx, rng);
         }
     }
     for _ in 0..(1 + tb) {
@@ -3151,9 +3201,14 @@ pub fn in_blast_box(at: Vec2, left: f32, top: f32, right: f32, bottom: f32) -> b
 /// `MeatExplosion` inherits `damagesource` (`team_none`, `hitid` None) with
 /// `damage = 4` and collides with every `hitme` - enemies, props (bushes,
 /// barrels, obstacles) and the player.
-fn melting_corpse_explosion(commands: &mut Commands, from: Vec2, at: Vec2, size: i32, tb: bool) {
-    let mut rng = rand::rng();
-
+fn melting_corpse_explosion(
+    commands: &mut Commands,
+    from: Vec2,
+    at: Vec2,
+    size: i32,
+    tb: bool,
+    rng: &mut SimRng,
+) {
     // GML `:466` - one BloodStreak thrown away from the player at 8px/step.
     let away = (at - from).normalize_or_zero();
     commands.spawn((
@@ -3279,6 +3334,7 @@ pub fn player_ability(
         Query<&mut WeaponVisual>,
     )>,
     mut enemies: Query<(Entity, &Pos, &mut Health, &Enemy), (With<Enemy>, Without<Player>)>,
+    mut streams: ResMut<SimStreams>,
 ) {
     let Ok((
         player_e,
@@ -3363,6 +3419,7 @@ pub fn player_ability(
                     player_e,
                     &player,
                     &live_tangles,
+                    &mut streams.player_fire,
                 );
                 return;
             }
@@ -3400,6 +3457,7 @@ pub fn player_ability(
         player_e: Entity,
         player: &Player,
         live_tangles: &[(Entity, Vec2)],
+        rng: &mut SimRng,
     ) {
         let trapper = matches!(player.ultra, Some(UltraMutationId::PlantTrapper));
         spawn_snare_seed(
@@ -3415,7 +3473,7 @@ pub fn player_ability(
         for (tangle, tpos) in live_tangles {
             crate::effects::spawn_burst(
                 commands,
-                &mut rand::rng(),
+                rng,
                 *tpos,
                 4,
                 [0.6, 0.55, 0.5, 1.0],
@@ -3546,6 +3604,7 @@ pub fn player_ability(
                     cpos.0,
                     ccorpse.size,
                     player.throne_butt,
+                    &mut streams.player_fire,
                 );
                 commands.entity(ce).despawn();
             }
@@ -3564,6 +3623,7 @@ pub fn player_ability(
                             epos.0,
                             crate::enemy_data::enemy_def(enemy.kind).size as i32,
                             player.throne_butt,
+                            &mut streams.player_fire,
                         );
                         ehealth.hp = 0;
                     }
@@ -3593,6 +3653,7 @@ pub fn player_ability(
                 player_e,
                 &player,
                 &live_tangles,
+                &mut streams.player_fire,
             );
         }
         AbilityKind::PopPop => {
@@ -3671,6 +3732,7 @@ pub fn player_ability(
                         &mut cooldown,
                         false,
                         &mut vis_q,
+                        &mut streams,
                     );
                 }
             }
@@ -3689,6 +3751,7 @@ pub fn player_ability(
                     &mut cooldown,
                     true,
                     &mut vis_q,
+                    &mut streams,
                 );
             }
             // GML `:173`: `if (speed > 14) speed = 14` (px/step).
@@ -3768,6 +3831,7 @@ pub fn player_ability(
                 false,
                 persist.p2().area,
                 persist.p2().gen_seed,
+                &mut streams.pickups,
             );
             if was_cursed {
                 // GML `scrPowers.gml:191` `scr_hit_self(7, HitId.CurseEat)`:
@@ -3776,9 +3840,12 @@ pub fn player_ability(
                     .p3()
                     .note(Some(crate::comps_a::HitId::CurseEat), None);
                 health.hp -= 7;
-                let mut rng = rand::rng();
+                let mut rng = streams.player_fire;
                 for _ in 0..10 {
-                    let off = Vec2::new(rng.random_range(-8.0..8.0), rng.random_range(-8.0..8.0));
+                    let off = Vec2::new(
+                        rng.random_range(-8.0_f32..8.0),
+                        rng.random_range(-8.0_f32..8.0),
+                    );
                     spawn_pickup(
                         &mut commands,
                         &catalog,
@@ -3786,12 +3853,14 @@ pub fn player_ability(
                         pos + off,
                         0,
                         false,
+                        &mut streams.pickups,
                     );
                 }
+                streams.player_fire = rng;
             }
             if wep_rads > 0 {
                 // GML `scrRadDrop(x, y, 15, false, false)`.
-                spawn_rad_burst(&mut commands, &catalog, pos, 15);
+                spawn_rad_burst(&mut commands, &catalog, pos, 15, &mut streams.pickups);
             }
 
             let unlocked = check_progress_unlocks(&mut persist.p0(), 0, 0, false, true, false);
@@ -3809,10 +3878,9 @@ pub fn player_ability(
                 1.0,
                 0.0,
             );
-            let mut rng = rand::rng();
             spawn_burst(
                 &mut commands,
-                &mut rng,
+                &mut streams.fx,
                 pos,
                 8,
                 [0.6, 0.6, 0.6, 1.0],
@@ -3832,7 +3900,7 @@ pub fn player_ability(
                 return;
             }
             let aim_angle = aim_v.y.atan2(aim_v.x);
-            let mut rng = rand::rng();
+            let rng = &mut streams.player_fire;
             let fling = aim_angle + rng.random_range(-2.0f32.to_radians()..2.0f32.to_radians());
             let determination = matches!(player.ultra, Some(UltraMutationId::ChickenDetermination));
             // GML `scrPowers.gml:225`: `scrWeaponPickupCreate(x, y, wep)` puts
@@ -3847,6 +3915,7 @@ pub fn player_ability(
                 player_e,
                 player.throne_butt,
                 if determination { 60 } else { 0 },
+                &mut streams.pickups,
             );
             inv.weapons[slot] = WeaponId::NONE;
             inv.cursed[slot] = false;
@@ -4002,7 +4071,7 @@ pub fn player_ability(
                 .map(|(_, _, wall_pos)| (wall_pos.0, Vec2::splat(WALL_PX)))
                 .collect();
             let speed = (2.0 + f32::from(player.throne_butt)) * 30.0;
-            let mut rng = rand::rng();
+            let rng = &mut streams.player_fire;
             for _ in 0..3 {
                 let angle = rng.random_range(0.0..std::f32::consts::TAU);
                 let dir = Vec2::from_angle(angle);
@@ -4096,6 +4165,7 @@ pub fn player_ability(
                 &mut cooldown,
                 false,
                 &mut vis_q,
+                &mut streams,
             );
 
             // GML `scrPowers.gml:392-394` `UltraSkill.Damnation`:
@@ -4111,7 +4181,7 @@ pub fn player_ability(
             let haste = u32::from(player.crown == CrownKind::Haste);
             let amount = crate::data::ammo_pickup_amount_for(ammo_kind, fish, haste).max(1);
             player.skeleton_gamble += 1;
-            let mut rng = rand::rng();
+            let rng = &mut streams.player_fire;
             let proc = rng.random_range(0..amount) < cost;
             let tb_gate = !player.throne_butt || rng.random_range(0..3) < 2;
             if proc && tb_gate {
@@ -4221,6 +4291,7 @@ pub fn tick_big_dog_missiles(
             ),
         >,
     )>,
+    mut streams: ResMut<SimStreams>,
 ) {
     let dt = time.delta_secs;
     let solids: Vec<(Vec2, Vec2)> = props
@@ -4242,7 +4313,7 @@ pub fn tick_big_dog_missiles(
             Pos(at),
         ));
     };
-    let mut rng = rand::rng();
+    let rng = &mut streams.player_fire;
     let missile_entities: Vec<Entity> = {
         let missiles = sets.p0();
         missiles
@@ -4311,7 +4382,8 @@ pub fn tick_big_dog_missiles(
                     save.as_ref().is_some_and(|save| save.settings.particles),
                     previous_pos,
                     Vec2::ZERO,
-                    rng.random_range(0.5..1.5),
+                    rng.random_range(0.5_f32..1.5),
+                    rng,
                 );
             }
             pos.0

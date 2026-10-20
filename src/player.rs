@@ -5,8 +5,10 @@
 
 use bevy_ecs::prelude::*;
 use glam::Vec2;
-use rand::RngExt;
 use repame_sim::SimTime;
+use repame_sim::rng::{Rng, SimRng};
+
+use crate::rng_streams::SimStreams;
 
 use crate::audio::{AudioCue, GameAudio};
 use crate::comps_a::{
@@ -124,7 +126,7 @@ pub fn player_move(
 // invuln), and the `WeaponVisual` art/anchor/pose/`flip_y`.
 // Conventions: `Timer` -> `GTimer`, `Transform` -> [`Pos`], audio spawns ->
 // [`AudioCue`]s in a [`Queue`], `Time<Fixed>` -> [`SimTime`], thread rng ->
-// `rand::rng()`.
+// the subsystem's `SimStreams` field.
 
 /// Stick aim -> [`AimDir`]. Any nonzero deflection steers: the port
 /// normalizes `aim_axis` directly, and so does GML - the gamepad sampler
@@ -361,6 +363,7 @@ pub fn tick_weapon_visuals(
         With<Player>,
     >,
     mut vis_q: Query<(Entity, &mut WeaponVisual), Without<Player>>,
+    mut streams: ResMut<SimStreams>,
 ) {
     let dt = time.delta_secs;
     let Ok((player_e, _aim, inv, race_state, sucking)) = player_q.single() else {
@@ -436,7 +439,7 @@ pub fn tick_weapon_visuals(
         if wv.wep_id != id {
             wv.wep_id = id;
             wv.wep_angle = if weapon_runtime_def(id).melee.is_some() {
-                if rand::rng().random_bool(0.5) {
+                if streams.fx.random_bool(0.5) {
                     120.0
                 } else {
                     -120.0
@@ -602,12 +605,19 @@ pub fn tick_hold_abilities(
             Without<Projectile>,
         ),
     >,
+    mut streams: ResMut<SimStreams>,
 ) {
     let Ok((player_e, mut ppos, mut player, mut health, mut pvel, aim, race_opt, shield_opt)) =
         player_q.single_mut()
     else {
         return;
     };
+    // Two streams feed this system: the horror stone's shot jitter draws off
+    // the player's fire stream, the throne-butt heal and the toxic drip off
+    // the player's own. `SimRng` is `Copy`, so both are read out here and
+    // written back at the tail.
+    let mut fire_rng = streams.player_fire;
+    let mut player_rng = streams.player;
     let held = input.spec_held;
     let pos = ppos.0;
     let dt = time.delta_secs;
@@ -721,8 +731,8 @@ pub fn tick_hold_abilities(
                 let dir = aim.0.normalize_or_zero();
                 for _ in 0..n.min(12) {
                     let jitter = Vec2::new(
-                        rand::rng().random_range(-8.0..8.0),
-                        rand::rng().random_range(-8.0..8.0),
+                        fire_rng.random_range(-8.0_f32..8.0),
+                        fire_rng.random_range(-8.0_f32..8.0),
                     );
                     let bdir = (dir * 24.0 + jitter).normalize_or_zero();
                     commands.spawn((
@@ -741,7 +751,7 @@ pub fn tick_hold_abilities(
                         Pos(pos + dir * 18.0),
                     ));
                 }
-                if player.throne_butt && rand::rng().random_range(0..30) == 0 {
+                if player.throne_butt && player_rng.random_range(0..30) == 0 {
                     health.hp = (health.hp + 1).min(health.max);
                 }
             }
@@ -807,13 +817,13 @@ pub fn tick_hold_abilities(
     if player.ability == AbilityKind::ToxicPuke {
         let intimacy = player.ultra == Some(crate::data::UltraMutationId::FrogToxicLord);
         // GML `:639` runs before the hold branch, so the drip is unconditional.
-        if intimacy && rand::rng().random_range(0.0..1.0) < 0.5 {
-            spawn_frog_gas(&mut commands, pos, true);
+        if intimacy && player_rng.random_range(0.0..1.0) < 0.5 {
+            spawn_frog_gas(&mut commands, pos, true, &mut player_rng);
         }
         if held {
             // GML `:661-668` repeats the roll inside the hold.
-            if intimacy && rand::rng().random_range(0.0..1.0) < 0.5 {
-                spawn_frog_gas(&mut commands, pos, true);
+            if intimacy && player_rng.random_range(0.0..1.0) < 0.5 {
+                spawn_frog_gas(&mut commands, pos, true, &mut player_rng);
             }
             let mut gas = if let Ok(c) = frog_q.get(player_e) {
                 c.gas
@@ -846,7 +856,7 @@ pub fn tick_hold_abilities(
                 // `ToxicGas` instances, each created on the player's origin and
                 // drifting outward on its own random heading.
                 for _ in 0..n.min(30) {
-                    spawn_frog_gas(&mut commands, pos, intimacy);
+                    spawn_frog_gas(&mut commands, pos, intimacy, &mut player_rng);
                 }
                 if gas >= 25.0 {
                     cues.push(AudioCue {
@@ -869,14 +879,15 @@ pub fn tick_hold_abilities(
     } else if frog_q.get(player_e).is_ok() {
         commands.entity(player_e).remove::<FrogCharge>();
     }
+    streams.player_fire = fire_rng;
+    streams.player = player_rng;
 }
 
 /// GML `ToxicGas/Create_0.gml:3-13`: one drifting, growing cloud on the
 /// player's origin. `Intimacy` adds the `speed ++`.
-fn spawn_frog_gas(commands: &mut Commands, at: Vec2, intimacy: bool) {
-    let mut rng = rand::rng();
+fn spawn_frog_gas(commands: &mut Commands, at: Vec2, intimacy: bool, rng: &mut SimRng) {
     let heading = rng.random_range(0.0..std::f32::consts::TAU);
-    let speed = rng.random_range(0.2..1.7);
+    let speed = rng.random_range(0.2_f32..1.7);
     let mut state = crate::comps_b::ToxicGasState::new();
     if intimacy {
         state.speed_bonus = 1.0;
@@ -886,6 +897,7 @@ fn spawn_frog_gas(commands: &mut Commands, at: Vec2, intimacy: bool) {
         at,
         glam::Vec2::new(heading.cos(), heading.sin()) * speed * 30.0,
         state,
+        rng,
     );
 }
 

@@ -14,6 +14,7 @@ use crate::time::{GTimer, TimerMode};
 use crate::comps_a::{Inventory, Player, Run, Toast};
 use crate::comps_b::{ChestKind, Enemy, OpenedChest, Pickup, PickupKind, RadChestContainer};
 use crate::data::{AreaId, EnemyKind, SecretTarget};
+use crate::rng_streams::SimStreams;
 use crate::spatial::Pos;
 
 /// Tracks secret eligibility across a floor run.
@@ -238,6 +239,7 @@ pub fn tick_pizza_entrances(
         (With<crate::comps_b::Enemy>, Without<crate::comps_a::Player>),
     >,
     mut shots: Query<(Entity, &crate::comps_a::Team), With<crate::Projectile>>,
+    mut streams: ResMut<SimStreams>,
 ) {
     if gates.is_empty() {
         return;
@@ -274,7 +276,14 @@ pub fn tick_pizza_entrances(
             hp.hp = 0;
         }
         let mut enemy_shots = &mut shots;
-        crate::progression::spawn_portal(&mut commands, &catalog, &mut enemy_shots, pos, 1);
+        crate::progression::spawn_portal(
+            &mut commands,
+            &catalog,
+            &mut enemy_shots,
+            pos,
+            1,
+            &mut streams.progression,
+        );
         run.queued_secret = Some(crate::data::SecretTarget::PizzaSewers);
     }
 }
@@ -296,6 +305,7 @@ pub fn tick_car_venus_fixed(
     cars: Query<(Entity, &Pos, &crate::comps_b::PropSprites), Without<Player>>,
     mut shots: Query<(Entity, &crate::comps_a::Team), With<crate::Projectile>>,
     mut enemies: Query<(Entity, &mut crate::comps_a::Health), With<Enemy>>,
+    mut streams: ResMut<SimStreams>,
 ) {
     if cars.is_empty() || !input.peek_interact_pressed() {
         return;
@@ -326,7 +336,14 @@ pub fn tick_car_venus_fixed(
         triggers.queue(crate::data::SecretTarget::YvMansion);
     }
     let at = ppos;
-    crate::progression::spawn_portal(&mut commands, &catalog, &mut shots, at, 1);
+    crate::progression::spawn_portal(
+        &mut commands,
+        &catalog,
+        &mut shots,
+        at,
+        1,
+        &mut streams.progression,
+    );
     for (_, mut health) in enemies.iter_mut() {
         health.hp = 0;
     }
@@ -426,6 +443,7 @@ pub fn tick_van_hq(
         (With<Enemy>, Without<Player>),
     >,
     mut shots: Query<(Entity, &crate::comps_a::Team), With<crate::Projectile>>,
+    mut streams: ResMut<SimStreams>,
 ) {
     if enemies.is_empty() || !input.peek_interact_pressed() {
         return;
@@ -465,7 +483,14 @@ pub fn tick_van_hq(
         hp.hp = 0;
     }
     commands.entity(entity).despawn();
-    crate::progression::spawn_portal(&mut commands, &catalog, &mut shots, ppos, 2);
+    crate::progression::spawn_portal(
+        &mut commands,
+        &catalog,
+        &mut shots,
+        ppos,
+        2,
+        &mut streams.progression,
+    );
 }
 
 /// Announce a queued secret route while the toast is idle. Port-only

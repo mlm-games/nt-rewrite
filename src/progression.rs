@@ -17,9 +17,9 @@
 //!   manage the `SaveDirty` flag (the write lands with the save phase).
 
 use bevy_ecs::prelude::*;
-use rand::RngExt;
 use repame_fx::Trauma;
 use repame_sim::SimTime;
+use repame_sim::rng::{Rng, SimRng};
 
 use crate::audio::{AudioCue, GameAudio};
 use crate::combat::queue_enemy_spawn_birth;
@@ -45,6 +45,7 @@ use crate::effects::{
 use crate::environment::{PropDeathEffect, spawn_prop_corpse, spawn_prop_death_effect};
 use crate::msg::Queue;
 use crate::pickups::ProtoChestState;
+use crate::rng_streams::SimStreams;
 use crate::savedata_part::SaveData;
 use crate::spatial::Pos;
 use crate::state::{AppState, Paused};
@@ -606,6 +607,7 @@ pub fn check_level_up(
     toast: &mut Toast,
     cues: &mut Queue<AudioCue>,
     pos: glam::Vec2,
+    rng: &mut SimRng,
 ) {
     let mut leveled = false;
 
@@ -643,6 +645,7 @@ pub fn check_level_up(
                 [0.25, 1.0, 0.25, 1.0]
             },
             player.level,
+            rng,
         );
     }
 }
@@ -698,11 +701,11 @@ pub fn level_up_feedback(
     pos: glam::Vec2,
     color: [f32; 4],
     level: u32,
+    rng: &mut SimRng,
 ) {
     trauma.add(0.35);
     flash_white(flash, 0.15);
-    let mut rng = rand::rng();
-    spawn_burst(commands, &mut rng, pos, 32, color, (120.0, 360.0));
+    spawn_burst(commands, rng, pos, 32, color, (120.0, 360.0));
     cues.push(AudioCue {
         name: if level >= 10 {
             "sndLevelUltra"
@@ -716,24 +719,23 @@ pub fn level_up_feedback(
 
 /// Roll up to 4 unowned mutations (Destiny crowns roll 1; Patience
 /// grants 4 next roll, then is consumed without repeating).
-pub fn roll_mutations(player: &mut Player) -> Vec<MutationId> {
-    roll_mutations_for(player, RaceId::Fish)
+pub fn roll_mutations(player: &mut Player, rng: &mut SimRng) -> Vec<MutationId> {
+    roll_mutations_for(player, RaceId::Fish, rng)
 }
 
-pub fn roll_mutations_for(player: &mut Player, race: RaceId) -> Vec<MutationId> {
-    let mut rng = rand::rng();
-    roll_mutations_with_for(player, race, &mut rng)
+pub fn roll_mutations_for(player: &mut Player, race: RaceId, rng: &mut SimRng) -> Vec<MutationId> {
+    roll_mutations_with_for(player, race, rng)
 }
 
 /// Seeded roll (deterministic under a seeded RNG; tests use this).
-pub fn roll_mutations_with(player: &mut Player, rng: &mut impl rand::RngExt) -> Vec<MutationId> {
+pub fn roll_mutations_with(player: &mut Player, rng: &mut impl Rng) -> Vec<MutationId> {
     roll_mutations_with_for(player, RaceId::Fish, rng)
 }
 
 pub fn roll_mutations_with_for(
     player: &mut Player,
     race: RaceId,
-    rng: &mut impl rand::RngExt,
+    rng: &mut impl Rng,
 ) -> Vec<MutationId> {
     let mut pool: Vec<MutationId> = ALL_MUTATIONS
         .iter()
@@ -800,7 +802,7 @@ pub fn roll_mutations_with_for(
 mod mutation_roll_tests {
     use super::{MutationId, roll_mutations_with};
     use crate::comps_a::Player;
-    use rand::{SeedableRng, rngs::StdRng};
+    use repame_sim::rng::SimRng;
 
     #[test]
     fn heavy_heart_replaces_first_choice_after_three_weapon_mutations() {
@@ -810,7 +812,7 @@ mod mutation_roll_tests {
             MutationId::RecycleGland,
             MutationId::BoltMarrow,
         ]);
-        let mut rng = StdRng::seed_from_u64(7);
+        let mut rng = SimRng::seeded(7);
         let choices = roll_mutations_with(&mut player, &mut rng);
         assert_eq!(choices.first(), Some(&MutationId::HeavyHeart));
         assert!(player.heavy_heart_wanted);
@@ -871,6 +873,7 @@ pub fn handle_mutation_choice(
     mut fx: LevelFx,
     mut save: ResMut<SaveData>,
     mut dirty: ResMut<SaveDirty>,
+    mut streams: ResMut<SimStreams>,
 ) {
     if ultra.is_none() && pending.is_none() {
         if flow.choice.0.is_some() {
@@ -923,7 +926,8 @@ pub fn handle_mutation_choice(
             player.ultra_pick_owed = false;
 
             if player.mutation_picks_owed > 0 {
-                let choices = roll_mutations_for(&mut player, race_state.race);
+                let choices =
+                    roll_mutations_for(&mut player, race_state.race, &mut streams.progression);
                 if choices.is_empty() {
                     health.hp = health.max;
                     try_recharge_strong_spirit(&mut player, &health);
@@ -994,7 +998,8 @@ pub fn handle_mutation_choice(
         }
 
         if player.mutation_picks_owed > 0 {
-            let choices = roll_mutations_for(&mut player, race_state.race);
+            let choices =
+                roll_mutations_for(&mut player, race_state.race, &mut streams.progression);
             if choices.is_empty() {
                 health.hp = health.max;
                 try_recharge_strong_spirit(&mut player, &health);
@@ -1349,13 +1354,14 @@ pub fn spawn_portal(
     enemy_shots: &mut Query<(Entity, &Team), With<Projectile>>,
     pos: glam::Vec2,
     kind: u8,
+    rng: &mut SimRng,
 ) {
     for (e, team) in &*enemy_shots {
         if *team != Team::Player {
             commands.entity(e).despawn();
         }
     }
-    spawn_portal_at(commands, catalog, pos, kind);
+    spawn_portal_at(commands, catalog, pos, kind, rng);
 }
 
 /// The same `Portal/Create_0` law for callers that reach it through a
@@ -1365,6 +1371,7 @@ pub fn spawn_portal_at(
     catalog: &repame_anim::AnimCatalog,
     pos: glam::Vec2,
     kind: u8,
+    rng: &mut SimRng,
 ) {
     let mut pe = commands.spawn((
         GameCleanup,
@@ -1407,15 +1414,7 @@ pub fn spawn_portal_at(
         },
         Pos(pos),
     ));
-    let mut rng = rand::rng();
-    spawn_burst(
-        commands,
-        &mut rng,
-        pos,
-        4,
-        [0.5, 0.8, 1.0, 1.0],
-        (60.0, 160.0),
-    );
+    spawn_burst(commands, rng, pos, 4, [0.5, 0.8, 1.0, 1.0], (60.0, 160.0));
 }
 
 /// GML `IceFlower/Step_0.gml:4-22` verbatim: the `feed >= 4` payoff, the only
@@ -1434,6 +1433,7 @@ pub fn ice_flower_jungle(
     enemies: &mut Query<(Entity, &mut Health), With<Enemy>>,
     flower: Entity,
     flower_pos: glam::Vec2,
+    rng: &mut SimRng,
 ) {
     triggers.queue(SecretTarget::Jungle);
 
@@ -1445,7 +1445,7 @@ pub fn ice_flower_jungle(
         health.hp = 0;
     }
 
-    spawn_portal(commands, catalog, enemy_shots, flower_pos, 1);
+    spawn_portal(commands, catalog, enemy_shots, flower_pos, 1, rng);
 
     // GML `IceFlower/Step_0:14-19`: the jungle secret eats the Last Wish
     // and hands the skill point back, so the next pick is free.
@@ -1478,6 +1478,7 @@ pub fn portal_check(
     // the statue is a `Prop`, so it needs its own query.
     vault: Query<Entity, With<CrownPedestal>>,
     vault_statues: Query<Entity, With<crate::crown::VaultStatue>>,
+    mut streams: ResMut<SimStreams>,
 ) {
     // GML `Corpse/Alarm_0.gml:3`: `TutCont` blocks the ordinary exit portal,
     // so the tutorial's own portal (GML `TutCont/Alarm_0:11`) is the only
@@ -1517,15 +1518,15 @@ pub fn portal_check(
         variance: 0.0,
     });
 
-    let mut rng = rand::rng();
-    let pos = mask.random_floor_pos(&mut rng, 80.0);
+    let rng = &mut streams.progression;
+    let pos = mask.random_floor_pos(rng, 80.0);
 
     // GML `Corpse/Alarm_0:23-28`: `type = 1`, `type = 2` for `area_hq`.
     // Type 3 exists only on the two statue/pedestal portals
     // (`ProtoStatue/Destroy_0:13-15`, `CrownPickup/Collision_Player:19`).
     let kind: u8 = if run.area == AreaId::HQ { 2 } else { 1 };
 
-    spawn_portal(&mut commands, &catalog, &mut enemy_shots, pos, kind);
+    spawn_portal(&mut commands, &catalog, &mut enemy_shots, pos, kind, rng);
 
     trauma.add(0.25);
     chromatic_pulse(&mut chroma, 0.25);
@@ -1686,6 +1687,7 @@ pub(crate) struct ChestLootCtx {
 /// set `hp = 0` and let this run.
 pub fn tick_destroyed_rad_chests(
     mut commands: Commands,
+    mut streams: ResMut<SimStreams>,
     catalog: Res<repame_anim::AnimCatalog>,
     audio: Res<GameAudio>,
     mut cues: ResMut<Queue<AudioCue>>,
@@ -1732,6 +1734,7 @@ pub fn tick_destroyed_rad_chests(
             kind,
             hasted,
             particles,
+            &mut streams.fx,
         );
         commands.entity(e).try_despawn();
     }
@@ -1751,8 +1754,8 @@ fn rad_chest_destroyed(
     kind: ChestKind,
     hasted: bool,
     particles: bool,
+    rng: &mut SimRng,
 ) {
-    let mut rng = rand::rng();
     if kind == ChestKind::RadMaggot {
         // `RadMaggotChest/Destroy_0.gml:1-3`: 6 `Smoke` on a 60-degree ring,
         // then 3 `AcidStreak` at 120 degrees, then `alarm[0] = 8` releases
@@ -1764,7 +1767,8 @@ fn rad_chest_destroyed(
                 particles,
                 pos,
                 glam::Vec2::from_angle(dir),
-                4.0 + rng.random_range(0.0..1.0),
+                4.0 + rng.random_range(0.0_f32..1.0),
+                rng,
             );
             dir += 60.0_f32.to_radians();
         }
@@ -1776,8 +1780,8 @@ fn rad_chest_destroyed(
         for _ in 0..20 {
             let at = pos
                 + glam::Vec2::new(
-                    rng.random_range(0.0..8.0) - 4.0,
-                    rng.random_range(0.0..8.0) - 4.0,
+                    rng.random_range(0.0_f32..8.0) - 4.0,
+                    rng.random_range(0.0_f32..8.0) - 4.0,
                 );
             let ang = rng.random_range(0.0..std::f32::consts::TAU);
             queue_enemy_spawn_birth(
@@ -1787,7 +1791,7 @@ fn rad_chest_destroyed(
                 1.0,
                 run.loop_count,
                 true,
-                Some(glam::Vec2::from_angle(ang) * rng.random_range(0.0..5.0) * 30.0),
+                Some(glam::Vec2::from_angle(ang) * rng.random_range(0.0_f32..5.0) * 30.0),
                 false,
             );
         }
@@ -1801,7 +1805,7 @@ fn rad_chest_destroyed(
     // (6 more `Smoke` and 6 shake, no damage), `sndEXPChest`, then
     // `event_inherited()` -> `prop/Destroy_0.gml:12` `scrRadDrop`.
     for _ in 0..runs {
-        crate::environment::spawn_rad_chest_burst(commands, particles, pos);
+        crate::environment::spawn_rad_chest_burst(commands, particles, pos, rng);
         audio.play_exp_chest(cues);
     }
     let amount = if kind == ChestKind::RadBig { 45 } else { 25 };
@@ -1814,6 +1818,7 @@ fn rad_chest_destroyed(
         hasted,
         true,
         true,
+        rng,
     );
     run.noradch = 0;
 }
@@ -1838,8 +1843,8 @@ pub(crate) fn chest_loot(
     kind: ChestKind,
     pos: glam::Vec2,
     player_pos: glam::Vec2,
+    mut rng: &mut SimRng,
 ) {
-    let mut rng = rand::rng();
     match kind {
         // GML `WeaponChest/Collision_Player.gml:11-24`: ONE
         // `scrDecideWep(1 + curse * 2, curse)` fills every drop, and
@@ -1856,9 +1861,13 @@ pub(crate) fn chest_loot(
                     commands,
                     catalog,
                     PickupKind::Weapon(weapon),
-                    pos + glam::Vec2::new(rng.random_range(-2.0..2.0), rng.random_range(-2.0..2.0)),
+                    pos + glam::Vec2::new(
+                        rng.random_range(-2.0_f32..2.0),
+                        rng.random_range(-2.0_f32..2.0),
+                    ),
                     0,
                     false,
+                    rng,
                 );
                 // GML `scrWeaponPickupCreate(..., true)`.
                 commands
@@ -1887,6 +1896,7 @@ pub(crate) fn chest_loot(
                 pos,
                 0,
                 false,
+                rng,
             );
             commands
                 .entity(e)
@@ -1900,8 +1910,11 @@ pub(crate) fn chest_loot(
             let count = if ctx.ambidextrous { 4 } else { 3 };
             let mut chain = crate::pickups::DropSeedChain::new(ctx.drop_seed);
             for _ in 0..count {
-                let at =
-                    pos + glam::Vec2::new(rng.random_range(-2.0..2.0), rng.random_range(-2.0..2.0));
+                let at = pos
+                    + glam::Vec2::new(
+                        rng.random_range(-2.0_f32..2.0),
+                        rng.random_range(-2.0_f32..2.0),
+                    );
                 let weapon = chain.roll(|r| {
                     crate::decide_wep::decide_wep_at(commands, r, &ctx.decide, at, 1, false)
                 });
@@ -1912,6 +1925,7 @@ pub(crate) fn chest_loot(
                     at,
                     0,
                     false,
+                    rng,
                 );
                 commands
                     .entity(e)
@@ -1930,8 +1944,11 @@ pub(crate) fn chest_loot(
             let count = if ctx.ambidextrous { 4 } else { 3 };
             let mut chain = crate::pickups::DropSeedChain::new(ctx.drop_seed);
             for _ in 0..count {
-                let at =
-                    pos + glam::Vec2::new(rng.random_range(-2.0..2.0), rng.random_range(-2.0..2.0));
+                let at = pos
+                    + glam::Vec2::new(
+                        rng.random_range(-2.0_f32..2.0),
+                        rng.random_range(-2.0_f32..2.0),
+                    );
                 let weapon = chain.roll(|r| {
                     crate::decide_wep::decide_wep_at(commands, r, &ctx.decide, at, 3, false)
                 });
@@ -1942,6 +1959,7 @@ pub(crate) fn chest_loot(
                     at,
                     0,
                     false,
+                    rng,
                 );
                 commands
                     .entity(e)
@@ -1966,9 +1984,10 @@ pub(crate) fn chest_loot(
                     player_pos,
                     run.loop_count,
                     false,
+                    rng,
                 );
             }
-            crate::idpd::raise_idpd_portals(commands, run, cues, 0, pos);
+            crate::idpd::raise_idpd_portals(commands, run, cues, 0, pos, rng);
             audio.play_ammo_chest_open(cues, ctx.underwater);
         }
         // No GML `Collision_PortalShock` reaches these; they keep the
@@ -2038,6 +2057,7 @@ pub fn tick_portal_shock(
     mut secrets: ResMut<crate::secrets::SecretTriggers>,
     mut run: ResMut<Run>,
     mut player_q: Query<(Entity, &Pos, &mut Player, &Inventory, &RaceState), Without<Pickup>>,
+    mut streams: ResMut<SimStreams>,
 ) {
     let Ok((_player_e, player_pos, mut player, inv, race_state)) = player_q.single_mut() else {
         return;
@@ -2098,6 +2118,7 @@ pub fn tick_portal_shock(
                 hasted,
                 &audio,
                 &mut cues,
+                &mut streams.environment,
             );
             if let Ok(entrance) = entrances.get(prop_e) {
                 secrets.queue(entrance.target);
@@ -2132,7 +2153,13 @@ pub fn tick_portal_shock(
             // GML `Destroy_0` spawns `FXChestOpen` for every chest kind
             // except `RogueChest` (the only chest with no FX).
             if kind != ChestKind::Rogue {
-                crate::pickups::spawn_fx_chest_open(&mut commands, &catalog, cpos, underwater);
+                crate::pickups::spawn_fx_chest_open(
+                    &mut commands,
+                    &catalog,
+                    cpos,
+                    underwater,
+                    &mut streams.fx,
+                );
             }
             let ctx = ChestLootCtx {
                 race,
@@ -2154,6 +2181,7 @@ pub fn tick_portal_shock(
                 kind,
                 cpos,
                 player_pos,
+                &mut streams.progression,
             );
             // GML hand-rolls the shock payout for the kinds with no
             // `event_perform(ev_collision, Player)`; `chest_loot` leaves
@@ -2170,6 +2198,7 @@ pub fn tick_portal_shock(
                             cpos,
                             run.loop_count,
                             hasted,
+                            &mut streams.pickups,
                         );
                     }
                     audio.play_chest(&mut cues);
@@ -2185,6 +2214,7 @@ pub fn tick_portal_shock(
                             cpos,
                             run.loop_count,
                             hasted,
+                            &mut streams.pickups,
                         );
                     }
                     audio.play_ammo_chest_open(&mut cues, underwater);
@@ -2200,6 +2230,7 @@ pub fn tick_portal_shock(
                             cpos,
                             0,
                             false,
+                            &mut streams.pickups,
                         );
                     }
                     audio.play_health_chest(&mut cues, second_stomach);
@@ -2220,6 +2251,7 @@ pub fn tick_portal_shock(
                             hasted,
                             false,
                             false,
+                            &mut streams.pickups,
                         );
                     }
                 }
@@ -2322,6 +2354,7 @@ pub fn portal_enter(
         (Entity, &Pos, &Pickup, Option<&PickupCurse>),
         (Without<Player>, Without<Portal>),
     >,
+    mut streams: ResMut<SimStreams>,
 ) {
     if run.game_over {
         return;
@@ -2384,11 +2417,11 @@ pub fn portal_enter(
                 true,
                 run.area,
                 run.gen_seed,
+                &mut streams.pickups,
             );
-            let mut rng = rand::rng();
             spawn_burst(
                 &mut commands,
-                &mut rng,
+                &mut streams.fx,
                 wep_pos.0,
                 6,
                 [0.6, 0.6, 0.6, 1.0],
@@ -2471,8 +2504,10 @@ pub fn tick_portal_suck(
     mut route: RouteBookkeeping,
     mut paused: ResMut<crate::state::Paused>,
     mut deferred: ResMut<DeferredFloorGen>,
-    mut save: ResMut<SaveData>,
-    mut dirty: ResMut<SaveDirty>,
+    // Folded into one param: the system already sits at bevy_ecs's 16-param
+    // cap and the draft roll needs a 17th.
+    (mut save, mut dirty): (ResMut<SaveData>, ResMut<SaveDirty>),
+    mut streams: ResMut<SimStreams>,
 ) {
     let Ok((player_e, mut player_pos, mut health, mut player, race_state, mut inv, mut suck)) =
         player_q.single_mut()
@@ -2726,7 +2761,7 @@ pub fn tick_portal_suck(
     ) == crate::state::LevelEntry::LevCont
     {
         deferred.0 = true;
-        match level_entry_draft(&mut run, &mut player, race) {
+        match level_entry_draft(&mut run, &mut player, race, &mut streams.progression) {
             DraftOffer::Ultra(choices) => {
                 commands.insert_resource(PendingUltra { choices });
                 paused.0 = true;
@@ -2801,7 +2836,12 @@ pub enum DraftOffer {
 /// The banked Patience pick is consumed by the draft *existing*, not by what
 /// it shows, so `patiencepick` clears on entry (GML
 /// `LevCont/Create_0:18-21`) and the next floor's skill arm is live again.
-pub fn level_entry_draft(run: &mut Run, player: &mut Player, race: RaceId) -> DraftOffer {
+pub fn level_entry_draft(
+    run: &mut Run,
+    player: &mut Player,
+    race: RaceId,
+    rng: &mut SimRng,
+) -> DraftOffer {
     run.patiencepick = false;
     if player.ultra_pick_owed && player.ultra.is_none() && player.level >= 10 {
         return DraftOffer::Ultra(ultra_choices_for_crown(
@@ -2810,7 +2850,7 @@ pub fn level_entry_draft(run: &mut Run, player: &mut Player, race: RaceId) -> Dr
         ));
     }
     while player.mutation_picks_owed > 0 {
-        let choices = roll_mutations_for(player, race);
+        let choices = roll_mutations_for(player, race, rng);
         if choices.is_empty() {
             player.mutation_picks_owed = player.mutation_picks_owed.saturating_sub(1);
             continue;
@@ -2949,6 +2989,7 @@ pub fn tick_floor_transition(
     mut player_q: Query<(&mut Pos, &mut Health, &mut Player, &RaceState), With<Player>>,
     mut carried: ResMut<PortalCarriedWeapons>,
     room: RoomEntry,
+    mut streams: ResMut<SimStreams>,
 ) {
     let open_mind = room.open_mind;
     let scarier = room.scarier;
@@ -3045,6 +3086,7 @@ pub fn tick_floor_transition(
                 room.triggers.vaults_entered,
                 !room.crowns.is_empty(),
                 room.ice_flower.is_some_and(|s| s.0),
+                &mut streams.setup,
             );
             commands.remove_resource::<IceFlowerSeed>();
 
@@ -3096,6 +3138,7 @@ pub fn tick_floor_transition(
                     pos.0,
                     0,
                     false,
+                    &mut streams.pickups,
                 );
             }
 
@@ -3112,6 +3155,7 @@ pub fn tick_floor_transition(
                         pos.0,
                         0,
                         false,
+                        &mut streams.pickups,
                     );
                 }
                 run.blackswords = 0;
@@ -3135,6 +3179,7 @@ pub fn tick_floor_transition(
                         base + glam::Vec2::new(ang.cos(), ang.sin()) * 24.0,
                         0,
                         false,
+                        &mut streams.pickups,
                     );
                 }
             }

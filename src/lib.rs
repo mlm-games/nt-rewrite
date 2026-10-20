@@ -59,14 +59,14 @@ use crate::shadow_pass::{ShadowPass, ShadowSnapshot};
 use crate::vortex_pass::{VARD_VARIANTS, VortexPass, VortexTexture};
 use bevy_ecs::prelude::*;
 use glam::{DVec2, DVec4, Vec2};
-use rand::RngExt;
+use repame_anim::{AnimCatalog, AtlasDesc};
+use repame_sim::rng::{Rng, SimRng};
+use repame_sim::{Sim, SimTime};
+use repame_view2d::fullscreen::SOLID_WGSL;
 use repame_view2d::{
     ActorDraw, ActorDrawList, ActorItem, ActorLibrary, RasterAtlas, actors_view_mixed,
     actors_view_mixed_with_events,
 };
-use repame_anim::{AnimCatalog, AtlasDesc};
-use repame_sim::{Sim, SimTime};
-use repame_view2d::fullscreen::SOLID_WGSL;
 use repame_view2d::{
     Camera2d, FullscreenDesc, FullscreenPass, PickEvent, TextureFilter, WorldText, effective_fit,
     rgba8, world_to_dp_with_roll,
@@ -135,6 +135,7 @@ pub mod keymap;
 
 pub mod dark_pass;
 pub mod font_data;
+pub mod gml_rng;
 pub mod loop_transition;
 pub mod msg;
 pub mod pickups;
@@ -143,6 +144,7 @@ pub mod player_fire;
 pub mod progression;
 pub mod projectile_math;
 pub mod render;
+pub mod rng_streams;
 pub mod run_save;
 pub mod savedata_part;
 pub mod schedule;
@@ -1263,7 +1265,18 @@ impl App {
                 .map(|t| t.amount * t.max_translation_px)
                 .unwrap_or(0.0);
             self.gml_cam.shake = shake_px;
-            let mut rng = rand::rng();
+            // Shake jitter is presentation, so it draws off `fx`; the state
+            // is read out and written back because `world` is borrowed again
+            // below.
+            let mut fx = world
+                .get_resource_mut::<crate::rng_streams::SimStreams>()
+                .map(|streams| streams.fx)
+                .unwrap_or_else(|| SimRng::seeded(0));
+            let jx = fx.random_range(-1.0_f32..1.0);
+            let jy = fx.random_range(-1.0_f32..1.0);
+            if let Some(mut streams) = world.get_resource_mut::<crate::rng_streams::SimStreams>() {
+                streams.fx = fx;
+            }
             CamStepInput {
                 player,
                 aim_dir,
@@ -1272,8 +1285,8 @@ impl App {
                 poi,
                 shake_scale,
                 timescale: 0.0,
-                jx: rng.random_range(-1.0..1.0),
-                jy: rng.random_range(-1.0..1.0),
+                jx,
+                jy,
             }
         };
         #[cfg(target_os = "android")]
@@ -1295,7 +1308,15 @@ impl App {
                 .map(|t| t.amount * t.max_translation_px)
                 .unwrap_or(0.0);
             self.gml_cam.shake = shake_px;
-            let mut rng = rand::rng();
+            let mut fx = world
+                .get_resource_mut::<crate::rng_streams::SimStreams>()
+                .map(|streams| streams.fx)
+                .unwrap_or_else(|| SimRng::seeded(0));
+            let jx = fx.random_range(-1.0..1.0);
+            let jy = fx.random_range(-1.0..1.0);
+            if let Some(mut streams) = world.get_resource_mut::<crate::rng_streams::SimStreams>() {
+                streams.fx = fx;
+            }
             CamStepInput {
                 player,
                 aim_dir,
@@ -1304,8 +1325,8 @@ impl App {
                 poi: nearest_poi(world, player),
                 shake_scale,
                 timescale: 0.0,
-                jx: rng.random_range(-1.0..1.0),
-                jy: rng.random_range(-1.0..1.0),
+                jx,
+                jy,
             }
         };
         const STEP_DT: f32 = 1.0 / SIM_HZ as f32;
@@ -5075,6 +5096,10 @@ fn init_schedule_resources(world: &mut World) {
     world.init_resource::<crate::audio::AudioChannels>();
     world.init_resource::<Queue<crate::audio::UiBridgeAction>>();
     world.init_resource::<repame_anim::AnimCatalog>();
+    // GML `scrRngStatesInit`: one stream per subsystem. Seeded at 0 here so
+    // the resource always exists; `setup_run_inner` re-seeds from the run's
+    // seed before the first floor is built.
+    world.insert_resource(crate::rng_streams::SimStreams::default());
     // Editable controls: default map, then overlay the save file's
     // rows when present (GML `scrOptionsLoadKeymaps` on boot). The
     // disk shell calls `App::load_save` after boot; headless/tests

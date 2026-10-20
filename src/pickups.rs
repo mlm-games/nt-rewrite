@@ -6,7 +6,9 @@
 //! skipped (no sim effect).
 
 use bevy_ecs::prelude::*;
-use rand::RngExt;
+use repame_sim::rng::{Rng, SimRng};
+
+use crate::rng_streams::SimStreams;
 use repame_fx::Trauma;
 use repame_sim::SimTime;
 
@@ -86,8 +88,18 @@ pub(crate) fn spawn_proto_weapon(
     weapon: WeaponId,
     cursed: bool,
     pos: glam::Vec2,
+
+    rng: &mut SimRng,
 ) -> Entity {
-    let entity = spawn_pickup(commands, catalog, PickupKind::Weapon(weapon), pos, 0, false);
+    let entity = spawn_pickup(
+        commands,
+        catalog,
+        PickupKind::Weapon(weapon),
+        pos,
+        0,
+        false,
+        rng,
+    );
     // GML `ProtoChest/Collision_Player.gml:7` is
     // `scrWeaponPickupCreate(x, y, wep)` with `_has_ammo` defaulting to
     // false, so the vault prototype comes out empty.
@@ -314,10 +326,11 @@ pub fn spawn_pickup(
     pos: glam::Vec2,
     loops: u32,
     hasted: bool,
+
+    rng: &mut SimRng,
 ) -> Entity {
     let path = pickup_sprite(kind);
 
-    let mut rng = rand::rng();
     let mut ec = commands.spawn((GameCleanup, LevelCleanup, Pickup { kind }, Pos(pos)));
     // Only rads animate. GML parks `image_speed = 0` on every pickup
     // (`Rad/Create_0.gml:12`, `AmmoPickup/Create_0.gml:11`,
@@ -342,7 +355,8 @@ pub fn spawn_pickup(
             // then the Haste crown's INTEGER `/= 3`. `Rad/Alarm_0.gml`
             // blinks `blink = 30` times at 2 ticks each before the
             // despawn, so the pickup lives `alarm + 60` steps.
-            let mut alarm = ((150.0 + rng.random_range(0.0..30.0)) / ((4.0 + loops as f32) / 4.0))
+            let mut alarm = ((150.0 + rng.random_range(0.0_f32..30.0))
+                / ((4.0 + loops as f32) / 4.0))
                 .ceil() as u32;
             if hasted {
                 alarm /= 3;
@@ -353,7 +367,7 @@ pub fn spawn_pickup(
         }
         PickupKind::Medkit(_) | PickupKind::Ammo(..) => {
             let init =
-                ((200.0 + rng.random_range(0.0..30.0)) / ((5.0 + loops as f32) / 5.0)).ceil();
+                ((200.0 + rng.random_range(0.0_f32..30.0)) / ((5.0 + loops as f32) / 5.0)).ceil();
             let total_steps = if hasted { init / 3.0 } else { init } + 62.0;
             ec.insert(PickupLifetime {
                 timer: GTimer::from_seconds(total_steps / 30.0, TimerMode::Once),
@@ -387,8 +401,8 @@ pub fn spawn_pickup(
 
             let ang = rng.random_range(0.0..std::f32::consts::TAU);
             ec.insert(GroundPhysics {
-                vel: glam::Vec2::new(ang.cos(), ang.sin()) * rng.random_range(15.0..45.0),
-                rotspeed: rng.random_range(0.7..1.0)
+                vel: glam::Vec2::new(ang.cos(), ang.sin()) * rng.random_range(15.0_f32..45.0),
+                rotspeed: rng.random_range(0.7_f32..1.0)
                     * if rng.random_bool(0.5) { 1.0 } else { -1.0 },
             });
         }
@@ -424,13 +438,15 @@ pub fn spawn_ammo_pickup(
     pos: glam::Vec2,
     loops: u32,
     hasted: bool,
+
+    rng: &mut SimRng,
 ) -> Entity {
-    let kind = if cursed_count >= 2 && rand::rng().random::<f32>() < 0.5 {
+    let kind = if cursed_count >= 2 && rng.random::<f32>() < 0.5 {
         PickupKind::CursedAmmo
     } else {
         PickupKind::Ammo(AmmoKind::None, 0)
     };
-    spawn_pickup(commands, catalog, kind, pos, loops, hasted)
+    spawn_pickup(commands, catalog, kind, pos, loops, hasted, rng)
 }
 
 /// [`spawn_ammo_pickup`] for callers that already resolved the ammo type.
@@ -446,13 +462,15 @@ pub fn maybe_cursed_ammo(
     pos: glam::Vec2,
     loops: u32,
     hasted: bool,
+
+    rng: &mut SimRng,
 ) -> Entity {
-    let kind = if cursed_count >= 2 && rand::rng().random::<f32>() < 0.5 {
+    let kind = if cursed_count >= 2 && rng.random::<f32>() < 0.5 {
         PickupKind::CursedAmmo
     } else {
         resolved
     };
-    spawn_pickup(commands, catalog, kind, pos, loops, hasted)
+    spawn_pickup(commands, catalog, kind, pos, loops, hasted, rng)
 }
 
 /// GML `WeaponChest/Create_0.gml:4-11`: the Crown-of-Curses roll, made
@@ -549,7 +567,7 @@ impl DropSeedChain {
 
 /// GML per-chest `sprite_index` / `spr_dead`, resolved once in
 /// `Create_0` and frozen on the entity as [`ChestArt`].
-pub fn chest_art(kind: ChestKind, ctx: &ChestCtx, cursed: bool) -> ChestArt {
+pub fn chest_art(kind: ChestKind, ctx: &ChestCtx, cursed: bool, rng: &mut SimRng) -> ChestArt {
     let art = |idle, open| ChestArt { idle, open };
     match kind {
         // GML `WeaponChest/Create_0.gml:6-24`, gated on `object_index ==
@@ -591,7 +609,7 @@ pub fn chest_art(kind: ChestKind, ctx: &ChestCtx, cursed: bool) -> ChestArt {
         // GML `HealthChest/Create_0.gml:12-15`.
         ChestKind::Health => {
             if ctx.area == crate::data::AreaId::PizzaSewers {
-                let pizza = if rand::rng().random_bool(0.5) {
+                let pizza = if rng.random_bool(0.5) {
                     "images/sprPizzaChest1.png"
                 } else {
                     "images/sprPizzaChest2.png"
@@ -632,8 +650,10 @@ pub fn spawn_chest(
     catalog: &repame_anim::AnimCatalog,
     kind: ChestKind,
     pos: glam::Vec2,
+
+    rng: &mut SimRng,
 ) {
-    spawn_chest_with(commands, catalog, kind, pos, &ChestCtx::default());
+    spawn_chest_with(commands, catalog, kind, pos, &ChestCtx::default(), rng);
 }
 
 /// GML `chestprop/Create_0` plus each subclass's `Create_0`: the built-in
@@ -648,10 +668,12 @@ pub fn spawn_chest_with(
     kind: ChestKind,
     pos: glam::Vec2,
     ctx: &ChestCtx,
+
+    rng: &mut SimRng,
 ) {
-    let art = chest_art(kind, ctx, false);
+    let art = chest_art(kind, ctx, false, rng);
     let frames = catalog.def(art.idle).map(|def| def.frames).unwrap_or(1);
-    spawn_chest_frames(commands, kind, pos, ctx, frames as u32);
+    spawn_chest_frames(commands, kind, pos, ctx, frames as u32, rng);
 }
 
 /// [`spawn_chest_with`] for callers that hold a frame count instead of the
@@ -662,8 +684,9 @@ pub fn spawn_chest_frames(
     pos: glam::Vec2,
     ctx: &ChestCtx,
     frames: u32,
+
+    rng: &mut SimRng,
 ) {
-    let mut rng = rand::rng();
     // GML `WeaponChest/Create_0.gml:7-11` verbatim, with GML
     // `crown > 1` (any real crown) and the `instance_exists(GenCont)`
     // worldgen gate.
@@ -675,7 +698,7 @@ pub fn spawn_chest_frames(
             } else {
                 1.0
             };
-    let art = chest_art(kind, ctx, cursed);
+    let art = chest_art(kind, ctx, cursed, rng);
     // GML `RadChest/Create_0.gml:15`, `RadChestBig/Create_0.gml:7` and
     // `RadMaggotChest/Create_0.gml:4` set `image_speed = 0`, which only
     // switches off the automatic advance: `RadChest/Step_1.gml:3-8` drives
@@ -743,6 +766,8 @@ pub fn spawn_fx_chest_open(
     catalog: &repame_anim::AnimCatalog,
     pos: glam::Vec2,
     underwater: bool,
+
+    rng: &mut SimRng,
 ) {
     let flash = "images/sprFXChestOpen.png";
     let frames = catalog.def(flash).map(|def| def.frames).unwrap_or(8);
@@ -756,11 +781,10 @@ pub fn spawn_fx_chest_open(
     if !underwater {
         return;
     }
-    let mut rng = rand::rng();
     for _ in 0..rng.random_range(12..=20) {
         let ang = rng.random_range(0.0..std::f32::consts::TAU);
-        let speed = rng.random_range(0.0..3.0);
-        let image_speed = rng.random_range(0.1..0.3);
+        let speed = rng.random_range(0.0_f32..3.0);
+        let image_speed = rng.random_range(0.1_f32..0.3);
         commands.spawn((
             GameCleanup,
             LevelCleanup,
@@ -783,8 +807,18 @@ pub fn spawn_rad(
     catalog: &repame_anim::AnimCatalog,
     pos: glam::Vec2,
     amount: u32,
+
+    rng: &mut SimRng,
 ) {
-    spawn_pickup(commands, catalog, PickupKind::Rad(amount), pos, 0, false);
+    spawn_pickup(
+        commands,
+        catalog,
+        PickupKind::Rad(amount),
+        pos,
+        0,
+        false,
+        rng,
+    );
 }
 
 pub fn spawn_rad_burst(
@@ -792,12 +826,14 @@ pub fn spawn_rad_burst(
     catalog: &repame_anim::AnimCatalog,
     pos: glam::Vec2,
     amount: u32,
+
+    rng: &mut SimRng,
 ) {
     // Generic `prop/Destroy_0.gml:12` and enemy-death `raddrop` caller (a
     // `RadChest` now goes through `spawn_prop_death_effect`), so
     // `scrRadDrop.gml:10-13` takes its `instance_is(self, prop)` branch:
     // `_direction = random_angle`, `_speed = 16`.
-    scr_rad_drop(commands, catalog, pos, amount, 0, false, false, true);
+    scr_rad_drop(commands, catalog, pos, amount, 0, false, false, true, rng);
 }
 
 /// GML `scrRadDrop` (`scripts/scrRadDrop/scrRadDrop.gml:7-43`) verbatim:
@@ -818,18 +854,19 @@ pub fn scr_rad_drop(
     hasted: bool,
     from_rad_chest: bool,
     from_prop: bool,
+
+    rng: &mut SimRng,
 ) {
-    let mut rng = rand::rng();
     let high = if from_rad_chest { 26 } else { 15 };
     while amount > high {
         amount -= 10;
         spawn_rad_motion(
-            commands, catalog, pos, 10, amount, from_prop, loops, hasted, &mut rng,
+            commands, catalog, pos, 10, amount, from_prop, loops, hasted, rng,
         );
     }
     for _ in 0..amount {
         spawn_rad_motion(
-            commands, catalog, pos, 1, amount, from_prop, loops, hasted, &mut rng,
+            commands, catalog, pos, 1, amount, from_prop, loops, hasted, rng,
         );
     }
 }
@@ -846,7 +883,7 @@ fn spawn_rad_motion(
     from_prop: bool,
     loops: u32,
     hasted: bool,
-    rng: &mut impl rand::RngExt,
+    rng: &mut SimRng,
 ) {
     let (dir, base) = if from_prop {
         (rng.random_range(0.0..std::f32::consts::TAU), 16.0)
@@ -867,6 +904,7 @@ fn spawn_rad_motion(
         pos,
         loops,
         hasted,
+        rng,
     );
     commands.entity(e).insert(GroundPhysics {
         vel: vel * 30.0,
@@ -877,10 +915,9 @@ fn spawn_rad_motion(
 /// Random unit-ish offset for scatter drops: uniform angle, uniform
 /// distance 0..22 px. Port-only - GML's drop scatter is `orandom(J)` per
 /// axis (`scripts/scrDrop/scrDrop.gml:64,70`), never a polar offset.
-pub fn random_offset() -> glam::Vec2 {
-    let mut rng = rand::rng();
+pub fn random_offset(rng: &mut SimRng) -> glam::Vec2 {
     let a = rng.random_range(0.0..std::f32::consts::TAU);
-    let d = rng.random_range(0.0..22.0);
+    let d = rng.random_range(0.0_f32..22.0);
     glam::Vec2::new(a.cos(), a.sin()) * d
 }
 
@@ -899,8 +936,18 @@ pub fn spawn_flung_weapon_pickup(
     creator: Entity,
     pierce: bool,
     return_ticks: u8,
+
+    rng: &mut SimRng,
 ) -> Entity {
-    let e = spawn_pickup(commands, catalog, PickupKind::Weapon(weapon), pos, 0, false);
+    let e = spawn_pickup(
+        commands,
+        catalog,
+        PickupKind::Weapon(weapon),
+        pos,
+        0,
+        false,
+        rng,
+    );
     let dir = glam::Vec2::new(angle_rad.cos(), angle_rad.sin());
     commands.entity(e).insert(FlungWeapon {
         team,
@@ -1082,6 +1129,8 @@ pub fn maybe_spawn_drop(
     health: &Health,
     loops: u32,
     decide: Option<&crate::decide_wep::DecideCtx>,
+
+    rng: &mut SimRng,
 ) -> bool {
     maybe_spawn_drop_ctx(
         commands,
@@ -1100,6 +1149,7 @@ pub fn maybe_spawn_drop(
             get_loaded: steroids_get_loaded(player),
             ..Default::default()
         },
+        rng,
     )
 }
 
@@ -1120,8 +1170,9 @@ pub fn maybe_spawn_drop_ctx(
     loops: u32,
     decide: Option<&crate::decide_wep::DecideCtx>,
     chest_ctx: &ChestCtx,
+
+    mut rng: &mut SimRng,
 ) -> bool {
-    let mut rng = rand::rng();
     let mut dropped = false;
 
     // GML `scrDrop.gml:32-34`: Fish Confiscate rolls `_confiscate` at
@@ -1153,7 +1204,7 @@ pub fn maybe_spawn_drop_ctx(
     // GML `scrDrop.gml:58` short-circuits on `_pickup_chance > 0`, so a
     // zero-chance call consumes NO `random(100)`. The `else if` arm draws
     // its own, which is what keeps one `random(100)` per death roll.
-    let pickup_hit = chance > 0.0 && rng.random_range(0.0..100.0) < (chance * (need + paw));
+    let pickup_hit = chance > 0.0 && rng.random_range(0.0_f32..100.0) < (chance * (need + paw));
 
     let hasted = player.crown == CrownKind::Haste;
 
@@ -1171,13 +1222,17 @@ pub fn maybe_spawn_drop_ctx(
         };
         let life_blocks = player.crown == CrownKind::Life;
         let guns_blocks_ammo = player.crown == CrownKind::Guns;
-        let at = pos + glam::Vec2::new(rng.random_range(-2.0..2.0), rng.random_range(-2.0..2.0));
+        let at = pos
+            + glam::Vec2::new(
+                rng.random_range(-2.0_f32..2.0),
+                rng.random_range(-2.0_f32..2.0),
+            );
         if rng.random_range(0..health.max.max(1)) as i32 > health.hp
             && (rng.random_range(0..3) as f32) < advantage
             && !life_blocks
         {
             if confiscate {
-                spawn_chest_with(commands, catalog, ChestKind::Health, at, chest_ctx);
+                spawn_chest_with(commands, catalog, ChestKind::Health, at, chest_ctx, rng);
             } else {
                 spawn_pickup(
                     commands,
@@ -1186,29 +1241,42 @@ pub fn maybe_spawn_drop_ctx(
                     at,
                     loops,
                     hasted,
+                    rng,
                 );
             }
             dropped = true;
         } else {
             if !guns_blocks_ammo {
                 if confiscate {
-                    spawn_chest_with(commands, catalog, ChestKind::Ammo, at, chest_ctx);
+                    spawn_chest_with(commands, catalog, ChestKind::Ammo, at, chest_ctx, rng);
                 } else {
-                    spawn_ammo_pickup(commands, catalog, count_cursed(inv), at, loops, hasted);
+                    spawn_ammo_pickup(commands, catalog, count_cursed(inv), at, loops, hasted, rng);
                 }
                 dropped = true;
             }
         }
-    } else if weapon_chance > 0 && rng.random_range(0.0..100.0) < weapon_chance as f32 {
-        let at = pos + glam::Vec2::new(rng.random_range(-2.0..2.0), rng.random_range(-2.0..2.0));
+    } else if weapon_chance > 0 && rng.random_range(0.0_f32..100.0) < weapon_chance as f32 {
+        let at = pos
+            + glam::Vec2::new(
+                rng.random_range(-2.0_f32..2.0),
+                rng.random_range(-2.0_f32..2.0),
+            );
         if confiscate {
-            spawn_chest_with(commands, catalog, ChestKind::Weapon, at, chest_ctx);
+            spawn_chest_with(commands, catalog, ChestKind::Weapon, at, chest_ctx, rng);
         } else {
             let weapon = match decide {
                 Some(ctx) => crate::decide_wep::decide_wep(&mut rng, ctx, 0, false),
                 None => random_weapon(&mut rng),
             };
-            let e = spawn_pickup(commands, catalog, PickupKind::Weapon(weapon), at, 0, false);
+            let e = spawn_pickup(
+                commands,
+                catalog,
+                PickupKind::Weapon(weapon),
+                at,
+                0,
+                false,
+                rng,
+            );
             // GML `scrDrop.gml:85`: `scrWeaponPickupCreate(..., true)`.
             commands.entity(e).insert(WepPickupAmmo(true));
         }
@@ -1232,7 +1300,7 @@ pub fn hppickup_num(player: &Player) -> i32 {
     num
 }
 
-fn random_ammo_kind(rng: &mut impl rand::RngExt) -> AmmoKind {
+fn random_ammo_kind(rng: &mut impl Rng) -> AmmoKind {
     match rng.random_range(0..5) {
         0 => AmmoKind::Bullets,
         1 => AmmoKind::Shells,
@@ -1242,7 +1310,7 @@ fn random_ammo_kind(rng: &mut impl rand::RngExt) -> AmmoKind {
     }
 }
 
-pub fn random_weapon(rng: &mut impl rand::RngExt) -> WeaponId {
+pub fn random_weapon(rng: &mut impl Rng) -> WeaponId {
     match rng.random_range(0..8) {
         0 => WeaponId::MACHINEGUN,
         1 => WeaponId(5),
@@ -1261,7 +1329,7 @@ pub fn random_weapon(rng: &mut impl rand::RngExt) -> WeaponId {
 /// that re-rolls a fixed 6-gun list (tier 2 past loop 0) until the
 /// player does not already hold it - the live path is
 /// [`crate::decide_wep::decide_wep_gold`].
-pub fn random_gold_weapon_fallback(rng: &mut impl rand::RngExt) -> WeaponId {
+pub fn random_gold_weapon_fallback(rng: &mut impl Rng) -> WeaponId {
     let gold: Vec<WeaponId> = crate::weapons_data::WEAPONS
         .iter()
         .filter(|w| w.wep_gold)
@@ -1315,12 +1383,11 @@ pub fn inv_ammo(inv: &Inventory, kind: AmmoKind) -> i32 {
     inv.ammo_of(kind)
 }
 
-pub fn give_ammo(inv: &mut Inventory, player: &Player) {
+pub fn give_ammo(inv: &mut Inventory, player: &Player, rng: &mut SimRng) {
     let id = inv.weapons[inv.current];
     let haste = haste_crown(player);
     if id == WeaponId::NONE {
-        let mut rng = rand::rng();
-        let kind = random_ammo_kind(&mut rng);
+        let kind = random_ammo_kind(rng);
         let slot = inv.ammo_mut(kind);
         let add = ammo_pickup_amount_for(kind, 0, haste);
         *slot = (*slot + add).min(player.ammo_cap(kind));
@@ -1389,10 +1456,13 @@ pub fn tick_cursed_ammo(
     mut q: Query<(Entity, &Pos, &mut CursedAmmoBlink, &mut GmlImage)>,
     audio: Res<crate::audio::GameAudio>,
     mut cues: ResMut<crate::msg::Queue<crate::audio::AudioCue>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut pickups_rng = streams.pickups;
     let steps = time.delta_secs * crate::SIM_HZ as f32;
-    let mut rng = rand::rng();
     for (entity, pos, mut blink, mut image) in &mut q {
+        let rng = &mut pickups_rng;
         if !blink.sounded {
             blink.sounded = true;
             audio.play_cursed_pickup(&mut cues);
@@ -1401,7 +1471,7 @@ pub fn tick_cursed_ammo(
         // while `image_index` creeps by `random(0.04)` a step, then the
         // whole strip runs at a flat `0.4`.
         if image.phase < 1.0 {
-            image.phase += rng.random_range(0.0..0.04) * steps;
+            image.phase += rng.random_range(0.0_f32..0.04) * steps;
         } else {
             image.phase += 0.4 * steps;
         }
@@ -1415,7 +1485,15 @@ pub fn tick_cursed_ammo(
         // integer, so the macro is `0 < 1` - unconditionally true: the roll runs
         // every step, not once per image frame.
         if rng.random::<f32>() < 0.25 {
-            spawn_pickup(&mut commands, &catalog, PickupKind::Curse, pos.0, 0, false);
+            spawn_pickup(
+                &mut commands,
+                &catalog,
+                PickupKind::Curse,
+                pos.0,
+                0,
+                false,
+                rng,
+            );
         }
         blink.alarm -= steps;
         if blink.alarm > 0.0 {
@@ -1442,6 +1520,7 @@ pub fn tick_cursed_ammo(
             continue;
         }
         blink.blink -= 1;
+        streams.pickups = pickups_rng;
     }
 }
 
@@ -1726,7 +1805,7 @@ pub fn tick_pickup_drag(
 /// drops; render blinks stay renderer-owned.
 #[allow(clippy::too_many_arguments)]
 pub fn collect_pickups(
-    time: Res<SimTime>,
+    (time, mut run): (Res<SimTime>, ResMut<Run>),
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
     mut trauma: ResMut<Trauma>,
@@ -1735,7 +1814,6 @@ pub fn collect_pickups(
     audio: Res<GameAudio>,
     mut cues: ResMut<Queue<AudioCue>>,
     input: ResMut<NtInput>,
-    mut run: ResMut<Run>,
     mask: Res<FloorMask>,
     mut player_q: Query<
         (
@@ -1775,7 +1853,10 @@ pub fn collect_pickups(
     )>,
     mut toast: ResMut<Toast>,
     mut tut: Option<ResMut<crate::state::TutorialState>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
+    let mut pickups_rng = streams.pickups;
     let Ok((_player_e, player_pos, mut player, mut health, mut inv, telek, race_opt, mut fire_cd)) =
         player_q.single_mut()
     else {
@@ -1950,7 +2031,13 @@ pub fn collect_pickups(
             // (e.g. `WeaponChest/Destroy_0.gml:5`); `RogueChest` is the only
             // chest with no open FX.
             if chest != ChestKind::Rogue {
-                spawn_fx_chest_open(&mut commands, &catalog, pickup_pos_value, underwater);
+                spawn_fx_chest_open(
+                    &mut commands,
+                    &catalog,
+                    pickup_pos_value,
+                    underwater,
+                    &mut pickups_rng,
+                );
             }
             // The rad chests are `prop` descendants, so their
             // `Collision_Player` is `hp = 0` - the press and a bullet share
@@ -1992,7 +2079,14 @@ pub fn collect_pickups(
                     health.hp -= 1;
                     health.invuln = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
                 }
-                spawn_hatred_rads(&mut commands, &catalog, player_pos, 16, loops);
+                spawn_hatred_rads(
+                    &mut commands,
+                    &catalog,
+                    player_pos,
+                    16,
+                    loops,
+                    &mut pickups_rng,
+                );
             }
 
             match chest {
@@ -2014,7 +2108,7 @@ pub fn collect_pickups(
                             cursed,
                         )
                     });
-                    let mut rng = rand::rng();
+                    let rng = &mut pickups_rng;
                     for _ in 0..count {
                         let e = spawn_pickup(
                             &mut commands,
@@ -2022,11 +2116,12 @@ pub fn collect_pickups(
                             PickupKind::Weapon(weapon),
                             pickup_pos_value
                                 + glam::Vec2::new(
-                                    rng.random_range(-2.0..2.0),
-                                    rng.random_range(-2.0..2.0),
+                                    rng.random_range(-2.0_f32..2.0),
+                                    rng.random_range(-2.0_f32..2.0),
                                 ),
                             0,
                             false,
+                            rng,
                         );
                         // GML `scrWeaponPickupCreate(..., true)`.
                         commands.entity(e).insert(WepPickupAmmo(true));
@@ -2040,9 +2135,9 @@ pub fn collect_pickups(
                 ChestKind::Gold => {
                     // GML `GoldChest/Collision_Player.gml`: one
                     // `scrDecideWepGold` pickup.
-                    let mut rng = rand::rng();
+                    let rng = &mut pickups_rng;
                     let weapon = crate::decide_wep::decide_wep_gold(
-                        &mut rng,
+                        rng,
                         loops,
                         &inv.weapons,
                         race == RaceId::Steroids,
@@ -2054,6 +2149,7 @@ pub fn collect_pickups(
                         pickup_pos_value,
                         0,
                         false,
+                        &mut pickups_rng,
                     );
                     commands.entity(e).insert(WepPickupAmmo(true));
                     audio.play_gold_chest(&mut cues);
@@ -2074,6 +2170,7 @@ pub fn collect_pickups(
                         get_loaded,
                         chest == ChestKind::Mystery,
                         &mut toast,
+                        &mut pickups_rng,
                     );
                     audio.play_ammo_chest_open(&mut cues, underwater);
                 }
@@ -2112,7 +2209,7 @@ pub fn collect_pickups(
                     // `Destroy_0:6` a SECOND one.
                     let count = if ambidextrous { 4 } else { 3 };
                     let mut chain = DropSeedChain::new(seed);
-                    let mut rng = rand::rng();
+                    let rng = &mut pickups_rng;
                     for _ in 0..count {
                         let weapon = chain.roll(|r| {
                             crate::decide_wep::decide_wep_at(
@@ -2130,11 +2227,12 @@ pub fn collect_pickups(
                             PickupKind::Weapon(weapon),
                             pickup_pos_value
                                 + glam::Vec2::new(
-                                    rng.random_range(-2.0..2.0),
-                                    rng.random_range(-2.0..2.0),
+                                    rng.random_range(-2.0_f32..2.0),
+                                    rng.random_range(-2.0_f32..2.0),
                                 ),
                             0,
                             false,
+                            rng,
                         );
                         commands.entity(e).insert(WepPickupAmmo(true));
                         commands.entity(e).insert(PickupCurse);
@@ -2151,7 +2249,7 @@ pub fn collect_pickups(
                     // chain. `:16` a `PortalClear`, `:30` resets `nochest`.
                     let count = if ambidextrous { 4 } else { 3 };
                     let mut chain = DropSeedChain::new(seed);
-                    let mut rng = rand::rng();
+                    let rng = &mut pickups_rng;
                     for _ in 0..count {
                         let weapon = chain.roll(|r| {
                             crate::decide_wep::decide_wep_at(
@@ -2169,11 +2267,12 @@ pub fn collect_pickups(
                             PickupKind::Weapon(weapon),
                             pickup_pos_value
                                 + glam::Vec2::new(
-                                    rng.random_range(-2.0..2.0),
-                                    rng.random_range(-2.0..2.0),
+                                    rng.random_range(-2.0_f32..2.0),
+                                    rng.random_range(-2.0_f32..2.0),
                                 ),
                             0,
                             false,
+                            rng,
                         );
                         commands.entity(e).insert(WepPickupAmmo(true));
                         toast.show(weapon_id_name(weapon));
@@ -2212,6 +2311,7 @@ pub fn collect_pickups(
                             haste > 0,
                             false,
                             false,
+                            &mut pickups_rng,
                         );
                     }
                     audio.play_rogue_canister(&mut cues);
@@ -2231,13 +2331,27 @@ pub fn collect_pickups(
                             health.hp -= 1;
                             health.invuln = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
                         }
-                        spawn_hatred_rads(&mut commands, &catalog, player_pos, 16, loops);
+                        spawn_hatred_rads(
+                            &mut commands,
+                            &catalog,
+                            player_pos,
+                            16,
+                            loops,
+                            &mut pickups_rng,
+                        );
                     }
                     let (weapon, cursed) = match proto_and_cause.p0().get(pickup_e) {
                         Ok((_, &ProtoChestState::Armed { weapon, cursed })) => (weapon, cursed),
                         _ => (run.protowep, run.protocurse),
                     };
-                    spawn_proto_weapon(&mut commands, &catalog, weapon, cursed, pickup_pos_value);
+                    spawn_proto_weapon(
+                        &mut commands,
+                        &catalog,
+                        weapon,
+                        cursed,
+                        pickup_pos_value,
+                        &mut pickups_rng,
+                    );
                     audio.play_weapon_chest(&mut cues);
                     toast.show(weapon_id_name(weapon));
                 }
@@ -2256,6 +2370,7 @@ pub fn collect_pickups(
                             player_pos,
                             loops,
                             false,
+                            &mut pickups_rng,
                         );
                     }
                     crate::idpd::raise_idpd_portals(
@@ -2264,6 +2379,7 @@ pub fn collect_pickups(
                         &mut cues,
                         0,
                         pickup_pos_value,
+                        &mut streams.idpd,
                     );
                     audio.play_ammo_chest_open(&mut cues, underwater);
                 }
@@ -2286,6 +2402,7 @@ pub fn collect_pickups(
                     &mut toast,
                     &mut cues,
                     player_pos,
+                    &mut streams.progression,
                 );
             }
             PickupKind::Medkit(amount) => {
@@ -2314,7 +2431,7 @@ pub fn collect_pickups(
                 // `scrAmmoUpdateTypeStats`, once here). The `instance_is(other,
                 // CursedPickup)` 1.5x is DEAD (`other` is the Player), so a
                 // CursedPickup pays the same amount as a normal AmmoPickup.
-                let ammo = decide_ammo_type(&inv, &player, race, false);
+                let ammo = decide_ammo_type(&inv, &player, race, false, &mut pickups_rng);
                 let amount = ammo_pickup_amount_for(ammo, fish, haste) + i32::from(haste > 0);
                 let cap = player.ammo_cap(ammo);
                 let slot = inv.ammo_mut(ammo);
@@ -2373,6 +2490,7 @@ pub fn collect_pickups(
                         pickup_pos_value,
                         0,
                         false,
+                        &mut pickups_rng,
                     );
                     commands
                         .entity(e2)
@@ -2388,6 +2506,7 @@ pub fn collect_pickups(
                     weapon,
                     pickup_pos_value,
                     pickup_cursed,
+                    &mut pickups_rng,
                 );
                 if matches!(player.ultra, Some(UltraMutationId::RobotRefinedTaste)) {
                     health.hp = (health.hp + 1).min(health.max);
@@ -2419,6 +2538,7 @@ pub fn collect_pickups(
             // touching one just clears it.
             PickupKind::Curse => {}
         }
+        streams.pickups = pickups_rng;
     }
 }
 
@@ -2445,11 +2565,12 @@ fn spawn_hatred_rads(
     player_pos: glam::Vec2,
     amount: u32,
     loops: u32,
+
+    rng: &mut SimRng,
 ) {
-    let mut rng = rand::rng();
     for _ in 0..amount {
         let ang = rng.random_range(0.0..std::f32::consts::TAU);
-        let speed = 2.0 + rng.random_range(0.0..4.0);
+        let speed = 2.0 + rng.random_range(0.0_f32..4.0);
         let e = spawn_pickup(
             commands,
             catalog,
@@ -2457,6 +2578,7 @@ fn spawn_hatred_rads(
             player_pos,
             loops,
             false,
+            rng,
         );
         commands.entity(e).insert(GroundPhysics {
             vel: glam::Vec2::from_angle(ang) * speed * 30.0,
@@ -2481,9 +2603,10 @@ fn open_ammo_chest(
     get_loaded: bool,
     mystery: bool,
     toast: &mut Toast,
+
+    rng: &mut SimRng,
 ) {
     let multiplier = if mystery { 3 } else { 2 };
-    let mut rng = rand::rng();
     let mut give = |inv: &mut Inventory, kind: AmmoKind, toast: &mut Toast| {
         let amount = ammo_pickup_amount_for(kind, fish, haste) * multiplier;
         let cap = player.ammo_cap(kind);
@@ -2506,8 +2629,8 @@ fn open_ammo_chest(
     };
 
     if get_loaded {
-        let a = decide_ammo_type(inv, player, race, true);
-        let b = decide_ammo_type(inv, player, race, true);
+        let a = decide_ammo_type(inv, player, race, true, rng);
+        let b = decide_ammo_type(inv, player, race, true, rng);
         for kind in ALL_AMMO_KINDS {
             // GML `AmmoChestMystery:19` skips the two rolled types.
             if mystery && (kind == a || kind == b) {
@@ -2517,9 +2640,9 @@ fn open_ammo_chest(
         }
     } else {
         let kind = if mystery {
-            decide_ammo_type_mystery(inv, player, &mut rng)
+            decide_ammo_type_mystery(inv, player, rng)
         } else {
-            decide_ammo_type(inv, player, race, true)
+            decide_ammo_type(inv, player, race, true, rng)
         };
         give(inv, kind, toast);
     }
@@ -2717,16 +2840,17 @@ fn decide_ammo_type(
     player: &Player,
     race: RaceId,
     prioritize_primary: bool,
+
+    rng: &mut SimRng,
 ) -> AmmoKind {
     if race == RaceId::BigDog
         || (weapon_ammo(inv.weapons[inv.current]) == AmmoKind::None
             && weapon_ammo(inv.weapons[1.min(inv.weapon_slots.saturating_sub(1))])
                 == AmmoKind::None)
     {
-        return random_ammo_kind(&mut rand::rng());
+        return random_ammo_kind(rng);
     }
 
-    let mut rng = rand::rng();
     let primary = weapon_ammo(inv.weapons[inv.current]);
     let mut secondary = weapon_ammo(inv.weapons[1.min(inv.weapon_slots.saturating_sub(1))]);
     let extras: Vec<WeaponId> = (2..inv.weapon_slots)
@@ -2768,16 +2892,12 @@ fn decide_ammo_type(
             return pick;
         }
     }
-    random_ammo_kind(&mut rng)
+    random_ammo_kind(rng)
 }
 
 /// GML `scrAmmoDecideTypeMystery` (`scrAmmoInit.gml:71-82`): re-roll a
 /// random type until it is not the type of `wep` or `bwep`.
-fn decide_ammo_type_mystery(
-    inv: &Inventory,
-    _player: &Player,
-    rng: &mut impl rand::RngExt,
-) -> AmmoKind {
+fn decide_ammo_type_mystery(inv: &Inventory, _player: &Player, rng: &mut impl Rng) -> AmmoKind {
     let primary = weapon_ammo(inv.weapons[inv.current]);
     let secondary = weapon_ammo(inv.weapons[1.min(inv.weapon_slots.saturating_sub(1))]);
     loop {
@@ -2801,8 +2921,18 @@ fn spawn_dropped_weapon(
     weapon: WeaponId,
     at: glam::Vec2,
     curse: bool,
+
+    rng: &mut SimRng,
 ) {
-    let e = spawn_pickup(commands, catalog, PickupKind::Weapon(weapon), at, 0, false);
+    let e = spawn_pickup(
+        commands,
+        catalog,
+        PickupKind::Weapon(weapon),
+        at,
+        0,
+        false,
+        rng,
+    );
     commands.entity(e).insert(WepPickupAmmo(false));
     if curse {
         commands.entity(e).insert(PickupCurse);
@@ -2842,6 +2972,7 @@ fn equip_weapon(
     weapon: WeaponId,
     at: glam::Vec2,
     curse: bool,
+    rng: &mut SimRng,
 ) {
     if let Some(empty) = first_empty_weapon_slot(inv) {
         inv.weapons[empty] = weapon;
@@ -2861,7 +2992,7 @@ fn equip_weapon(
     let dropped = inv.weapons[slot];
     let dropped_curse = inv.cursed[slot];
     if dropped != WeaponId::NONE {
-        spawn_dropped_weapon(commands, catalog, dropped, at, dropped_curse);
+        spawn_dropped_weapon(commands, catalog, dropped, at, dropped_curse, rng);
     }
     inv.weapons[slot] = weapon;
     inv.cursed[slot] = curse;
@@ -2925,6 +3056,7 @@ pub fn tick_rad_container_contact(
     mut cues: ResMut<Queue<AudioCue>>,
     mut run: ResMut<Run>,
     save: Res<crate::savedata_part::SaveData>,
+    mut streams: ResMut<SimStreams>,
     player_q: Query<(&Pos, &Player), With<Player>>,
     rad_q: Query<
         (
@@ -2970,6 +3102,7 @@ pub fn tick_rad_container_contact(
             hasted,
             &audio,
             &mut cues,
+            &mut streams.environment,
         );
         commands.entity(e).try_despawn();
         run.noradch = 0;

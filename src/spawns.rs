@@ -7,7 +7,8 @@
 //! strips draw at the catalog cell size (`render.rs`, fidelity notes).
 
 use bevy_ecs::prelude::*;
-use rand::RngExt;
+use repame_sim::rng::{Rng, SimRng};
+
 use repame_anim::AnimCatalog;
 
 use crate::anim::SpriteAnim;
@@ -159,9 +160,9 @@ pub fn spawn_split_projectiles(
     split: SplitDef,
     source: Option<DamageSource>,
     base_dir: glam::Vec2,
+    rng: &mut SimRng,
 ) {
     let child = split_child(team, split);
-    let mut rng = rand::rng();
     let samples: Vec<f32> = (0..split.pellets)
         .map(|_| rng.random_range(-1.0f32..1.0))
         .collect();
@@ -187,10 +188,12 @@ pub fn spawn_split_projectiles(
     for dir in dirs {
         match child {
             SplitChild::SmallGrenade => {
-                let speed = rng.random_range(3.0..5.0) * 30.0;
+                let speed = rng.random_range(3.0_f32..5.0) * 30.0;
                 let life = rng.random_range(10..=20) as f32 / 30.0;
-                let scatter =
-                    glam::Vec2::new(rng.random_range(-2.0..2.0), rng.random_range(-2.0..2.0));
+                let scatter = glam::Vec2::new(
+                    rng.random_range(-2.0_f32..2.0),
+                    rng.random_range(-2.0_f32..2.0),
+                );
                 commands.spawn((
                     GameCleanup,
                     LevelCleanup,
@@ -210,7 +213,7 @@ pub fn spawn_split_projectiles(
                 ));
             }
             SplitChild::FlakBullet => {
-                let speed = rng.random_range(12.0..16.0) * 30.0;
+                let speed = rng.random_range(12.0_f32..16.0) * 30.0;
                 commands.spawn((
                     GameCleanup,
                     LevelCleanup,
@@ -230,7 +233,7 @@ pub fn spawn_split_projectiles(
                 ));
             }
             SplitChild::EnemyBullet3 => {
-                let speed = rng.random_range(8.0..12.0) * 30.0;
+                let speed = rng.random_range(8.0_f32..12.0) * 30.0;
                 commands.spawn((
                     GameCleanup,
                     LevelCleanup,
@@ -262,7 +265,7 @@ pub fn spawn_split_projectiles(
                 ));
             }
             SplitChild::Bullet2 => {
-                let speed = rng.random_range(8.0..16.0) * 30.0;
+                let speed = rng.random_range(8.0_f32..16.0) * 30.0;
                 commands.spawn((
                     GameCleanup,
                     LevelCleanup,
@@ -371,7 +374,13 @@ pub fn spawn_sentry_turret(commands: &mut Commands, pos: glam::Vec2, spec: Deplo
 /// `motion_add(_gunangle, 6)`. Bullet: `Bullet1` at
 /// `motion_add(gunangle + random(12) - 6, 16)` - 16 px/step = 480 px/s,
 /// damage 3.
-pub fn spawn_sentry_gun(commands: &mut Commands, pos: glam::Vec2, dir: glam::Vec2, team: Team) {
+pub fn spawn_sentry_gun(
+    commands: &mut Commands,
+    pos: glam::Vec2,
+    dir: glam::Vec2,
+    team: Team,
+    rng: &mut SimRng,
+) {
     commands.spawn((
         GameCleanup,
         LevelCleanup,
@@ -407,7 +416,7 @@ pub fn spawn_sentry_gun(commands: &mut Commands, pos: glam::Vec2, dir: glam::Vec
         // `right = choose(1, -1)`. The renderer orients by `NativeAngle`.
         crate::comps_b::GmlImage::new("images/sprSentryGun.png", 1, 0.0),
         crate::comps_b::NativeAngle(0.0),
-        crate::comps_b::NativeFlip(rand::rng().random_bool(0.5)),
+        crate::comps_b::NativeFlip(rng.random_bool(0.5)),
         crate::comps_b::NativeDepth(-1.0),
         Pos(pos),
     ));
@@ -419,6 +428,7 @@ pub fn spawn_weapon_pickup_from_projectile(
     pos: glam::Vec2,
     spec: SpawnsWeaponPickup,
     decide: Option<&crate::decide_wep::DecideCtx>,
+    rng: &mut SimRng,
 ) {
     if pos.x.abs() > crate::comps_a::ARENA_W / 2.0 + 32.0
         || pos.y.abs() > crate::comps_a::ARENA_H / 2.0 + 32.0
@@ -428,8 +438,8 @@ pub fn spawn_weapon_pickup_from_projectile(
 
     let weapon = spec.weapon.unwrap_or_else(|| match decide {
         // GML `wep_gun_gun`: `scrDecideWep(10)` at the muzzle.
-        Some(ctx) => crate::decide_wep::decide_wep(&mut rand::rng(), ctx, spec.decide_extra, false),
-        None => random_weapon(&mut rand::rng()),
+        Some(ctx) => crate::decide_wep::decide_wep(rng, ctx, spec.decide_extra, false),
+        None => random_weapon(rng),
     });
     spawn_pickup(
         commands,
@@ -438,6 +448,7 @@ pub fn spawn_weapon_pickup_from_projectile(
         pos,
         0,
         false,
+        rng,
     );
 }
 
@@ -503,6 +514,7 @@ pub fn on_projectile_removed(
     plasma_burst: Option<PlasmaBurst>,
     fade: Option<ProjectileFade>,
     already_faded: bool,
+    rng: &mut SimRng,
 ) {
     if let Some(f) = fade
         && !already_faded
@@ -549,7 +561,7 @@ pub fn on_projectile_removed(
                 visual,
             );
         } else {
-            let ang0 = rand::rng().random_range(0.0..std::f32::consts::TAU);
+            let ang0 = rng.random_range(0.0..std::f32::consts::TAU);
             for k in 0..count {
                 let ang = ang0 + k as f32 * std::f32::consts::TAU / count as f32;
                 let off = glam::Vec2::new(ang.cos(), ang.sin()) * spread;
@@ -588,11 +600,11 @@ pub fn on_projectile_removed(
     }
 
     if let Some(SplitOnDeath(spec)) = split {
-        spawn_split_projectiles(commands, pos, team, spec, source, base_dir);
+        spawn_split_projectiles(commands, pos, team, spec, source, base_dir, rng);
     }
 
     if let Some(spec) = spawn_pickup_spec {
-        spawn_weapon_pickup_from_projectile(commands, catalog, pos, spec, decide);
+        spawn_weapon_pickup_from_projectile(commands, catalog, pos, spec, decide, rng);
     }
 
     if let Some(plasma) = plasma_burst {
@@ -603,21 +615,21 @@ pub fn on_projectile_removed(
     // a `PortalClear`. FrogQueen-kind projectiles are exclusively the
     // gas mortar, so the source kind is a reliable tag.
     if source.is_some_and(|s| s.enemy_kind == Some(EnemyKind::FrogQueen)) {
-        let mut rng = rand::rng();
         for _ in 0..25 {
             let a = rng.random_range(0.0..std::f32::consts::TAU);
-            let d = rng.random_range(0.0..=48.0);
+            let d = rng.random_range(0.0_f32..=48.0_f32);
             let off = glam::Vec2::from_angle(a) * d;
-            let speed = rng.random_range(0.2..1.7) * 30.0;
+            let speed = rng.random_range(0.2_f32..1.7) * 30.0;
             let mut gas = crate::comps_b::ToxicGasState::new();
-            gas.grow_speed = 0.003 + rng.random_range(0.0..0.002);
-            gas.rot =
-                (1.0 + rng.random_range(0.0..=3.0)) * if rng.random_bool(0.5) { 1.0 } else { -1.0 };
+            gas.grow_speed = 0.003 + rng.random_range(0.0_f32..0.002);
+            gas.rot = (1.0 + rng.random_range(0.0_f32..=3.0_f32))
+                * if rng.random_bool(0.5) { 1.0 } else { -1.0 };
             crate::enemies::spawn_toxic_gas(
                 commands,
                 pos + off,
                 glam::Vec2::from_angle(a) * speed,
                 gas,
+                rng,
             );
         }
         commands.spawn((
@@ -676,6 +688,7 @@ pub fn damage_destructible_prop(
     nexthurt_window: Option<u64>,
     loops: u32,
     hasted: bool,
+    rng: &mut SimRng,
 ) {
     damage_destructible_prop_ctx(
         commands,
@@ -695,6 +708,7 @@ pub fn damage_destructible_prop(
         loops,
         hasted,
         None,
+        rng,
     );
 }
 
@@ -730,6 +744,7 @@ pub fn damage_destructible_prop_ctx(
     loops: u32,
     hasted: bool,
     drop: Option<DropCtx<'_>>,
+    rng: &mut SimRng,
 ) {
     let mut dead = false;
     let mut legacy_explosive = false;
@@ -775,6 +790,7 @@ pub fn damage_destructible_prop_ctx(
         hasted,
         audio,
         cues,
+        rng,
     );
     commands.entity(prop_e).try_despawn();
     if let Ok(entrance) = entrances.get(prop_e) {
@@ -782,22 +798,24 @@ pub fn damage_destructible_prop_ctx(
     }
     let nest_flags = nests.get(prop_e).copied().unwrap_or_default();
     if nest_flags.snowman {
-        let mut rng = rand::rng();
         for _ in 0..3 {
             queue_enemy_spawn(
                 &mut *commands,
                 EnemyKind::Bandit,
-                center + glam::Vec2::new(rng.random_range(-4.0..4.0), rng.random_range(-4.0..4.0)),
+                center
+                    + glam::Vec2::new(
+                        rng.random_range(-4.0_f32..4.0),
+                        rng.random_range(-4.0_f32..4.0),
+                    ),
                 1.0,
                 loops,
             );
         }
         for _ in 0..6 {
-            spawn_rad(commands, catalog, center, 1);
+            spawn_rad(commands, catalog, center, 1, rng);
         }
     }
     if nest_flags.cocoon {
-        let mut rng = rand::rng();
         // GML `Cocoon/Destroy_0.gml:1-2` verbatim: `random(3) < 1` spawns
         // a `Gator`, otherwise `scrDrop(30, 0)` - a 30% drop that weighs
         // the player's ammo need and can pay a `HealthChest`.
@@ -815,40 +833,47 @@ pub fn damage_destructible_prop_ctx(
                 drop.health,
                 loops,
                 drop.decide,
+                rng,
             );
         }
     }
     if nest_flags.mutant_tube {
-        let mut rng = rand::rng();
         for _ in 0..8 {
             queue_enemy_spawn(
                 &mut *commands,
                 EnemyKind::Freak,
-                center + glam::Vec2::new(rng.random_range(-4.0..4.0), rng.random_range(-4.0..4.0)),
+                center
+                    + glam::Vec2::new(
+                        rng.random_range(-4.0_f32..4.0),
+                        rng.random_range(-4.0_f32..4.0),
+                    ),
                 1.0,
                 loops,
             );
         }
     }
     if nest_flags.soda_machine {
-        let mut rng = rand::rng();
         for _ in 0..20 {
             let a = rng.random_range(0.0..std::f32::consts::TAU);
             let d = glam::Vec2::new(a.cos(), a.sin());
-            let s = rng.random_range(3.0..7.0) * 30.0;
+            let s = rng.random_range(3.0_f32..7.0) * 30.0;
             spawn_pickup(
                 commands,
                 catalog,
                 crate::comps_b::PickupKind::Medkit(1),
                 center
-                    + glam::Vec2::new(rng.random_range(-4.0..4.0), rng.random_range(0.0..16.0))
+                    + glam::Vec2::new(
+                        rng.random_range(-4.0_f32..4.0),
+                        rng.random_range(0.0_f32..16.0),
+                    )
                     + d * s * 0.05,
                 loops,
                 false,
+                rng,
             );
         }
     }
-    if nest_flags.pizza_box && rand::rng().random_range(0.0..1.0) < 0.2 {
+    if nest_flags.pizza_box && rng.random_range(0.0..1.0) < 0.2 {
         spawn_pickup(
             commands,
             catalog,
@@ -856,11 +881,12 @@ pub fn damage_destructible_prop_ctx(
             center,
             loops,
             false,
+            rng,
         );
     }
     if nest_flags.small_gen {
         // GML `SmallGenerator/Create_0.gml:13` `raddrop = 5`, paid by
         // `prop/Destroy_0.gml:12`.
-        spawn_rad_burst(commands, catalog, center, 5);
+        spawn_rad_burst(commands, catalog, center, 5, rng);
     }
 }

@@ -7,8 +7,8 @@
 use std::collections::HashSet;
 
 use bevy_ecs::prelude::*;
-use rand::RngExt;
 use repame_sim::SimTime;
+use repame_sim::rng::Rng;
 
 use crate::audio::AudioCue;
 use crate::comps_a::{
@@ -22,6 +22,7 @@ use crate::comps_b::{
 use crate::data::{AmmoKind, CrownKind, WeaponId, ammo_pickup_amount};
 use crate::enemy_data::enemy_def;
 use crate::msg::Queue;
+use crate::rng_streams::SimStreams;
 use crate::spatial::Pos;
 use crate::time::{GTimer, TimerMode};
 
@@ -39,7 +40,7 @@ pub const VAULT_STATUE_DIST: f32 = 128.0;
 /// GML `rng_choose(0, 0, 90, 180, 270)` (`CrownPickup/Create_0.gml:42,45`).
 /// `rng_choose` samples its argument list uniformly, so the repeated `0` is
 /// double-weighted: p(0) = 2/5, the rest 1/5 each.
-fn vault_statue_angle(rng: &mut impl RngExt) -> f32 {
+fn vault_statue_angle(rng: &mut impl Rng) -> f32 {
     match rng.random_range(0..5u32) {
         0 | 1 => 0.0,
         2 => 90.0,
@@ -55,7 +56,7 @@ fn vault_statue_angle(rng: &mut impl RngExt) -> f32 {
 /// `do..until` rejection loop draws at least once); else none. `crownvisits` is the
 /// port's `SecretTriggers::vaults_entered`, incremented on entry like GML's
 /// room-start `GameCont/Other_4.gml:8`.
-pub fn vault_statue_angles(crownvisits: u8, crown_object: bool, rng: &mut impl RngExt) -> Vec<f32> {
+pub fn vault_statue_angles(crownvisits: u8, crown_object: bool, rng: &mut impl Rng) -> Vec<f32> {
     if crownvisits >= 3 {
         return vec![0.0, 90.0, 180.0, 270.0];
     }
@@ -79,7 +80,7 @@ pub fn spawn_vault_statue(
     commands: &mut Commands,
     catalog: &repame_anim::AnimCatalog,
     pos: glam::Vec2,
-    rng: &mut impl RngExt,
+    rng: &mut impl Rng,
 ) -> Entity {
     // GML `prop/Create_0.gml:13` `image_xscale = choose(1, -1)`.
     let flip = rng.random_bool(0.5);
@@ -126,7 +127,7 @@ pub fn spawn_crown_vault_statues(
     pedestal: glam::Vec2,
     crownvisits: u8,
     crown_object: bool,
-    rng: &mut impl RngExt,
+    rng: &mut impl Rng,
 ) {
     for deg in vault_statue_angles(crownvisits, crown_object, rng) {
         spawn_vault_statue(
@@ -276,6 +277,7 @@ pub fn tick_crown_love(
 /// Crown of Curses: radial burst of 4 hostile bolts every 14 s.
 pub fn tick_crown_curses(
     time: Res<SimTime>,
+    mut streams: ResMut<SimStreams>,
     mut commands: Commands,
     mut q: Query<(&mut CrownState, &Pos), With<Player>>,
 ) {
@@ -292,7 +294,7 @@ pub fn tick_crown_curses(
         }
 
         let center = pos.0;
-        let mut rng = rand::rng();
+        let rng = &mut streams.crown;
 
         for _ in 0..4 {
             let dir = glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU));
@@ -323,6 +325,7 @@ pub fn crown_floor_start_bonus(
     mut started: ResMut<Queue<FloorStarted>>,
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
+    mut streams: ResMut<SimStreams>,
     mut q: Query<(&Player, &mut CrownState, &mut Inventory, &Pos, &mut Health), With<Player>>,
 ) {
     let mut start: Option<FloorStarted> = None;
@@ -365,6 +368,7 @@ pub fn crown_floor_start_bonus(
                     pos.0 + glam::Vec2::new(36.0, -28.0),
                     0,
                     false,
+                    &mut streams.pickups,
                 );
             }
 
@@ -459,6 +463,8 @@ pub fn tick_crown_love_convert(
     mut chests: Query<(Entity, &Pickup, &Pos)>,
     mut rad_props: Query<(Entity, &Pos), With<RadChestContainer>>,
     mut done: Local<Option<u64>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
     let Ok(player) = player_q.single() else {
         return;
@@ -486,12 +492,24 @@ pub fn tick_crown_love_convert(
         }
         let at = pos.0;
         commands.entity(e).despawn();
-        crate::pickups::spawn_chest(&mut commands, &catalog, ChestKind::Ammo, at);
+        crate::pickups::spawn_chest(
+            &mut commands,
+            &catalog,
+            ChestKind::Ammo,
+            at,
+            &mut streams.pickups,
+        );
     }
     for (e, pos) in &mut rad_props {
         let at = pos.0;
         commands.entity(e).despawn();
-        crate::pickups::spawn_chest(&mut commands, &catalog, ChestKind::Ammo, at);
+        crate::pickups::spawn_chest(
+            &mut commands,
+            &catalog,
+            ChestKind::Ammo,
+            at,
+            &mut streams.pickups,
+        );
     }
 }
 
@@ -506,6 +524,8 @@ pub fn tick_crown_life_convert(
     mut chests: Query<(Entity, &Pickup, &Pos)>,
     mut rad_props: Query<(Entity, &Pos), With<RadChestContainer>>,
     mut done: Local<Option<u64>>,
+
+    mut streams: ResMut<SimStreams>,
 ) {
     let Ok(player) = player_q.single() else {
         return;
@@ -522,18 +542,31 @@ pub fn tick_crown_life_convert(
         }
         let at = pos.0;
         commands.entity(e).despawn();
-        crate::pickups::spawn_chest(&mut commands, &catalog, ChestKind::Health, at);
+        crate::pickups::spawn_chest(
+            &mut commands,
+            &catalog,
+            ChestKind::Health,
+            at,
+            &mut streams.pickups,
+        );
     }
     for (e, pos) in &mut rad_props {
         let at = pos.0;
         commands.entity(e).despawn();
-        crate::pickups::spawn_chest(&mut commands, &catalog, ChestKind::Health, at);
+        crate::pickups::spawn_chest(
+            &mut commands,
+            &catalog,
+            ChestKind::Health,
+            at,
+            &mut streams.pickups,
+        );
     }
 }
 
 /// Crown of Luck: 10% of non-boss enemies spawn at 1 HP. Each enemy
 /// rolls once (tracked in `seen`).
 pub fn tick_crown_luck(
+    mut streams: ResMut<SimStreams>,
     player_q: Query<&Player, With<Player>>,
     mut enemies: Query<(Entity, &Enemy, &mut Health), With<Enemy>>,
     mut seen: Local<HashSet<Entity>>,
@@ -545,7 +578,7 @@ pub fn tick_crown_luck(
         seen.clear();
         return;
     }
-    let mut rng = rand::rng();
+    let rng = &mut streams.crown;
     for (e, enemy, mut health) in &mut enemies {
         if !seen.insert(e) {
             continue;
@@ -626,6 +659,7 @@ pub fn tick_crown_pedestal(
     mut statues: Query<(Entity, &mut Prop), With<VaultStatue>>,
     crowns: Query<Entity, With<CrownObject>>,
     mut shots: Query<(Entity, &Team), With<Projectile>>,
+    mut streams: ResMut<SimStreams>,
 ) {
     let Ok((ppos, mut player, mut health, mut inv, mut state)) = q_player.single_mut() else {
         return;
@@ -651,7 +685,14 @@ pub fn tick_crown_pedestal(
         // (no `VaultStatue`) opens the type-3 portal on the spot, so the
         // vault can be left without clearing it.
         if statues.is_empty() {
-            crate::progression::spawn_portal(&mut commands, &catalog, &mut shots, pos.0, 3);
+            crate::progression::spawn_portal(
+                &mut commands,
+                &catalog,
+                &mut shots,
+                pos.0,
+                3,
+                &mut streams.progression,
+            );
         }
 
         // GML `CrownPickup/Collision_Player:24` `with (VaultStatue) hp = 0`:

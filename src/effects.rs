@@ -59,7 +59,7 @@ pub fn rumble(queue: &mut Queue<RumbleRequest>, weak: f32, strong: f32, duration
 ///   flat friction over a ~0.6 s life.
 pub fn spawn_burst(
     commands: &mut Commands,
-    rng: &mut impl rand::RngExt,
+    rng: &mut impl repame_sim::rng::Rng,
     pos: glam::Vec2,
     count: usize,
     color: [f32; 4],
@@ -69,7 +69,7 @@ pub fn spawn_burst(
     for _ in 0..count {
         let angle = rng.random_range(0.0..TAU);
         let speed = rng.random_range(speed_range.0..speed_range.1);
-        let life_secs = rng.random_range(0.4..0.9);
+        let life_secs = rng.random_range(0.4_f32..0.9);
         commands.spawn(Particle {
             pos: [pos.x, pos.y],
             vel: [angle.cos() * speed, angle.sin() * speed],
@@ -77,7 +77,7 @@ pub fn spawn_burst(
             life_secs,
             age_ticks: 0,
             life_ticks: (life_secs * 100.0).ceil().max(1.0) as i32,
-            size_px: rng.random_range(3.0..7.0),
+            size_px: rng.random_range(3.0_f32..7.0),
             gravity_pps2: 0.0,
             drag_per_sec: 4.0,
             gradient: Gradient::solid(color),

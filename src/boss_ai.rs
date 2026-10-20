@@ -37,9 +37,9 @@
 //! `&[(Vec2, (i32, i32))]` walls) so tests drive them without a world.
 
 use bevy_ecs::prelude::*;
-use rand::RngExt;
 use repame_fx::Trauma;
 use repame_sim::SimTime;
+use repame_sim::rng::{Rng, SimRng};
 
 use crate::anim::SpriteAnim;
 use crate::audio::{AudioCue, GameAudio};
@@ -60,6 +60,7 @@ use crate::data::{AreaId, EnemyKind};
 use crate::enemies::show_enemy_fire;
 use crate::enemy_data::{EnemyDef, enemy_def};
 use crate::msg::Queue;
+use crate::rng_streams::SimStreams;
 use crate::spatial::{
     Pos, clamp_to_arena, move_bounce_solid, move_bounce_solid_displacement, resolve_prop_collision,
     solid_contact,
@@ -459,9 +460,8 @@ pub fn spawn_enemy_beam(
 /// on wall masks.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn boss_ai(
-    time: Res<SimTime>,
+    (time, mut run): (Res<SimTime>, ResMut<Run>),
     mut commands: Commands,
-    mut run: ResMut<Run>,
     mut trauma: ResMut<Trauma>,
     mut toast: ResMut<Toast>,
     player_q: Query<(&Pos, &Velocity, &RaceState), (With<Player>, Without<Enemy>)>,
@@ -491,6 +491,7 @@ pub fn boss_ai(
     catalog: Res<repame_anim::AnimCatalog>,
     mask: Res<FloorMask>,
     mut tops: ResMut<TopSmalls>,
+    mut streams: ResMut<SimStreams>,
 ) {
     let Ok((player_pos, player_vel, race_state)) = player_q.single() else {
         return;
@@ -499,6 +500,10 @@ pub fn boss_ai(
     let player_velocity = player_vel.0;
     let rogue_present = race_state.race == crate::data::RaceId::Rogue;
     let dt = time.delta_secs;
+    // GML draws every boss decision off its own `RNGStates` slot; the port
+    // keeps them in `SimStreams::boss_ai` and threads the stream into the
+    // handlers.
+    let rng = &mut streams.boss_ai;
 
     // Snapshots so handlers stay plain functions (no query threading).
     let prop_shapes: Vec<(glam::Vec2, glam::Vec2)> =
@@ -603,6 +608,7 @@ pub fn boss_ai(
                 &mask,
                 run.loop_count,
                 sprites.as_deref_mut(),
+                rng,
             ),
             EnemyKind::BigDog => big_dog_ai(
                 &mut commands,
@@ -622,6 +628,7 @@ pub fn boss_ai(
                 &mask,
                 run.loop_count,
                 missile_count,
+                rng,
             ),
             EnemyKind::LilHunter => lil_hunter_ai(
                 &mut commands,
@@ -647,6 +654,7 @@ pub fn boss_ai(
                 rogue_present,
                 &mask,
                 &mut run,
+                rng,
             ),
             EnemyKind::Throne => throne_ai(
                 &mut commands,
@@ -668,6 +676,7 @@ pub fn boss_ai(
                 &wall_shapes,
                 &mask,
                 def.radius,
+                rng,
             ),
             EnemyKind::ThroneII => {
                 // GML `Nothing2/Other_10:12-13` (and
@@ -690,6 +699,7 @@ pub fn boss_ai(
                     dt,
                     run.loop_count,
                     &wall_list,
+                    rng,
                 )
             }
             EnemyKind::Hyper => {
@@ -709,6 +719,7 @@ pub fn boss_ai(
                         live_crystals,
                         run.loop_count,
                         &mut run,
+                        rng,
                     );
                 }
                 false
@@ -734,6 +745,7 @@ pub fn boss_ai(
                 hurting,
                 health.hp,
                 health.max,
+                rng,
             ),
             EnemyKind::Technomancer => {
                 if let Some(st) = tech.as_deref_mut() {
@@ -748,6 +760,7 @@ pub fn boss_ai(
                         turret_count,
                         run.loop_count,
                         &mask,
+                        rng,
                     );
                 }
                 false
@@ -772,6 +785,7 @@ pub fn boss_ai(
                 &prop_shapes,
                 &wall_shapes,
                 &mask,
+                rng,
             ),
             EnemyKind::YvBoss => yv_boss_ai(
                 &mut commands,
@@ -790,6 +804,7 @@ pub fn boss_ai(
                 &prop_shapes,
                 &mask,
                 def.radius,
+                rng,
             ),
             _ => false,
         };
@@ -853,8 +868,8 @@ fn big_bandit_ai(
     mask: &FloorMask,
     loops: u32,
     sprites: Option<&mut crate::comps_b::EnemySprites>,
+    rng: &mut SimRng,
 ) -> bool {
-    let mut rng = rand::rng();
     let frames = dt * crate::SIM_HZ as f32;
     let mut fired = false;
     let mut sprites = sprites;
@@ -902,9 +917,9 @@ fn big_bandit_ai(
 
     // GML `Alarm_1` (decide).
     if boss.attack_timer.just_finished() {
-        let mut period = 30.0 + rng.random_range(0.0..60.0);
+        let mut period = 30.0 + rng.random_range(0.0_f32..60.0);
         if loops > 0 {
-            period = 20.0 + rng.random_range(0.0..50.0);
+            period = 20.0 + rng.random_range(0.0_f32..50.0);
         }
         boss.attack_timer = gml_alarm(period);
         enemy.touch_damage = 0;
@@ -933,7 +948,7 @@ fn big_bandit_ai(
                     }
                     boss.special_timer = gml_alarm(1.0);
                     brain.gunangle = dir.y.atan2(dir.x);
-                    boss.attack_timer = gml_alarm(70.0 + rng.random_range(0.0..5.0));
+                    boss.attack_timer = gml_alarm(70.0 + rng.random_range(0.0_f32..5.0));
                 }
             } else if brain.fire > 0 || health.hp < health.max || !intro {
                 boss.pattern_index += 1;
@@ -966,7 +981,7 @@ fn big_bandit_ai(
         let away_dir = -dir;
         let base = away_dir.y.atan2(away_dir.x);
         let mut heading = base + rng.random_range(-90.0f32..90.0).to_radians();
-        let mut walk = 10.0 + rng.random_range(0.0..10.0);
+        let mut walk = 10.0 + rng.random_range(0.0_f32..10.0);
         if dist > 64.0 {
             walk = 40.0;
             heading = base + rng.random_range(-45.0f32..45.0).to_radians();
@@ -1036,7 +1051,7 @@ fn big_bandit_ai(
         } else {
             // GML `Alarm_2:20-22`.
             boss_cue(commands, "sndBigBanditStopShoot");
-            boss.attack_timer = gml_alarm(60.0 + rng.random_range(0.0..10.0));
+            boss.attack_timer = gml_alarm(60.0 + rng.random_range(0.0_f32..10.0));
         }
     }
 
@@ -1065,7 +1080,7 @@ fn big_bandit_ai(
                 set.idle = "images/sprBanditBossIdle.png";
                 set.walk = Some("images/sprBanditBossWalk.png");
             }
-            boss.attack_timer = gml_alarm(45.0 + rng.random_range(0.0..30.0));
+            boss.attack_timer = gml_alarm(45.0 + rng.random_range(0.0_f32..30.0));
             // GML `Alarm_5:14-22`.
             if boss.aux < 1.0 {
                 boss.aux = 1.0;
@@ -1142,8 +1157,8 @@ fn big_dog_ai(
     mask: &FloorMask,
     loop_count: u32,
     missiles: usize,
+    rng: &mut SimRng,
 ) -> bool {
-    let mut rng = rand::rng();
     let mut fired = false;
 
     // GML `Create_0`: `alarm[0] = 30`, `ammo = 15`, `turn = ±1`.
@@ -1233,7 +1248,7 @@ fn big_dog_ai(
                 }
                 boss.attack_timer = GTimer::from_seconds(10.0 / 30.0, TimerMode::Once);
             } else {
-                brain.walk = rng.random_range(20.0..30.0);
+                brain.walk = rng.random_range(20.0_f32..30.0);
                 let head = glam::Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU));
                 gml_motion_add_clamp(&mut vel.0, head, 1.0, 3.0, dt);
                 boss.target = head;
@@ -1322,16 +1337,18 @@ fn lil_hunter_ai(
     rogue_present: bool,
     mask: &FloorMask,
     run: &mut Run,
+    rng: &mut SimRng,
 ) -> bool {
-    let mut rng = rand::rng();
     let mut fired = false;
 
     // GML `Create_0`: `spawns = 6`, `alarm[1] = 30..120`, `alarm[2] = 30`.
     if brain.burst_left == 0 {
         brain.burst_left = 1;
         brain.ammo = 6;
-        boss.attack_timer =
-            GTimer::from_seconds(rng.random_range(30.0..=120.0) / 30.0, TimerMode::Once);
+        boss.attack_timer = GTimer::from_seconds(
+            rng.random_range(30.0_f32..=120.0_f32) / 30.0,
+            TimerMode::Once,
+        );
         boss.special_timer = GTimer::from_seconds(1.0 /* 30 ticks */, TimerMode::Once);
     }
 
@@ -1378,12 +1395,14 @@ fn lil_hunter_ai(
                     },
                     Pos(pos.0),
                 ));
-                lil_hunter_fire_ring(commands, pos.0, props, Some(mask));
+                lil_hunter_fire_ring(commands, pos.0, props, Some(mask), rng);
                 fired = true;
                 // GML `LilHunterFly/Step_0.gml:62`.
                 boss_cue(commands, "sndLilHunterLand");
-                boss.attack_timer =
-                    GTimer::from_seconds(rng.random_range(20.0..=30.0) / 30.0, TimerMode::Once);
+                boss.attack_timer = GTimer::from_seconds(
+                    rng.random_range(20.0_f32..=30.0_f32) / 30.0,
+                    TimerMode::Once,
+                );
                 if brain.burst_left == 1 {
                     brain.burst_left = 2;
                     // GML `LilHunterFly/Step_0.gml:88`, on the first landing.
@@ -1422,8 +1441,10 @@ fn lil_hunter_ai(
 
     // GML `Alarm_1` (brain).
     if boss.attack_timer.just_finished() {
-        boss.attack_timer =
-            GTimer::from_seconds((20.0 + rng.random_range(0.0..=6.0)) / 30.0, TimerMode::Once);
+        boss.attack_timer = GTimer::from_seconds(
+            (20.0 + rng.random_range(0.0_f32..=6.0_f32)) / 30.0,
+            TimerMode::Once,
+        );
         // GML: Rogue in the run with no other enemies forces liftoff.
         let liftoff = rogue_present && others == 0
             || rng.random::<f32>() < 1.0 / 30.0
@@ -1475,7 +1496,7 @@ fn lil_hunter_ai(
                 } else {
                     // Sniper hose: 10 + 2 * loops bolts at 7..13 px/tick.
                     boss.attack_timer = GTimer::from_seconds(
-                        (5.0 + rng.random_range(0.0..=6.0)) / 30.0,
+                        (5.0 + rng.random_range(0.0_f32..=6.0_f32)) / 30.0,
                         TimerMode::Once,
                     );
                     brain.gunangle = aim + rng.random_range(-15.0..=15.0_f32).to_radians();
@@ -1489,7 +1510,7 @@ fn lil_hunter_ai(
                             epos + sdir * 20.0,
                             sdir,
                             Team::Enemy,
-                            rng.random_range(210.0..=390.0),
+                            rng.random_range(210.0_f32..=390.0_f32),
                             3,
                             2.5,
                             4.0,
@@ -1506,7 +1527,7 @@ fn lil_hunter_ai(
                 .normalize_or_zero();
                 vel.0 = back * 12.0;
                 boss.target = back;
-                brain.walk = rng.random_range(8.0..=12.0);
+                brain.walk = rng.random_range(8.0_f32..=12.0_f32);
                 boss.attack_timer = GTimer::from_seconds(brain.walk / 30.0, TimerMode::Once);
                 brain.gunangle = aim;
             }
@@ -1524,7 +1545,8 @@ fn lil_hunter_ai(
             let waves = 1 + loop_count.saturating_sub(1) as usize;
             run.popolevel += waves as f32;
             for _ in 0..waves {
-                for kind in crate::idpd::roll_idpd_table(loop_count, run.area, run.popolevel, true)
+                for kind in
+                    crate::idpd::roll_idpd_table(loop_count, run.area, run.popolevel, true, rng)
                 {
                     queue_enemy_spawn(&mut *commands, kind, epos, 1.0, loop_count);
                 }
@@ -1539,7 +1561,7 @@ fn lil_hunter_ai(
             .normalize_or_zero();
             vel.0 = back * 12.0;
             boss.target = back;
-            brain.walk = rng.random_range(40.0..=50.0);
+            brain.walk = rng.random_range(40.0_f32..=50.0_f32);
             brain.gunangle = aim;
             let d = boss.attack_timer.duration() / 3.0;
             boss.attack_timer = GTimer::from_seconds(d, TimerMode::Once);
@@ -1595,13 +1617,13 @@ pub fn lil_hunter_fire_ring(
     at: glam::Vec2,
     props: &[(glam::Vec2, glam::Vec2)],
     mask: Option<&FloorMask>,
+    rng: &mut SimRng,
 ) {
-    let mut rng = rand::rng();
     let mut ang = rng.random_range(0.0..std::f32::consts::TAU);
     for _ in 0..80 {
         ang += 4.5_f32.to_radians();
         let d = glam::Vec2::from_angle(ang);
-        let speed = (2.0 + rng.random_range(0.0..0.2)) * 30.0;
+        let speed = (2.0 + rng.random_range(0.0_f32..0.2)) * 30.0;
         let mut origin = at;
         crate::spatial::move_contact_solid(&mut origin, d * 12.0, 0.0, props, mask);
         crate::environment::spawn_trap_fire_with_image(
@@ -1613,6 +1635,7 @@ pub fn lil_hunter_fire_ring(
             None,
             "images/sprFireLilHunter.png",
             Some(d.y.atan2(d.x)),
+            rng,
         );
     }
 }
@@ -1731,6 +1754,7 @@ pub fn throne_annihilate_props(
     entrances: Query<&SecretEntrance>,
     nests: Query<&PropNestMarkers, With<Prop>>,
     player_q: Query<&Player, With<Player>>,
+    mut streams: ResMut<SimStreams>,
 ) {
     let Some((throne_pos, _)) = throne_q.iter().find(|(_, e)| e.kind == EnemyKind::Throne) else {
         return;
@@ -1794,6 +1818,7 @@ pub fn throne_annihilate_props(
             None,
             run.loop_count,
             hasted,
+            &mut streams.environment,
         );
     }
 }
@@ -1818,8 +1843,8 @@ fn throne_ai(
     walls: &[(glam::Vec2, (i32, i32))],
     mask: &FloorMask,
     radius: f32,
+    rng: &mut SimRng,
 ) -> bool {
-    let mut rng = rand::rng();
     let mut fired = false;
 
     // GML `Create_0`: `alarm[1] = 30`. `friction = 1.7` is only read by
@@ -1998,14 +2023,15 @@ fn throne_ai(
                 } else if frac <= 0.4 {
                     boss.attack_timer = GTimer::from_seconds(20.0 / 30.0, TimerMode::Once);
                     brain.gunangle = [-30.0_f32, -20.0, -10.0, 0.0, 10.0, 20.0, 30.0]
-                        [rng.random_range(0..7)]
+                        [rng.random_range(0..7usize)]
                     .to_radians();
                     brain.ammo = (3 + loop_count) as u8;
                     boss.special_timer = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
                 } else {
                     boss.attack_timer = GTimer::from_seconds(60.0 / 30.0, TimerMode::Once);
-                    brain.gunangle =
-                        [-20.0_f32, -10.0, 0.0, 10.0, 20.0][rng.random_range(0..5)].to_radians();
+                    brain.gunangle = [-20.0_f32, -10.0, 0.0, 10.0, 20.0]
+                        [rng.random_range(0..5usize)]
+                    .to_radians();
                     brain.ammo = (8 + loop_count) as u8;
                     boss.special_timer = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
                 }
@@ -2026,7 +2052,7 @@ fn throne_ai(
                         hold: 8.0,
                         released: false,
                     },
-                    Velocity(sdir * rng.random_range(210.0..=240.0)),
+                    Velocity(sdir * rng.random_range(210.0_f32..=240.0_f32)),
                     Pos(epos + glam::Vec2::new(sx, 10.0)),
                 ));
             }
@@ -2117,8 +2143,8 @@ fn throne_ii_ai(
     dt: f32,
     loop_count: u32,
     walls: &[Entity],
+    rng: &mut SimRng,
 ) -> bool {
-    let mut rng = rand::rng();
     let mut fired = false;
 
     // GML `Nothing2/Other_10`: walls turn invisible (still solid via
@@ -2165,7 +2191,9 @@ fn throne_ii_ai(
     // GML `Alarm_0` (strafe).
     if boss.special_timer.just_finished() {
         boss.special_timer = GTimer::from_seconds(1.0 /* 30 ticks */, TimerMode::Once);
-        let head = glam::Vec2::from_angle(aim + (50.0 + rng.random_range(0.0..=20.0)) * brain.dash);
+        let head = glam::Vec2::from_angle(
+            aim + (50.0 + rng.random_range(0.0_f32..=20.0_f32)) * brain.dash,
+        );
         boss.target = head;
         brain.walk = 60.0;
         if rng.random::<f32>() < 0.1 {
@@ -2181,7 +2209,7 @@ fn throne_ii_ai(
             brain.ammo += 1;
             // GML `Nothing2/Alarm_1.gml:8`.
             boss_cue(commands, "sndBigBallFire");
-            brain.gunangle = aim + (30.0 + rng.random_range(0.0..=10.0)) * brain.strafe_dir;
+            brain.gunangle = aim + (30.0 + rng.random_range(0.0_f32..=10.0_f32)) * brain.strafe_dir;
             let sdir = glam::Vec2::from_angle(brain.gunangle);
             fire_projectile(
                 commands,
@@ -2189,7 +2217,7 @@ fn throne_ii_ai(
                 epos + sdir * 20.0,
                 sdir,
                 Team::Enemy,
-                rng.random_range(150.0..=180.0),
+                rng.random_range(150.0_f32..=180.0_f32),
                 12,
                 3.0,
                 8.0,
@@ -2202,7 +2230,7 @@ fn throne_ii_ai(
                 brain.ammo = 0;
                 let d = boss.attack_timer.duration() + 100.0 / 30.0;
                 boss.attack_timer = GTimer::from_seconds(d, TimerMode::Once);
-                boss.aux = [1.0, 2.0, 3.0][rng.random_range(0..3)];
+                boss.aux = [1.0, 2.0, 3.0][rng.random_range(0..3usize)];
                 exited = true;
             }
         }
@@ -2242,7 +2270,7 @@ fn throne_ii_ai(
                 let d = boss.attack_timer.duration() + 40.0 / 30.0;
                 boss.attack_timer = GTimer::from_seconds(d, TimerMode::Once);
                 brain.gunangle = rng.random_range(0.0..std::f32::consts::TAU);
-                boss.aux = [1.0, 3.0][rng.random_range(0..2)];
+                boss.aux = [1.0, 3.0][rng.random_range(0..2usize)];
                 exited = true;
             }
         }
@@ -2276,7 +2304,7 @@ fn throne_ii_ai(
                         angle: ang,
                         sounded: true,
                     },
-                    Velocity(sdir * rng.random_range(120.0..=300.0)),
+                    Velocity(sdir * rng.random_range(120.0_f32..=300.0_f32)),
                     Pos(epos + sdir * 20.0),
                 ));
                 ang += step.to_radians();
@@ -2286,7 +2314,7 @@ fn throne_ii_ai(
             brain.ammo = 0;
             let d = boss.attack_timer.duration() + 90.0 / 30.0;
             boss.attack_timer = GTimer::from_seconds(d, TimerMode::Once);
-            boss.aux = [1.0, 2.0, 3.0][rng.random_range(0..3)];
+            boss.aux = [1.0, 2.0, 3.0][rng.random_range(0..3usize)];
             exited = true;
         }
         if !exited {
@@ -2348,6 +2376,7 @@ fn hyper_ai(
     live_crystals: usize,
     loop_count: u32,
     run: &mut Run,
+    rng: &mut SimRng,
 ) -> bool {
     let dt = 1.0 / crate::SIM_HZ as f32;
     state.alarm1.tick(dt);
@@ -2381,7 +2410,7 @@ fn hyper_ai(
         if !state.crystals {
             // GML `Alarm_1:11-26`: a released shell is re-seeded in full, so
             // the fight keeps regenerating adds.
-            hyper_ensure_orbit(commands, owner, epos, loop_count, false, run);
+            hyper_ensure_orbit(commands, owner, epos, loop_count, false, run, rng);
             state.crystals = true;
             // GML `HyperCrystal/Alarm_1.gml:12`.
             boss_cue(commands, "sndHyperCrystalSpawn");
@@ -2501,12 +2530,13 @@ pub fn hyper_ensure_orbit(
     loop_count: u32,
     enraged: bool,
     run: &mut Run,
+    rng: &mut SimRng,
 ) {
     let n = (hyper_orbit_count(loop_count) + usize::from(enraged)).min(12);
     for i in 0..n {
         // GML type law: LaserCrystal, or area-104 triple-inv + lightning.
         let kind = if run.area == AreaId::CursedCaves {
-            match rand::rng().random_range(0..4) {
+            match rng.random_range(0..4) {
                 0 | 1 | 2 => EnemyKind::InvLaserCrystal,
                 _ => EnemyKind::LightningCrystal,
             }
@@ -2636,8 +2666,8 @@ fn frog_queen_ai(
     hurting: bool,
     health_hp: i32,
     health_max: i32,
+    rng: &mut SimRng,
 ) -> bool {
-    let mut rng = rand::rng();
     let mut fired = false;
 
     // GML `Create_0`: `alarm[1] = 60`, aim at the target.
@@ -2657,8 +2687,10 @@ fn frog_queen_ai(
 
     // GML `Alarm_1` (brain).
     if boss.attack_timer.just_finished() {
-        boss.attack_timer =
-            GTimer::from_seconds((30.0 + rng.random_range(0.0..20.0)) / 30.0, TimerMode::Once);
+        boss.attack_timer = GTimer::from_seconds(
+            (30.0 + rng.random_range(0.0_f32..20.0)) / 30.0,
+            TimerMode::Once,
+        );
         brain.walk = 0.0;
         boss.target = if los {
             glam::Vec2::from_angle(aim + rng.random_range(-10.0..10.0_f32).to_radians())
@@ -2716,7 +2748,7 @@ fn frog_queen_ai(
                 boss_cue(
                     commands,
                     ["sndFrogEggSpawn1", "sndFrogEggSpawn2", "sndFrogEggSpawn3"]
-                        [rng.random_range(0..3)],
+                        [rng.random_range(0..3usize)],
                 );
             }
             brain.ammo -= 1;
@@ -2795,6 +2827,7 @@ fn technomancer_ai(
     turrets: usize,
     loops: u32,
     mask: &FloorMask,
+    rng: &mut SimRng,
 ) {
     let dt = 1.0 / crate::SIM_HZ as f32;
     for a in [
@@ -2831,12 +2864,12 @@ fn technomancer_ai(
 
     // GML `Alarm_6`: the emplaced turrets, each snapped to its floor tile.
     if state.alarm6.just_finished() {
-        spawn_techno_turrets(commands, catalog, epos, 1 + loops, mask);
+        spawn_techno_turrets(commands, catalog, epos, 1 + loops, mask, rng);
     }
 
     // GML `Alarm_2`: three corpses at the player-facing bearing and +-80deg.
     if state.alarm2.just_finished() {
-        revive_techno_corpses(commands, epos, player_pos, corpses, mask);
+        revive_techno_corpses(commands, epos, player_pos, corpses, mask, rng);
     }
 
     if !state.alarm1.just_finished() {
@@ -2891,11 +2924,11 @@ fn spawn_techno_turrets(
     at: glam::Vec2,
     count: u32,
     mask: &FloorMask,
+    rng: &mut SimRng,
 ) {
-    let mut rng = rand::rng();
     for _ in 0..count {
         let ang = rng.random_range(0.0..std::f32::consts::TAU);
-        let d = 60.0 + rng.random_range(0.0..100.0);
+        let d = 60.0 + rng.random_range(0.0_f32..100.0);
         queue_enemy_spawn(
             commands,
             EnemyKind::Turret,
@@ -2916,8 +2949,8 @@ fn revive_techno_corpses(
     player_pos: glam::Vec2,
     corpses: &[glam::Vec2],
     mask: &FloorMask,
+    rng: &mut SimRng,
 ) {
-    let mut rng = rand::rng();
     let base = (at - player_pos).y.atan2((at - player_pos).x);
     for bearing in [
         base,
@@ -2926,7 +2959,10 @@ fn revive_techno_corpses(
     ] {
         let probe = at
             + glam::Vec2::new(bearing.cos(), bearing.sin()) * 80.0
-            + glam::Vec2::new(rng.random_range(-40.0..40.0), rng.random_range(-40.0..40.0));
+            + glam::Vec2::new(
+                rng.random_range(-40.0_f32..40.0),
+                rng.random_range(-40.0_f32..40.0),
+            );
         let Some(corpse) = nearest_walkable(corpses, probe, mask) else {
             continue;
         };
@@ -2987,8 +3023,8 @@ fn captain_ai(
     props: &[(glam::Vec2, glam::Vec2)],
     walls: &[(glam::Vec2, (i32, i32))],
     mask: &FloorMask,
+    rng: &mut SimRng,
 ) -> bool {
-    let mut rng = rand::rng();
     let frames = dt * crate::SIM_HZ as f32;
     let mut fired = false;
     let aim = dir.y.atan2(dir.x);
@@ -3109,8 +3145,8 @@ fn captain_ai(
         let mut target_pos = pos.0;
         for _ in 0..64 {
             let cand = glam::Vec2::new(
-                player_pos.x + rng.random_range(0.0..320.0) - 160.0,
-                player_pos.y + rng.random_range(0.0..320.0) - 160.0,
+                player_pos.x + rng.random_range(0.0_f32..320.0) - 160.0,
+                player_pos.y + rng.random_range(0.0_f32..320.0) - 160.0,
             );
             target_pos = cand;
             if cand.distance(player_pos) > 80.0
@@ -3317,13 +3353,13 @@ fn yv_boss_ai(
     props: &[(glam::Vec2, glam::Vec2)],
     mask: &FloorMask,
     def_radius: f32,
+    rng: &mut SimRng,
 ) -> bool {
     const REVOLVER: usize = 0;
     const SHOTGUN: usize = 1;
     const BAZOOKA: usize = 2;
     const MINIGUN: usize = 3;
 
-    let mut rng = rand::rng();
     let mut fired = false;
 
     // GML `Create_0`: golden revolver, 5 rounds, brain in 20 ticks,
@@ -3373,7 +3409,7 @@ fn yv_boss_ai(
             // GML `Alarm_2:7` `scrWalk(direction, 1, 10, 30)`.
             boss.target = vel.0.normalize_or_zero();
             gml_motion_add_clamp(&mut vel.0, boss.target, 1.0, 4.0, dt);
-            brain.walk = rng.random_range(10.0..=30.0);
+            brain.walk = rng.random_range(10.0_f32..=30.0_f32);
         } else {
             brain.ammo -= 1;
             match boss.pattern_index {
@@ -3464,7 +3500,7 @@ fn yv_boss_ai(
                             },
                             // GML `Alarm_2:39` overrides `spr_fade`.
                             ProjectileFade("images/sprBullet2Disappear.png"),
-                            Velocity(sdir * rng.random_range(12.0..=18.0) * 30.0),
+                            Velocity(sdir * rng.random_range(12.0_f32..=18.0_f32) * 30.0),
                             Pos(epos),
                         ));
                     }
@@ -3556,7 +3592,7 @@ fn yv_boss_ai(
             } else {
                 head
             };
-            brain.walk = rng.random_range(10.0..=30.0);
+            brain.walk = rng.random_range(10.0_f32..=30.0_f32);
             let heading = if vel.0.length_squared() > 1e-8 {
                 vel.0.normalize_or_zero()
             } else {
@@ -3569,7 +3605,7 @@ fn yv_boss_ai(
             };
             // `alarm[1] = walk + irandom(10) + 10`, halved on cooldown.
             // GML `Alarm_1:12` stores a float into an integer alarm.
-            let wait = ((brain.walk + rng.random_range(0.0..=10.0) + 10.0) * 0.5).floor();
+            let wait = ((brain.walk + rng.random_range(0.0_f32..=10.0_f32) + 10.0) * 0.5).floor();
             boss.attack_timer = gml_alarm(wait);
         } else {
             brain.gunangle = aim;
@@ -3591,7 +3627,7 @@ fn yv_boss_ai(
                         },
                         Pos(epos),
                     ));
-                    boss.phase_timer = gml_alarm(rng.random_range(30.0..=40.0));
+                    boss.phase_timer = gml_alarm(rng.random_range(30.0_f32..=40.0_f32));
                     boss.special_timer = gml_alarm(10.0);
                 } else if (dist <= 110.0 || rng.random::<f32>() < 1.0 / 3.0)
                     && boss.pattern_index != REVOLVER
@@ -3599,7 +3635,7 @@ fn yv_boss_ai(
                     boss.pattern_index = REVOLVER;
                     yv_change_weapon(commands, crate::data::WEAPON_GOLDEN_REVOLVER);
                     brain.ammo = 5;
-                    boss.phase_timer = gml_alarm(25.0 + rng.random_range(0.0..=15.0));
+                    boss.phase_timer = gml_alarm(25.0 + rng.random_range(0.0_f32..=15.0_f32));
                     boss.special_timer = gml_alarm(5.0);
                 } else {
                     boss.pattern_index = MINIGUN;
@@ -3607,8 +3643,8 @@ fn yv_boss_ai(
                     boss.aux = if rng.random_bool(0.5) { 1.0 } else { -1.0 };
                     brain.ammo = 90;
                     brain.gunangle -=
-                        (45.0 * boss.aux + rng.random_range(-10.0..=10.0)).to_radians();
-                    boss.phase_timer = gml_alarm(180.0 + rng.random_range(0.0..=40.0));
+                        (45.0 * boss.aux + rng.random_range(-10.0_f32..=10.0_f32)).to_radians();
+                    boss.phase_timer = gml_alarm(180.0 + rng.random_range(0.0_f32..=40.0_f32));
                     boss.special_timer = gml_alarm(4.0);
                 }
             } else {
@@ -3635,7 +3671,7 @@ fn yv_boss_ai(
                     );
                     let heading = vel.0.normalize_or_zero();
                     gml_motion_add_clamp(&mut vel.0, heading, 4.0, 4.0, dt);
-                    brain.walk = rng.random_range(10.0..=20.0);
+                    brain.walk = rng.random_range(10.0_f32..=20.0_f32);
                     brain.gunangle = heading.y.atan2(heading.x);
                 } else {
                     boss.pattern_index = BAZOOKA;
@@ -3649,7 +3685,7 @@ fn yv_boss_ai(
             // GML `Alarm_1:74-77`: `alarm[4]` is never -1 here, so the brain
             // always re-arms at 5-15 and `walk` is zeroed - YV stands still
             // through the wall-adjacent branch too.
-            boss.attack_timer = gml_alarm(rng.random_range(5.0..=15.0));
+            boss.attack_timer = gml_alarm(rng.random_range(5.0_f32..=15.0_f32));
             brain.walk = 0.0;
         }
     }

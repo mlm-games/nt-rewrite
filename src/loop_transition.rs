@@ -9,9 +9,11 @@
 //! `progression.rs`.
 
 use bevy_ecs::prelude::*;
-use rand::RngExt;
 use repame_fx::Trauma;
 use repame_sim::SimTime;
+use repame_sim::rng::Rng;
+
+use crate::rng_streams::SimStreams;
 
 use crate::audio::AudioCue;
 use crate::combat::queue_enemy_spawn;
@@ -290,6 +292,7 @@ pub fn tick_yv_couch(
     players: Query<&Pos, With<Player>>,
     enemies: Query<&Enemy>,
     mut cues: ResMut<Queue<AudioCue>>,
+    mut streams: ResMut<SimStreams>,
 ) {
     let steps = time.delta_secs * 30.0;
     for mut couch in q.iter_mut() {
@@ -303,7 +306,7 @@ pub fn tick_yv_couch(
     }
 
     let tv_dead = !cuz_q.is_empty() && enemies.iter().any(|e| e.kind == EnemyKind::YvBoss);
-    let mut rng = rand::rng();
+    let rng = &mut streams.fx;
     for (pos, mut cuz) in cuz_q.iter_mut() {
         if tv_dead && !cuz.crying {
             cuz.crying = true;
@@ -368,7 +371,7 @@ pub fn tick_yv_couch(
         if cuz.alarm1 >= 0.0 {
             cuz.alarm1 -= steps;
             if cuz.alarm1 <= 0.0 {
-                cuz.alarm1 = rng.random_range(120.0..=360.0);
+                cuz.alarm1 = rng.random_range(120.0_f32..=360.0_f32);
                 let mut n = rng.random_range(1..=10u8);
                 while n == cuz.last_cry {
                     n = rng.random_range(1..=10u8);

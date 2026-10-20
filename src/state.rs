@@ -38,6 +38,7 @@
 
 use bevy_ecs::prelude::*;
 use repame_sim::SimTime;
+use repame_sim::rng::Rng;
 
 use crate::time::{GTimer, TimerMode};
 
@@ -239,13 +240,15 @@ pub fn drive_tutorial_exit(world: &mut World) {
 
     // GML `instance_create(10016, 10016, Portal)`.
     let at = glam::Vec2::splat(crate::worldgen::TILE as f32 * 0.5);
+    let mut rng = world.resource::<crate::rng_streams::SimStreams>().state;
     world.resource_scope(|world, catalog: Mut<repame_anim::AnimCatalog>| {
         let mut commands = world.commands();
         for shot in enemy_shots {
             commands.entity(shot).despawn();
         }
-        crate::progression::spawn_portal_at(&mut commands, &catalog, at, 1);
+        crate::progression::spawn_portal_at(&mut commands, &catalog, at, 1, &mut rng);
     });
+    world.resource_mut::<crate::rng_streams::SimStreams>().state = rng;
     world.flush();
 }
 
@@ -303,8 +306,10 @@ pub fn tick_tutorial(world: &mut World, dt: f32) {
     if world.resource::<TutorialState>().step != TutorialStep::PickingUp {
         return;
     }
-    use rand::RngExt;
-    let mut rng = rand::rng();
+    // GML draws this site off the global stream; the port keeps the tutorial
+    // (and the rest of run state) on its own `state` stream, and `SimRng` is
+    // `Copy`, so the state is read out here and written back at the end.
+    let mut rng = world.resource::<crate::rng_streams::SimStreams>().state;
     let player: Vec<glam::Vec2> = world
         .query_filtered::<&crate::spatial::Pos, With<crate::comps_a::Player>>()
         .iter(world)
@@ -346,7 +351,7 @@ pub fn tick_tutorial(world: &mut World, dt: f32) {
     }
     let at = site.unwrap_or_else(|| glam::Vec2::splat(crate::worldgen::TILE as f32 * 0.5));
     let dir = rng.random_range(0.0..std::f32::consts::TAU);
-    let shove = rng.random_range(32.0..104.0);
+    let shove = rng.random_range(32.0_f32..104.0);
     let mut rest = at + glam::Vec2::from_angle(dir) * shove;
     if let Some(mask) = world.get_resource::<crate::comps_a::FloorMask>() {
         crate::spatial::move_contact_solid(
@@ -359,8 +364,9 @@ pub fn tick_tutorial(world: &mut World, dt: f32) {
     }
     // GML `:37-42`: a 20-mote fan stepping 18 degrees off one heading.
     let motes: Vec<f32> = (0..20)
-        .map(|_| (6.0 - rng.random_range(0.0..1.0)) * 30.0)
+        .map(|_| (6.0 - rng.random_range(0.0_f32..1.0)) * 30.0)
         .collect();
+    world.resource_mut::<crate::rng_streams::SimStreams>().state = rng;
     let fan = dir;
     world.commands().queue(move |world: &mut World| {
         let frames = world
@@ -368,6 +374,11 @@ pub fn tick_tutorial(world: &mut World, dt: f32) {
             .def("images/sprWeaponChest.png")
             .map(|def| def.frames)
             .unwrap_or(1) as u32;
+        // GML `WeaponChest/Create_0:4-11` rolls the chest art off the
+        // global stream; the port keeps it on the pickups stream.
+        let mut pickups_rng = world
+            .resource_mut::<crate::rng_streams::SimStreams>()
+            .pickups;
         let mut commands = world.commands();
         crate::pickups::spawn_chest_frames(
             &mut commands,
@@ -375,12 +386,16 @@ pub fn tick_tutorial(world: &mut World, dt: f32) {
             rest,
             &crate::pickups::ChestCtx::default(),
             frames,
+            &mut pickups_rng,
         );
         let mut dust = fan;
         for speed in motes {
             crate::environment::spawn_native_streak(&mut commands, false, at, dust, speed);
             dust += 18.0_f32.to_radians();
         }
+        world
+            .resource_mut::<crate::rng_streams::SimStreams>()
+            .pickups = pickups_rng;
     });
 }
 
