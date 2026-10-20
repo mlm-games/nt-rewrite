@@ -203,6 +203,7 @@ fn run_tape() -> Vec<TickSnap> {
             nt_rewrite::EnemyKind::Bandit,
             spot,
             true,
+            0,
         );
     }
     nt_rewrite::nt_shortcuts::install_map_once();

@@ -1,5 +1,6 @@
 //! Combat hit pipeline, run in [`NtSimSet`](crate::schedule::NtSimSet)
 //! order (Always → Input → Combat → Progression → Cleanup).
+use crate::runner_rng::RunnerRng;
 ///
 ///Render writes (`image_index`/`image_xscale`, tint restore) stay out
 ///- the render phase resolves visuals from sim state. Effect sinks
@@ -7,7 +8,6 @@
 ///  ported alongside and asserted in tests.
 use bevy_ecs::prelude::*;
 use repame_sim::rng::Rng;
-use crate::runner_rng::RunnerRng;
 
 use crate::rng_streams::SimStreams;
 use repame_fx::Trauma;
@@ -357,6 +357,9 @@ pub struct MaggotExplosionFx {
 pub struct DeathEvent {
     pub pos: glam::Vec2,
     pub kind: EnemyKind,
+    /// The enemy's own `dropseed` (`enemy/Create_0.gml:28`), read by
+    /// `scrDrop` instead of a fresh `Pickups` draw.
+    pub drop_seed: Option<u32>,
     pub rad_drop: usize,
     pub drop_chance: usize,
     pub weapon_chance: usize,
@@ -561,6 +564,7 @@ pub fn resolve_enemy_deaths(
             Option<&Velocity>,
             Option<&EnemyBrain>,
             Option<&crate::comps_b::ProtoGuardian>,
+            Option<&crate::comps_b::DropSeed>,
         ),
         (Without<Prop>, Without<Player>, Without<Dying>),
     >,
@@ -585,8 +589,8 @@ pub fn resolve_enemy_deaths(
     let oasis = run.area == crate::data::AreaId::Oasis;
     let pre: Vec<EnemyKind> = q
         .iter()
-        .filter(|(_, _, team, _, _, _, _, _)| **team == Team::Enemy)
-        .map(|(_, _, _, _, enemy, _, _, _)| {
+        .filter(|(_, _, team, _, _, _, _, _, _)| **team == Team::Enemy)
+        .map(|(_, _, _, _, enemy, _, _, _, _)| {
             enemy.copied().map(|e| e.kind).unwrap_or(EnemyKind::Maggot)
         })
         .collect();
@@ -599,7 +603,7 @@ pub fn resolve_enemy_deaths(
         .filter(|kind| **kind == EnemyKind::Technomancer)
         .count();
 
-    for (e, pos, team, health, enemy, enemy_vel, enemy_brain, statue) in &mut q {
+    for (e, pos, team, health, enemy, enemy_vel, enemy_brain, statue, drop_seed) in &mut q {
         if *team != Team::Enemy || health.hp > 0 {
             continue;
         }
@@ -874,14 +878,16 @@ pub fn resolve_enemy_deaths(
             }
             EnemyKind::YvBoss => {
                 // GML `YVBoss/Destroy_0`: 3 golden-weapon pickups.
-                let rng = &mut deaths_rng;
                 for _ in 0..3 {
-                    let weapon = crate::decide_wep::decide_wep_gold(
-                        rng,
-                        run.loop_count,
-                        &decide_owned,
-                        decide_steroids,
-                    );
+                    let weapon = {
+                        let state = streams.states.get(crate::gml_rng::RngState::WeaponDrops);
+                        crate::decide_wep::decide_wep_gold(
+                            state,
+                            run.loop_count,
+                            &decide_owned,
+                            decide_steroids,
+                        )
+                    };
                     let e = crate::pickups::spawn_pickup(
                         &mut commands,
                         &catalog,
@@ -1453,6 +1459,7 @@ pub fn resolve_enemy_deaths(
         deaths.0.push(DeathEvent {
             pos,
             kind: enemy.kind,
+            drop_seed: drop_seed.map(|seed| seed.0),
             rad_drop: enemy.rad_drop,
             // GML `LilHunter/Destroy_0`: `scrDrop(200, 0)`.
             drop_chance: if matches!(enemy.kind, EnemyKind::LilHunter) {
@@ -1623,38 +1630,6 @@ pub struct DeathFeel<'w> {
     pub rumble_queue: ResMut<'w, Queue<RumbleRequest>>,
 }
 
-/// GML `scrDrop.gml:92-99`: on the birthday, a roll that dropped nothing
-/// has a 5% chance to hand out the party gun - once per boot
-/// (`global.party_gun_special_drop`).
-fn birthday_party_drop(
-    commands: &mut Commands,
-    catalog: &repame_anim::AnimCatalog,
-    pos: glam::Vec2,
-    dropped: bool,
-    date: &mut crate::date_part::DateRuntime,
-
-    rng: &mut RunnerRng,
-) {
-    if dropped || !date.events.birthday || date.party_gun_dropped {
-        return;
-    }
-    if rng.random_range(0.0..1.0) <= 0.05 {
-        let e = crate::pickups::spawn_pickup(
-            commands,
-            catalog,
-            crate::comps_b::PickupKind::Weapon(crate::data::WEAPON_PARTY_GUN),
-            pos,
-            0,
-            false,
-            rng,
-        );
-        commands
-            .entity(e)
-            .insert(crate::comps_b::WepPickupAmmo(true));
-        date.party_gun_dropped = true;
-    }
-}
-
 pub fn resolve_death_drops(
     mut commands: Commands,
     catalog: Res<repame_anim::AnimCatalog>,
@@ -1747,16 +1722,11 @@ pub fn resolve_death_drops(
                         &phealth,
                         run.loop_count,
                         Some(&decide),
-                        &mut streams.pickups,
+                        event.drop_seed,
+                        &mut streams.states,
+                        date.events.birthday.then_some(&mut date.party_gun_dropped),
                     );
-                    birthday_party_drop(
-                        &mut commands,
-                        &catalog,
-                        drop_pos,
-                        dropped,
-                        &mut date,
-                        &mut streams.pickups,
-                    );
+                    let _ = dropped;
                 }
             }
             EnemyKind::FrogQueen => {
@@ -1900,16 +1870,11 @@ pub fn resolve_death_drops(
                     &phealth,
                     run.loop_count,
                     Some(&decide),
-                    &mut streams.pickups,
+                    event.drop_seed,
+                    &mut streams.states,
+                    date.events.birthday.then_some(&mut date.party_gun_dropped),
                 );
-                birthday_party_drop(
-                    &mut commands,
-                    &catalog,
-                    pos,
-                    dropped,
-                    &mut date,
-                    &mut streams.pickups,
-                );
+                let _ = dropped;
             }
         } else {
             let melting_bonus = if race_state.race == RaceId::Melting {
@@ -1944,16 +1909,11 @@ pub fn resolve_death_drops(
                     &phealth,
                     run.loop_count,
                     Some(&decide),
-                    &mut streams.pickups,
+                    event.drop_seed,
+                    &mut streams.states,
+                    date.events.birthday.then_some(&mut date.party_gun_dropped),
                 );
-                birthday_party_drop(
-                    &mut commands,
-                    &catalog,
-                    pos,
-                    dropped,
-                    &mut date,
-                    &mut streams.pickups,
-                );
+                let _ = dropped;
             }
             if event.extra_drop_chance != 0 || event.extra_weapon_chance != 0 {
                 let dropped = maybe_spawn_drop(
@@ -1967,16 +1927,11 @@ pub fn resolve_death_drops(
                     &phealth,
                     run.loop_count,
                     Some(&decide),
-                    &mut streams.pickups,
+                    event.drop_seed,
+                    &mut streams.states,
+                    date.events.birthday.then_some(&mut date.party_gun_dropped),
                 );
-                birthday_party_drop(
-                    &mut commands,
-                    &catalog,
-                    pos,
-                    dropped,
-                    &mut date,
-                    &mut streams.pickups,
-                );
+                let _ = dropped;
             }
             if enemy.kind == EnemyKind::WepMimic {
                 // GML `WepMimic/Destroy_0`: a bare `scrDecideWep(1)`
@@ -2319,6 +2274,7 @@ pub fn move_projectiles(
                                 health: hp,
                                 decide: gun_decide.as_ref(),
                             }),
+                        &mut streams.states,
                         &mut combat_rng,
                     );
                 }
@@ -2394,6 +2350,7 @@ pub fn move_projectiles(
                                     health: hp,
                                     decide: gun_decide.as_ref(),
                                 }),
+                            &mut streams.states,
                             &mut combat_rng,
                         );
                     }
@@ -2468,6 +2425,7 @@ pub fn move_projectiles(
                                 health: hp,
                                 decide: gun_decide.as_ref(),
                             }),
+                        &mut streams.states,
                         &mut combat_rng,
                     );
                     if hp_before < ((p.damage as f32 * 0.5).ceil() as i32) {
@@ -2588,6 +2546,7 @@ pub fn move_projectiles(
                             health: hp,
                             decide: gun_decide.as_ref(),
                         }),
+                    &mut streams.states,
                     &mut combat_rng,
                 );
             }
@@ -3732,7 +3691,9 @@ pub fn tick_sentry_turrets(
                     hp,
                     run.loop_count,
                     decide.ctx.as_ref(),
-                    &mut streams.pickups,
+                    None,
+                    &mut streams.states,
+                    None,
                 );
             }
             commands.entity(entity).despawn();

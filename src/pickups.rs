@@ -5,9 +5,9 @@
 //! art renderer-side from the same kind -> path table. Juice pop-ins
 //! skipped (no sim effect).
 
+use crate::runner_rng::RunnerRng;
 use bevy_ecs::prelude::*;
 use repame_sim::rng::Rng;
-use crate::runner_rng::RunnerRng;
 
 use crate::rng_streams::SimStreams;
 use repame_fx::Trauma;
@@ -496,11 +496,9 @@ pub struct ChestCtx {
     pub ambidextrous: bool,
     /// `scr_ultra_get(Race.Steroids, UltraSkill.GetLoaded)`.
     pub get_loaded: bool,
-    /// `Run.gen_seed`, mixed into the per-chest `dropseed` draw.
-    pub gen_seed: u64,
-    /// Chest creation index this floor (GML's per-run
-    /// `rng_state[WeaponDrops]` walk).
-    pub order: u32,
+    /// GML `chestprop/Create_0.gml:10` `dropseed = rng_next_int(RNGStates.
+    /// WeaponDrops)`: one draw per chest, in creation order.
+    pub drop_seed: u32,
 }
 
 impl Default for ChestCtx {
@@ -511,8 +509,7 @@ impl Default for ChestCtx {
             crown: CrownKind::None,
             ambidextrous: false,
             get_loaded: false,
-            gen_seed: 0,
-            order: 0,
+            drop_seed: 0,
         }
     }
 }
@@ -522,24 +519,6 @@ impl ChestCtx {
     pub fn underwater(&self) -> bool {
         self.area == crate::data::AreaId::Oasis
     }
-}
-
-/// GML `rng_next_int` (`scripts/rng_next_int/rng_next_int.gml:5`) with
-/// the `scrRngStatesInit` constants: `rng_m 2147483647`, `rng_a
-/// 1103515245`, `rng_c 12345`.
-pub fn gml_rng_next(state: &mut u32) -> u32 {
-    const RNG_M: u64 = 2_147_483_647;
-    *state = ((1_103_515_245u64 * *state as u64 + 12_345) % RNG_M) as u32;
-    *state
-}
-
-/// GML `chestprop/Create_0.gml:10` `dropseed = rng_next_int(RNGStates.
-/// WeaponDrops)`. The reference walks one global stream; the port draws
-/// from the run's own seed plus a per-floor creation counter so a
-/// chest's contents stay fixed for the whole run.
-pub fn chest_drop_seed(gen_seed: u64, order: u32) -> u32 {
-    let mut state = (gen_seed as u32) ^ 0x5DEE_CE66 ^ order.wrapping_mul(2_654_435_761);
-    gml_rng_next(&mut state)
 }
 
 /// GML `scrDecideWep.gml:11,57`: `random_set_seed(_seed)` before the roll
@@ -651,10 +630,21 @@ pub fn spawn_chest(
     catalog: &repame_anim::AnimCatalog,
     kind: ChestKind,
     pos: glam::Vec2,
+    drop_seed: u32,
 
     rng: &mut RunnerRng,
 ) {
-    spawn_chest_with(commands, catalog, kind, pos, &ChestCtx::default(), rng);
+    spawn_chest_with(
+        commands,
+        catalog,
+        kind,
+        pos,
+        &ChestCtx {
+            drop_seed,
+            ..Default::default()
+        },
+        rng,
+    );
 }
 
 /// GML `chestprop/Create_0` plus each subclass's `Create_0`: the built-in
@@ -714,7 +704,7 @@ pub fn spawn_chest_frames(
             kind: PickupKind::Chest(kind),
         },
         ChestCurse(cursed),
-        DropSeed(chest_drop_seed(ctx.gen_seed, ctx.order)),
+        DropSeed(ctx.drop_seed),
         ChestArt {
             idle: art.idle,
             open: art.open,
@@ -1130,8 +1120,9 @@ pub fn maybe_spawn_drop(
     health: &Health,
     loops: u32,
     decide: Option<&crate::decide_wep::DecideCtx>,
-
-    rng: &mut RunnerRng,
+    drop_seed: Option<u32>,
+    states: &mut crate::gml_rng::RngStates,
+    birthday: Option<&mut bool>,
 ) -> bool {
     maybe_spawn_drop_ctx(
         commands,
@@ -1150,7 +1141,9 @@ pub fn maybe_spawn_drop(
             get_loaded: steroids_get_loaded(player),
             ..Default::default()
         },
-        rng,
+        drop_seed,
+        states,
+        birthday,
     )
 }
 
@@ -1171,9 +1164,20 @@ pub fn maybe_spawn_drop_ctx(
     loops: u32,
     decide: Option<&crate::decide_wep::DecideCtx>,
     chest_ctx: &ChestCtx,
-
-    mut rng: &mut RunnerRng,
+    drop_seed: Option<u32>,
+    states: &mut crate::gml_rng::RngStates,
+    birthday: Option<&mut bool>,
 ) -> bool {
+    // GML `scrDrop.gml:14`: `_seed = variable_struct_exists(self, "dropseed")
+    // ? dropseed : rng_next_int(RNGStates.Pickups)`, then `random_set_seed`
+    // before the first roll. Every roll below, including the pickups' own
+    // `Create_0` draws, comes off that generator.
+    let seed = match drop_seed {
+        Some(seed) => seed,
+        None => states.get(crate::gml_rng::RngState::Pickups).next_int() as u32,
+    };
+    let mut rng = RunnerRng::seeded(seed);
+    let mut chest_ctx = *chest_ctx;
     let mut dropped = false;
 
     // GML `scrDrop.gml:32-34`: Fish Confiscate rolls `_confiscate` at
@@ -1223,17 +1227,31 @@ pub fn maybe_spawn_drop_ctx(
         };
         let life_blocks = player.crown == CrownKind::Life;
         let guns_blocks_ammo = player.crown == CrownKind::Guns;
-        let at = pos
-            + glam::Vec2::new(
+        // The jitter is an argument of `instance_create`, so GML draws it
+        // only after both gate rolls have passed (and the ammo arm draws its
+        // own when the health arm is skipped).
+        let at = |rng: &mut RunnerRng| {
+            pos + glam::Vec2::new(
                 rng.random_range(-2.0_f32..2.0),
                 rng.random_range(-2.0_f32..2.0),
-            );
+            )
+        };
         if rng.random_range(0..health.max.max(1)) as i32 > health.hp
             && (rng.random_range(0..3) as f32) < advantage
             && !life_blocks
         {
+            let at = at(&mut rng);
             if confiscate {
-                spawn_chest_with(commands, catalog, ChestKind::Health, at, chest_ctx, rng);
+                chest_ctx.drop_seed =
+                    states.get(crate::gml_rng::RngState::WeaponDrops).next_int() as u32;
+                spawn_chest_with(
+                    commands,
+                    catalog,
+                    ChestKind::Health,
+                    at,
+                    &chest_ctx,
+                    &mut rng,
+                );
             } else {
                 spawn_pickup(
                     commands,
@@ -1242,33 +1260,57 @@ pub fn maybe_spawn_drop_ctx(
                     at,
                     loops,
                     hasted,
-                    rng,
+                    &mut rng,
                 );
             }
             dropped = true;
         } else {
             if !guns_blocks_ammo {
+                let at = at(&mut rng);
                 if confiscate {
-                    spawn_chest_with(commands, catalog, ChestKind::Ammo, at, chest_ctx, rng);
+                    chest_ctx.drop_seed =
+                        states.get(crate::gml_rng::RngState::WeaponDrops).next_int() as u32;
+                    spawn_chest_with(commands, catalog, ChestKind::Ammo, at, &chest_ctx, &mut rng);
                 } else {
-                    spawn_ammo_pickup(commands, catalog, count_cursed(inv), at, loops, hasted, rng);
+                    spawn_ammo_pickup(
+                        commands,
+                        catalog,
+                        count_cursed(inv),
+                        at,
+                        loops,
+                        hasted,
+                        &mut rng,
+                    );
                 }
                 dropped = true;
             }
         }
     } else if weapon_chance > 0 && rng.random_range(0.0_f32..100.0) < weapon_chance as f32 {
-        let at = pos
-            + glam::Vec2::new(
+        let at = |rng: &mut RunnerRng| {
+            pos + glam::Vec2::new(
                 rng.random_range(-2.0_f32..2.0),
                 rng.random_range(-2.0_f32..2.0),
-            );
+            )
+        };
         if confiscate {
-            spawn_chest_with(commands, catalog, ChestKind::Weapon, at, chest_ctx, rng);
+            chest_ctx.drop_seed =
+                states.get(crate::gml_rng::RngState::WeaponDrops).next_int() as u32;
+            let at = at(&mut rng);
+            spawn_chest_with(
+                commands,
+                catalog,
+                ChestKind::Weapon,
+                at,
+                &chest_ctx,
+                &mut rng,
+            );
         } else {
+            // GML rolls `scrDecideWep(0)` before the `orandom(2)` jitter.
             let weapon = match decide {
                 Some(ctx) => crate::decide_wep::decide_wep(&mut rng, ctx, 0, false),
                 None => random_weapon(&mut rng),
             };
+            let at = at(&mut rng);
             let e = spawn_pickup(
                 commands,
                 catalog,
@@ -1276,12 +1318,36 @@ pub fn maybe_spawn_drop_ctx(
                 at,
                 0,
                 false,
-                rng,
+                &mut rng,
             );
             // GML `scrDrop.gml:85`: `scrWeaponPickupCreate(..., true)`.
             commands.entity(e).insert(WepPickupAmmo(true));
         }
         dropped = true;
+    }
+
+    // GML `scrDrop.gml:92-99`: the roll happens on the same seeded generator,
+    // and the `global.party_gun_special_drop` gate sits INSIDE it, so the
+    // `random(1)` is spent even after the gun has already been handed out.
+    if let Some(party_gun_dropped) = birthday {
+        if !dropped && rng.random_range(0.0_f32..1.0) <= 0.05 && !*party_gun_dropped {
+            let at = pos
+                + glam::Vec2::new(
+                    rng.random_range(-2.0_f32..2.0),
+                    rng.random_range(-2.0_f32..2.0),
+                );
+            let e = spawn_pickup(
+                commands,
+                catalog,
+                PickupKind::Weapon(crate::data::WEAPON_PARTY_GUN),
+                at,
+                0,
+                false,
+                &mut rng,
+            );
+            commands.entity(e).insert(WepPickupAmmo(true));
+            *party_gun_dropped = true;
+        }
     }
     dropped
 }
@@ -2096,6 +2162,10 @@ pub fn collect_pickups(
                     // verbatim: `scrDecideWep(1 + curse * 2, curse)` is
                     // rolled ONCE, then `repeat (_count)` spawns that
                     // SAME weapon. `_count` is 2 with Ambidextrous.
+                    // The file's `_shift` (+-736817 on
+                    // `rng_state[WeaponDrops]` around the call) nets to
+                    // zero: `scrDecideWep` reads the chest's own
+                    // `dropseed`, never the state, in between.
                     let cursed = chest_curse.is_some_and(|c| c.0);
                     let count = if ambidextrous { 2 } else { 1 };
                     let extra = 1 + if cursed { 2 } else { 0 };
@@ -2135,14 +2205,17 @@ pub fn collect_pickups(
                 }
                 ChestKind::Gold => {
                     // GML `GoldChest/Collision_Player.gml`: one
-                    // `scrDecideWepGold` pickup.
-                    let rng = &mut pickups_rng;
-                    let weapon = crate::decide_wep::decide_wep_gold(
-                        rng,
-                        loops,
-                        &inv.weapons,
-                        race == RaceId::Steroids,
-                    );
+                    // `scrDecideWepGold` pickup, chosen off
+                    // `rng_state[WeaponDrops]`.
+                    let weapon = {
+                        let state = streams.states.get(crate::gml_rng::RngState::WeaponDrops);
+                        crate::decide_wep::decide_wep_gold(
+                            state,
+                            loops,
+                            &inv.weapons,
+                            race == RaceId::Steroids,
+                        )
+                    };
                     let e = spawn_pickup(
                         &mut commands,
                         &catalog,

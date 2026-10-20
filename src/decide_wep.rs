@@ -7,7 +7,6 @@
 //! `hardmode ? 2 : 1` per room.
 
 use bevy_ecs::prelude::*;
-use repame_sim::rng::Rng;
 
 use crate::comps_a::{GameCleanup, Health, Hitbox, LevelCleanup, Run, Team, Velocity};
 use crate::comps_b::Ally;
@@ -216,18 +215,20 @@ fn spawn_refined_taste_ally(commands: &mut Commands, ctx: &DecideCtx, pos: glam:
 }
 
 /// GML `scrDecideWepGold`: tier pool by loop count, owned-reject loop
-/// (Steroids exempt). Unbounded in GML; capped defensively here.
+/// (Steroids exempt). The pool pick is `rng_choose(RNGStates.WeaponDrops,
+/// ...)`, i.e. the game's own LCG advanced once per attempt. Unbounded in
+/// GML; capped defensively here.
 pub fn decide_wep_gold(
-    rng: &mut impl Rng,
+    state: &mut crate::gml_rng::GmlRng,
     loops: u32,
     owned: &[WeaponId],
     is_steroids: bool,
 ) -> WeaponId {
     let pool = if loops > 0 { GOLD_TIER2 } else { GOLD_TIER1 };
-    // GML `do { _wep = rng_choose(...) } until (steroids || !has_weapon)`.
-    let mut wep = pool[rng.random_range(0..pool.len())];
+    let mut wep = pool[0];
     for _ in 0..1000 {
-        wep = pool[rng.random_range(0..pool.len())];
+        let index = state.next_int() as usize % pool.len();
+        wep = pool[index];
         if is_steroids || !owned.contains(&wep) {
             break;
         }
@@ -292,11 +293,10 @@ mod decide_wep_tests {
 
     #[test]
     fn gold_pools_split_by_loops() {
-        let mut rng = RunnerRng::seeded(3);
         for _ in 0..50 {
-            let w = decide_wep_gold(&mut rng, 0, &[], false);
+            let w = decide_wep_gold(&mut crate::gml_rng::GmlRng::seeded(7), 0, &[], false);
             assert!(GOLD_TIER1.contains(&w));
-            let w = decide_wep_gold(&mut rng, 2, &[], false);
+            let w = decide_wep_gold(&mut crate::gml_rng::GmlRng::seeded(7), 2, &[], false);
             assert!(GOLD_TIER2.contains(&w));
         }
     }

@@ -17,11 +17,11 @@
 //! `loop_transition.rs` exactly (`blocks_new_idpd_raids`, `throne_ii_alive`,
 //! `loop_ready`, `campfire_active`).
 
+use crate::runner_rng::RunnerRng;
 use bevy_ecs::prelude::*;
 use repame_fx::Trauma;
 use repame_sim::SimTime;
 use repame_sim::rng::Rng;
-use crate::runner_rng::RunnerRng;
 
 use crate::audio::AudioCue;
 use crate::combat::{queue_enemy_spawn, queue_enemy_spawn_birth};
@@ -541,11 +541,22 @@ fn spawn_at(
     difficulty: f32,
     loops: u32,
     context: EnemySpawnContext,
+    states: &mut crate::gml_rng::RngStates,
 
     rng: &mut RunnerRng,
 ) -> Entity {
     spawn_enemy_at(
-        commands, catalog, kind, pos, difficulty, false, false, loops, context, rng,
+        commands,
+        catalog,
+        kind,
+        pos,
+        difficulty,
+        false,
+        false,
+        loops,
+        context,
+        rng,
+        states.get(crate::gml_rng::RngState::WeaponDrops),
     )
 }
 
@@ -564,7 +575,6 @@ pub fn tick_idpd_spawn_world(
         (With<IdpdSpawnPortal>, Without<Player>, Without<Enemy>),
     >,
     mut streams: ResMut<SimStreams>,
-    mut floor: ResMut<crate::rng_streams::FloorStates>,
 ) {
     let Ok(player_pos) = player_q.single().map(|p| p.0) else {
         return;
@@ -572,6 +582,7 @@ pub fn tick_idpd_spawn_world(
     let lil_hunter_alive = enemies_q
         .iter()
         .any(|e| matches!(e.kind, EnemyKind::LilHunter));
+    let streams = &mut *streams;
     tick_idpd_spawns(
         &mut commands,
         time.delta_secs,
@@ -579,7 +590,7 @@ pub fn tick_idpd_spawn_world(
         &mask,
         player_pos,
         lil_hunter_alive,
-        floor.0.get(crate::gml_rng::RngState::Popo),
+        streams.states.get(crate::gml_rng::RngState::Popo),
         &mut streams.idpd,
         &mut spawn_q,
     );
@@ -618,6 +629,7 @@ pub(crate) fn spawn_van(
     difficulty: f32,
     loops: u32,
     context: EnemySpawnContext,
+    states: &mut crate::gml_rng::RngStates,
     rng: &mut RunnerRng,
 ) -> Entity {
     // GML `Van/Create_0.gml:14-23`: `right = choose(1, -1)`, overridden to
@@ -633,6 +645,7 @@ pub(crate) fn spawn_van(
         difficulty,
         loops,
         context,
+        states,
         rng,
     );
     commands.entity(e).insert(IdpdVanDeploy {
@@ -742,12 +755,21 @@ pub fn tick_idpd_vans(
     mut trauma: ResMut<Trauma>,
     mut cues: ResMut<Queue<AudioCue>>,
     player_q: Query<(&Pos, &Player, &Inventory, &Health), (With<Player>, Without<Enemy>)>,
-    mut vans: Query<(Entity, &Pos, &mut IdpdVanDeploy), (With<Enemy>, Without<IdpdVanDeployed>)>,
+    mut vans: Query<
+        (
+            Entity,
+            &Pos,
+            &mut IdpdVanDeploy,
+            Option<&crate::comps_b::DropSeed>,
+        ),
+        (With<Enemy>, Without<IdpdVanDeployed>),
+    >,
     mut streams: ResMut<SimStreams>,
 ) {
     let steps = (time.delta_secs * crate::SIM_HZ as f32).round();
+    let mut idpd_rng = streams.idpd;
     let context = enemy_spawn_context(&run, scarier.0, heavy_heart.0);
-    for (entity, pos, mut van) in vans.iter_mut() {
+    for (entity, pos, mut van, drop_seed) in vans.iter_mut() {
         if van.inert > 0.0 {
             // GML `Van/Alarm_2.gml:2` then `Van/Alarm_3.gml:2`: `can_hq =
             // 0`, parked on `sprVanDeactivated` for good.
@@ -776,13 +798,15 @@ pub fn tick_idpd_vans(
                 &run,
                 pos.0,
                 &player_q,
-                &mut streams.idpd,
+                drop_seed.map(|seed| seed.0),
+                &mut streams.states,
+                &mut idpd_rng,
             );
             continue;
         }
 
         // GML `Van/Alarm_1.gml:14-15`
-        let rng = &mut streams.idpd;
+        let rng = &mut idpd_rng;
         let back = pos.0 + glam::Vec2::new(-55.0 * van.right, 0.0);
         for _ in 0..3 + run.loop_count {
             let y = rng.random_range(-5.0_f32..5.0);
@@ -794,6 +818,7 @@ pub fn tick_idpd_vans(
                 1.0,
                 run.loop_count,
                 context,
+                &mut streams.states,
                 rng,
             );
         }
@@ -815,6 +840,7 @@ pub fn tick_idpd_vans(
                     1.0,
                     run.loop_count,
                     context,
+                    &mut streams.states,
                     rng,
                 );
             }
@@ -834,12 +860,14 @@ pub fn tick_idpd_vans(
                     1.0,
                     run.loop_count,
                     context,
+                    &mut streams.states,
                     rng,
                 );
             }
         }
         van.inert = VAN_INERT_FRAMES;
     }
+    streams.idpd = idpd_rng;
 }
 
 /// GML `objects/Van/Destroy_0.gml`, the freak-van self-destruct:
@@ -854,6 +882,8 @@ fn van_destroy(
     run: &Run,
     pos: glam::Vec2,
     player_q: &Query<(&Pos, &Player, &Inventory, &Health), (With<Player>, Without<Enemy>)>,
+    drop_seed: Option<u32>,
+    states: &mut crate::gml_rng::RngStates,
     rng: &mut RunnerRng,
 ) {
     let Ok((_, player, inv, health)) = player_q.single() else {
@@ -872,7 +902,9 @@ fn van_destroy(
             run.loop_count,
             None,
             &crate::pickups::ChestCtx::default(),
-            rng,
+            drop_seed,
+            states,
+            None,
         );
     }
     for _ in 0..3 {

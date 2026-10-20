@@ -46,9 +46,15 @@ const TAG_WALLS: u32 = 0xA0B4_28DB;
 const TAG_WORLDGEN: u32 = 0x8EBC_6AF0;
 const TAG_FX: u32 = 0x9C88_C6E3;
 
-/// Every simulation stream the port draws from.
+/// Every simulation stream the port draws from, plus the live
+/// `global.rng_state[]` (`scrRngStatesReset`). Generation advances the states
+/// (`scrPopulate`'s phase reseeds, `scrPopEnemies`' per-call draw), so the
+/// array lives here and the runtime draws from the same values the floor was
+/// built with.
 #[derive(Resource, Clone, Copy, Debug)]
 pub struct SimStreams {
+    /// `global.rng_state[]`, per floor.
+    pub states: RngStates,
     /// Enemy movement, targeting and spawn rolls.
     pub enemies: RunnerRng,
     /// The hit pipeline's rolls.
@@ -90,10 +96,12 @@ pub struct SimStreams {
 impl SimStreams {
     /// Every stream, derived from the floor's built-in seed (`scrRngStatesReset`'s
     /// `_number`) and, for `fx`, from the run seed so that no floor reset can
-    /// move presentation.
-    pub fn from_floor(builtin_seed: u32, gen_seed: u64) -> Self {
-        let sim = |tag: u32| RunnerRng::seeded(builtin_seed ^ tag);
+    /// move presentation. `states` is the live array, already advanced by the
+    /// floor's generation.
+    pub fn new(states: RngStates, gen_seed: u64, ambient_seed: u32) -> Self {
+        let sim = |tag: u32| RunnerRng::seeded(ambient_seed ^ tag);
         Self {
+            states,
             enemies: sim(TAG_ENEMIES),
             combat: sim(TAG_COMBAT),
             environment: sim(TAG_ENVIRONMENT),
@@ -118,16 +126,9 @@ impl SimStreams {
 
 impl Default for SimStreams {
     fn default() -> Self {
-        Self::from_floor(RngStates::default().builtin_seed(), 0)
+        Self::new(RngStates::default(), 0, RngStates::default().builtin_seed())
     }
 }
-
-/// `global.rng_state[]` for the floor being built, from GML
-/// `scrRngStatesReset`. `scrRngStatesReset` runs in `Vlambeer/Create_0`, the
-/// room controller, so this is rebuilt at every floor entry with that room's
-/// `area`/`subarea`/`loops`.
-#[derive(Resource, Clone, Copy, Debug, Default)]
-pub struct FloorStates(pub RngStates);
 
 #[cfg(test)]
 mod tests {
@@ -136,18 +137,22 @@ mod tests {
 
     #[test]
     fn a_floor_reseeds_every_stream() {
-        let mut one = SimStreams::from_floor(1_234, 99);
-        let mut two = SimStreams::from_floor(1_235, 99);
+        let one_states = RngStates::reset(1, 1, 1, 0);
+        let two_states = RngStates::reset(2, 1, 1, 0);
+        let mut one = SimStreams::new(one_states, 99, one_states.builtin_seed());
+        let mut two = SimStreams::new(two_states, 99, two_states.builtin_seed());
         assert_ne!(one.enemies.next_u64(), two.enemies.next_u64());
         assert_ne!(one.worldgen.next_u64(), two.worldgen.next_u64());
         // `fx` rides the run seed, not the floor's.
         assert_eq!(one.fx.next_u64(), two.fx.next_u64());
-        let mut other_run = SimStreams::from_floor(1_234, 100);
+        let other_states = RngStates::reset(1, 1, 1, 0);
+        let mut other_run = SimStreams::new(other_states, 100, other_states.builtin_seed());
         assert_ne!(one.fx.next_u64(), other_run.fx.next_u64());
 
         // Every simulation stream differs from its siblings on one floor.
         let mut seen = std::collections::HashSet::new();
-        let streams = SimStreams::from_floor(7, 1);
+        let states = RngStates::reset(7, 1, 1, 0);
+        let streams = SimStreams::new(states, 1, states.builtin_seed());
         for stream in [
             streams.enemies,
             streams.combat,

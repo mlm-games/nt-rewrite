@@ -492,22 +492,32 @@ pub fn tick_crown_love_convert(
         }
         let at = pos.0;
         commands.entity(e).despawn();
+        let drop_seed = streams
+            .states
+            .get(crate::gml_rng::RngState::WeaponDrops)
+            .next_int() as u32;
         crate::pickups::spawn_chest(
             &mut commands,
             &catalog,
             ChestKind::Ammo,
             at,
+            drop_seed,
             &mut streams.pickups,
         );
     }
     for (e, pos) in &mut rad_props {
         let at = pos.0;
         commands.entity(e).despawn();
+        let drop_seed = streams
+            .states
+            .get(crate::gml_rng::RngState::WeaponDrops)
+            .next_int() as u32;
         crate::pickups::spawn_chest(
             &mut commands,
             &catalog,
             ChestKind::Ammo,
             at,
+            drop_seed,
             &mut streams.pickups,
         );
     }
@@ -542,22 +552,32 @@ pub fn tick_crown_life_convert(
         }
         let at = pos.0;
         commands.entity(e).despawn();
+        let drop_seed = streams
+            .states
+            .get(crate::gml_rng::RngState::WeaponDrops)
+            .next_int() as u32;
         crate::pickups::spawn_chest(
             &mut commands,
             &catalog,
             ChestKind::Health,
             at,
+            drop_seed,
             &mut streams.pickups,
         );
     }
     for (e, pos) in &mut rad_props {
         let at = pos.0;
         commands.entity(e).despawn();
+        let drop_seed = streams
+            .states
+            .get(crate::gml_rng::RngState::WeaponDrops)
+            .next_int() as u32;
         crate::pickups::spawn_chest(
             &mut commands,
             &catalog,
             ChestKind::Health,
             at,
+            drop_seed,
             &mut streams.pickups,
         );
     }

@@ -17,12 +17,10 @@
 //! birth, silent until re-armed).
 
 use bevy_ecs::prelude::*;
-use rand::rngs::StdRng;
 
-use rand::{RngExt, SeedableRng};
+use crate::runner_rng::RunnerRng;
 use repame_anim::AnimCatalog;
 use repame_sim::rng::Rng;
-use crate::runner_rng::RunnerRng;
 
 use crate::anim::{PlayerAnim, SpriteAnim};
 use crate::comps_a::{
@@ -98,6 +96,7 @@ pub fn spawn_enemy(
     kind: EnemyKind,
     pos: glam::Vec2,
     give_kill: bool,
+    drop_seed: u32,
 ) -> Entity {
     let def = enemy_def(kind);
     commands
@@ -122,6 +121,7 @@ pub fn spawn_enemy(
                 max: def.hp,
                 invuln: GTimer::disarmed(),
             },
+            crate::comps_b::DropSeed(drop_seed),
         ))
         .id()
 }
@@ -270,12 +270,12 @@ pub fn resolve_run_loadout(save: &SaveData, race: RaceId) -> RunLoadout {
 /// verbatim: `irandom_range(Fish, Cuz)` rejecting locked races and
 /// BigDog; Fish is always unlocked so the loop terminates). The RNG is
 /// the caller's split stream so the level-generation stream never shifts.
-pub fn roll_random_race(save: &SaveData, race: RaceId, rng: &mut StdRng) -> RaceId {
+pub fn roll_random_race(save: &SaveData, race: RaceId, rng: &mut RunnerRng) -> RaceId {
     if race != RaceId::Random {
         return race;
     }
     for _ in 0..500 {
-        let gml = rng.random_range(1..=16);
+        let gml = rng.irandom_range(1, 16) as usize;
         if gml == RaceId::BigDog as usize {
             continue;
         }
@@ -295,9 +295,9 @@ pub fn roll_random_race(save: &SaveData, race: RaceId, rng: &mut StdRng) -> Race
 /// `crwn_none`; single-player so one race is checked. GML 2..13 maps to
 /// port 1..12 via `crown_gml_to_port`. The title grid has no random slot
 /// yet, so run setup keeps the stamped crown; this carries the law for it.
-pub fn roll_random_crown(save: &SaveData, race: RaceId, rng: &mut StdRng) -> CrownKind {
+pub fn roll_random_crown(save: &SaveData, race: RaceId, rng: &mut RunnerRng) -> CrownKind {
     for _ in 0..50 {
-        let gml: u8 = rng.random_range(2..=13);
+        let gml = rng.irandom_range(2, 13) as u8;
         let port = CrownKind::from_u8(gml.saturating_sub(1));
         if port == CrownKind::None {
             continue;
@@ -540,11 +540,10 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
     // the campfire room (area 0, first subarea, no loops), which seeds
     // `global.rng_state[]` and, through `_number`, every built-in stream.
     let run_states = crate::gml_rng::RngStates::reset(seed, 0, 1, 0);
-    world.insert_resource(crate::rng_streams::SimStreams::from_floor(
-        run_states.builtin_seed(),
-        seed,
+    let ambient = crate::gml_rng::levcont_ambient(seed, 1, 0, false, false);
+    world.insert_resource(crate::rng_streams::SimStreams::new(
+        run_states, seed, ambient,
     ));
-    world.insert_resource(crate::rng_streams::FloorStates(run_states));
     // The floor-setup draws (`GenCont/Destroy_0`) run off the `setup` stream.
     // `RunnerRng` is `Copy` and this function owns the world, so it is read out
     // here and written back once the floor is built.
@@ -688,9 +687,9 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
         None => world.resource::<SelectedCharacter>().0,
     };
     let save = world.resource::<SaveData>().clone();
-    // GML `scrCreatePlayers` Random roll on its own split stream (level
-    // generation keeps its own `gen_seed` stream either way).
-    let mut roll_rng = StdRng::seed_from_u64(seed ^ 0x9E37_79B9_7F4A_7C15);
+    // GML `scrRunStart:4` `random_set_seed(global.seed)`, then
+    // `scrCreatePlayers`' Random roll on that generator.
+    let mut roll_rng = RunnerRng::seeded(seed as u32);
     let race = roll_random_race(&save, picked, &mut roll_rng);
     // GML `scrRunStart.gml:39`: the run-start confirm sting.
     world.init_resource::<Queue<crate::audio::AudioCue>>();
@@ -739,11 +738,33 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
         )
     };
     let mut floor_states = crate::gml_rng::RngStates::reset(gen_seed, area_number, subarea, loops);
-    world.insert_resource(crate::rng_streams::SimStreams::from_floor(
-        floor_states.builtin_seed(),
+    // GML `LevCont/Create_0.gml:3-37`: the room's own re-seed, including the
+    // jungle reroll. The player exists by now, so `level`/`skillpoints` are
+    // the values the original reads.
+    let (mut gen_seed, level, picks_owed, patiencepick) = {
+        let mut level = 1;
+        let mut picks_owed = 0;
+        let mut q = world.query::<&crate::comps_a::Player>();
+        if let Some(player) = q.iter(world).next() {
+            level = player.level;
+            picks_owed = player.mutation_picks_owed;
+        }
+        let run = world.resource::<crate::comps_a::Run>();
+        (run.gen_seed, level, picks_owed, run.patiencepick)
+    };
+    if world.resource::<crate::comps_a::Run>().area == crate::data::AreaId::Jungle
+        && picks_owed == 1
+    {
+        gen_seed = gen_seed.wrapping_add(15_013);
+        world.resource_mut::<crate::comps_a::Run>().gen_seed = gen_seed;
+        floor_states = crate::gml_rng::RngStates::all_seeded(gen_seed as i32);
+    }
+    let ambient = crate::gml_rng::levcont_ambient(gen_seed, level, picks_owed, false, patiencepick);
+    world.insert_resource(crate::rng_streams::SimStreams::new(
+        floor_states,
         gen_seed,
+        ambient,
     ));
-    world.insert_resource(crate::rng_streams::FloorStates(floor_states));
     let mut plan: LevelPlan = {
         let run = world.resource::<Run>();
         worldgen::generate_level(&run, &mut floor_states)
@@ -853,6 +874,8 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
         })
     });
     world.flush();
+    *world.resource_mut::<crate::rng_streams::SimStreams>() =
+        crate::rng_streams::SimStreams::new(floor_states, gen_seed, ambient);
     world.insert_resource(run);
     // GML `GenCont/Destroy:186-187`: `instance_destroy(SpiralCont)` once
     // generation lands. Run setup warmed the sim `SpiralCtl` for the generating
@@ -994,12 +1017,7 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
                 if entry != crate::state::LevelEntry::LevCont {
                     return Some((entry, None));
                 }
-                let offer = crate::progression::level_entry_draft(
-                    &mut run,
-                    &mut player,
-                    race,
-                    &mut setup_rng,
-                );
+                let offer = crate::progression::level_entry_draft(&mut run, &mut player, race);
                 Some((entry, Some(offer)))
             })
         })
@@ -1817,6 +1835,7 @@ pub fn spawn_secret_entrances(
     heavy_heart: bool,
     crownvisits: u8,
     plan: &LevelPlan,
+    states: &mut crate::gml_rng::RngStates,
     rng: &mut RunnerRng,
 ) {
     if crownvisits >= 3 || plan.floor_cells.is_empty() {
@@ -1943,6 +1962,7 @@ pub fn spawn_secret_entrances(
                 heavy_heart,
             },
             rng,
+            states.get(crate::gml_rng::RngState::WeaponDrops),
         );
     }
 }
@@ -2158,6 +2178,7 @@ pub fn spawn_level(
         heavy_heart,
         crownvisits,
         plan,
+        states,
         rng,
     );
 
@@ -2275,7 +2296,6 @@ pub fn spawn_level(
     let crown_kind = crown;
     let ambidextrous = ultra == Some(UltraMutationId::SteroidsAmbidextrous);
     let get_loaded = ultra == Some(UltraMutationId::SteroidsGetArmed);
-    let mut chest_order = 0u32;
     let mut enemy_count = 0usize;
     for event in &events {
         match *event {
@@ -2293,10 +2313,8 @@ pub fn spawn_level(
                     crown: crown_kind,
                     ambidextrous: ambidextrous,
                     get_loaded: get_loaded,
-                    gen_seed: run.gen_seed,
-                    order: chest_order,
+                    drop_seed: states.get(crate::gml_rng::RngState::WeaponDrops).next_int() as u32,
                 };
-                chest_order += 1;
                 let mut spawn = |kind: ChestKind, p: glam::Vec2, rng: &mut RunnerRng| {
                     crate::pickups::spawn_chest_with(commands, catalog, kind, p, &ctx, rng)
                 };
@@ -2387,6 +2405,7 @@ pub fn spawn_level(
                     run.loop_count,
                     spawn_context,
                     rng,
+                    states.get(crate::gml_rng::RngState::WeaponDrops),
                 );
             }
             PopulationEvent::PortalClear { pos, scale } => {
@@ -2562,6 +2581,7 @@ pub fn spawn_level(
                     run.loop_count,
                     spawn_context,
                     rng,
+                    states.get(crate::gml_rng::RngState::WeaponDrops),
                 );
             }
         }
@@ -3191,14 +3211,14 @@ mod verbatim_title_to_first_level {
     fn random_roll_skips_bigdog_and_locked() {
         let save = SaveData::default();
         for seed in 0..50u64 {
-            let mut rng = StdRng::seed_from_u64(seed);
+            let mut rng = RunnerRng::seeded(seed as u32);
             let race = roll_random_race(&save, RaceId::Random, &mut rng);
             assert_ne!(race, RaceId::Random);
             assert_ne!(race, RaceId::BigDog);
             assert!(save.race_unlocked(race));
         }
         // Non-random passes through untouched.
-        let mut rng = StdRng::seed_from_u64(7);
+        let mut rng = RunnerRng::seeded(7);
         assert_eq!(
             roll_random_race(&save, RaceId::Plant, &mut rng),
             RaceId::Plant
@@ -3387,10 +3407,9 @@ mod verbatim_title_to_first_level {
 
     #[test]
     fn random_crown_roll_respects_unlocks() {
-        use rand::{SeedableRng, rngs::StdRng};
         // Fresh Fish holds no real crowns: 50 locked rolls → none.
         let save = SaveData::default();
-        let mut rng = StdRng::seed_from_u64(7);
+        let mut rng = RunnerRng::seeded(7);
         assert_eq!(
             roll_random_crown(&save, RaceId::Fish, &mut rng),
             CrownKind::None
@@ -3400,7 +3419,7 @@ mod verbatim_title_to_first_level {
         for gml in 2..=13u8 {
             save.unlock_crown(RaceId::Fish, gml);
         }
-        let mut rng = StdRng::seed_from_u64(7);
+        let mut rng = RunnerRng::seeded(7);
         assert_ne!(
             roll_random_crown(&save, RaceId::Fish, &mut rng),
             CrownKind::None

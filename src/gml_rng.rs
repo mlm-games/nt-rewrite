@@ -193,9 +193,8 @@ impl RngStates {
 
         let mut states = [GmlRng::seeded(0); NUM_RNG_STATES];
         for (i, state) in states.iter_mut().enumerate() {
-            *state = GmlRng::seeded(
-                ((number + i128::from(RNG_STATE_STEP) * i as i128) % span) as i32,
-            );
+            *state =
+                GmlRng::seeded(((number + i128::from(RNG_STATE_STEP) * i as i128) % span) as i32);
         }
         if area == AREA_HQ {
             states[0] = GmlRng::seeded(subarea as i32 + 24);
@@ -236,10 +235,58 @@ impl RngStates {
         self.states[RngState::Generation as usize].state()
     }
 
+    /// GML `LevCont/Create_0.gml:29-37`: the jungle reroll writes
+    /// `global.seed + 15013` into every slot. The GML loop also writes the
+    /// array's eleventh slot (`i <= NUM_RNG_STATES`), which nothing reads.
+    pub fn all_seeded(seed: i32) -> Self {
+        let mut states = [GmlRng::seeded(seed); NUM_RNG_STATES];
+        for state in &mut states {
+            *state = GmlRng::seeded(seed);
+        }
+        Self {
+            states,
+            builtin_seed: seed as u32,
+        }
+    }
+
     /// Every state, in `RNGStates` order.
     pub const fn states(&self) -> &[GmlRng; NUM_RNG_STATES] {
         &self.states
     }
+}
+
+/// GML `objects/LevCont/Create_0.gml:3-36`: the built-in seed the room is
+/// left with, after `scrRngStatesReset` seeded it and `LevCont` re-seeded it.
+///
+/// ```text
+/// random_set_seed(global.seed)
+/// for (i = 0; i <= 15; i++) mutseed[i] = irandom(999999)
+/// random_set_seed(mutseed[clamp(level - skillpoints, 0, 15)] + wasskeleton * 10203)
+/// ```
+///
+/// `picks_owed` is `GameCont.skillpoints` (level-ups whose skill pick is
+/// still unspent). The Port's per-subsystem streams derive from this seed;
+/// GML's own draws on the generator are modelled at their reseed points, so
+/// this value only keeps the ambient streams on the seed the room actually
+/// carried.
+pub fn levcont_ambient(
+    run_seed: u64,
+    level: u32,
+    picks_owed: u32,
+    wasskeleton: bool,
+    patiencepick: bool,
+) -> u32 {
+    let mut rng = crate::runner_rng::RunnerRng::seeded(run_seed as u32);
+    let mut mutseed = [0u32; 16];
+    for seed in &mut mutseed {
+        *seed = crate::runner_rng::GmlDraw::irandom(&mut rng, 999_999) as u32;
+    }
+    let index = (level as i32 - picks_owed as i32).clamp(0, 15) as usize;
+    let mut ambient = mutseed[index].wrapping_add((wasskeleton as u32).wrapping_mul(10_203));
+    if patiencepick {
+        ambient = (run_seed as u32).wrapping_add(200_513);
+    }
+    ambient
 }
 
 impl Default for RngStates {
@@ -349,6 +396,38 @@ mod tests {
 
     /// `scrRngStatesReset`, including the two areas that step out of the
     /// formula: the vault takes the run seed whole, HQ pins `Generation`.
+    /// GML `LevCont/Create_0.gml:3-36`: `mutseed[i] = irandom(999999)` off a
+    /// generator seeded with `global.seed`, then
+    /// `mutseed[clamp(level - skillpoints, 0, 15)] + wasskeleton * 10203`
+    /// (patience overrides with `global.seed + 200513`). Values from an
+    /// independent transcription of the runner's WELL512.
+    #[test]
+    fn the_levcont_seed_follows_the_gml_chain() {
+        assert_eq!(levcont_ambient(1_234_567, 3, 1, false, false), 178_468);
+        assert_eq!(levcont_ambient(1_234_567, 10, 1, false, false), 575_987);
+        assert_eq!(levcont_ambient(1_234_567, 3, 1, true, false), 188_671);
+        assert_eq!(levcont_ambient(42, 2, 1, false, true), 200_555);
+        assert_eq!(levcont_ambient(0, 1, 0, false, false), 52_911);
+        // The index clamps into 0..=15.
+        assert_eq!(
+            levcont_ambient(1_234_567, 40, 0, false, false),
+            levcont_ambient(1_234_567, 15, 0, false, false)
+        );
+    }
+
+    #[test]
+    fn the_jungle_reset_writes_every_state() {
+        let mut states = RngStates::all_seeded(9_876_543);
+        assert_eq!(states.builtin_seed(), 9_876_543);
+        assert_eq!(states.levseed(), 9_876_543);
+        for i in 0..NUM_RNG_STATES {
+            assert_eq!(
+                states.idx(i).next_int(),
+                GmlRng::seeded(9_876_543).next_int()
+            );
+        }
+    }
+
     #[test]
     fn the_floor_reset_follows_the_gml_formula() {
         let (seed, area, subarea, loops) = (1_234u64, 1i32, 3u32, 1u32);

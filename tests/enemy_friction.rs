@@ -69,6 +69,7 @@ fn enemy_speed_decays_by_gml_friction_each_step() {
             false,
             0,
             &mut RunnerRng::seeded(4242),
+            &mut nt_rewrite::gml_rng::GmlRng::seeded(4242),
         );
     }
     {

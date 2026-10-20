@@ -16,11 +16,11 @@
 //! - Save writes: the sim owns no save manager, so `flush_dirty_save*` only
 //!   manage the `SaveDirty` flag (the write lands with the save phase).
 
+use crate::runner_rng::RunnerRng;
 use bevy_ecs::prelude::*;
 use repame_fx::Trauma;
 use repame_sim::SimTime;
 use repame_sim::rng::Rng;
-use crate::runner_rng::RunnerRng;
 
 use crate::audio::{AudioCue, GameAudio};
 use crate::combat::queue_enemy_spawn_birth;
@@ -724,55 +724,68 @@ pub fn roll_mutations(player: &mut Player, rng: &mut RunnerRng) -> Vec<MutationI
     roll_mutations_for(player, RaceId::Fish, rng)
 }
 
-pub fn roll_mutations_for(player: &mut Player, race: RaceId, rng: &mut RunnerRng) -> Vec<MutationId> {
+pub fn roll_mutations_for(
+    player: &mut Player,
+    race: RaceId,
+    rng: &mut RunnerRng,
+) -> Vec<MutationId> {
     roll_mutations_with_for(player, race, rng)
 }
 
 /// Seeded roll (deterministic under a seeded RNG; tests use this).
-pub fn roll_mutations_with(player: &mut Player, rng: &mut impl Rng) -> Vec<MutationId> {
+pub fn roll_mutations_with(
+    player: &mut Player,
+    rng: &mut impl crate::runner_rng::GmlDraw,
+) -> Vec<MutationId> {
     roll_mutations_with_for(player, RaceId::Fish, rng)
 }
 
 pub fn roll_mutations_with_for(
     player: &mut Player,
     race: RaceId,
-    rng: &mut impl Rng,
+    rng: &mut impl crate::runner_rng::GmlDraw,
 ) -> Vec<MutationId> {
-    let mut pool: Vec<MutationId> = ALL_MUTATIONS
-        .iter()
-        .copied()
-        .filter(|m| {
-            if *m == MutationId::Patience && player.patience_used {
-                return false;
-            }
-
-            // GML `scrSkills.gml:196-198` (`scr_skill_can_appear`): the
-            // Destiny crown hands out only one mutation, so Last Wish
-            // (its jungle route) never appears for a non-Horror run.
-            if *m == MutationId::LastWish
-                && player.crown == CrownKind::Destiny
-                && race != RaceId::Horror
-            {
-                return false;
-            }
-
-            !player.mutations.contains(m)
-        })
-        .collect();
-
-    let mut out = Vec::new();
-
+    // GML `scrSkills.gml:154` `maxskill = 29` and
+    // `scrDecideSkill:7` `_skill = irandom(maxskill)`: a uniform id in
+    // 0..=29, re-rolled until `scr_skill_can_appear` accepts it (100 tries).
+    // Ids 1-29 map through `hud::mutation_from_skill_index`.
     let destiny = player.crown == CrownKind::Destiny;
-    let mut want_base = if destiny { 1 } else { 4 };
+    let mut want = if destiny { 1 } else { 4 };
     if race == RaceId::Horror {
-        want_base += 1;
+        want += 1;
     }
 
-    let want = pool.len().min(want_base);
+    let blocked = |player: &Player, id: MutationId| {
+        player.mutations.contains(&id)
+            || id == MutationId::HeavyHeart
+            || (id == MutationId::LastWish && destiny && race != RaceId::Horror)
+    };
 
-    for _ in 0..want {
-        let idx = rng.random_range(0..pool.len());
-        out.push(pool.remove(idx));
+    let mut out: Vec<MutationId> = Vec::new();
+    for icon in 0..want {
+        let mut picked = None;
+        for _ in 0..100 {
+            let skill = rng.irandom(29);
+            if !(1..=29).contains(&skill) {
+                continue;
+            }
+            let Some(id) = crate::hud::mutation_from_skill_index(skill as u8) else {
+                continue;
+            };
+            if blocked(player, id) || out.contains(&id) {
+                continue;
+            }
+            picked = Some(id);
+            break;
+        }
+        // GML `scrDecideSkill(_num == 0)` falls back to Last Wish for the
+        // first icon; the rest break the loop on `-1`.
+        let id = match picked {
+            Some(id) => id,
+            None if icon == 0 => MutationId::LastWish,
+            None => break,
+        };
+        out.push(id);
     }
 
     let weapon_mutations = [
@@ -927,8 +940,14 @@ pub fn handle_mutation_choice(
             player.ultra_pick_owed = false;
 
             if player.mutation_picks_owed > 0 {
-                let choices =
-                    roll_mutations_for(&mut player, race_state.race, &mut streams.progression);
+                let mut draft_rng = RunnerRng::seeded(crate::gml_rng::levcont_ambient(
+                    flow.run.gen_seed,
+                    player.level,
+                    player.mutation_picks_owed,
+                    false,
+                    flow.run.patiencepick,
+                ));
+                let choices = roll_mutations_for(&mut player, race_state.race, &mut draft_rng);
                 if choices.is_empty() {
                     health.hp = health.max;
                     try_recharge_strong_spirit(&mut player, &health);
@@ -1844,12 +1863,15 @@ pub(crate) fn chest_loot(
     kind: ChestKind,
     pos: glam::Vec2,
     player_pos: glam::Vec2,
-    mut rng: &mut RunnerRng,
+    states: &mut crate::gml_rng::RngStates,
+    rng: &mut RunnerRng,
 ) {
     match kind {
         // GML `WeaponChest/Collision_Player.gml:11-24`: ONE
         // `scrDecideWep(1 + curse * 2, curse)` fills every drop, and
-        // `_count` is 2 under Ambidextrous.
+        // `_count` is 2 under Ambidextrous. (The `_shift` that file adds
+        // to `rng_state[WeaponDrops]` around the call is a no-op: the
+        // roll reads `dropseed`, not the state.)
         ChestKind::Weapon => {
             let count = if ctx.ambidextrous { 2 } else { 1 };
             let extra = 1 + if ctx.curse { 2 } else { 0 };
@@ -1884,12 +1906,15 @@ pub(crate) fn chest_loot(
         // GML `GoldChest/Collision_Player.gml`: one `scrDecideWepGold`
         // pickup, no `PortalClear`, no `nochest` reset.
         ChestKind::Gold => {
-            let weapon = crate::decide_wep::decide_wep_gold(
-                &mut rng,
-                run.loop_count,
-                &ctx.decide.owned,
-                ctx.race == RaceId::Steroids,
-            );
+            let weapon = {
+                let state = states.get(crate::gml_rng::RngState::WeaponDrops);
+                crate::decide_wep::decide_wep_gold(
+                    state,
+                    run.loop_count,
+                    &ctx.decide.owned,
+                    ctx.race == RaceId::Steroids,
+                )
+            };
             let e = crate::pickups::spawn_pickup(
                 commands,
                 catalog,
@@ -2171,19 +2196,27 @@ pub fn tick_portal_shock(
                 ambidextrous,
                 cursed_count: crate::pickups::count_cursed(inv),
             };
-            chest_loot(
-                &mut commands,
-                &catalog,
-                &audio,
-                &mut cues,
-                &mut toast,
-                &mut run,
-                &ctx,
-                kind,
-                cpos,
-                player_pos,
-                &mut streams.progression,
-            );
+            {
+                let crate::rng_streams::SimStreams {
+                    states,
+                    progression,
+                    ..
+                } = &mut *streams;
+                chest_loot(
+                    &mut commands,
+                    &catalog,
+                    &audio,
+                    &mut cues,
+                    &mut toast,
+                    &mut run,
+                    &ctx,
+                    kind,
+                    cpos,
+                    player_pos,
+                    states,
+                    progression,
+                );
+            }
             // GML hand-rolls the shock payout for the kinds with no
             // `event_perform(ev_collision, Player)`; `chest_loot` leaves
             // those to here.
@@ -2407,6 +2440,9 @@ pub fn portal_enter(
                 continue;
             }
 
+            let crate::rng_streams::SimStreams {
+                states, pickups, ..
+            } = &mut *streams;
             crate::player_fire::robot_eat_drops(
                 &mut commands,
                 &catalog,
@@ -2417,8 +2453,8 @@ pub fn portal_enter(
                 w,
                 true,
                 run.area,
-                run.gen_seed,
-                &mut streams.pickups,
+                states,
+                pickups,
             );
             spawn_burst(
                 &mut commands,
@@ -2508,7 +2544,6 @@ pub fn tick_portal_suck(
     // Folded into one param: the system already sits at bevy_ecs's 16-param
     // cap and the draft roll needs a 17th.
     (mut save, mut dirty): (ResMut<SaveData>, ResMut<SaveDirty>),
-    mut streams: ResMut<SimStreams>,
 ) {
     let Ok((player_e, mut player_pos, mut health, mut player, race_state, mut inv, mut suck)) =
         player_q.single_mut()
@@ -2762,7 +2797,7 @@ pub fn tick_portal_suck(
     ) == crate::state::LevelEntry::LevCont
     {
         deferred.0 = true;
-        match level_entry_draft(&mut run, &mut player, race, &mut streams.progression) {
+        match level_entry_draft(&mut run, &mut player, race) {
             DraftOffer::Ultra(choices) => {
                 commands.insert_resource(PendingUltra { choices });
                 paused.0 = true;
@@ -2837,12 +2872,10 @@ pub enum DraftOffer {
 /// The banked Patience pick is consumed by the draft *existing*, not by what
 /// it shows, so `patiencepick` clears on entry (GML
 /// `LevCont/Create_0:18-21`) and the next floor's skill arm is live again.
-pub fn level_entry_draft(
-    run: &mut Run,
-    player: &mut Player,
-    race: RaceId,
-    rng: &mut RunnerRng,
-) -> DraftOffer {
+pub fn level_entry_draft(run: &mut Run, player: &mut Player, race: RaceId) -> DraftOffer {
+    // GML `LevCont/Create_0:18-21` consumes the Patience pick AFTER seeding
+    // the room's generator with it, so the draft it builds still sees it.
+    let patiencepick = run.patiencepick;
     run.patiencepick = false;
     if player.ultra_pick_owed && player.ultra.is_none() && player.level >= 10 {
         return DraftOffer::Ultra(ultra_choices_for_crown(
@@ -2851,7 +2884,14 @@ pub fn level_entry_draft(
         ));
     }
     while player.mutation_picks_owed > 0 {
-        let choices = roll_mutations_for(player, race, rng);
+        let mut rng = RunnerRng::seeded(crate::gml_rng::levcont_ambient(
+            run.gen_seed,
+            player.level,
+            player.mutation_picks_owed,
+            false,
+            patiencepick,
+        ));
+        let choices = roll_mutations_for(player, race, &mut rng);
         if choices.is_empty() {
             player.mutation_picks_owed = player.mutation_picks_owed.saturating_sub(1);
             continue;
@@ -3041,10 +3081,22 @@ pub fn tick_floor_transition(
                 run.floor_in_area,
                 run.loop_count,
             );
-            *streams = crate::rng_streams::SimStreams::from_floor(
-                floor_states.builtin_seed(),
+            // GML `LevCont/Create_0.gml:29-37`: on a jungle floor with one
+            // unspent skill point the run seed takes a fixed step and every
+            // state restarts from it. It runs before `GenCont` lays the floor,
+            // and the new `global.seed` stays for the rest of the run.
+            if run.area == crate::data::AreaId::Jungle && player.mutation_picks_owed == 1 {
+                run.gen_seed = run.gen_seed.wrapping_add(15_013);
+                floor_states = crate::gml_rng::RngStates::all_seeded(run.gen_seed as i32);
+            }
+            let ambient = crate::gml_rng::levcont_ambient(
                 run.gen_seed,
+                player.level,
+                player.mutation_picks_owed,
+                false,
+                run.patiencepick,
             );
+            *streams = crate::rng_streams::SimStreams::new(floor_states, run.gen_seed, ambient);
             let mut plan = crate::worldgen::generate_level(&run, &mut floor_states);
             // Player landing first (plan-space; `spawn_level` builds the
             // same mask from these cells, so placement below agrees).
@@ -3104,7 +3156,7 @@ pub fn tick_floor_transition(
                 &mut streams.setup,
                 &mut floor_states,
             );
-            commands.insert_resource(crate::rng_streams::FloorStates(floor_states));
+            *streams = crate::rng_streams::SimStreams::new(floor_states, run.gen_seed, ambient);
             commands.remove_resource::<IceFlowerSeed>();
 
             floor_started.push(FloorStarted {

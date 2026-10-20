@@ -37,12 +37,12 @@
 //!   `scripts/scrFire/scrFire.gml`).
 
 use crate::anim::SpriteAnim;
+use crate::runner_rng::RunnerRng;
 use bevy_ecs::prelude::*;
 use glam::Vec2;
 use repame_fx::Trauma;
 use repame_sim::SimTime;
 use repame_sim::rng::Rng;
-use crate::runner_rng::RunnerRng;
 
 use crate::audio::{AudioCue, GameAudio, MainVol};
 use crate::combat::Explosion;
@@ -3066,7 +3066,7 @@ pub fn robot_eat_drops(
     weapon: WeaponId,
     auto_collect: bool,
     run_area: crate::data::AreaId,
-    gen_seed: u64,
+    states: &mut crate::gml_rng::RngStates,
     mut rng: &mut RunnerRng,
 ) {
     let tb = u32::from(player.throne_butt);
@@ -3154,26 +3154,31 @@ pub fn robot_eat_drops(
         // offset, and it spawns CHESTS (`scrPowers.gml:639-648`), so no
         // `CursedPickup` conversion is involved - but the area/ultra art
         // variants still apply.
-        let ctx = crate::pickups::ChestCtx {
+        let mut ctx = crate::pickups::ChestCtx {
             worldgen: false,
             area: run_area,
             crown: player.crown,
             ambidextrous: matches!(player.ultra, Some(UltraMutationId::SteroidsAmbidextrous)),
             get_loaded: matches!(player.ultra, Some(UltraMutationId::SteroidsGetArmed)),
-            gen_seed,
-            order: 0,
+            drop_seed: 0,
+        };
+        let mut seed = |ctx: &mut crate::pickups::ChestCtx| {
+            ctx.drop_seed = states.get(crate::gml_rng::RngState::WeaponDrops).next_int() as u32;
         };
         if player.crown == CrownKind::Love {
+            seed(&mut ctx);
             spawn_chest_with(commands, catalog, ChestKind::Ammo, pos, &ctx, rng);
         } else if rng.random_range(0..health.max.max(1)) as i32 > health.hp
             && rng.random_range(0..3) < 2
         {
+            seed(&mut ctx);
             spawn_chest_with(commands, catalog, ChestKind::Health, pos, &ctx, rng);
         } else {
             let kind = match rng.random_range(0..3) {
                 0 => ChestKind::Weapon,
                 _ => ChestKind::Ammo,
             };
+            seed(&mut ctx);
             spawn_chest_with(commands, catalog, kind, pos, &ctx, rng);
         }
     }
@@ -3821,6 +3826,9 @@ pub fn player_ability(
                 inv.current = next;
                 cooldown.swap_slots();
             }
+            let crate::rng_streams::SimStreams {
+                states, pickups, ..
+            } = &mut *streams;
             robot_eat_drops(
                 &mut commands,
                 &catalog,
@@ -3831,8 +3839,8 @@ pub fn player_ability(
                 w,
                 false,
                 persist.p2().area,
-                persist.p2().gen_seed,
-                &mut streams.pickups,
+                states,
+                pickups,
             );
             if was_cursed {
                 // GML `scrPowers.gml:191` `scr_hit_self(7, HitId.CurseEat)`:

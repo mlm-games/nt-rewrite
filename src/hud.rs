@@ -573,6 +573,43 @@ pub fn mutation_skill_index(id: crate::data::MutationId) -> u8 {
 /// (`scripts/scrUltras/scrUltras.gml:231`, drawn at `scripts/scrDrawMiscHUD/scrDrawMiscHUD.gml:76`).
 /// Cuz reuses 1-3 because it owns a third ultra
 /// (`scripts/scrUltras/scrUltras.gml:42`).
+/// Inverse of [`mutation_skill_index`]: GML skill ids 1-29.
+pub fn mutation_from_skill_index(index: u8) -> Option<crate::data::MutationId> {
+    use crate::data::MutationId::*;
+    Some(match index {
+        1 => RhinoSkin,
+        2 => ExtraFeet,
+        3 => PlutoniumHunger,
+        4 => RabbitPaw,
+        5 => ThroneButt,
+        6 => LuckyShot,
+        7 => Bloodlust,
+        8 => GammaGuts,
+        9 => SecondStomach,
+        10 => BackMuscle,
+        11 => ScarierFace,
+        12 => Euphoria,
+        13 => LongArms,
+        14 => BoilingVeins,
+        15 => ShotgunShoulders,
+        16 => RecycleGland,
+        17 => LaserBrain,
+        18 => LastWish,
+        19 => EagleEyes,
+        20 => ImpactWrists,
+        21 => BoltMarrow,
+        22 => Stress,
+        23 => TriggerFingers,
+        24 => SharpTeeth,
+        25 => Patience,
+        26 => Hammerhead,
+        27 => StrongSpirit,
+        28 => OpenMind,
+        29 => HeavyHeart,
+        _ => return None,
+    })
+}
+
 pub fn ultra_skill_index(id: crate::data::UltraMutationId) -> u8 {
     use crate::data::UltraMutationId::*;
     match id {

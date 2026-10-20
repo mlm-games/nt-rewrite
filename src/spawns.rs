@@ -6,9 +6,9 @@
 //! hazards off their markers). Scale pop-ins and tint flashes are not ported -
 //! strips draw at the catalog cell size (`render.rs`, fidelity notes).
 
+use crate::runner_rng::RunnerRng;
 use bevy_ecs::prelude::*;
 use repame_sim::rng::Rng;
-use crate::runner_rng::RunnerRng;
 
 use repame_anim::AnimCatalog;
 
@@ -689,6 +689,7 @@ pub fn damage_destructible_prop(
     nexthurt_window: Option<u64>,
     loops: u32,
     hasted: bool,
+    states: &mut crate::gml_rng::RngStates,
     rng: &mut RunnerRng,
 ) {
     damage_destructible_prop_ctx(
@@ -709,6 +710,7 @@ pub fn damage_destructible_prop(
         loops,
         hasted,
         None,
+        states,
         rng,
     );
 }
@@ -745,6 +747,7 @@ pub fn damage_destructible_prop_ctx(
     loops: u32,
     hasted: bool,
     drop: Option<DropCtx<'_>>,
+    states: &mut crate::gml_rng::RngStates,
     rng: &mut RunnerRng,
 ) {
     let mut dead = false;
@@ -834,7 +837,9 @@ pub fn damage_destructible_prop_ctx(
                 drop.health,
                 loops,
                 drop.decide,
-                rng,
+                None,
+                states,
+                None,
             );
         }
     }

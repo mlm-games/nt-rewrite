@@ -7,9 +7,9 @@
 //! `GenCont`), so the wave is port-only; the RGBA colors below are the
 //! port's own hazard tints.
 
+use crate::runner_rng::RunnerRng;
 use bevy_ecs::prelude::*;
 use repame_sim::rng::Rng;
-use crate::runner_rng::RunnerRng;
 
 use crate::rng_streams::SimStreams;
 use repame_sim::SimTime;
@@ -511,7 +511,9 @@ pub fn tick_prop_drops(
                 run.loop_count,
                 decide,
                 &chest_ctx,
-                &mut streams.pickups,
+                None,
+                &mut streams.states,
+                None,
             );
         }
         if drop.weaken_nothing && run.loop_count == 0 && generators_left <= 1 {

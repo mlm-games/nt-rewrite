@@ -36,11 +36,11 @@
 //! no record-split; handlers take snapshots (`&[(Vec2, Vec2)]` props,
 //! `&[(Vec2, (i32, i32))]` walls) so tests drive them without a world.
 
+use crate::runner_rng::RunnerRng;
 use bevy_ecs::prelude::*;
 use repame_fx::Trauma;
 use repame_sim::SimTime;
 use repame_sim::rng::Rng;
-use crate::runner_rng::RunnerRng;
 
 use crate::anim::SpriteAnim;
 use crate::audio::{AudioCue, GameAudio};
@@ -1801,6 +1801,7 @@ pub fn throne_annihilate_props(
         }
         crushed.push((prop_e, ppos.0, prop.hp.max(1)));
     }
+    let mut environment = streams.environment;
     for (prop_e, center, hp) in crushed {
         crate::spawns::damage_destructible_prop(
             &mut commands,
@@ -1819,9 +1820,11 @@ pub fn throne_annihilate_props(
             None,
             run.loop_count,
             hasted,
-            &mut streams.environment,
+            &mut streams.states,
+            &mut environment,
         );
     }
+    streams.environment = environment;
 }
 
 fn throne_ai(

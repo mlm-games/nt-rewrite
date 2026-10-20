@@ -12,10 +12,10 @@
 /// tail lives in [`tick_bigmaggot_inspector`].
 use std::collections::HashMap;
 
+use crate::runner_rng::RunnerRng;
 use bevy_ecs::prelude::*;
 use bevy_ecs::system::EntityCommands;
 use repame_sim::rng::Rng;
-use crate::runner_rng::RunnerRng;
 
 use crate::rng_streams::SimStreams;
 
@@ -151,6 +151,7 @@ pub fn spawn_enemy(
     loops: u32,
 
     rng: &mut impl Rng,
+    drops: &mut crate::gml_rng::GmlRng,
 ) -> Entity {
     spawn_enemy_with_context(
         commands,
@@ -163,6 +164,7 @@ pub fn spawn_enemy(
         loops,
         EnemySpawnContext::default(),
         rng,
+        drops,
     )
 }
 
@@ -178,6 +180,7 @@ pub fn spawn_enemy_with_context(
     context: EnemySpawnContext,
 
     rng: &mut impl Rng,
+    drops: &mut crate::gml_rng::GmlRng,
 ) -> Entity {
     spawn_enemy_impl(
         commands,
@@ -192,6 +195,7 @@ pub fn spawn_enemy_with_context(
         true,
         None,
         rng,
+        drops,
     )
 }
 
@@ -208,9 +212,13 @@ fn spawn_enemy_impl(
     give_kill: bool,
     birth: Option<&PendingEnemySpawn>,
     rng: &mut impl Rng,
+    drops: &mut crate::gml_rng::GmlRng,
 ) -> Entity {
     let def = enemy_def(kind);
-    let e = crate::setup::spawn_enemy(commands, kind, pos, true);
+    // GML `enemy/Create_0.gml:28`: `dropseed = rng_next_int(RNGStates.
+    // WeaponDrops)`, one draw per instance, in creation order.
+    let drop_seed = drops.next_int() as u32;
+    let e = crate::setup::spawn_enemy(commands, kind, pos, true, drop_seed);
 
     // GML `FrogQueen/Create_0.gml:40-44`: the Mom digs out through five
     // `PortalClear` bursts (centre plus a +-24 cross).
@@ -620,6 +628,7 @@ fn spawn_enemy_impl(
                 true,
                 None,
                 rng,
+                drops,
             );
             commands.entity(e).despawn();
             return gold;
@@ -642,6 +651,7 @@ pub fn spawn_enemy_at(
     context: EnemySpawnContext,
 
     rng: &mut impl Rng,
+    drops: &mut crate::gml_rng::GmlRng,
 ) -> Entity {
     spawn_enemy_with_context(
         commands,
@@ -654,6 +664,7 @@ pub fn spawn_enemy_at(
         loops,
         context,
         rng,
+        drops,
     )
 }
 
@@ -690,6 +701,7 @@ pub fn flush_pending_enemy_spawns(
             spawn.give_kill,
             Some(spawn),
             rng,
+            streams.states.get(crate::gml_rng::RngState::WeaponDrops),
         );
         commands.entity(entity).despawn();
     }
@@ -6358,7 +6370,9 @@ pub fn tick_big_guardian_bullets(
                 health,
                 run.loop_count,
                 None,
-                &mut streams.pickups,
+                None,
+                &mut streams.states,
+                None,
             );
         }
         let mut ang = rng.random_range(0.0..std::f32::consts::TAU);
@@ -6462,7 +6476,9 @@ pub fn tick_last_balls(
                 health,
                 run.loop_count,
                 None,
-                &mut streams.pickups,
+                None,
+                &mut streams.states,
+                None,
             );
         }
         // GML `Destroy_0:7-19`: `_ang` runs across the whole salvo, so each
@@ -6761,6 +6777,7 @@ pub fn tick_want_van(
                 scarier_face: scarier.0,
                 heavy_heart: heavy_heart.0,
             },
+            &mut streams.states,
             rng,
         );
         raised += 1;
@@ -6872,6 +6889,7 @@ pub fn tick_want_lil_hunter(
                 run.loop_count,
                 EnemySpawnContext::default(),
                 rng,
+                streams.states.get(crate::gml_rng::RngState::WeaponDrops),
             );
         }
         commands.entity(marker_e).despawn();
@@ -7034,6 +7052,7 @@ pub fn tick_delayed_boss_spawns(
                 &player_q,
                 &walls,
                 &mut enemies_rng,
+                streams.states.get(crate::gml_rng::RngState::WeaponDrops),
             )
         {
             live += 1;
@@ -7090,6 +7109,7 @@ fn breach_bandit(
     >,
 
     rng: &mut impl Rng,
+    drops: &mut crate::gml_rng::GmlRng,
 ) -> bool {
     // GML `WantBoss/Alarm_0.gml:1-6`: no target means a 5 step retry, and
     // `:46` re-arms at 1 either way so the marker tries again next step.
@@ -7136,6 +7156,7 @@ fn breach_bandit(
             heavy_heart,
         },
         rng,
+        drops,
     );
 
     commands.spawn((
@@ -10999,6 +11020,7 @@ mod gml_volley_cadence_tests {
                 false,
                 0,
                 &mut RunnerRng::seeded(1),
+                &mut crate::gml_rng::GmlRng::seeded(1),
             );
         }
         world.flush();

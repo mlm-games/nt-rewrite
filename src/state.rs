@@ -379,12 +379,20 @@ pub fn tick_tutorial(world: &mut World, dt: f32) {
         let mut pickups_rng = world
             .resource_mut::<crate::rng_streams::SimStreams>()
             .pickups;
+        let drop_seed = world
+            .resource_mut::<crate::rng_streams::SimStreams>()
+            .states
+            .get(crate::gml_rng::RngState::WeaponDrops)
+            .next_int() as u32;
         let mut commands = world.commands();
         crate::pickups::spawn_chest_frames(
             &mut commands,
             crate::comps_b::ChestKind::Weapon,
             rest,
-            &crate::pickups::ChestCtx::default(),
+            &crate::pickups::ChestCtx {
+                drop_seed,
+                ..Default::default()
+            },
             frames,
             &mut pickups_rng,
         );
