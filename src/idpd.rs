@@ -43,6 +43,10 @@ use crate::time::{GTimer, TimerMode};
 pub fn idpd_elite_roll(loop_count: u32, area: AreaId, rng: &mut SimRng) -> bool {
     let eligible = (loop_count > 1 && area == AreaId::Campfire)
         || (loop_count > 0 && area != AreaId::Campfire);
+    // `Create_0.gml:33` is `elite = !rng_float(RNGStates.Enemies, 5)`, which
+    // on a real means "the draw was exactly zero" and would make elites
+    // effectively unreachable. The port reads it as the intended one-in-five
+    // roll; the source is ambiguous here.
     eligible && rng.random::<f32>() < 0.2
 }
 
@@ -90,8 +94,10 @@ pub fn roll_idpd_table(
 
 /// GML `IDPDSpawn/Alarm_1.gml:10-14`: `rng_choose(1, 1, 2, 3)` re-rolled
 /// until the `popolevel` gates pass (dir 3 needs 3+, dir 2 needs 5+), then
-/// a live `LilHunter` on loop 0 forces dir 1. The float source is a
-/// parameter so the global stream and the `RNGStates` LCG share this law.
+/// a live `LilHunter` on loop 0 forces dir 1. The GML draws `rng_choose`
+/// from `RNGStates.Enemies`; the port draws a float with the same four-way
+/// split (1, 1, 2, 3) from the caller's engine stream, so the distribution
+/// matches while the generator is the port's own.
 pub fn roll_idpd_dir(
     next_float: &mut dyn FnMut() -> f32,
     popolevel: f32,
@@ -110,6 +116,18 @@ pub fn roll_idpd_dir(
         if !(d == 3 && popolevel < 3.0) && !(d == 2 && popolevel < 5.0) {
             return d;
         }
+    }
+}
+
+/// The `RNGStates.Popo` stream: GML keeps one state across the run and every
+/// portal draws from it, so the port carries it as a resource instead of
+/// re-seeding per tick.
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct PopoStream(pub GmlRng);
+
+impl Default for PopoStream {
+    fn default() -> Self {
+        Self(GmlRng::seeded(0))
     }
 }
 
@@ -271,9 +289,12 @@ pub fn raise_idpd_portals(
 pub fn idpd_spawn_site(rng: &mut GmlRng, player_pos: glam::Vec2, mask: &FloorMask) -> glam::Vec2 {
     let mut p = player_pos;
     for _ in 0..64 {
+        // `Create_0.gml:10-13` draws the radius twice, once inside each
+        // `lengthdir_*` call, so x and y get different draws.
         let ang = rng.float(360.0);
-        let dist = 96.0 + rng.float(96.0);
-        p = player_pos + glam::Vec2::from_angle(ang.to_radians()) * dist;
+        let dx = 96.0 + rng.float(96.0);
+        let dy = 96.0 + rng.float(96.0);
+        p = player_pos + glam::Vec2::new(ang.to_radians().cos() * dx, ang.to_radians().sin() * dy);
         // GML `var dir = instance_nearest(x, y, Floor); if dir { x = dir.x
         // + 16; y = dir.y + 16 }` - snap to the nearest floor tile centre.
         if let Some(tile) = nearest_floor_tile(p, mask) {
@@ -554,6 +575,7 @@ pub fn tick_idpd_spawn_world(
         (With<IdpdSpawnPortal>, Without<Player>, Without<Enemy>),
     >,
     mut streams: ResMut<SimStreams>,
+    mut popo: ResMut<PopoStream>,
 ) {
     let Ok(player_pos) = player_q.single().map(|p| p.0) else {
         return;
@@ -561,7 +583,6 @@ pub fn tick_idpd_spawn_world(
     let lil_hunter_alive = enemies_q
         .iter()
         .any(|e| matches!(e.kind, EnemyKind::LilHunter));
-    let mut popo = GmlRng::seeded((run.gen_seed as i32) ^ 0x50_50);
     tick_idpd_spawns(
         &mut commands,
         time.delta_secs,
@@ -569,7 +590,7 @@ pub fn tick_idpd_spawn_world(
         &mask,
         player_pos,
         lil_hunter_alive,
-        &mut popo,
+        &mut popo.0,
         &mut streams.idpd,
         &mut spawn_q,
     );

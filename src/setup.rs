@@ -538,6 +538,9 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
     // GML `scrRngStatesInit(_seed)`: the run's seed opens every subsystem
     // stream, so a run drawn from `seed` replays the same way.
     world.insert_resource(crate::rng_streams::SimStreams::from_run_seed(seed));
+    world.insert_resource(crate::idpd::PopoStream(crate::gml_rng::GmlRng::seeded(
+        (seed as i32) ^ 0x50_50,
+    )));
     // The floor-setup draws (`GenCont/Destroy_0`) run off the `setup` stream.
     // `SimRng` is `Copy` and this function owns the world, so it is read out
     // here and written back once the floor is built.

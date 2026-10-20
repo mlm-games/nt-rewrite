@@ -5100,6 +5100,7 @@ fn init_schedule_resources(world: &mut World) {
     // the resource always exists; `setup_run_inner` re-seeds from the run's
     // seed before the first floor is built.
     world.insert_resource(crate::rng_streams::SimStreams::default());
+    world.insert_resource(crate::idpd::PopoStream::default());
     // Editable controls: default map, then overlay the save file's
     // rows when present (GML `scrOptionsLoadKeymaps` on boot). The
     // disk shell calls `App::load_save` after boot; headless/tests
