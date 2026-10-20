@@ -14,7 +14,8 @@ use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
 use bevy_ecs::system::EntityCommands;
-use repame_sim::rng::{Rng, SimRng};
+use repame_sim::rng::Rng;
+use crate::runner_rng::RunnerRng;
 
 use crate::rng_streams::SimStreams;
 
@@ -1633,7 +1634,7 @@ fn gml_alarm_2_volley(
     particles_on: bool,
     rng: &mut impl Rng,
 
-    fx_rng: &mut SimRng,
+    fx_rng: &mut RunnerRng,
 ) {
     let gunangle = brain.gunangle;
     match kind {
@@ -5991,7 +5992,7 @@ fn fire_enemy_laser(
     from: glam::Vec2,
     angle: f32,
 
-    fx_rng: &mut SimRng,
+    fx_rng: &mut RunnerRng,
 ) {
     let dir = glam::Vec2::from_angle(angle);
     let mut end = from;
@@ -7262,7 +7263,7 @@ pub fn spawn_lil_hunter_trapfire(
     commands: &mut Commands,
     at: glam::Vec2,
     team: Team,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     let mut ang = rng.random_range(0.0..std::f32::consts::TAU);
     for _ in 0..80 {
@@ -8126,7 +8127,7 @@ fn lift_raven(
     flight: &mut crate::comps_b::RavenFlight,
     mut anim: Option<&mut SpriteAnim>,
 
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     use crate::comps_b::RavenPhase;
     if flight.phase != RavenPhase::Ground || flight.nofly > 0.0 {
@@ -10997,7 +10998,7 @@ mod gml_volley_cadence_tests {
                 false,
                 false,
                 0,
-                &mut SimRng::seeded(1),
+                &mut RunnerRng::seeded(1),
             );
         }
         world.flush();
@@ -11024,7 +11025,7 @@ mod gml_volley_cadence_tests {
     /// post-volley window, so pin both.
     #[test]
     fn crab_rest_after_a_volley_is_longer_than_before() {
-        let mut rng = SimRng::seeded(7);
+        let mut rng = RunnerRng::seeded(7);
         for _ in 0..64 {
             let before = 10.0 + rnd(&mut rng, 10.0);
             let after = 40.0 + rnd(&mut rng, 10.0);
@@ -11171,7 +11172,7 @@ mod gml_rorand_tests {
 
     #[test]
     fn orandom_samples_plus_minus_half() {
-        let mut rng = SimRng::seeded(7);
+        let mut rng = RunnerRng::seeded(7);
         for n in [1.0_f32, 3.0, 10.0, 15.0, 16.0] {
             for _ in 0..256 {
                 let v = spread(&mut rng, n);

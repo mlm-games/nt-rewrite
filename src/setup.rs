@@ -21,7 +21,8 @@ use rand::rngs::StdRng;
 
 use rand::{RngExt, SeedableRng};
 use repame_anim::AnimCatalog;
-use repame_sim::rng::{Rng, SimRng};
+use repame_sim::rng::Rng;
+use crate::runner_rng::RunnerRng;
 
 use crate::anim::{PlayerAnim, SpriteAnim};
 use crate::comps_a::{
@@ -535,14 +536,17 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
     // Area-fog scroll persists like GML's persistent TopCont
     // (init-only: never reset mid-run).
     world.init_resource::<crate::environment::FogState>();
-    // GML `scrRngStatesInit(_seed)`: the run's seed opens every subsystem
-    // stream, so a run drawn from `seed` replays the same way.
-    world.insert_resource(crate::rng_streams::SimStreams::from_run_seed(seed));
-    world.insert_resource(crate::idpd::PopoStream(crate::gml_rng::GmlRng::seeded(
-        (seed as i32) ^ 0x50_50,
-    )));
+    // GML `scrRngStatesInit(_seed)` -> `scrRngStatesReset()`: the run opens on
+    // the campfire room (area 0, first subarea, no loops), which seeds
+    // `global.rng_state[]` and, through `_number`, every built-in stream.
+    let run_states = crate::gml_rng::RngStates::reset(seed, 0, 1, 0);
+    world.insert_resource(crate::rng_streams::SimStreams::from_floor(
+        run_states.builtin_seed(),
+        seed,
+    ));
+    world.insert_resource(crate::rng_streams::FloorStates(run_states));
     // The floor-setup draws (`GenCont/Destroy_0`) run off the `setup` stream.
-    // `SimRng` is `Copy` and this function owns the world, so it is read out
+    // `RunnerRng` is `Copy` and this function owns the world, so it is read out
     // here and written back once the floor is built.
     let mut setup_rng = world.resource::<crate::rng_streams::SimStreams>().setup;
 
@@ -722,9 +726,27 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
     // the mask/queue writes below (system callers flush on schedule run).
     world.flush();
 
+    // GML `Vlambeer/Create_0:42` -> `scrRngStatesReset()`: the continued room
+    // re-seeds the state array and the floor's built-in generator before
+    // `GenCont` lays anything.
+    let (gen_seed, area_number, subarea, loops) = {
+        let run = world.resource::<Run>();
+        (
+            run.gen_seed,
+            worldgen::gml_area_number(&run),
+            run.floor_in_area,
+            run.loop_count,
+        )
+    };
+    let mut floor_states = crate::gml_rng::RngStates::reset(gen_seed, area_number, subarea, loops);
+    world.insert_resource(crate::rng_streams::SimStreams::from_floor(
+        floor_states.builtin_seed(),
+        gen_seed,
+    ));
+    world.insert_resource(crate::rng_streams::FloorStates(floor_states));
     let mut plan: LevelPlan = {
         let run = world.resource::<Run>();
-        worldgen::generate_level(&run)
+        worldgen::generate_level(&run, &mut floor_states)
     };
     // GML `GenCont/Alarm_0 -> scrPopulate -> scrPopChests` verbatim: the
     // first floor trims to 1 weapon / 1 ammo / 1 rad chest (plus Open-Mind
@@ -777,6 +799,7 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
                 player_pos: player_spawn,
                 seed: gen_seed ^ 0xC0E5_75EED,
             },
+            &mut floor_states,
         );
         if out.horror {
             world.resource_mut::<crate::comps_a::Run>().horror = true;
@@ -824,6 +847,7 @@ fn setup_run_inner(world: &mut World, seed: u64, resume: Option<&crate::run_save
                     false,
                     false,
                     &mut setup_rng,
+                    &mut floor_states,
                 );
             })
         })
@@ -1450,7 +1474,7 @@ pub fn spawn_prop_sim(
     kind: PropKind,
     pos: glam::Vec2,
     styleb: bool,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> Option<Entity> {
     if kind == PropKind::None {
         return None;
@@ -1793,7 +1817,7 @@ pub fn spawn_secret_entrances(
     heavy_heart: bool,
     crownvisits: u8,
     plan: &LevelPlan,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     if crownvisits >= 3 || plan.floor_cells.is_empty() {
         return;
@@ -1945,7 +1969,7 @@ fn spawn_ground_details(
     if plan.styleb && run.area != AreaId::FrozenCity {
         return;
     }
-    let mut rng = StdRng::seed_from_u64(run.gen_seed ^ 0x0D37A1);
+    let mut rng = RunnerRng::seeded((run.gen_seed as u32) ^ 0x0D37A1);
     for pos in &plan.details {
         commands.spawn((
             GameCleanup,
@@ -2106,7 +2130,8 @@ pub fn spawn_level(
     // GML `GenCont/Destroy_0.gml:112`: FrozenCity subarea 1 with LAST WISH
     // turns a prop (or an enemy) into the Jungle's only entrance.
     ice_flower: bool,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
+    states: &mut crate::gml_rng::RngStates,
 ) {
     *mask = build_floor_mask(plan);
 
@@ -2188,7 +2213,7 @@ pub fn spawn_level(
         }
     }
 
-    let mut cluster_rng = StdRng::seed_from_u64(run.gen_seed);
+    let mut cluster_rng = worldgen::enemy_call_rng(states);
     let _ = worldgen::apply_loop_population_clusters(
         &mut events,
         run.loop_count,
@@ -2231,7 +2256,7 @@ pub fn spawn_level(
                 .map(|(i, _)| i)
                 .collect();
             if !enemies.is_empty() {
-                let mut rng = StdRng::seed_from_u64(run.gen_seed ^ 0x1CE5_5EED);
+                let mut rng = RunnerRng::seeded((run.gen_seed as u32) ^ 0x1CE5_5EED);
                 let idx = enemies[rng.random_range(0..enemies.len())];
                 if let PopulationEvent::Enemy { pos, .. } = events.remove(idx) {
                     spawn(pos);
@@ -2272,7 +2297,7 @@ pub fn spawn_level(
                     order: chest_order,
                 };
                 chest_order += 1;
-                let mut spawn = |kind: ChestKind, p: glam::Vec2, rng: &mut SimRng| {
+                let mut spawn = |kind: ChestKind, p: glam::Vec2, rng: &mut RunnerRng| {
                     crate::pickups::spawn_chest_with(commands, catalog, kind, p, &ctx, rng)
                 };
                 match chest {

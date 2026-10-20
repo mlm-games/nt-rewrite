@@ -39,7 +39,8 @@
 use bevy_ecs::prelude::*;
 use repame_fx::Trauma;
 use repame_sim::SimTime;
-use repame_sim::rng::{Rng, SimRng};
+use repame_sim::rng::Rng;
+use crate::runner_rng::RunnerRng;
 
 use crate::anim::SpriteAnim;
 use crate::audio::{AudioCue, GameAudio};
@@ -868,7 +869,7 @@ fn big_bandit_ai(
     mask: &FloorMask,
     loops: u32,
     sprites: Option<&mut crate::comps_b::EnemySprites>,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> bool {
     let frames = dt * crate::SIM_HZ as f32;
     let mut fired = false;
@@ -1157,7 +1158,7 @@ fn big_dog_ai(
     mask: &FloorMask,
     loop_count: u32,
     missiles: usize,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> bool {
     let mut fired = false;
 
@@ -1337,7 +1338,7 @@ fn lil_hunter_ai(
     rogue_present: bool,
     mask: &FloorMask,
     run: &mut Run,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> bool {
     let mut fired = false;
 
@@ -1617,7 +1618,7 @@ pub fn lil_hunter_fire_ring(
     at: glam::Vec2,
     props: &[(glam::Vec2, glam::Vec2)],
     mask: Option<&FloorMask>,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     let mut ang = rng.random_range(0.0..std::f32::consts::TAU);
     for _ in 0..80 {
@@ -1843,7 +1844,7 @@ fn throne_ai(
     walls: &[(glam::Vec2, (i32, i32))],
     mask: &FloorMask,
     radius: f32,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> bool {
     let mut fired = false;
 
@@ -2143,7 +2144,7 @@ fn throne_ii_ai(
     dt: f32,
     loop_count: u32,
     walls: &[Entity],
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> bool {
     let mut fired = false;
 
@@ -2376,7 +2377,7 @@ fn hyper_ai(
     live_crystals: usize,
     loop_count: u32,
     run: &mut Run,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> bool {
     let dt = 1.0 / crate::SIM_HZ as f32;
     state.alarm1.tick(dt);
@@ -2530,7 +2531,7 @@ pub fn hyper_ensure_orbit(
     loop_count: u32,
     enraged: bool,
     run: &mut Run,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     let n = (hyper_orbit_count(loop_count) + usize::from(enraged)).min(12);
     for i in 0..n {
@@ -2666,7 +2667,7 @@ fn frog_queen_ai(
     hurting: bool,
     health_hp: i32,
     health_max: i32,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> bool {
     let mut fired = false;
 
@@ -2827,7 +2828,7 @@ fn technomancer_ai(
     turrets: usize,
     loops: u32,
     mask: &FloorMask,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     let dt = 1.0 / crate::SIM_HZ as f32;
     for a in [
@@ -2924,7 +2925,7 @@ fn spawn_techno_turrets(
     at: glam::Vec2,
     count: u32,
     mask: &FloorMask,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     for _ in 0..count {
         let ang = rng.random_range(0.0..std::f32::consts::TAU);
@@ -2949,7 +2950,7 @@ fn revive_techno_corpses(
     player_pos: glam::Vec2,
     corpses: &[glam::Vec2],
     mask: &FloorMask,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     let base = (at - player_pos).y.atan2((at - player_pos).x);
     for bearing in [
@@ -3023,7 +3024,7 @@ fn captain_ai(
     props: &[(glam::Vec2, glam::Vec2)],
     walls: &[(glam::Vec2, (i32, i32))],
     mask: &FloorMask,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> bool {
     let frames = dt * crate::SIM_HZ as f32;
     let mut fired = false;
@@ -3353,7 +3354,7 @@ fn yv_boss_ai(
     props: &[(glam::Vec2, glam::Vec2)],
     mask: &FloorMask,
     def_radius: f32,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> bool {
     const REVOLVER: usize = 0;
     const SHOTGUN: usize = 1;

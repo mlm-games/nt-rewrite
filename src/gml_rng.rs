@@ -26,17 +26,19 @@
 //! `rng_state[Generation] = subarea + 24`, and `levseed` reading the
 //! `Generation` state.
 //!
-//! The port today uses this stream where the original does: the big chests'
-//! `WeaponDrops` roll ([`crate::decide_wep::decide_wep_seeded`]) and the
-//! `Popo` portal placement ([`crate::idpd`]). It does **not** yet implement
-//! `scrRngStatesReset`'s per-floor seeding: those two sites seed directly from
-//! the run instead, which is a known fidelity gap recorded here rather than
-//! hidden.
+//! The port uses this stream where the original does: the `Popo` portal
+//! placement ([`crate::idpd`]) and every draw `scrRngStatesReset` derives.
+//! Chest weapon rolls read it through [`RngStates`] only for their creation
+//! dropseed; the roll itself is the built-in generator
+//! ([`crate::runner_rng`]).
 //!
-//! Everything else the port draws comes from [`crate::rng_streams::SimStreams`]
-//! (the engine's `SimRng`), because those draws correspond to the original's
-//! built-in `random()` calls and the runner's generator is its own, separate
-//! law.
+//! [`RngStates`] is `global.rng_state[]` itself: ten slots, re-seeded on every
+//! floor by [`RngStates::reset`] (GML `scrRngStatesReset`), which also derives
+//! the floor's built-in seed `_number`.
+//!
+//! Everything else the port draws corresponds to the original's built-in
+//! `random()` family, which is [`crate::runner_rng::RunnerRng`]: the runtime's
+//! own WELL512, not this LCG.
 
 use serde::{Deserialize, Serialize};
 
@@ -146,6 +148,107 @@ impl GmlRng {
     }
 }
 
+/// GML `RNGStates.NUM_RNG_STATES`: ten slots, six of them named.
+pub const NUM_RNG_STATES: usize = 10;
+
+/// GML `area_vault`: the reset takes the run seed whole here.
+pub const AREA_VAULT: i32 = 100;
+
+/// GML `area_hq`: the reset pins `Generation` to `subarea + 24` here.
+pub const AREA_HQ: i32 = 106;
+
+/// `global.rng_state[]`, plus the built-in generator's floor seed.
+///
+/// `scrRngStatesReset` runs once per floor (GML `objects/Vlambeer/Create_0:42`,
+/// the room's controller), so every field the port derives from it is a
+/// per-floor value:
+///
+/// ```text
+/// _number = (global.seed + area*80687 + subarea*56041 + loops*90023) % 0x7fffffff
+/// if (area == area_vault) _number = global.seed
+/// random_set_seed(_number)
+/// rng_state[i] = (_number + 79379 * i) % 0x7fffffff
+/// if (area == area_hq) rng_state[Generation] = subarea + 24
+/// ```
+#[derive(Clone, Copy, Debug)]
+pub struct RngStates {
+    states: [GmlRng; NUM_RNG_STATES],
+    builtin_seed: u32,
+}
+
+impl RngStates {
+    /// GML `scrRngStatesReset()`, with `run_seed` as `global.seed`, `area` as
+    /// the GML area number, `subarea` as `GameCont.subarea` and `loops` as
+    /// `GameCont.loops`.
+    pub fn reset(run_seed: u64, area: i32, subarea: u32, loops: u32) -> Self {
+        let span = RNG_M as i128;
+        let mut number = (run_seed as i128
+            + i128::from(area) * 80_687
+            + i128::from(subarea) * 56_041
+            + i128::from(loops) * 90_023)
+            % span;
+        if area == AREA_VAULT {
+            number = run_seed as i128;
+        }
+
+        let mut states = [GmlRng::seeded(0); NUM_RNG_STATES];
+        for (i, state) in states.iter_mut().enumerate() {
+            *state = GmlRng::seeded(
+                ((number + i128::from(RNG_STATE_STEP) * i as i128) % span) as i32,
+            );
+        }
+        if area == AREA_HQ {
+            states[0] = GmlRng::seeded(subarea as i32 + 24);
+        }
+
+        // `random_set_seed(floor(_seed))` masks the low 32 bits, so the vault's
+        // unreduced seed reaches the runner the same way it does in GML.
+        let builtin_seed = if area == AREA_VAULT {
+            (number as u64 & 0xFFFF_FFFF) as u32
+        } else {
+            number as u32
+        };
+
+        Self {
+            states,
+            builtin_seed,
+        }
+    }
+
+    /// The named state's stream, GML `global.rng_state[RNGStates.X]`.
+    pub fn get(&mut self, state: RngState) -> &mut GmlRng {
+        &mut self.states[state as usize]
+    }
+
+    /// A state by index, for the two slots `RNGStates` leaves unnamed.
+    pub fn idx(&mut self, index: usize) -> &mut GmlRng {
+        &mut self.states[index]
+    }
+
+    /// GML `scrRngStatesReset`'s `random_set_seed(_number)`: the seed the
+    /// floor's built-in generator starts from.
+    pub const fn builtin_seed(&self) -> u32 {
+        self.builtin_seed
+    }
+
+    /// GML `GameCont.levseed`, which is `rng_state[Generation]`.
+    pub const fn levseed(&self) -> i32 {
+        self.states[RngState::Generation as usize].state()
+    }
+
+    /// Every state, in `RNGStates` order.
+    pub const fn states(&self) -> &[GmlRng; NUM_RNG_STATES] {
+        &self.states
+    }
+}
+
+impl Default for RngStates {
+    /// `scrRngStatesInit` before a run exists: seed 1, campfire, first subarea.
+    fn default() -> Self {
+        Self::reset(1, 0, 1, 0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +345,37 @@ mod tests {
         let mut restored = GmlRng::seeded(0);
         restored.set_state(state);
         assert_eq!(restored.next_int(), 21_869_072);
+    }
+
+    /// `scrRngStatesReset`, including the two areas that step out of the
+    /// formula: the vault takes the run seed whole, HQ pins `Generation`.
+    #[test]
+    fn the_floor_reset_follows_the_gml_formula() {
+        let (seed, area, subarea, loops) = (1_234u64, 1i32, 3u32, 1u32);
+        let states = RngStates::reset(seed, area, subarea, loops);
+        let number = (seed as i64
+            + i64::from(area) * 80_687
+            + i64::from(subarea) * 56_041
+            + i64::from(loops) * 90_023)
+            % RNG_M;
+        assert_eq!(states.builtin_seed(), number as u32);
+        for i in 0..NUM_RNG_STATES {
+            let want = ((number + RNG_STATE_STEP * i as i64) % RNG_M) as i32;
+            assert_eq!(states.states()[i].state(), want);
+        }
+        assert_eq!(states.levseed(), states.states()[0].state());
+
+        let vault = RngStates::reset(seed, AREA_VAULT, subarea, loops);
+        assert_eq!(vault.builtin_seed(), seed as u32);
+        assert_eq!(vault.states()[0].state(), (seed as i64 % RNG_M) as i32);
+
+        let hq = RngStates::reset(seed, AREA_HQ, 5, 0);
+        assert_eq!(hq.levseed(), 5 + 24);
+
+        // A different floor is a different stream, everywhere.
+        assert_ne!(
+            RngStates::reset(seed, area, subarea, loops).states()[1].state(),
+            RngStates::reset(seed, area, subarea + 1, loops).states()[1].state()
+        );
     }
 }

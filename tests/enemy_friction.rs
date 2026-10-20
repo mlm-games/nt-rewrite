@@ -8,7 +8,7 @@
 //! This drives the live schedule and pins the decay, so the law cannot be dropped
 //! from the pipeline again without this failing.
 
-use repame_sim::rng::SimRng;
+use nt_rewrite::runner_rng::RunnerRng;
 use web_time::Duration;
 
 use nt_rewrite::App;
@@ -68,7 +68,7 @@ fn enemy_speed_decays_by_gml_friction_each_step() {
             false,
             false,
             0,
-            &mut SimRng::seeded(4242),
+            &mut RunnerRng::seeded(4242),
         );
     }
     {

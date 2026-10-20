@@ -19,7 +19,8 @@
 use bevy_ecs::prelude::*;
 use repame_fx::Trauma;
 use repame_sim::SimTime;
-use repame_sim::rng::{Rng, SimRng};
+use repame_sim::rng::Rng;
+use crate::runner_rng::RunnerRng;
 
 use crate::audio::{AudioCue, GameAudio};
 use crate::combat::queue_enemy_spawn_birth;
@@ -607,7 +608,7 @@ pub fn check_level_up(
     toast: &mut Toast,
     cues: &mut Queue<AudioCue>,
     pos: glam::Vec2,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     let mut leveled = false;
 
@@ -701,7 +702,7 @@ pub fn level_up_feedback(
     pos: glam::Vec2,
     color: [f32; 4],
     level: u32,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     trauma.add(0.35);
     flash_white(flash, 0.15);
@@ -719,11 +720,11 @@ pub fn level_up_feedback(
 
 /// Roll up to 4 unowned mutations (Destiny crowns roll 1; Patience
 /// grants 4 next roll, then is consumed without repeating).
-pub fn roll_mutations(player: &mut Player, rng: &mut SimRng) -> Vec<MutationId> {
+pub fn roll_mutations(player: &mut Player, rng: &mut RunnerRng) -> Vec<MutationId> {
     roll_mutations_for(player, RaceId::Fish, rng)
 }
 
-pub fn roll_mutations_for(player: &mut Player, race: RaceId, rng: &mut SimRng) -> Vec<MutationId> {
+pub fn roll_mutations_for(player: &mut Player, race: RaceId, rng: &mut RunnerRng) -> Vec<MutationId> {
     roll_mutations_with_for(player, race, rng)
 }
 
@@ -802,7 +803,7 @@ pub fn roll_mutations_with_for(
 mod mutation_roll_tests {
     use super::{MutationId, roll_mutations_with};
     use crate::comps_a::Player;
-    use repame_sim::rng::SimRng;
+    use crate::runner_rng::RunnerRng;
 
     #[test]
     fn heavy_heart_replaces_first_choice_after_three_weapon_mutations() {
@@ -812,7 +813,7 @@ mod mutation_roll_tests {
             MutationId::RecycleGland,
             MutationId::BoltMarrow,
         ]);
-        let mut rng = SimRng::seeded(7);
+        let mut rng = RunnerRng::seeded(7);
         let choices = roll_mutations_with(&mut player, &mut rng);
         assert_eq!(choices.first(), Some(&MutationId::HeavyHeart));
         assert!(player.heavy_heart_wanted);
@@ -1354,7 +1355,7 @@ pub fn spawn_portal(
     enemy_shots: &mut Query<(Entity, &Team), With<Projectile>>,
     pos: glam::Vec2,
     kind: u8,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     for (e, team) in &*enemy_shots {
         if *team != Team::Player {
@@ -1371,7 +1372,7 @@ pub fn spawn_portal_at(
     catalog: &repame_anim::AnimCatalog,
     pos: glam::Vec2,
     kind: u8,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     let mut pe = commands.spawn((
         GameCleanup,
@@ -1433,7 +1434,7 @@ pub fn ice_flower_jungle(
     enemies: &mut Query<(Entity, &mut Health), With<Enemy>>,
     flower: Entity,
     flower_pos: glam::Vec2,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     triggers.queue(SecretTarget::Jungle);
 
@@ -1754,7 +1755,7 @@ fn rad_chest_destroyed(
     kind: ChestKind,
     hasted: bool,
     particles: bool,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     if kind == ChestKind::RadMaggot {
         // `RadMaggotChest/Destroy_0.gml:1-3`: 6 `Smoke` on a 60-degree ring,
@@ -1843,7 +1844,7 @@ pub(crate) fn chest_loot(
     kind: ChestKind,
     pos: glam::Vec2,
     player_pos: glam::Vec2,
-    mut rng: &mut SimRng,
+    mut rng: &mut RunnerRng,
 ) {
     match kind {
         // GML `WeaponChest/Collision_Player.gml:11-24`: ONE
@@ -2840,7 +2841,7 @@ pub fn level_entry_draft(
     run: &mut Run,
     player: &mut Player,
     race: RaceId,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> DraftOffer {
     run.patiencepick = false;
     if player.ultra_pick_owed && player.ultra.is_none() && player.level >= 10 {
@@ -3031,7 +3032,20 @@ pub fn tick_floor_transition(
             commands.queue(|world: &mut World| {
                 let _ = crate::run_save::save_run(world);
             });
-            let mut plan = crate::worldgen::generate_level(&run);
+            // GML `Vlambeer/Create_0:42` -> `scrRngStatesReset()`: the room
+            // controller re-seeds `global.rng_state[]` and the floor's
+            // built-in generator before `GenCont` lays anything.
+            let mut floor_states = crate::gml_rng::RngStates::reset(
+                run.gen_seed,
+                crate::worldgen::gml_area_number(&run),
+                run.floor_in_area,
+                run.loop_count,
+            );
+            *streams = crate::rng_streams::SimStreams::from_floor(
+                floor_states.builtin_seed(),
+                run.gen_seed,
+            );
+            let mut plan = crate::worldgen::generate_level(&run, &mut floor_states);
             // Player landing first (plan-space; `spawn_level` builds the
             // same mask from these cells, so placement below agrees).
             let landing = plan
@@ -3066,6 +3080,7 @@ pub fn tick_floor_transition(
                     player_pos: landing,
                     seed: run.gen_seed ^ 0xC0E5_75EED,
                 },
+                &mut floor_states,
             );
             if perm.horror {
                 run.horror = true;
@@ -3087,7 +3102,9 @@ pub fn tick_floor_transition(
                 !room.crowns.is_empty(),
                 room.ice_flower.is_some_and(|s| s.0),
                 &mut streams.setup,
+                &mut floor_states,
             );
+            commands.insert_resource(crate::rng_streams::FloorStates(floor_states));
             commands.remove_resource::<IceFlowerSeed>();
 
             floor_started.push(FloorStarted {

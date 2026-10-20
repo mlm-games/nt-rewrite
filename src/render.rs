@@ -33,7 +33,8 @@ use glam::{DVec2, DVec4, Vec2};
 use repame_anim::{AnimCatalog, AnimDef, AtlasDesc, UvRect, frame_key};
 use repame_atlas::AtlasId;
 use repame_fx::{DamageNumber, Particle, particle_sprites};
-use repame_sim::rng::{Rng, SimRng};
+use repame_sim::rng::Rng;
+use crate::runner_rng::RunnerRng;
 use repame_view2d::{ActorDraw, ActorItem};
 use repame_view2d::{
     AtlasUpload, BatchDesc, Camera2d, FitMode, SpriteBlend, SpriteInstance, WorldText, dp_to_world,
@@ -2313,7 +2314,7 @@ pub fn world_instances_cached(
     let mut fx_rng = world
         .get_resource_mut::<crate::rng_streams::SimStreams>()
         .map(|streams| streams.fx)
-        .unwrap_or_else(|| SimRng::seeded(0));
+        .unwrap_or_else(|| RunnerRng::seeded(0));
     let mut out = cached_prefix
         .as_deref()
         .map(|sprites| sprites.to_vec())
@@ -9028,7 +9029,7 @@ pub fn darkness_light_stamps(world: &mut World, assets: &RenderAssets) -> Vec<Ac
     let mut fx_rng = world
         .get_resource_mut::<crate::rng_streams::SimStreams>()
         .map(|streams| streams.fx)
-        .unwrap_or_else(|| SimRng::seeded(0));
+        .unwrap_or_else(|| RunnerRng::seeded(0));
     const DISC: &str = "images/sprPortalClear.png";
     let mut lights: Vec<(glam::Vec2, f32, f32)> = Vec::new();
     {

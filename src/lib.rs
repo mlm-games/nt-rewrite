@@ -60,7 +60,8 @@ use crate::vortex_pass::{VARD_VARIANTS, VortexPass, VortexTexture};
 use bevy_ecs::prelude::*;
 use glam::{DVec2, DVec4, Vec2};
 use repame_anim::{AnimCatalog, AtlasDesc};
-use repame_sim::rng::{Rng, SimRng};
+use repame_sim::rng::Rng;
+use crate::runner_rng::RunnerRng;
 use repame_sim::{Sim, SimTime};
 use repame_view2d::fullscreen::SOLID_WGSL;
 use repame_view2d::{
@@ -146,6 +147,7 @@ pub mod projectile_math;
 pub mod render;
 pub mod rng_streams;
 pub mod run_save;
+pub mod runner_rng;
 pub mod savedata_part;
 pub mod schedule;
 pub mod secrets;
@@ -1271,7 +1273,7 @@ impl App {
             let mut fx = world
                 .get_resource_mut::<crate::rng_streams::SimStreams>()
                 .map(|streams| streams.fx)
-                .unwrap_or_else(|| SimRng::seeded(0));
+                .unwrap_or_else(|| RunnerRng::seeded(0));
             let jx = fx.random_range(-1.0_f32..1.0);
             let jy = fx.random_range(-1.0_f32..1.0);
             if let Some(mut streams) = world.get_resource_mut::<crate::rng_streams::SimStreams>() {
@@ -1311,7 +1313,7 @@ impl App {
             let mut fx = world
                 .get_resource_mut::<crate::rng_streams::SimStreams>()
                 .map(|streams| streams.fx)
-                .unwrap_or_else(|| SimRng::seeded(0));
+                .unwrap_or_else(|| RunnerRng::seeded(0));
             let jx = fx.random_range(-1.0..1.0);
             let jy = fx.random_range(-1.0..1.0);
             if let Some(mut streams) = world.get_resource_mut::<crate::rng_streams::SimStreams>() {
@@ -5100,7 +5102,6 @@ fn init_schedule_resources(world: &mut World) {
     // the resource always exists; `setup_run_inner` re-seeds from the run's
     // seed before the first floor is built.
     world.insert_resource(crate::rng_streams::SimStreams::default());
-    world.insert_resource(crate::idpd::PopoStream::default());
     // Editable controls: default map, then overlay the save file's
     // rows when present (GML `scrOptionsLoadKeymaps` on boot). The
     // disk shell calls `App::load_save` after boot; headless/tests

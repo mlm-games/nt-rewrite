@@ -6,7 +6,8 @@
 use bevy_ecs::prelude::*;
 use glam::Vec2;
 use repame_sim::SimTime;
-use repame_sim::rng::{Rng, SimRng};
+use repame_sim::rng::Rng;
+use crate::runner_rng::RunnerRng;
 
 use crate::rng_streams::SimStreams;
 
@@ -614,7 +615,7 @@ pub fn tick_hold_abilities(
     };
     // Two streams feed this system: the horror stone's shot jitter draws off
     // the player's fire stream, the throne-butt heal and the toxic drip off
-    // the player's own. `SimRng` is `Copy`, so both are read out here and
+    // the player's own. `RunnerRng` is `Copy`, so both are read out here and
     // written back at the tail.
     let mut fire_rng = streams.player_fire;
     let mut player_rng = streams.player;
@@ -885,7 +886,7 @@ pub fn tick_hold_abilities(
 
 /// GML `ToxicGas/Create_0.gml:3-13`: one drifting, growing cloud on the
 /// player's origin. `Intimacy` adds the `speed ++`.
-fn spawn_frog_gas(commands: &mut Commands, at: Vec2, intimacy: bool, rng: &mut SimRng) {
+fn spawn_frog_gas(commands: &mut Commands, at: Vec2, intimacy: bool, rng: &mut RunnerRng) {
     let heading = rng.random_range(0.0..std::f32::consts::TAU);
     let speed = rng.random_range(0.2_f32..1.7);
     let mut state = crate::comps_b::ToxicGasState::new();

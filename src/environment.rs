@@ -8,7 +8,8 @@
 //! port's own hazard tints.
 
 use bevy_ecs::prelude::*;
-use repame_sim::rng::{Rng, SimRng};
+use repame_sim::rng::Rng;
+use crate::runner_rng::RunnerRng;
 
 use crate::rng_streams::SimStreams;
 use repame_sim::SimTime;
@@ -723,7 +724,7 @@ fn spawn_dust_ring(
     particles_on: bool,
     pos: glam::Vec2,
     count: u8,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     if !particles_on {
         return;
@@ -742,7 +743,7 @@ pub fn spawn_raven_dust(
     commands: &mut Commands,
     particles_on: bool,
     pos: glam::Vec2,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     if !particles_on {
         return;
@@ -768,7 +769,7 @@ pub fn spawn_dust_ring_12(
     commands: &mut Commands,
     particles_on: bool,
     pos: glam::Vec2,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     if !particles_on {
         return;
@@ -841,7 +842,7 @@ pub fn spawn_prop_death_effect(
     hasted: bool,
     audio: &crate::audio::GameAudio,
     cues: &mut crate::msg::Queue<crate::audio::AudioCue>,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     let effect = explicit.or_else(|| legacy_explosive.then_some(PropDeathEffect::legacy_barrel()));
 
@@ -1065,7 +1066,7 @@ pub fn spawn_rad_chest_burst(
     commands: &mut Commands,
     particles_on: bool,
     pos: glam::Vec2,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     for _ in 0..4 {
         let ang = rng.random_range(0.0..std::f32::consts::TAU);
@@ -1088,7 +1089,7 @@ pub fn spawn_native_smoke_mote(
     pos: glam::Vec2,
     direction: glam::Vec2,
     speed: f32,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     if !particles_on {
         return;
@@ -1138,7 +1139,7 @@ fn spawn_native_dust_mote(
     pos: glam::Vec2,
     direction: glam::Vec2,
     speed: f32,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     spawn_native_dust_mote_vel(
         commands,
@@ -1154,7 +1155,7 @@ fn spawn_native_dust_mote_vel(
     particles_on: bool,
     pos: glam::Vec2,
     vel: glam::Vec2,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     if !particles_on {
         return;
@@ -1228,7 +1229,7 @@ pub fn spawn_exploder_explo(
     pos: glam::Vec2,
     direction: glam::Vec2,
     speed: f32,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> Entity {
     let start = rng.random_range(0.0..std::f32::consts::TAU);
     for i in 0..6 {
@@ -1268,7 +1269,7 @@ pub fn spawn_ground_flame(
     pos: glam::Vec2,
     big: bool,
     launch: glam::Vec2,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> Entity {
     let (base, _, frames) = if big {
         (
@@ -1310,7 +1311,7 @@ pub fn spawn_trap_fire(
     speed: f32,
     team: Team,
     source: Option<DamageSource>,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> Entity {
     spawn_trap_fire_with_image(
         commands,
@@ -1395,7 +1396,7 @@ pub fn spawn_native_explosion_visual(
     pos: glam::Vec2,
     kind: NativeExplosionKind,
     on_floor: bool,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> Entity {
     let (path, frames) = match kind {
         NativeExplosionKind::Standard => ("images/sprExplosion.png", 9),
@@ -1611,7 +1612,7 @@ pub struct FireTrap {
 impl FireTrap {
     /// GML `Trap/Create_0.gml`: `side = choose(0, 1)`, `alarm[0] =
     /// 90 + random(30)`.
-    pub fn seeded(rng: &mut SimRng) -> Self {
+    pub fn seeded(rng: &mut RunnerRng) -> Self {
         Self {
             side: rng.random_bool(0.5),
             alarm: 90.0 + rng.random_range(0.0_f32..30.0),
@@ -1632,7 +1633,7 @@ fn step_fire_traps(
     portal_open: bool,
     walls: &Query<&Pos, With<WallTile>>,
     traps: &mut Query<(Entity, &Pos, &mut FireTrap), With<Prop>>,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     let steps = dt * crate::SIM_HZ as f32;
     let emit = !paused && !portal_open;
@@ -1750,7 +1751,7 @@ pub fn spawn_shell_casing(
     aim: glam::Vec2,
     speed_bonus: f32,
     spread: (f32, f32),
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     let right = if aim.length_squared() > 0.0 {
         crate::player::gml_player_right_back_from_aim(aim).0
@@ -1778,7 +1779,7 @@ pub fn spawn_shell_casing_at(
     life_secs: f32,
     friction: f32,
     frame: u32,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     let Some(def) = catalog.def(art) else {
         return;
@@ -1865,7 +1866,7 @@ pub fn spawn_motes(
     pos: glam::Vec2,
     strip: MoteStrip,
     count: usize,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     if !particles_on {
         return;
@@ -2299,7 +2300,7 @@ pub fn spawn_explosion_motes(
     particles_on: bool,
     pos: glam::Vec2,
     small: bool,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     let kind = if small {
         NativeExplosionKind::Small

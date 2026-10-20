@@ -9,13 +9,15 @@
 //!
 //! Per-area seeding mirrors GML `objects/GameCont/Create_0.gml:95`
 //! (`levseed = global.seed`) over `scripts/scrRngStatesReset/scrRngStatesReset.gml:3-17`;
-//! the port draws one `StdRng` per phase off `run.gen_seed` instead of
+//! the port draws one `RunnerRng` per phase off `run.gen_seed` instead of
 //! re-seeding the one GameMaker stream, so its exact sequences still differ
 //! (see `phase_rng`).
 
 use glam::Vec2;
-use rand::rngs::StdRng;
-use rand::{RngExt, SeedableRng};
+use repame_sim::rng::Rng;
+
+use crate::gml_rng::{RngState, RngStates};
+use crate::runner_rng::RunnerRng;
 use std::collections::{HashMap, HashSet};
 
 use crate::comps_a::Run;
@@ -177,7 +179,23 @@ impl ChestSpawn {
 }
 
 pub fn gml_area_from_run(run: &Run) -> i32 {
+    gml_area_of(run.area)
+}
+
+/// GML `GameCont.area` for the room the run is in.
+///
+/// This is [`gml_area_from_run`]'s tile-set mapping except at the campfire,
+/// whose room is `area_campfire` (0) even though it lays palace tiles. The
+/// RNG reset reads this number, so the two uses must stay apart.
+pub fn gml_area_number(run: &Run) -> i32 {
     match run.area {
+        AreaId::Campfire => 0,
+        area => gml_area_of(area),
+    }
+}
+
+fn gml_area_of(area: AreaId) -> i32 {
+    match area {
         AreaId::Desert => 1,
         AreaId::Oasis => 101,
         AreaId::Sewers => 2,
@@ -212,7 +230,7 @@ pub fn generation_goal(floor: u32) -> usize {
 /// `Floor/Create_0.gml:15-19`'s `styleb = false` (no maker to be near yet) and
 /// are already floor for both `FloorMaker/Step_0.gml:69`'s
 /// `instance_number(Floor) > goal` and `GenCont/Alarm_0.gml:3`'s wall pass.
-fn tutorial_floor_cells(genr: &mut Gen, rng: &mut StdRng) {
+fn tutorial_floor_cells(genr: &mut Gen, rng: &mut RunnerRng) {
     let w = 3 + i32::from(rng.random_bool(0.5));
     let h = 3 + i32::from(rng.random_bool(0.5));
     for xx in -w..=w {
@@ -303,7 +321,7 @@ pub fn area_can_have_popo(run: &Run, gml_area: i32) -> bool {
     !matches!(gml_area, 100 | 107 | 0) && !(gml_area == 106 && last) && !(gml_area == 7 && last)
 }
 
-fn pick_floor_cell<'a>(cells: &'a [(i32, i32)], rng: &mut StdRng) -> Option<&'a (i32, i32)> {
+fn pick_floor_cell<'a>(cells: &'a [(i32, i32)], rng: &mut RunnerRng) -> Option<&'a (i32, i32)> {
     if cells.is_empty() {
         return None;
     }
@@ -356,30 +374,19 @@ pub fn gml_max_subarea(area: i32) -> u32 {
     }
 }
 
-/// Five GML RNG states re-seed the default `random()` stream between
-/// `scrPopulate` phases from `rng_next_int(<state>)`
-/// (`scrPopulate.gml:35,184,202,223,241,272`); `scrPopEnemies.gml:10`
-/// re-seeds that same default stream from the advanced `Enemies` LCG on
-/// *every* call. Deviation: the port draws one `StdRng` per phase out of
-/// `run.gen_seed` so a phase can no longer shift its neighbours; the
-/// re-seed chain and the advanced LCG are unported, so GameMaker's exact
-/// sequences still differ.
-const RNG_DEFAULT: u64 = 0x2545_F491_4F6C_DD1D;
-const RNG_BONES: u64 = 0xBF58_476D_1CE4_E5B9;
-const RNG_ENEMIES: u64 = 0x94D0_49BB_1331_11EB;
-const RNG_ENEMY_CALL: u64 = 0xD6E8_FEB8_6659_FD93;
-const RNG_PROPS: u64 = 0xA076_1D64_78BD_642F;
-const RNG_CHEST: u64 = 0xE703_7ED1_A0B4_28DB;
-const RNG_PIZZA: u64 = 0x8EBC_6AF0_9C88_C6E3;
-const RNG_TUTORIAL: u64 = 0x9E37_79B9_7F4A_7C15;
-/// GML draws the crib's `CarVenusFixed` roll from the default
-/// `random(5)` stream (`GenCont/Alarm_2.gml:95`) inside `Alarm_2`, one
-/// step before `Alarm_0` reseeds that stream for `scrPopulate`; the port
-/// gives it its own phase stream like every other phase.
-const RNG_CRIB: u64 = 0x8A5C_D1F0_3B77_E2A4;
+/// GML `random_set_seed(rng_next_int(RNGStates.X))`: a phase opens with the
+/// runtime's generator seeded from that state's next value. `scrPopulate`
+/// draws the states in this order: Generation (:35, bones), Enemies (:184),
+/// one more Enemies per `scrPopEnemies` call (`scrPopEnemies:10`), Props
+/// (:202), Chest (:223), Generation (:241, pizza), Enemies (:272, Popo).
+fn phase_rng(states: &mut RngStates, state: RngState) -> RunnerRng {
+    RunnerRng::seeded(states.get(state).next_int() as u32)
+}
 
-fn phase_rng(seed: u64, state: u64) -> StdRng {
-    StdRng::seed_from_u64(seed ^ state)
+/// GML `scrPopEnemies.gml:10`: every enemy call re-seeds from the advanced
+/// `Enemies` state, so one call cannot move the next one.
+pub(crate) fn enemy_call_rng(states: &mut RngStates) -> RunnerRng {
+    phase_rng(states, RngState::Enemies)
 }
 
 /// GML `point_distance(floor.x, floor.y, 10016, 10016)`. A `Floor` instance
@@ -467,7 +474,7 @@ const RING8_CURSED: [(i32, i32); 8] = [
 struct Gen {
     area: i32,
     is_last: bool,
-    rng: StdRng,
+    rng: RunnerRng,
     seen: HashSet<(i32, i32)>,
     /// GML `Floor/Create_0:16` copies the styleb of the maker nearest the
     /// new floor; the port records the *creating* maker's styleb (first
@@ -478,11 +485,12 @@ struct Gen {
 }
 
 impl Gen {
-    fn new(run: &Run, area: i32, styleb: bool) -> Gen {
+    fn new(run: &Run, area: i32, styleb: bool, states: &mut RngStates) -> Gen {
         Gen {
             area,
             is_last: run.floor_in_area >= gml_max_subarea(area),
-            rng: StdRng::seed_from_u64(run.gen_seed),
+            // GML `GenCont/Create_0:1` `random_set_seed(rng_state[Generation])`.
+            rng: RunnerRng::seeded(states.levseed() as u32),
             seen: HashSet::new(),
             styleb_cells: HashMap::new(),
             root_styleb: None,
@@ -980,7 +988,7 @@ impl Gen {
         }
     }
 
-    fn finish(mut self) -> (LevelPlan, HashMap<(i32, i32), bool>) {
+    fn finish(mut self) -> (LevelPlan, HashMap<(i32, i32), bool>, RunnerRng) {
         if let Some(root) = self.root_styleb {
             self.plan.styleb = root;
         }
@@ -990,18 +998,18 @@ impl Gen {
             .filter(|(_, v)| **v)
             .map(|(c, _)| *c)
             .collect();
-        (self.plan, self.styleb_cells)
+        (self.plan, self.styleb_cells, self.rng)
     }
 }
 
-fn rng_choose<'a, T>(rng: &mut StdRng, items: &'a [T]) -> T
+fn rng_choose<'a, T>(rng: &mut RunnerRng, items: &'a [T]) -> T
 where
     T: Copy,
 {
-    items[rng.random_range(0..items.len())]
+    items[rng.choose(items.len())]
 }
 
-fn turn_table(rng: &mut StdRng, area: i32) -> i32 {
+fn turn_table(rng: &mut RunnerRng, area: i32) -> i32 {
     const Z: i32 = 0;
     match area {
         0 => rng_choose(rng, &[Z, Z, 90, -90, 90, -90, 180]),
@@ -1038,7 +1046,7 @@ fn turn_table(rng: &mut StdRng, area: i32) -> i32 {
 fn apply_safespawn_shift(
     plan: &mut LevelPlan,
     run: &Run,
-    gen_rng: &mut StdRng,
+    gen_rng: &mut RunnerRng,
     styleb_map: &mut HashMap<(i32, i32), bool>,
 ) {
     let no_safe = matches!(
@@ -1109,11 +1117,11 @@ fn apply_safespawn_shift(
         }
     }
 }
-pub fn generate_level(run: &Run) -> LevelPlan {
+pub fn generate_level(run: &Run, states: &mut RngStates) -> LevelPlan {
     let area = gml_area_from_run(run);
 
     if run.area == AreaId::Campfire {
-        return generate_campfire(run);
+        return generate_campfire(run, states);
     }
     if area == 7 && ((run.floor.max(1) - 1) % 15) + 1 == 15 {
         return generate_palace_last(run);
@@ -1122,17 +1130,17 @@ pub fn generate_level(run: &Run) -> LevelPlan {
         return generate_hq_last(run);
     }
     if run.area == AreaId::Crib {
-        return generate_crib(run);
+        return generate_crib(run, states);
     }
     let goal = generation_goal_for_run(run);
 
-    let mut genr = Gen::new(run, area, false);
+    let mut genr = Gen::new(run, area, false, states);
     // GML `GenCont/Create_0:35-45` creates `TutCont` (which lays its square in
     // `Create`) before it creates the `FloorMaker`, so the tutorial square is
     // already floor when the maker tests `instance_number(Floor) > goal` and
     // when `GenCont/Alarm_0:3` makes the walls.
     if run.tutorial {
-        let mut rng = phase_rng(run.gen_seed, RNG_TUTORIAL);
+        let mut rng = phase_rng(states, RngState::Generation);
         tutorial_floor_cells(&mut genr, &mut rng);
         // GML `TutCont/Create_0:32-40` also hangs the four `TutorialTarget`s
         // here, before the `FloorMaker` exists, so they are `hitme` by the
@@ -1142,12 +1150,12 @@ pub fn generate_level(run: &Run) -> LevelPlan {
     let initial = genr.create_maker(0, 0);
     genr.run_makers(goal, vec![initial]);
     apply_safespawn_shift(&mut genr.plan, run, &mut genr.rng, &mut genr.styleb_cells);
-    let (mut plan, styleb_cells) = genr.finish();
+    let (mut plan, styleb_cells, mut maker_rng) = genr.finish();
 
     let floors = plan.floor_cells.clone();
     build_walls(run, &floors, &mut plan);
     let walls = plan.wall_cells.clone();
-    populate(run, &floors, &walls, &mut plan, &styleb_cells);
+    populate(run, &floors, &walls, &mut plan, &styleb_cells, states, &mut maker_rng);
     plan
 }
 
@@ -1226,11 +1234,11 @@ fn generate_palace_last(run: &Run) -> LevelPlan {
     plan
 }
 
-fn generate_campfire(run: &Run) -> LevelPlan {
+fn generate_campfire(run: &Run, states: &mut RngStates) -> LevelPlan {
     // GML `objects/GenCont/Create_0.gml:20-30`: a 5x3 floor block, then SEVEN
     // `FloorMaker` instances stacked on the spawn point, plus the ordinary one
     // at :43 -- eight makers running the area-0 turn table.
-    let mut genr = Gen::new(run, 0, false);
+    let mut genr = Gen::new(run, 0, false, states);
     for xx in -2..=2 {
         for yy in -1..=1 {
             genr.floor(xx, yy, false);
@@ -1243,12 +1251,12 @@ fn generate_campfire(run: &Run) -> LevelPlan {
     makers.push(genr.create_maker(0, 0));
     let goal = generation_goal_for_run(run);
     genr.run_makers(goal, makers);
-    let (mut plan, styleb_cells) = genr.finish();
+    let (mut plan, styleb_cells, mut maker_rng) = genr.finish();
 
     let floors = plan.floor_cells.clone();
     build_walls(run, &floors, &mut plan);
     let walls = plan.wall_cells.clone();
-    populate(run, &floors, &walls, &mut plan, &styleb_cells);
+    populate(run, &floors, &walls, &mut plan, &styleb_cells, states, &mut maker_rng);
     plan
 }
 
@@ -1258,18 +1266,18 @@ fn generate_campfire(run: &Run) -> LevelPlan {
 /// hand-laid slabs. `FloorMaker/Step_0.gml:82-86` sets `alarm[0] = 3` and
 /// `alarm[2] = 2` in one step, so `Alarm_2` fires BEFORE `Alarm_0` -- the slab
 /// floors land in the cell list `mcr_floor_make_walls`/`scrPopulate` walk.
-fn generate_crib(run: &Run) -> LevelPlan {
-    let mut genr = Gen::new(run, 107, false);
+fn generate_crib(run: &Run, states: &mut RngStates) -> LevelPlan {
+    let mut genr = Gen::new(run, 107, false, states);
     let initial = genr.create_maker(0, 0);
     genr.run_makers(generation_goal_for_run(run), vec![initial]);
-    let (mut plan, styleb_cells) = genr.finish();
+    let (mut plan, styleb_cells, mut maker_rng) = genr.finish();
 
-    build_crib_rooms(&mut plan, run);
+    build_crib_rooms(&mut plan, states);
 
     let floors = plan.floor_cells.clone();
     build_walls(run, &floors, &mut plan);
     let walls = plan.wall_cells.clone();
-    populate(run, &floors, &walls, &mut plan, &styleb_cells);
+    populate(run, &floors, &walls, &mut plan, &styleb_cells, states, &mut maker_rng);
 
     // GML `GenCont/Destroy_0.gml:126-139`: the crib keeps no enemy, and no
     // chestprop but the two Giant kinds (`apply_chest_permutations` already
@@ -1289,7 +1297,7 @@ fn generate_crib(run: &Run) -> LevelPlan {
 /// [`LevelPlan::crib_anchor`]; GML creates them in this same alarm, before
 /// `scrPopulate` runs, and `scrPopChests` leaves them alone (no `chestprop`
 /// parent).
-fn build_crib_rooms(plan: &mut LevelPlan, run: &Run) {
+fn build_crib_rooms(plan: &mut LevelPlan, states: &mut RngStates) {
     let mut cells = plan.floor_cells.clone();
     let mut seen: HashSet<(i32, i32)> = cells.iter().copied().collect();
     let push_cell = |cells: &mut Vec<(i32, i32)>, seen: &mut HashSet<(i32, i32)>, c: (i32, i32)| {
@@ -1363,7 +1371,7 @@ fn build_crib_rooms(plan: &mut LevelPlan, run: &Run) {
     // (CarVenusFixed) == 0` for a car past 96px from the spawn point. The
     // `&&` short-circuits on the distance test, so the draw is only paid
     // past 96px.
-    let mut rng = phase_rng(run.gen_seed, RNG_CRIB);
+    let mut rng = phase_rng(states, RngState::Generation);
     let mut cars = 0usize;
     let mut dix = -160i32;
     for _ in 0..10 {
@@ -1541,11 +1549,11 @@ pub struct ChestPermuteOut {
 }
 
 /// GML `scrPopChests.gml:37-41,45-49,53-57`.
-fn trim_chest_kind(list: &mut Vec<Vec2>, keep: usize, rng: &mut StdRng) {
+fn trim_chest_kind(list: &mut Vec<Vec2>, keep: usize, rng: &mut RunnerRng) {
     loop {
         let target = Vec2::new(
-            rng.random_range(-250.0..250.0),
-            rng.random_range(-250.0..250.0),
+            rng.random_range(-250.0_f32..250.0),
+            rng.random_range(-250.0_f32..250.0),
         );
         if !list.is_empty() {
             let mut best = 0usize;
@@ -1610,8 +1618,12 @@ fn replace_prop_with_chest(
 /// permutations (Rogue / noradch horror-or-big / half-health / desert styleb
 /// maggot), crown Life/Love conversions, mimic rolls, desert 1-1
 /// `BigWeaponChest` arm in hardmode.
-pub fn apply_chest_permutations(plan: &mut LevelPlan, ctx: ChestPermuteCtx) -> ChestPermuteOut {
-    let mut rng = phase_rng(ctx.seed, RNG_CHEST);
+pub fn apply_chest_permutations(
+    plan: &mut LevelPlan,
+    ctx: ChestPermuteCtx,
+    states: &mut RngStates,
+) -> ChestPermuteOut {
+    let mut rng = phase_rng(states, RngState::Chest);
     let mut out = ChestPermuteOut { horror: false };
     let mut base_events: Vec<PopulationEvent> = plan
         .population_events
@@ -1871,7 +1883,7 @@ pub fn apply_chest_permutations(plan: &mut LevelPlan, ctx: ChestPermuteCtx) -> C
                 });
             }
             ChestSpawn::Weapon(p)
-                if rng.random_range(0.0..4.0) < ctx.nochest as f32 && no_big_yet =>
+                if rng.random_range(0.0_f32..4.0) < ctx.nochest as f32 && no_big_yet =>
             {
                 no_big_yet = false;
                 let chest = ChestSpawn::Custom(ChestKind::BigWeapon, p);
@@ -1880,7 +1892,7 @@ pub fn apply_chest_permutations(plan: &mut LevelPlan, ctx: ChestPermuteCtx) -> C
             }
             ChestSpawn::Weapon(p)
                 if ctx.same_weapons_for > 4
-                    && rng.random_range(0.0..100.0) < (ctx.same_weapons_for - 4) as f32 =>
+                    && rng.random_range(0.0_f32..100.0) < (ctx.same_weapons_for - 4) as f32 =>
             {
                 phase_enemies.push((EnemyKind::WepMimic, p));
                 phase_events.push(PopulationEvent::Enemy {
@@ -2040,6 +2052,8 @@ fn populate(
     walls: &HashSet<(i32, i32)>,
     plan: &mut LevelPlan,
     styleb_cells: &HashMap<(i32, i32), bool>,
+    states: &mut RngStates,
+    maker_rng: &mut RunnerRng,
 ) {
     let area = gml_area_from_run(run);
     let is_last = run.floor_in_area >= gml_max_subarea(area);
@@ -2074,22 +2088,18 @@ fn populate(
                 .map(|(kind, pos)| PopulationEvent::Prop { kind, pos }),
         )
         .collect();
-    let mut enemy_calls: u64 = 0;
 
     // GML :16-31 -- default stream, `_spawndist = 120` for this pass (the
     // city-boss 150 override only lands on :33, after it).
-    let mut rng = phase_rng(run.gen_seed, RNG_DEFAULT);
+    // GML :16-31 -- this pass still runs on the maker's stream; the first
+    // `random_set_seed` is at :35, after it.
+    let mut rng = *maker_rng;
     for &(cx, cy) in floors {
         if rng.random::<f32>() * (10.0 + hard) < hard
             && cell_dist2_origin(cx, cy) > 120.0 * 120.0
             && !prop_tiles.contains(&(cx, cy))
         {
-            let mut er = phase_rng(
-                run.gen_seed
-                    .wrapping_add(enemy_calls.wrapping_mul(0x9E37_79B9)),
-                RNG_ENEMY_CALL,
-            );
-            enemy_calls += 1;
+            let mut er = enemy_call_rng(states);
             let props_before = plan.props.len();
             let enemies_before = plan.enemies.len();
             scr_pop_enemies(
@@ -2117,8 +2127,8 @@ fn populate(
         // GML :26-30 -- `random_range(bbox_left, bbox_right)`, i.e. an offset
         // in [0,31) from the tile ORIGIN.
         if rng.random::<f32>() * 6.0 < 1.0 {
-            let ux = rng.random_range(0.0..31.0);
-            let uy = rng.random_range(0.0..31.0);
+            let ux = rng.random_range(0.0_f32..31.0);
+            let uy = rng.random_range(0.0_f32..31.0);
             plan.details
                 .push(Vec2::new(cx as f32 * TILE + ux, cy as f32 * TILE + uy));
         }
@@ -2152,7 +2162,7 @@ fn populate(
         _ => "images/sprBones.png",
     };
     if let Some((roll, paired)) = bone_pass {
-        let mut rng = phase_rng(run.gen_seed, RNG_BONES);
+        let mut rng = phase_rng(states, RngState::Generation);
         for &(cx, cy) in floors {
             let (ox, oy) = (cx as f32 * TILE, cy as f32 * TILE);
             // GML :41 etc -- three single-point probes, not an edge test:
@@ -2185,19 +2195,14 @@ fn populate(
     }
 
     // GML :183-198 -- the capped pass, then the Blood-crown pass.
-    let mut rng = phase_rng(run.gen_seed, RNG_ENEMIES);
+    let mut rng = phase_rng(states, RngState::Enemies);
     let spawndist = if area == 5 && is_last { 150.0 } else { 120.0 };
     for &(cx, cy) in floors {
         if (plan.enemies.len() as f32) < enemy_cap
             && cell_dist2_origin(cx, cy) > spawndist * spawndist
             && !prop_tiles.contains(&(cx, cy))
         {
-            let mut er = phase_rng(
-                run.gen_seed
-                    .wrapping_add(enemy_calls.wrapping_mul(0x9E37_79B9)),
-                RNG_ENEMY_CALL,
-            );
-            enemy_calls += 1;
+            let mut er = enemy_call_rng(states);
             let props_before = plan.props.len();
             let enemies_before = plan.enemies.len();
             scr_pop_enemies(
@@ -2227,12 +2232,7 @@ fn populate(
             && cell_dist2_origin(cx, cy) > spawndist * spawndist
             && !prop_tiles.contains(&(cx, cy))
         {
-            let mut er = phase_rng(
-                run.gen_seed
-                    .wrapping_add(enemy_calls.wrapping_mul(0x9E37_79B9)),
-                RNG_ENEMY_CALL,
-            );
-            enemy_calls += 1;
+            let mut er = enemy_call_rng(states);
             let props_before = plan.props.len();
             let enemies_before = plan.enemies.len();
             scr_pop_enemies(
@@ -2292,7 +2292,7 @@ fn populate(
             }
         }
     }
-    let mut rng = phase_rng(run.gen_seed, RNG_PROPS);
+    let mut rng = phase_rng(states, RngState::Props);
     for &(cx, cy) in floors {
         if prop_tiles.contains(&(cx, cy)) || enemy_tiles.contains(&(cx, cy)) {
             continue;
@@ -2320,8 +2320,8 @@ fn populate(
         if walls_ok {
             // GML :17-18 -- two draws spanning the 32px bbox, each snapped
             // down to a 16px multiple.
-            let ux = rng.random_range(0.0..31.0);
-            let uy = rng.random_range(0.0..31.0);
+            let ux = rng.random_range(0.0_f32..31.0);
+            let uy = rng.random_range(0.0_f32..31.0);
             let sx = (ux as i32).div_euclid(16) * 16;
             let sy = (uy as i32).div_euclid(16) * 16;
             if !wall_point(plan, walls, ox + sx as f32, oy + sy as f32)
@@ -2557,8 +2557,8 @@ fn populate(
         // other prop lands on the tile centre.
         let pos = if made.contains(&PropKind::StreetLight) {
             Vec2::new(
-                px + rng.random_range(-4.0..4.0),
-                py + rng.random_range(-4.0..4.0),
+                px + rng.random_range(-4.0_f32..4.0),
+                py + rng.random_range(-4.0_f32..4.0),
             )
         } else {
             Vec2::new(px, py)
@@ -2574,7 +2574,7 @@ fn populate(
     // and the furthest floor gets four turtles and a rat.
     if area == 102 {
         plan.enemies.clear();
-        let mut rng = phase_rng(run.gen_seed, RNG_PIZZA);
+        let mut rng = phase_rng(states, RngState::Generation);
         if let Some(&(fx, fy)) = plan.floor_cells.iter().max_by(|a, b| {
             cell_dist2_origin(a.0, a.1)
                 .partial_cmp(&cell_dist2_origin(b.0, b.1))
@@ -2582,8 +2582,8 @@ fn populate(
         }) {
             let (px, py) = cell_center_i(fx, fy);
             for _ in 0..4 {
-                let dx = rng.random_range(-2.0..2.0);
-                let dy = rng.random_range(-2.0..2.0);
+                let dx = rng.random_range(-2.0_f32..2.0);
+                let dy = rng.random_range(-2.0_f32..2.0);
                 let pos = Vec2::new(px + dx, py + dy);
                 plan.enemies.push((EnemyKind::Turtle, pos));
                 events.push(PopulationEvent::Enemy {
@@ -2628,7 +2628,7 @@ fn populate(
             for _ in 0..6 {
                 events.push(PopulationEvent::PortalClear {
                     pos: at
-                        + Vec2::new(rng.random_range(-60.0..60.0), rng.random_range(-60.0..60.0)),
+                        + Vec2::new(rng.random_range(-60.0_f32..60.0), rng.random_range(-60.0_f32..60.0)),
                     scale: 1.0,
                 });
             }
@@ -2794,16 +2794,16 @@ pub fn wall_cell_at(pos: Vec2) -> (i32, i32) {
     )
 }
 
-fn pop_spawn<T: Copy>(rng: &mut StdRng, center: Vec2, table: &[T]) -> (T, Vec2) {
-    let x = rng.random_range(-2.0..2.0);
-    let y = rng.random_range(-2.0..2.0);
+fn pop_spawn<T: Copy>(rng: &mut RunnerRng, center: Vec2, table: &[T]) -> (T, Vec2) {
+    let x = rng.random_range(-2.0_f32..2.0);
+    let y = rng.random_range(-2.0_f32..2.0);
     let value = table[rng.random_range(0..table.len())];
     (value, center + Vec2::new(x, y))
 }
 
 fn spawn_pop_enemy(
     enemies: &mut Vec<(EnemyKind, Vec2)>,
-    rng: &mut StdRng,
+    rng: &mut RunnerRng,
     center: Vec2,
     table: &[EnemyKind],
 ) {
@@ -2815,7 +2815,7 @@ fn spawn_pop_prop(
     props: &mut Vec<(PropKind, Vec2)>,
     prop_tiles: &mut HashSet<(i32, i32)>,
     cell: (i32, i32),
-    rng: &mut StdRng,
+    rng: &mut RunnerRng,
     center: Vec2,
     table: &[PropKind],
 ) {
@@ -2848,7 +2848,7 @@ fn scr_pop_enemies(
     props: &mut Vec<(PropKind, Vec2)>,
     prop_tiles: &mut HashSet<(i32, i32)>,
     idpd_portals: &mut Vec<Vec2>,
-    rng: &mut StdRng,
+    rng: &mut RunnerRng,
     cell: (i32, i32),
     small_walls: &[(i16, i16)],
     walls: &HashSet<(i32, i32)>,
@@ -3386,7 +3386,7 @@ fn cluster_kind(kind: EnemyKind) -> EnemyKind {
     }
 }
 
-fn cluster_source_skips(kind: EnemyKind, loops: u32, rng: &mut StdRng) -> bool {
+fn cluster_source_skips(kind: EnemyKind, loops: u32, rng: &mut RunnerRng) -> bool {
     // GML `scrPopulate:288-294`: inside `if (_loops > 0 && ...)`,
     // `if (random(60) > _loops || ...) continue`. `random(60)` is a real in
     // [0, 60), so `loops / 60` of the sources cluster. The GML text names all
@@ -3403,7 +3403,7 @@ pub fn apply_loop_population_clusters(
     events: &mut Vec<PopulationEvent>,
     loops: u32,
     area: AreaId,
-    rng: &mut StdRng,
+    rng: &mut RunnerRng,
 ) -> LoopClusterOut {
     let mut out = LoopClusterOut::default();
     if loops == 0 || area == AreaId::PizzaSewers {
@@ -3427,8 +3427,8 @@ pub fn apply_loop_population_clusters(
         }
         let kind = cluster_kind(source_kind);
         for _ in 0..loops.saturating_add(3) {
-            let x = rng.random_range(-4.0..4.0);
-            let y = rng.random_range(-4.0..4.0);
+            let x = rng.random_range(-4.0_f32..4.0);
+            let y = rng.random_range(-4.0_f32..4.0);
             next.push(PopulationEvent::Enemy {
                 kind,
                 pos: source_pos + Vec2::new(x, y),
@@ -3452,7 +3452,7 @@ pub fn apply_loop_enemy_clusters(
     enemies: &mut Vec<(EnemyKind, Vec2)>,
     loops: u32,
     area: AreaId,
-    rng: &mut StdRng,
+    rng: &mut RunnerRng,
 ) -> LoopClusterOut {
     let mut out = LoopClusterOut::default();
     if loops == 0 || area == AreaId::PizzaSewers {
@@ -3466,8 +3466,8 @@ pub fn apply_loop_enemy_clusters(
         }
         let kind = cluster_kind(source_kind);
         for _ in 0..loops.saturating_add(3) {
-            let x = rng.random_range(-4.0..4.0);
-            let y = rng.random_range(-4.0..4.0);
+            let x = rng.random_range(-4.0_f32..4.0);
+            let y = rng.random_range(-4.0_f32..4.0);
             enemies.push((kind, source_pos + Vec2::new(x, y)));
         }
         // GML `scrPopulate.gml:307`: `distance_to_point(10016, 10016) < 128` on

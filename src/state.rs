@@ -307,7 +307,7 @@ pub fn tick_tutorial(world: &mut World, dt: f32) {
         return;
     }
     // GML draws this site off the global stream; the port keeps the tutorial
-    // (and the rest of run state) on its own `state` stream, and `SimRng` is
+    // (and the rest of run state) on its own `state` stream, and `RunnerRng` is
     // `Copy`, so the state is read out here and written back at the end.
     let mut rng = world.resource::<crate::rng_streams::SimStreams>().state;
     let player: Vec<glam::Vec2> = world

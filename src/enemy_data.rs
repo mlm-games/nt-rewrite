@@ -1,5 +1,6 @@
 use super::data::EnemyKind;
-use repame_sim::rng::{Rng, SimRng};
+use repame_sim::rng::Rng;
+use crate::runner_rng::RunnerRng;
 
 #[derive(Clone, Copy)]
 #[allow(dead_code)]
@@ -173,7 +174,7 @@ const CHOOSE_DEAD: &[&str] = &[
 fn gendered(
     table: &[(&'static str, &'static str)],
     kind: EnemyKind,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> &'static str {
     let idx = match kind {
         EnemyKind::IdpdGrunt => 0,
@@ -188,11 +189,11 @@ fn gendered(
     }
 }
 
-fn choose(options: &[&'static str], rng: &mut SimRng) -> &'static str {
+fn choose(options: &[&'static str], rng: &mut RunnerRng) -> &'static str {
     options[rng.random_range(0..options.len())]
 }
 
-pub fn gml_snd_hurt(kind: EnemyKind, oasis: bool, hp_frac: f32, rng: &mut SimRng) -> &'static str {
+pub fn gml_snd_hurt(kind: EnemyKind, oasis: bool, hp_frac: f32, rng: &mut RunnerRng) -> &'static str {
     use EnemyKind::*;
     let base: &'static str = match kind {
         // GML `TutorialTarget/Create_0.gml:13-19`.
@@ -288,7 +289,7 @@ pub fn boss_drops_rads(kind: EnemyKind) -> bool {
     !matches!(kind, EnemyKind::Throne | EnemyKind::ThroneII)
 }
 
-fn gml_dead_stem(kind: EnemyKind, oasis: bool, rng: &mut SimRng) -> &'static str {
+fn gml_dead_stem(kind: EnemyKind, oasis: bool, rng: &mut RunnerRng) -> &'static str {
     use EnemyKind::*;
     let base: &'static str = match kind {
         EnemyKind::TutorialTarget => {
@@ -378,7 +379,7 @@ pub fn gml_death_cues(
     kind: EnemyKind,
     oasis: bool,
     kind_count: usize,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> Vec<crate::audio::AudioCue> {
     let q = |name: &'static str, variance: f32| crate::audio::AudioCue {
         name,

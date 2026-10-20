@@ -6,7 +6,8 @@
 //! skipped (no sim effect).
 
 use bevy_ecs::prelude::*;
-use repame_sim::rng::{Rng, SimRng};
+use repame_sim::rng::Rng;
+use crate::runner_rng::RunnerRng;
 
 use crate::rng_streams::SimStreams;
 use repame_fx::Trauma;
@@ -89,7 +90,7 @@ pub(crate) fn spawn_proto_weapon(
     cursed: bool,
     pos: glam::Vec2,
 
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> Entity {
     let entity = spawn_pickup(
         commands,
@@ -327,7 +328,7 @@ pub fn spawn_pickup(
     loops: u32,
     hasted: bool,
 
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> Entity {
     let path = pickup_sprite(kind);
 
@@ -439,7 +440,7 @@ pub fn spawn_ammo_pickup(
     loops: u32,
     hasted: bool,
 
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> Entity {
     let kind = if cursed_count >= 2 && rng.random::<f32>() < 0.5 {
         PickupKind::CursedAmmo
@@ -463,7 +464,7 @@ pub fn maybe_cursed_ammo(
     loops: u32,
     hasted: bool,
 
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> Entity {
     let kind = if cursed_count >= 2 && rng.random::<f32>() < 0.5 {
         PickupKind::CursedAmmo
@@ -542,8 +543,10 @@ pub fn chest_drop_seed(gen_seed: u64, order: u32) -> u32 {
 }
 
 /// GML `scrDecideWep.gml:11,57`: `random_set_seed(_seed)` before the roll
-/// and `dropseed = irandom(0x7fffffff)` after it, so a chest's three
-/// weapons come off a fixed chain instead of the live RNG.
+/// and `dropseed = irandom(0x7fffffff)` after it, so a chest's three weapons
+/// come off a fixed chain instead of the live RNG. Both calls are the
+/// runtime's generator ([`RunnerRng`]), which is what makes a chest's
+/// contents match the original for a given `dropseed`.
 pub struct DropSeedChain {
     seed: u32,
 }
@@ -553,21 +556,19 @@ impl DropSeedChain {
         Self { seed }
     }
 
-    /// One `scrDecideWep` call: seed a generator from `dropseed`, roll,
-    /// then advance `dropseed` for the next drop.
-    pub fn roll<T>(&mut self, roll: impl FnOnce(&mut rand::rngs::StdRng) -> T) -> T {
-        use rand::SeedableRng;
-        let mut rng = rand::rngs::StdRng::seed_from_u64(self.seed as u64);
+    /// One `scrDecideWep` call: `random_set_seed(dropseed)`, the roll, then
+    /// `dropseed = irandom(0x7fffffff)` drawn from that same generator.
+    pub fn roll<T>(&mut self, roll: impl FnOnce(&mut RunnerRng) -> T) -> T {
+        let mut rng = RunnerRng::seeded(self.seed);
         let out = roll(&mut rng);
-        let mut state = self.seed;
-        self.seed = gml_rng_next(&mut state);
+        self.seed = rng.irandom(0x7fff_ffff) as u32;
         out
     }
 }
 
 /// GML per-chest `sprite_index` / `spr_dead`, resolved once in
 /// `Create_0` and frozen on the entity as [`ChestArt`].
-pub fn chest_art(kind: ChestKind, ctx: &ChestCtx, cursed: bool, rng: &mut SimRng) -> ChestArt {
+pub fn chest_art(kind: ChestKind, ctx: &ChestCtx, cursed: bool, rng: &mut RunnerRng) -> ChestArt {
     let art = |idle, open| ChestArt { idle, open };
     match kind {
         // GML `WeaponChest/Create_0.gml:6-24`, gated on `object_index ==
@@ -651,7 +652,7 @@ pub fn spawn_chest(
     kind: ChestKind,
     pos: glam::Vec2,
 
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     spawn_chest_with(commands, catalog, kind, pos, &ChestCtx::default(), rng);
 }
@@ -669,7 +670,7 @@ pub fn spawn_chest_with(
     pos: glam::Vec2,
     ctx: &ChestCtx,
 
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     let art = chest_art(kind, ctx, false, rng);
     let frames = catalog.def(art.idle).map(|def| def.frames).unwrap_or(1);
@@ -685,7 +686,7 @@ pub fn spawn_chest_frames(
     ctx: &ChestCtx,
     frames: u32,
 
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     // GML `WeaponChest/Create_0.gml:7-11` verbatim, with GML
     // `crown > 1` (any real crown) and the `instance_exists(GenCont)`
@@ -767,7 +768,7 @@ pub fn spawn_fx_chest_open(
     pos: glam::Vec2,
     underwater: bool,
 
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     let flash = "images/sprFXChestOpen.png";
     let frames = catalog.def(flash).map(|def| def.frames).unwrap_or(8);
@@ -808,7 +809,7 @@ pub fn spawn_rad(
     pos: glam::Vec2,
     amount: u32,
 
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     spawn_pickup(
         commands,
@@ -827,7 +828,7 @@ pub fn spawn_rad_burst(
     pos: glam::Vec2,
     amount: u32,
 
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     // Generic `prop/Destroy_0.gml:12` and enemy-death `raddrop` caller (a
     // `RadChest` now goes through `spawn_prop_death_effect`), so
@@ -855,7 +856,7 @@ pub fn scr_rad_drop(
     from_rad_chest: bool,
     from_prop: bool,
 
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     let high = if from_rad_chest { 26 } else { 15 };
     while amount > high {
@@ -883,7 +884,7 @@ fn spawn_rad_motion(
     from_prop: bool,
     loops: u32,
     hasted: bool,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     let (dir, base) = if from_prop {
         (rng.random_range(0.0..std::f32::consts::TAU), 16.0)
@@ -915,7 +916,7 @@ fn spawn_rad_motion(
 /// Random unit-ish offset for scatter drops: uniform angle, uniform
 /// distance 0..22 px. Port-only - GML's drop scatter is `orandom(J)` per
 /// axis (`scripts/scrDrop/scrDrop.gml:64,70`), never a polar offset.
-pub fn random_offset(rng: &mut SimRng) -> glam::Vec2 {
+pub fn random_offset(rng: &mut RunnerRng) -> glam::Vec2 {
     let a = rng.random_range(0.0..std::f32::consts::TAU);
     let d = rng.random_range(0.0_f32..22.0);
     glam::Vec2::new(a.cos(), a.sin()) * d
@@ -937,7 +938,7 @@ pub fn spawn_flung_weapon_pickup(
     pierce: bool,
     return_ticks: u8,
 
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> Entity {
     let e = spawn_pickup(
         commands,
@@ -1130,7 +1131,7 @@ pub fn maybe_spawn_drop(
     loops: u32,
     decide: Option<&crate::decide_wep::DecideCtx>,
 
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> bool {
     maybe_spawn_drop_ctx(
         commands,
@@ -1171,7 +1172,7 @@ pub fn maybe_spawn_drop_ctx(
     decide: Option<&crate::decide_wep::DecideCtx>,
     chest_ctx: &ChestCtx,
 
-    mut rng: &mut SimRng,
+    mut rng: &mut RunnerRng,
 ) -> bool {
     let mut dropped = false;
 
@@ -1383,7 +1384,7 @@ pub fn inv_ammo(inv: &Inventory, kind: AmmoKind) -> i32 {
     inv.ammo_of(kind)
 }
 
-pub fn give_ammo(inv: &mut Inventory, player: &Player, rng: &mut SimRng) {
+pub fn give_ammo(inv: &mut Inventory, player: &Player, rng: &mut RunnerRng) {
     let id = inv.weapons[inv.current];
     let haste = haste_crown(player);
     if id == WeaponId::NONE {
@@ -2566,7 +2567,7 @@ fn spawn_hatred_rads(
     amount: u32,
     loops: u32,
 
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     for _ in 0..amount {
         let ang = rng.random_range(0.0..std::f32::consts::TAU);
@@ -2604,7 +2605,7 @@ fn open_ammo_chest(
     mystery: bool,
     toast: &mut Toast,
 
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     let multiplier = if mystery { 3 } else { 2 };
     let mut give = |inv: &mut Inventory, kind: AmmoKind, toast: &mut Toast| {
@@ -2841,7 +2842,7 @@ fn decide_ammo_type(
     race: RaceId,
     prioritize_primary: bool,
 
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) -> AmmoKind {
     if race == RaceId::BigDog
         || (weapon_ammo(inv.weapons[inv.current]) == AmmoKind::None
@@ -2922,7 +2923,7 @@ fn spawn_dropped_weapon(
     at: glam::Vec2,
     curse: bool,
 
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     let e = spawn_pickup(
         commands,
@@ -2972,7 +2973,7 @@ fn equip_weapon(
     weapon: WeaponId,
     at: glam::Vec2,
     curse: bool,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     if let Some(empty) = first_empty_weapon_slot(inv) {
         inv.weapons[empty] = weapon;

@@ -6,7 +6,8 @@
 ///  (`Trauma`, `FlashWhite`, audio cues, rumble, bursts, secrets) are
 ///  ported alongside and asserted in tests.
 use bevy_ecs::prelude::*;
-use repame_sim::rng::{Rng, SimRng};
+use repame_sim::rng::Rng;
+use crate::runner_rng::RunnerRng;
 
 use crate::rng_streams::SimStreams;
 use repame_fx::Trauma;
@@ -445,7 +446,7 @@ fn spawn_maggot_explosion(
     commands: &mut Commands,
     particles: bool,
     pos: glam::Vec2,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     let mut dir = rng.random_range(0.0..std::f32::consts::TAU);
     for _ in 0..6 {
@@ -1632,7 +1633,7 @@ fn birthday_party_drop(
     dropped: bool,
     date: &mut crate::date_part::DateRuntime,
 
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     if dropped || !date.events.birthday || date.party_gun_dropped {
         return;
@@ -2696,7 +2697,7 @@ fn chain_to_nearby_targets(
     jumps: u8,
     falloff: f32,
 
-    fx_rng: &mut SimRng,
+    fx_rng: &mut RunnerRng,
 ) {
     let Some(first_e) = first_target else {
         return;
@@ -3333,7 +3334,7 @@ pub fn projectile_hits(
             }
         }
 
-        let terminal = |commands: &mut Commands, rng: &mut SimRng| {
+        let terminal = |commands: &mut Commands, rng: &mut RunnerRng| {
             on_projectile_removed(
                 commands,
                 &catalog,

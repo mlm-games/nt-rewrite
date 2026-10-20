@@ -7,7 +7,8 @@
 //! strips draw at the catalog cell size (`render.rs`, fidelity notes).
 
 use bevy_ecs::prelude::*;
-use repame_sim::rng::{Rng, SimRng};
+use repame_sim::rng::Rng;
+use crate::runner_rng::RunnerRng;
 
 use repame_anim::AnimCatalog;
 
@@ -160,7 +161,7 @@ pub fn spawn_split_projectiles(
     split: SplitDef,
     source: Option<DamageSource>,
     base_dir: glam::Vec2,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     let child = split_child(team, split);
     let samples: Vec<f32> = (0..split.pellets)
@@ -379,7 +380,7 @@ pub fn spawn_sentry_gun(
     pos: glam::Vec2,
     dir: glam::Vec2,
     team: Team,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     commands.spawn((
         GameCleanup,
@@ -428,7 +429,7 @@ pub fn spawn_weapon_pickup_from_projectile(
     pos: glam::Vec2,
     spec: SpawnsWeaponPickup,
     decide: Option<&crate::decide_wep::DecideCtx>,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     if pos.x.abs() > crate::comps_a::ARENA_W / 2.0 + 32.0
         || pos.y.abs() > crate::comps_a::ARENA_H / 2.0 + 32.0
@@ -514,7 +515,7 @@ pub fn on_projectile_removed(
     plasma_burst: Option<PlasmaBurst>,
     fade: Option<ProjectileFade>,
     already_faded: bool,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     if let Some(f) = fade
         && !already_faded
@@ -688,7 +689,7 @@ pub fn damage_destructible_prop(
     nexthurt_window: Option<u64>,
     loops: u32,
     hasted: bool,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     damage_destructible_prop_ctx(
         commands,
@@ -744,7 +745,7 @@ pub fn damage_destructible_prop_ctx(
     loops: u32,
     hasted: bool,
     drop: Option<DropCtx<'_>>,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     let mut dead = false;
     let mut legacy_explosive = false;

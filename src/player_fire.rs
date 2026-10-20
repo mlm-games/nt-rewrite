@@ -41,7 +41,8 @@ use bevy_ecs::prelude::*;
 use glam::Vec2;
 use repame_fx::Trauma;
 use repame_sim::SimTime;
-use repame_sim::rng::{Rng, SimRng};
+use repame_sim::rng::Rng;
+use crate::runner_rng::RunnerRng;
 
 use crate::audio::{AudioCue, GameAudio, MainVol};
 use crate::combat::Explosion;
@@ -1657,7 +1658,7 @@ fn spawn_dog_spin_attack(
     pos: Vec2,
     creator: Entity,
     spec: SpinSpawn,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     commands.spawn((
         LevelCleanup,
@@ -1751,7 +1752,7 @@ pub fn slash_life_secs(frames: u32) -> f32 {
 
 /// GML scrFire melee: `wepangle *= -1` on every swing, so the held weapon
 /// alternates sides each click (fresh roll only if it was somehow 0).
-pub fn flip_melee_angle(wep_angle: f32, rng: &mut SimRng) -> f32 {
+pub fn flip_melee_angle(wep_angle: f32, rng: &mut RunnerRng) -> f32 {
     if wep_angle == 0.0 {
         if rng.random_bool(0.5) { 120.0 } else { -120.0 }
     } else {
@@ -2765,7 +2766,7 @@ fn plant_tangle(
     creator: Entity,
     throne_butt: bool,
     trapper: bool,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     let ultra = if trapper {
         "sndPlantSnareTrapperTB"
@@ -2780,7 +2781,7 @@ fn plant_tangle(
     cue(cues, if throne_butt { ultra } else { plain }, 1.0, 0.0);
     // GML `Tangle/Create_0.gml:4-5`: `image_xscale = choose(1, -1)`,
     // `image_speed = 0.4` over the 6-frame strip.
-    let body = |commands: &mut Commands, at: Vec2, rng: &mut SimRng| {
+    let body = |commands: &mut Commands, at: Vec2, rng: &mut RunnerRng| {
         commands.spawn((
             LevelCleanup,
             Tangle { creator, team },
@@ -3066,7 +3067,7 @@ pub fn robot_eat_drops(
     auto_collect: bool,
     run_area: crate::data::AreaId,
     gen_seed: u64,
-    mut rng: &mut SimRng,
+    mut rng: &mut RunnerRng,
 ) {
     let tb = u32::from(player.throne_butt);
     let life_crown = player.crown == CrownKind::Life;
@@ -3082,7 +3083,7 @@ pub fn robot_eat_drops(
                            player: &Player,
                            health: &mut Health,
                            inv: &mut Inventory,
-                           rng: &mut SimRng,
+                           rng: &mut RunnerRng,
                            hp_amount: i32| {
         let wants_hp = !life_crown && rng.random_range(0..health.max.max(1)) as i32 > health.hp;
         if wants_hp {
@@ -3207,7 +3208,7 @@ fn melting_corpse_explosion(
     at: Vec2,
     size: i32,
     tb: bool,
-    rng: &mut SimRng,
+    rng: &mut RunnerRng,
 ) {
     // GML `:466` - one BloodStreak thrown away from the player at 8px/step.
     let away = (at - from).normalize_or_zero();
@@ -3457,7 +3458,7 @@ pub fn player_ability(
         player_e: Entity,
         player: &Player,
         live_tangles: &[(Entity, Vec2)],
-        rng: &mut SimRng,
+        rng: &mut RunnerRng,
     ) {
         let trapper = matches!(player.ultra, Some(UltraMutationId::PlantTrapper));
         spawn_snare_seed(

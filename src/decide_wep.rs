@@ -7,13 +7,12 @@
 //! `hardmode ? 2 : 1` per room.
 
 use bevy_ecs::prelude::*;
-use rand::RngExt;
 use repame_sim::rng::Rng;
 
 use crate::comps_a::{GameCleanup, Health, Hitbox, LevelCleanup, Run, Team, Velocity};
 use crate::comps_b::Ally;
 use crate::data::{AmmoKind, RaceId, WeaponId};
-use crate::gml_rng::GmlRng;
+use crate::runner_rng::GmlDraw;
 use crate::spatial::Pos;
 use crate::time::{GTimer, TimerMode};
 use crate::weapon_runtime::weapon_meta;
@@ -84,27 +83,13 @@ pub struct DecideCtx {
     pub owned: Vec<WeaponId>,
 }
 
-/// GML `scrDecideWep(_extra, _curse)`, drawing ids from the global stream.
-/// Weapon chests use this; `BigWeaponChest` / `CursedBigChest` use
-/// [`decide_wep_seeded`] so their contents are fixed at spawn by
-/// `random_set_seed(dropseed)`.
-pub fn decide_wep(rng: &mut impl Rng, ctx: &DecideCtx, extra: i32, curse: bool) -> WeaponId {
+/// GML `scrDecideWep(_extra, _curse)`: `irandom_range(1, maxwep - 1)` on the
+/// stream the caller has already seeded. Chests seed their own with
+/// `random_set_seed(dropseed)` (see [`crate::pickups::DropSeedChain`]), which
+/// is why this takes the roll law rather than a resource.
+pub fn decide_wep(rng: &mut impl GmlDraw, ctx: &DecideCtx, extra: i32, curse: bool) -> WeaponId {
     decide_wep_drawing(
-        &mut || WeaponId(rng.random_range(1u8..=127u8)),
-        ctx,
-        extra,
-        curse,
-    )
-}
-
-/// The chest path's stand-in: GML re-seeds its built-in generator with the
-/// chest's `dropseed` (`BigWeaponChest/Collision_Player.gml:14`) and rolls from
-/// that; the port draws the same ids from the `RNGStates.WeaponDrops` LCG
-/// instead, because the runner's built-in law is not reproducible from the
-/// game source.
-pub fn decide_wep_seeded(rng: &mut GmlRng, ctx: &DecideCtx, extra: i32, curse: bool) -> WeaponId {
-    decide_wep_drawing(
-        &mut || WeaponId(rng.range_i32(1, 127) as u8),
+        &mut || WeaponId(rng.irandom_range(1, 127) as u8),
         ctx,
         extra,
         curse,
@@ -178,42 +163,19 @@ fn decide_wep_drawing(
 ///     _tier_min = median(6, 1, _tier_max + _extra)
 /// }
 /// ```
-/// Tier half lives in [`decide_wep`]; every caller rolls through this (or
-/// [`decide_wep_seeded_at`]) so the ally is never dropped. GML `objects/RobotA` is
+/// Tier half lives in [`decide_wep`]; every caller rolls through this so the
+/// ally is never dropped. GML `objects/RobotA` is
 /// eventless (`eventList` empty, no parent), so it lands as the port's `Ally` (same
 /// shape as Rebel's Riot summon) and answers with that object's create sting.
 pub fn decide_wep_at(
     commands: &mut Commands,
-    rng: &mut impl RngExt,
+    rng: &mut impl GmlDraw,
     ctx: &DecideCtx,
     pos: glam::Vec2,
     extra: i32,
     curse: bool,
 ) -> WeaponId {
-    // The seeded drop chain still draws from a `rand` stream (the
-    // `WeaponDrops` LCG seed path is fixed at spawn), so this entry point
-    // shares the tier law with `decide_wep` instead of calling it.
-    let wep = decide_wep_drawing(
-        &mut || WeaponId(rng.random_range(1u8..=127u8)),
-        ctx,
-        extra,
-        curse,
-    );
-    spawn_refined_taste_ally(commands, ctx, pos);
-    wep
-}
-
-/// [`decide_wep_at`] on the `RNGStates.WeaponDrops` LCG: the big-chest
-/// spawn-fixed roll.
-pub fn decide_wep_seeded_at(
-    commands: &mut Commands,
-    rng: &mut GmlRng,
-    ctx: &DecideCtx,
-    pos: glam::Vec2,
-    extra: i32,
-    curse: bool,
-) -> WeaponId {
-    let wep = decide_wep_seeded(rng, ctx, extra, curse);
+    let wep = decide_wep(rng, ctx, extra, curse);
     spawn_refined_taste_ally(commands, ctx, pos);
     wep
 }
@@ -276,7 +238,7 @@ pub fn decide_wep_gold(
 #[cfg(test)]
 mod decide_wep_tests {
     use super::*;
-    use repame_sim::rng::SimRng;
+    use crate::runner_rng::RunnerRng;
 
     fn ctx(hard: i32) -> DecideCtx {
         DecideCtx {
@@ -294,7 +256,7 @@ mod decide_wep_tests {
     #[test]
     fn floor1_tier_caps_at_2() {
         let c = ctx(1);
-        let mut rng = SimRng::seeded(7);
+        let mut rng = RunnerRng::seeded(7);
         for _ in 0..200 {
             let w = decide_wep(&mut rng, &c, 0, false);
             let area = weapon_meta(w).wep_area;
@@ -305,7 +267,7 @@ mod decide_wep_tests {
     #[test]
     fn chest_extra_widens_tier() {
         let c = ctx(1);
-        let mut rng = SimRng::seeded(42);
+        let mut rng = RunnerRng::seeded(42);
         let mut saw_high = false;
         for _ in 0..500 {
             let w = decide_wep(&mut rng, &c, 1, false);
@@ -321,7 +283,7 @@ mod decide_wep_tests {
     fn owned_rejected_for_non_steroids() {
         let mut c = ctx(30);
         c.owned = vec![WeaponId(4), WeaponId(5), WeaponId(6)];
-        let mut rng = SimRng::seeded(9);
+        let mut rng = RunnerRng::seeded(9);
         for _ in 0..200 {
             let w = decide_wep(&mut rng, &c, 0, false);
             assert!(!c.owned.contains(&w) || weapon_meta(w).wep_area < 0);
@@ -330,7 +292,7 @@ mod decide_wep_tests {
 
     #[test]
     fn gold_pools_split_by_loops() {
-        let mut rng = SimRng::seeded(3);
+        let mut rng = RunnerRng::seeded(3);
         for _ in 0..50 {
             let w = decide_wep_gold(&mut rng, 0, &[], false);
             assert!(GOLD_TIER1.contains(&w));
@@ -342,7 +304,7 @@ mod decide_wep_tests {
     #[test]
     fn special_gates_hold() {
         let c = ctx(30);
-        let mut rng = SimRng::seeded(11);
+        let mut rng = RunnerRng::seeded(11);
         for _ in 0..500 {
             let w = decide_wep(&mut rng, &c, 0, false);
             assert_ne!(w, SUPER_DISC_GUN);
