@@ -1257,6 +1257,26 @@ fn generate_campfire(run: &Run, states: &mut RngStates) -> LevelPlan {
     build_walls(run, &floors, &mut plan);
     let walls = plan.wall_cells.clone();
     populate(run, &floors, &walls, &mut plan, &styleb_cells, states, &mut maker_rng);
+
+    // GML `GenCont/Alarm_0.gml:39-45`: on the campfire floor every `Floor`
+    // tile draws `rng_float(Enemies, 10 + hard) > hard`, and a tile raises an
+    // `IDPDSpawn` while fewer than `5 + loops` exist. The first tile always
+    // raises one (`!instance_exists(IDPDSpawn)`), and the draw is spent on
+    // every tile even after the cap is reached.
+    let cap = 5 + run.loop_count as usize;
+    let hard = run.hard as f32;
+    for (cx, cy) in &plan.floor_cells {
+        let beats_hard = states
+            .get(crate::gml_rng::RngState::Enemies)
+            .float(10.0 + hard)
+            > hard;
+        if (beats_hard || plan.idpd_portals.is_empty()) && plan.idpd_portals.len() < cap {
+            plan.idpd_portals.push(glam::Vec2::new(
+                *cx as f32 * TILE + 16.0,
+                *cy as f32 * TILE + 16.0,
+            ));
+        }
+    }
     plan
 }
 
