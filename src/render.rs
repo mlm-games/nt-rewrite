@@ -3216,14 +3216,21 @@ pub fn world_instances_cached(
             } else {
                 gunangle
             };
+            // GML `RavenFly/Draw_0:4,8` draws the gun at `y + 2 + z`.
             let gun_pos = pos.0
                 + Vec2::new(draw_angle.cos(), draw_angle.sin()) * (-brain.wkick)
-                + Vec2::new(0.0, flight.map_or(0.0, |f| f.z));
+                + Vec2::new(0.0, flight.map_or(0.0, |f| f.z + 2.0));
             if gunangle.to_degrees().rem_euclid(360.0) > 180.0 {
                 continue;
             }
-            let flip = vel.map(|v| v.0.x < 0.0).unwrap_or(false)
-                || aim.map(|a| a.0.x < 0.0).unwrap_or(false);
+            // GML `Raven/Draw_0` flips gun and body on the bird's own
+            // `right`, which its decide writes and flight never rewrites.
+            let flip = if enemy.kind == EnemyKind::Raven {
+                brain.right < 0.0
+            } else {
+                vel.map(|v| v.0.x < 0.0).unwrap_or(false)
+                    || aim.map(|a| a.0.x < 0.0).unwrap_or(false)
+            };
             if let Some(s) =
                 assets.sprite_for_full(gun_path, 0, gun_pos, false, flip, draw_angle, [1.0; 4])
             {
@@ -3281,6 +3288,12 @@ pub fn world_instances_cached(
                     .map(|c| c.facing < 0.0)
                     .or_else(|| brain.map(|b| b.maggot_spawn_facing < 0.0))
                     .unwrap_or(false)
+            } else if enemy.kind == EnemyKind::Raven {
+                // GML `Raven/Draw_0:9` / `RavenFly/Draw_0:8` draw on the
+                // bird's own `right`; flight zeroes velocity, so the
+                // vel/aim fallback would flip the crow with the player's
+                // aim.
+                brain.is_some_and(|b| b.right < 0.0)
             } else {
                 vel.map(|v| v.0.x < 0.0).unwrap_or(false)
                     || aim.map(|a| a.0.x < 0.0).unwrap_or(false)
@@ -3337,12 +3350,16 @@ pub fn world_instances_cached(
             };
             let gun_pos = pos.0
                 + Vec2::new(draw_angle.cos(), draw_angle.sin()) * (-brain.wkick)
-                + Vec2::new(0.0, flight.map_or(0.0, |f| f.z));
+                + Vec2::new(0.0, flight.map_or(0.0, |f| f.z + 2.0));
             if gunangle.to_degrees().rem_euclid(360.0) <= 180.0 {
                 continue;
             }
-            let flip = vel.map(|v| v.0.x < 0.0).unwrap_or(false)
-                || aim.map(|a| a.0.x < 0.0).unwrap_or(false);
+            let flip = if enemy.kind == EnemyKind::Raven {
+                brain.right < 0.0
+            } else {
+                vel.map(|v| v.0.x < 0.0).unwrap_or(false)
+                    || aim.map(|a| a.0.x < 0.0).unwrap_or(false)
+            };
             if let Some(s) =
                 assets.sprite_for_full(gun_path, 0, gun_pos, false, flip, draw_angle, [1.0; 4])
             {

@@ -2876,15 +2876,6 @@ pub fn enemy_ai(
         // Turtle fire-strip swap: visual-only, omitted (renderer resolves
         // strips from state; no gameplay effect).
 
-        let was_dashing = brain.dash > 0.0;
-
-        if enemy.kind == EnemyKind::Raven && !was_dashing && brain.melee.is_finished() {
-            brain.dash = 0.2;
-            brain.melee = GTimer::from_seconds(rng.random_range(0.9_f32..1.8), TimerMode::Once);
-            let side = glam::Vec2::new(-dir.y, dir.x) * brain.strafe_dir;
-            vel.0 = (dir * -0.35 + side).normalize() * 420.0;
-        }
-
         // GML `Alarm_2` for the objects whose decide only staged `ammo`.
         if enemy.kind != EnemyKind::DogGuardian && brain.burst_timer.just_finished() {
             gml_alarm_2_volley(
@@ -2936,7 +2927,7 @@ pub fn enemy_ai(
         if emplacement {
             vel.0 = glam::Vec2::ZERO;
         } else if dashing {
-            // GML's dash only sets `speed`/`direction` (`Raven/Alarm_1.gml`); the
+            // GML's dash only sets `speed`/`direction`; the
             // translation happens once, inside `enemy/Collision_Wall`'s
             // `move_bounce_solid` below. Moving here too integrated `vel * dt`
             // twice, and the second (swept) test started from the unchecked
