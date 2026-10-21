@@ -11237,10 +11237,10 @@ pub fn menu_sprites(
             }
         }
         crate::MenuOverlay::GameOver => {
-            let (offsety, death_pos, splat) = world
+            let (offsety, death_pos, splat, go_image) = world
                 .get_resource::<MenuState>()
-                .map(|m| (m.go_offsety, m.go_death_pos, m.go_splat))
-                .unwrap_or((0.0, 0.0, 0.0));
+                .map(|m| (m.go_offsety, m.go_death_pos, m.go_splat, m.go_image))
+                .unwrap_or((0.0, 0.0, 0.0, 0.0));
             let screen = world
                 .get_resource::<MenuState>()
                 .and_then(|menu| menu.game_over.clone());
@@ -11271,8 +11271,10 @@ pub fn menu_sprites(
                 out.push(sprite);
             }
             if let Some(path) = screen.as_ref().and_then(|screen| screen.deathcause_sprite) {
-                let frames = strip_frames(assets, path).max(1) as f32;
-                let frame = ((death_pos * 0.4).floor() % frames) as i32;
+                // GML `GameOver/Draw_0:36` `draw_sprite(spr, -1, ...)`: the
+                // instance `image_index` at `image_speed = 0.4`, wrapped.
+                let frames = strip_frames(assets, path).max(1) as i32;
+                let frame = (go_image.floor() as i32).rem_euclid(frames);
                 if let Some(sprite) = assets.sprite_for(
                     path,
                     frame,

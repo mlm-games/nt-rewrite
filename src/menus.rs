@@ -445,10 +445,12 @@ pub struct MenuState {
     pub credits_scroll: f32,
     /// Live game-over snapshot (`None` until the run ends).
     pub game_over: Option<GameOverScreen>,
-    /// GML `GameOver/Create_0` anim state: `death_pos`, `offsety`,
-    /// `splatimg`, and the two `PauseButton` appearance counters.
-    /// Reset on capture, ticked in `tick_ingame_menu`.
+    /// GML `GameOver/Create_0` anim state: `death_pos`, `image_index`
+    /// (`image_speed = 0.4`, kept off `death_pos` because that caps at the
+    /// waypoint count), `offsety`, `splatimg`, and the two `PauseButton`
+    /// appearance counters. Reset on capture, ticked in `tick_ingame_menu`.
     pub go_death_pos: f32,
+    pub go_image: f32,
     pub go_offsety: f32,
     pub go_splat: f32,
     pub go_appear: f32,
@@ -524,6 +526,7 @@ impl Default for MenuState {
             unlock: UnlockPopupState::default(),
             game_over: None,
             go_death_pos: 0.0,
+            go_image: 0.0,
             go_offsety: 128.0,
             go_splat: 0.0,
             go_appear: 4.0,
@@ -2492,6 +2495,7 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
             menu.pause_confirm = None;
             menu.hover_label.clear();
             menu.go_death_pos = 0.0;
+            menu.go_image = 0.0;
             menu.go_offsety = 128.0;
             menu.go_splat = 0.0;
             menu.go_appear = 4.0;
@@ -2510,6 +2514,7 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
     {
         menu.game_over = None;
         menu.go_death_pos = 0.0;
+        menu.go_image = 0.0;
         menu.go_offsety = 128.0;
         menu.go_splat = 0.0;
         menu.go_appear = 4.0;
@@ -2539,6 +2544,12 @@ fn tick_ingame_menu(world: &mut World, edge: MenuEdge) {
             if menu.go_death_pos < total {
                 menu.go_death_pos = (menu.go_death_pos + steps).min(total);
             }
+            // GML `GameOver/Create_0:49` `image_speed = 0.4`: the instance
+            // `image_index` runs unbounded (the runner advances it even
+            // with no sprite) and `draw_sprite(_sprite, -1, ...)` wraps it
+            // over the death-cause strip, so the icon never freezes on an
+            // early frame the way `death_pos` would.
+            menu.go_image += 0.4 * steps;
             if menu.go_offsety > 0.0 {
                 menu.go_offsety = approach(menu.go_offsety, 0.0, 32.0 * steps);
             }
