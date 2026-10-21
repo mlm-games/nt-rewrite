@@ -3216,10 +3216,13 @@ pub fn world_instances_cached(
             } else {
                 gunangle
             };
-            // GML `RavenFly/Draw_0:4,8` draws the gun at `y + 2 + z`.
+            // GML `RavenFly/Draw_0:4,8` draws the flying gun at `y + 2 + z`;
+            // the ground `Raven/Draw_0` draws it at `y`.
+            let airborne = flight.is_some_and(|f| f.phase != crate::comps_b::RavenPhase::Ground);
+            let gun_dy = flight.map_or(0.0, |f| f.z) + if airborne { 2.0 } else { 0.0 };
             let gun_pos = pos.0
                 + Vec2::new(draw_angle.cos(), draw_angle.sin()) * (-brain.wkick)
-                + Vec2::new(0.0, flight.map_or(0.0, |f| f.z + 2.0));
+                + Vec2::new(0.0, gun_dy);
             if gunangle.to_degrees().rem_euclid(360.0) > 180.0 {
                 continue;
             }
@@ -3348,9 +3351,11 @@ pub fn world_instances_cached(
             } else {
                 gunangle
             };
+            let airborne = flight.is_some_and(|f| f.phase != crate::comps_b::RavenPhase::Ground);
+            let gun_dy = flight.map_or(0.0, |f| f.z) + if airborne { 2.0 } else { 0.0 };
             let gun_pos = pos.0
                 + Vec2::new(draw_angle.cos(), draw_angle.sin()) * (-brain.wkick)
-                + Vec2::new(0.0, flight.map_or(0.0, |f| f.z + 2.0));
+                + Vec2::new(0.0, gun_dy);
             if gunangle.to_degrees().rem_euclid(360.0) <= 180.0 {
                 continue;
             }
