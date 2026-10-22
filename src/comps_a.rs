@@ -391,6 +391,10 @@ impl LastDamageTaken {
             (Some(HitId::Fire), _) => "FIRE".into(),
             (Some(HitId::Trap), _) => "TRAP".into(),
             (Some(HitId::Explosion(_)), _) => "EXPLOSION".into(),
+            (Some(HitId::Car), _) => "CAR".into(),
+            (Some(HitId::IcyCar), _) => "ICY CAR".into(),
+            (Some(HitId::VenusCar), _) => "VENUS CAR".into(),
+            (Some(HitId::VenusCarFixed), _) => "VENUS CAR FIXED".into(),
             (Some(HitId::SmallExplosion), _) => "SMALL EXPLOSION".into(),
             (Some(HitId::GreenExplosion), _) => "GREEN EXPLOSION".into(),
             (Some(HitId::PopoExplosion), _) => "I.D.P.D. EXPLOSION".into(),
@@ -1015,6 +1019,14 @@ pub enum HitId {
     SmallExplosion,
     GreenExplosion,
     PopoExplosion,
+    /// GML `Car/Create_0.gml:11,18`, `CarVenus/Create_0.gml:14` and
+    /// `CarVenusFixed/Create_0.gml:16`: car blasts inherit the prop's own
+    /// `hitid` (`Car/Destroy_0.gml:2-4`), so the death cause names the car
+    /// instead of "EXPLOSION" (`scrDeathCauses.gml:185-189`).
+    Car,
+    IcyCar,
+    VenusCar,
+    VenusCarFixed,
 
     Enemy(u16),
     Contact,
@@ -1136,6 +1148,10 @@ pub struct ShellWallBounce {
 pub struct SlashProjectile {
     pub typ: u8,
     pub shank: bool,
+    /// GML `objects/Shank/Create_0.gml:3` `canfix`: only the Screwdriver's
+    /// `Shank` repairs the broken Y.V. Mansion car (`CarVenus/Collision_Shank`).
+    /// The Energy Shank does not set it.
+    pub canfix: bool,
     pub walled: bool,
     pub hit: bool,
     pub guitar: bool,

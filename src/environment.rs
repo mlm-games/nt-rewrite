@@ -376,6 +376,13 @@ pub struct PropDeathEffect {
     /// `motion_add(random_angle, random(1.5) + 0.2)`.
     pub toxic_gas: u8,
     pub ground_flames: u8,
+    /// GML `repeat (2 + irandom(3))` style flame counts (`CarVenus/
+    /// Destroy_0.gml:9`): `ground_flames + random 0..=flame_extra`.
+    pub flame_extra: u8,
+    /// `Car/Destroy_0.gml:2-4`: the blast inherits the prop's `hitid`
+    /// (`Car`, `IcyCar`, `VenusCar`, `VenusCarFixed`) so the death cause
+    /// names the car instead of "EXPLOSION".
+    pub blast_hit: Option<crate::comps_a::HitId>,
     /// GML `WaterMineExplode/Step_0.gml:13-24`: 16 `EnemyBullet3` on a
     /// 360/16 ring at `motion_add(ang, 5 + random(7))`, `team = -1`.
     pub mine_ring: bool,
@@ -601,6 +608,24 @@ impl PropDeathEffect {
         }
     }
 
+    /// GML `CarVenus/Destroy_0.gml:1-17`: FIVE `Explosion`s at
+    /// `random(6) - 3`, then `2 + irandom(3)` `GroundFlame`s, each kicked
+    /// `move_contact_solid(random_angle, 4 + random(16))`, before the
+    /// `corpse = false` inherited tail.
+    pub fn car_venus() -> Self {
+        Self {
+            explosion: Self::blast(32.0, 5),
+            blasts: 5,
+            blast_jitter: 3.0,
+            ground_flames: 2,
+            flame_extra: 3,
+            flame_launch: Some((4.0, 16.0)),
+            blast_hit: Some(crate::comps_a::HitId::VenusCar),
+            cue: Some("sndExplosionCar"),
+            ..Default::default()
+        }
+    }
+
     /// GML `CarVenusFixed/Destroy_0.gml:1-23`: FIVE `Explosion` and THREE
     /// `SmallExplosion` at `orandom(3)`, then six `GroundFlame` each kicked
     /// `move_contact_solid(random_angle, 4 + random(16))`.
@@ -613,6 +638,7 @@ impl PropDeathEffect {
             ground_flames: 6,
             flame_jitter: 0.0,
             flame_launch: Some((4.0, 16.0)),
+            blast_hit: Some(crate::comps_a::HitId::VenusCarFixed),
             cue: Some("sndExplosionCar"),
             ..Default::default()
         }
@@ -800,6 +826,7 @@ pub fn spawn_prop_corpse(
         sprites.idle,
         "images/sprCarIdle.png"
             | "images/sprFrozenCar.png"
+            | "images/sprVenusCar.png"
             | "images/sprVenusCarFixed.png"
             | "images/sprVenuzCar2.png"
     ) {
@@ -878,7 +905,7 @@ pub fn spawn_prop_death_effect(
             } else {
                 glam::Vec2::ZERO
             };
-            commands.spawn((
+            let mut blast = commands.spawn((
                 GameCleanup,
                 LevelCleanup,
                 crate::combat::Explosion {
@@ -891,6 +918,9 @@ pub fn spawn_prop_death_effect(
                 },
                 Pos(pos + off),
             ));
+            if let Some(hit) = effect.blast_hit {
+                blast.insert(crate::comps_b::BlastHitId(hit));
+            }
         }
     }
 
@@ -902,7 +932,7 @@ pub fn spawn_prop_death_effect(
             } else {
                 glam::Vec2::ZERO
             };
-            commands.spawn((
+            let mut blast = commands.spawn((
                 GameCleanup,
                 LevelCleanup,
                 crate::combat::Explosion {
@@ -913,8 +943,12 @@ pub fn spawn_prop_death_effect(
                     hits_player: true,
                     source,
                 },
+                crate::comps_b::ExplosionVisual(NativeExplosionKind::Small),
                 Pos(pos + off),
             ));
+            if let Some(hit) = effect.blast_hit {
+                blast.insert(crate::comps_b::BlastHitId(hit));
+            }
         }
     }
 
@@ -987,9 +1021,16 @@ pub fn spawn_prop_death_effect(
         ));
     }
 
-    if effect.ground_flames > 0 {
+    if effect.ground_flames > 0 || effect.flame_extra > 0 {
         let jitter = effect.flame_jitter;
-        for _ in 0..effect.ground_flames {
+        // GML draws the count before the flame positions
+        // (`CarVenus/Destroy_0.gml:9` `2 + irandom(3)`).
+        let extra = if effect.flame_extra > 0 {
+            rng.random_range(0..=effect.flame_extra as u32)
+        } else {
+            0
+        };
+        for _ in 0..effect.ground_flames as u32 + extra {
             let off = if jitter > 0.0 {
                 glam::Vec2::new(
                     rng.random_range(-jitter..jitter),

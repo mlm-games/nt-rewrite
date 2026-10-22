@@ -4576,11 +4576,6 @@ pub fn tick_slash_projectiles(
             if !prop.destructible {
                 continue;
             }
-            if let Some(nh) = nexthurt.as_ref()
-                && nh.0 > frame.0
-            {
-                continue;
-            }
             let center = ppos.0;
             let half = prop.size * 0.5;
             if !slash_hits_aabb(
@@ -4592,6 +4587,39 @@ pub fn tick_slash_projectiles(
                 center,
                 half,
             ) {
+                continue;
+            }
+            // GML `CarVenus/Collision_Shank.gml:1-10`: only the Shank
+            // (`canfix = true`) repairs the broken Y.V. Mansion car - it
+            // swaps into a `CarVenusFixed` with five steps of i-frames and
+            // takes no damage. `nexthurt` gates damage only; the GML
+            // collision event fires during i-frames too.
+            if slash.canfix && sprites.is_some_and(|s| s.idle == "images/sprVenusCar.png") {
+                let fixed = crate::setup::spawn_prop_sim(
+                    &mut commands,
+                    &catalog,
+                    &run,
+                    crate::worldgen::PropKind::CarVenusFixed,
+                    center,
+                    false,
+                    &mut enemy_data_rng,
+                );
+                if let Some(fixed) = fixed {
+                    commands.entity(fixed).insert(NextHurt(frame.0 + 5));
+                }
+                cues.push(AudioCue {
+                    name: "sndCarLoop",
+                    volume: 1.0,
+                    variance: 0.2,
+                });
+                prop.destructible = false;
+                commands.entity(pe).try_despawn();
+                slash.hit = true;
+                continue;
+            }
+            if let Some(nh) = nexthurt.as_ref()
+                && nh.0 > frame.0
+            {
                 continue;
             }
             let hp_before = prop.hp;
@@ -4968,6 +4996,7 @@ pub fn apply_explosions(
             &Pos,
             Option<&ExplosionFeelApplied>,
             Option<&ExplosionVisual>,
+            Option<&crate::comps_b::BlastHitId>,
         ),
         (Without<Enemy>, Without<Player>, Without<Prop>),
     >,
@@ -5003,6 +5032,7 @@ pub fn apply_explosions(
             Option<&PropSprites>,
             Option<&SecretEntrance>,
             Option<&PropNestMarkers>,
+            Option<&crate::comps_b::SpecialPropDeath>,
         ),
         (With<Prop>, Without<Player>),
     >,
@@ -5024,7 +5054,7 @@ pub fn apply_explosions(
     let hasted = player_q
         .single()
         .is_ok_and(|(_, _, _, p, _, _, _)| crate::pickups::haste_crown(p) > 0);
-    for (e, mut boom, pos, feel_applied, visual) in &mut q {
+    for (e, mut boom, pos, feel_applied, visual, blast_hit) in &mut q {
         boom.timer.tick(time.delta_secs);
         let fused = boom.timer.just_finished();
 
@@ -5126,7 +5156,9 @@ pub fn apply_explosions(
                 }
             }
             let mut destroyed_props = Vec::new();
-            for (prop_e, mut prop, ppos, death_effect, sprites, entrance, nest) in &mut props {
+            for (prop_e, mut prop, ppos, death_effect, sprites, entrance, nest, special) in
+                &mut props
+            {
                 if !prop.destructible {
                     continue;
                 }
@@ -5140,7 +5172,7 @@ pub fn apply_explosions(
                 if fused && pos.distance(closest) < boom.radius {
                     let hp_before = prop.hp;
                     prop.hp -= boom.damage.max(1);
-                    if hp_before > 0 && prop.hp <= 0 {
+                    if hp_before > 0 && prop.hp <= 0 && special.is_none() {
                         destroyed_props.push((
                             prop_e,
                             center,
@@ -5250,14 +5282,15 @@ pub fn apply_explosions(
             // `PopoExplosion` each keep theirs (`scrDeathCauses` sprites),
             // `MeatExplosion` inherits `damagesource`'s `HitId.None`, and
             // everything else is the standard `HitId.Explosion` (the fix
-            // for a plain `Explosion/Create_0:5`).
-            let hit = match visual.map(|v| v.0) {
+            // for a plain `Explosion/Create_0:5`). Car blasts override it
+            // with the prop's own hit id (`Car/Destroy_0.gml:2-4`).
+            let hit = blast_hit.map(|b| b.0).or_else(|| match visual.map(|v| v.0) {
                 Some(NativeExplosionKind::Small) => Some(HitId::SmallExplosion),
                 Some(NativeExplosionKind::Green) => Some(HitId::GreenExplosion),
                 Some(NativeExplosionKind::Popo) => Some(HitId::PopoExplosion),
                 Some(NativeExplosionKind::Meat) => None,
                 _ => Some(HitId::Explosion(WeaponId::NONE)),
-            };
+            });
             last_damage.note(hit, None);
             HitFlash::apply(&mut commands, player_e, [1.0, 0.3, 0.2, 1.0], 0.15);
             cues.push(AudioCue {

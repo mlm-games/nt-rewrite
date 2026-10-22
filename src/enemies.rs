@@ -9097,6 +9097,7 @@ pub fn tick_special_props(
     catalog: Res<repame_anim::AnimCatalog>,
     run: Res<Run>,
     mut cues: ResMut<Queue<AudioCue>>,
+    audio: Res<crate::audio::GameAudio>,
     mut save: ResMut<crate::savedata_part::SaveData>,
     mut dirty: ResMut<crate::comps_a::SaveDirty>,
     mut props: Query<
@@ -9107,6 +9108,7 @@ pub fn tick_special_props(
             Option<&SpecialPropDeath>,
             Option<&crate::crown::VaultStatue>,
             Option<&PropSprites>,
+            Option<&crate::environment::PropDeathEffect>,
         ),
         (With<Prop>, Without<Player>, Without<Enemy>),
     >,
@@ -9118,16 +9120,21 @@ pub fn tick_special_props(
     let mut environment_rng = streams.environment;
 
     let rng = &mut environment_rng;
-    let dying: Vec<(Entity, glam::Vec2, SpecialPropDeath)> = props
+    let dying: Vec<(
+        Entity,
+        glam::Vec2,
+        SpecialPropDeath,
+        Option<crate::environment::PropDeathEffect>,
+    )> = props
         .iter()
-        .filter_map(|(e, prop, pos, kind, _, _)| {
+        .filter_map(|(e, prop, pos, kind, _, _, death)| {
             (prop.hp <= 0)
-                .then(|| kind.map(|k| (e, pos.0, *k)))
+                .then(|| kind.map(|k| (e, pos.0, *k, death.copied())))
                 .flatten()
         })
         .collect();
-    for (entity, at, kind) in dying {
-        if let Ok((_, _, _, _, _, sprites)) = props.get(entity) {
+    for (entity, at, kind, death) in dying {
+        if let Ok((_, _, _, _, _, sprites, _)) = props.get(entity) {
             if let Some(ps) = sprites {
                 crate::environment::spawn_prop_corpse(&mut commands, &catalog, at, &ps);
             }
@@ -9141,7 +9148,7 @@ pub fn tick_special_props(
                     1.0,
                     run.loop_count,
                 );
-                for (other, mut oprop, _, _, is_statue, _) in &mut props {
+                for (other, mut oprop, _, _, is_statue, _, _) in &mut props {
                     if other != entity && is_statue.is_some() {
                         oprop.hp = 0;
                     }
@@ -9182,9 +9189,31 @@ pub fn tick_special_props(
                 queue_enemy_spawn(&mut commands, EnemyKind::BigDog, at, 1.0, run.loop_count);
             }
             SpecialPropDeath::CarVenusFixed => {
-                // GML `CarVenusFixed/Destroy_0.gml:12-15`: only in the crib.
-                enemy_cue(&mut cues, "sndExplosionCar");
-                enemy_cue(&mut cues, "sndCarLoop");
+                // GML `CarVenusFixed/Destroy_0.gml:1-27`: FIVE `Explosion`s,
+                // THREE `SmallExplosion`s, six launched `GroundFlame`s and
+                // `sndExplosionCar`. `damage_destructible_prop_ctx` skips the
+                // generic effect for props that own a special death, so the
+                // effect runs here; the crib's `NewCarPlz` and the repair
+                // loop's stop (`snd_stop(sndCarLoop)`, not a restart) are
+                // the special extras.
+                if death.is_none() {
+                    enemy_cue(&mut cues, "sndExplosionCar");
+                }
+                crate::environment::spawn_prop_death_effect(
+                    &mut commands,
+                    &catalog,
+                    save.settings.particles,
+                    at,
+                    death,
+                    false,
+                    None,
+                    run.loop_count,
+                    false,
+                    &audio,
+                    &mut cues,
+                    rng,
+                );
+                enemy_cue(&mut cues, "stop_sndCarLoop");
                 if run.area == AreaId::Crib {
                     commands.spawn((
                         GameCleanup,

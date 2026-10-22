@@ -1137,6 +1137,8 @@ fn prop_candidates(kind: PropKind, styleb: bool) -> &'static [&'static str] {
         PropKind::ToxicBarrel => &["images/sprToxicBarrel.png"],
         PropKind::PizzaEntrance => &["images/sprPizzaEntrance.png"],
         PropKind::Car => &["images/sprCarIdle.png"],
+        // GML `CarVenus/Create_0.gml:4-6`.
+        PropKind::CarVenus => &["images/sprVenusCar.png"],
         PropKind::Cocoon => &["images/sprCocoon.png"],
         PropKind::Snowman => &["images/sprSnowMan.png"],
         PropKind::Torch => &["images/sprTorch.png"],
@@ -1238,6 +1240,9 @@ fn prop_stats(kind: PropKind, styleb: bool, loop_count: u32) -> PropStats {
         PropKind::ToxicBarrel => s(24.0, 24.0, 1, 1, Some(PropDeathEffect::toxic_barrel())),
         PropKind::PizzaEntrance => s(24.0, 24.0, 1, 1, None),
         PropKind::Car => s(32.0, 32.0, 1, 20, Some(PropDeathEffect::car())),
+        // GML `CarVenus/Create_0.gml:1-10`: 25 hp, size 1; `Destroy_0`
+        // bursts FIVE `Explosion`s and `2 + irandom(3)` `GroundFlame`s.
+        PropKind::CarVenus => s(32.0, 32.0, 1, 25, Some(PropDeathEffect::car_venus())),
         PropKind::Cocoon => s(24.0, 24.0, 1, 8, None),
         PropKind::Snowman => s(30.0, 30.0, 1, 10, None),
         PropKind::Torch => s(12.0, 28.0, 1, 20, None),
@@ -1351,6 +1356,8 @@ fn prop_hurt_dead_paths(idle: &'static str) -> (&'static str, &'static str) {
             ("images/sprPlantPotHurt.png", "images/sprPlantPotDead.png")
         }
         "images/sprCarIdle.png" => ("images/sprCarHurt.png", "images/sprScorchmark.png"),
+        // GML `CarVenus/Create_0.gml:5-6`.
+        "images/sprVenusCar.png" => ("images/sprVenusCarHurt.png", "images/sprScorchmark.png"),
         "images/sprFrozenCar.png" => ("images/sprFrozenCarHurt.png", "images/sprScorchmark.png"),
         // GML `CarVenusFixed/Create_0.gml:8-10`.
         "images/sprVenusCarFixed.png" => (
@@ -1588,8 +1595,20 @@ pub fn spawn_prop_sim(
         );
     }
 
-    let stats = prop_stats(kind, styleb, run.loop_count);
+    let mut stats = prop_stats(kind, styleb, run.loop_count);
     let idle = prop_idle_for(catalog, run, kind, pos, styleb);
+    // GML `Car/Create_0.gml:7-18`: the frozen-city car carries `IcyCar`,
+    // the desert/scrapyard car `Car`; `Car/Destroy_0.gml:2-4` copies the
+    // prop's `hitid` onto every blast.
+    if kind == PropKind::Car
+        && let Some(fx) = stats.effect.as_mut()
+    {
+        fx.blast_hit = Some(if idle == "images/sprFrozenCar.png" {
+            crate::comps_a::HitId::IcyCar
+        } else {
+            crate::comps_a::HitId::Car
+        });
+    }
     let special = (kind == PropKind::CarVenusFixed)
         .then_some(crate::comps_b::SpecialPropDeath::CarVenusFixed);
     // GML `FloorMaker/Step_0.gml:33-49` mirrors the +x column's
@@ -1600,6 +1619,9 @@ pub fn spawn_prop_sim(
     } else if matches!(kind, PropKind::VenuzTV | PropKind::VenuzCouch) {
         // GML `VenuzTV/Create_0.gml:7` and `VenuzCouch/Create_0.gml:7` both
         // re-pin `image_xscale = 1` over the prop default.
+        false
+    } else if kind == PropKind::CarVenus {
+        // GML `CarVenus/Create_0.gml:18` pins `image_xscale = 1`.
         false
     } else if kind == PropKind::BigGeneratorInactive {
         pos.x > 0.0
@@ -1741,6 +1763,12 @@ fn prop_idle_for(
     // triple to the frozen strips.
     if kind == PropKind::Car && run.area == AreaId::FrozenCity {
         return "images/sprFrozenCar.png";
+    }
+    // GML `CarVenusFixed/Create_0.gml:14-17`: only the crib halves the art
+    // onto `sprVenuzCar2`; the mansion and the repaired 1-1 car keep the
+    // fixed Venus strip.
+    if kind == PropKind::CarVenusFixed && run.area != AreaId::Crib {
+        return "images/sprVenusCarFixed.png";
     }
     let candidates = prop_candidates(kind, styleb);
     let present: Vec<&'static str> = candidates

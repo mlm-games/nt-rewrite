@@ -105,6 +105,11 @@ pub enum PropKind {
     /// GML `objects/PizzaEntrance` (sewers 1-1 only).
     PizzaEntrance,
     Car,
+    /// GML `objects/CarVenus`: the broken Y.V. Mansion car that
+    /// `scrPopulate.gml:205-218` parks on Scrapyards 1-1's furthest free
+    /// tile; a Shank hit repairs it into a drivable `CarVenusFixed`
+    /// (`CarVenus/Collision_Shank.gml`).
+    CarVenus,
     Cocoon,
     Snowman,
     Torch,
@@ -2587,6 +2592,31 @@ fn populate(
         for kind in made {
             plan.props.push((kind, pos));
             events.push(PopulationEvent::Prop { kind, pos });
+        }
+    }
+
+    // GML `scrPopulate.gml:205-218`: the Y.V. Mansion car. The broken
+    // `CarVenus` parks on the floor tile furthest from the level origin
+    // that carries no prop or chest; the scan uses `>`, so the first tile
+    // wins a tie.
+    if area == 3 && run.floor_in_area == 1 {
+        let mut best: Option<((i32, i32), f32)> = None;
+        for &(cx, cy) in floors {
+            if prop_tiles.contains(&(cx, cy)) {
+                continue;
+            }
+            let d = cell_dist2_origin(cx, cy);
+            if best.is_none_or(|(_, bd)| d > bd) {
+                best = Some(((cx, cy), d));
+            }
+        }
+        if let Some(((cx, cy), _)) = best {
+            let at = cell_center_px(cx, cy);
+            plan.props.push((PropKind::CarVenus, at));
+            events.push(PopulationEvent::Prop {
+                kind: PropKind::CarVenus,
+                pos: at,
+            });
         }
     }
 

@@ -1867,6 +1867,7 @@ fn melee_attack(
             SlashProjectile {
                 typ: 0,
                 shank: spec.shank,
+                canfix: spec.shank && base_weapon_name(shot.def.name) == "SCREWDRIVER",
                 walled: false,
                 hit: false,
                 guitar: spec.guitar,

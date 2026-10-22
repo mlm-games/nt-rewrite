@@ -1377,6 +1377,11 @@ pub enum NativeExplosionKind {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct ExplosionVisual(pub NativeExplosionKind);
 
+/// GML `Car/Destroy_0.gml:2-4`: blasts created by a car carry the prop's own
+/// `hitid`, overriding the `Explosion/Create_0` default (`HitId.Explosion`).
+#[derive(Component, Clone, Copy, Debug)]
+pub struct BlastHitId(pub crate::comps_a::HitId);
+
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct TopSmall;
 

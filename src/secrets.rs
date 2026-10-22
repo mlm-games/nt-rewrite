@@ -352,6 +352,11 @@ pub fn tick_car_venus_fixed(
         volume: 1.0,
         variance: 0.0,
     });
+    cues.push(crate::audio::AudioCue {
+        name: "stop_sndCarLoop",
+        volume: 1.0,
+        variance: 0.0,
+    });
     run.portal_open = false;
 }
 
