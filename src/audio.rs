@@ -663,18 +663,20 @@ pub fn update_amb_filter(
     );
 }
 
-/// GML `MusCont` selection law per app state: menus hold the title theme
-/// (A→B timer at `Create_0.gml:10-12`, char-select bed `Menu/Create_0.gml:96`),
-/// Loading previews the area, InGame runs the `Alarm_11` area bed under the
-/// boss-death jingle / boss-dead / big-dog / campfire priority, and Splash runs
-/// `Logo/Alarm_0.gml:8` `sndLogoLoop` on the ambience slot - leaving Splash
-/// re-evaluates it to `None`, which is the backend stop
-/// (`Logo/Destroy_0.gml:1` `snd_stop`).
+/// GML `MusCont` selection law per app state: Splash/MainMenu hold the
+/// title theme (A→B timer at `Create_0.gml:10-12`) while the char select
+/// forces B (`MenuGen/Create_0.gml:1-9`, `Menu/Create_0.gml:96` bed);
+/// Loading starts the upcoming area bed with the generation spiral; InGame
+/// runs the `Alarm_11` area bed under the boss-death jingle / boss-dead /
+/// big-dog / campfire priority; and Splash runs `Logo/Alarm_0.gml:8`
+/// `sndLogoLoop` on the ambience slot - leaving Splash re-evaluates it to
+/// `None`, which is the backend stop (`Logo/Destroy_0.gml:1` `snd_stop`).
 pub fn sync_area_audio(
     time: Res<SimTime>,
     app_state: Res<AppState>,
     splash: Option<Res<crate::state::SplashState>>,
     run: Res<Run>,
+    pending_save: Option<Res<crate::run_save::PendingRunSave>>,
     transition: Res<LoopTransition>,
     floor: Res<FloorTransition>,
     mut cues: ResMut<Queue<AudioCue>>,
@@ -751,14 +753,26 @@ pub fn sync_area_audio(
 
     let (wanted_music, wanted_ambience): (Option<MusicCue>, Option<AmbienceCue>) = if !in_game {
         if *app_state == AppState::Loading {
+            // GML `GenCont/Create_0.gml:66` re-arms `alarm[11] = 1`, and
+            // `Alarm_11` reads the area `scrRunStart` set (or
+            // `scrSavegameLoad` restored) before the floor is built, so the
+            // area bed starts with the generation spiral. `Run` still holds
+            // the menu/dead floor until `setup_run`.
+            let area = pending_save.as_ref().map_or_else(
+                || crate::data::area_for_floor(1, 0),
+                |save| save.0.session.run.area,
+            );
             (
-                Some(desired_music_cue(run.area, campfire_present)),
-                Some(desired_ambience_cue(run.area, campfire_present)),
+                Some(desired_music_cue(area, campfire_present)),
+                Some(desired_ambience_cue(area, campfire_present)),
             )
         } else {
-            let title = if state.title_in > 0.0 {
+            let title = if *app_state != AppState::Title && state.title_in > 0.0 {
                 MusicCue::TitleThemeA
             } else {
+                // GML `MenuGen/Create_0.gml:1-9`: opening the character
+                // select campfire forces the A->B switch immediately, so
+                // ThemeA scores only the boot logo and menu.
                 MusicCue::TitleThemeB
             };
             // GML `Logo/Alarm_0.gml:8`: the loop starts on the seventh
