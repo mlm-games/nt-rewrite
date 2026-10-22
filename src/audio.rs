@@ -11,9 +11,10 @@
 
 use bevy_ecs::prelude::*;
 use repame_sim::SimTime;
+use repame_sim::rng::Rng;
 
 use crate::anim::{PlayerAnim, SpriteAnim};
-use crate::comps_a::{FloorMask, Health, Player, Pos, RaceState, Run};
+use crate::comps_a::{FloorMask, Health, Player, RaceState, Run};
 use crate::comps_b::{
     BossBrain, CampfireProp, CrownPedestal, Dash, Enemy, FloorTransition, LoopTransition,
     ThroneCarpet,
@@ -21,6 +22,7 @@ use crate::comps_b::{
 use crate::data::{AreaId, EnemyKind, RaceId, SkinLetter};
 use crate::msg::Queue;
 use crate::rng_streams::SimStreams;
+use crate::spatial::Pos;
 use crate::state::{AppState, Paused};
 
 /// One fire-and-forget sound with playback variation.
