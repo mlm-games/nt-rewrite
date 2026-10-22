@@ -15,6 +15,7 @@ use crate::rng_streams::SimStreams;
 use repame_sim::SimTime;
 
 use crate::anim::SpriteAnim;
+use crate::audio::AudioCue;
 use crate::combat::{Explosion, HitFlash};
 use crate::comps_a::{
     ARENA_H, ARENA_W, DamageSource, FloorMask, GameCleanup, Health, LevelCleanup, Player,
@@ -26,6 +27,7 @@ use crate::comps_b::{
     PropSprites, ShellCasing, ThroneWeaken, TopSmall, TrapFire,
 };
 use crate::data::{CrownKind, EnemyKind};
+use crate::msg::Queue;
 use crate::secrets::SecretTriggers;
 use crate::spatial::{Pos, move_bounce_solid};
 use crate::time::{GTimer, TimerMode};
@@ -272,6 +274,7 @@ pub fn tick_environment_hazards(
         ),
     >,
     mut streams: ResMut<SimStreams>,
+    mut cues: ResMut<Queue<AudioCue>>,
 ) {
     let dt = time.delta_secs;
     step_fire_traps(
@@ -282,6 +285,7 @@ pub fn tick_environment_hazards(
         &walls,
         &mut traps,
         &mut streams.environment,
+        &mut cues,
     );
 
     for (hazard_entity, hazard_pos, mut hazard) in hazards.iter_mut() {
@@ -578,6 +582,7 @@ impl PropDeathEffect {
             explosion: Self::blast(32.0, 5),
             ground_flames: 4,
             flame_jitter: 16.0,
+            cue: Some("sndExplosion"),
             ..Default::default()
         }
     }
@@ -590,6 +595,7 @@ impl PropDeathEffect {
             toxic_gas: 25,
             ground_flames: 4,
             flame_jitter: 16.0,
+            cue: Some("sndExplosion"),
             ..Default::default()
         }
     }
@@ -664,6 +670,7 @@ impl PropDeathEffect {
             explosion: Self::blast(32.0, 12),
             ground_flames: 6,
             flame_jitter: 32.0,
+            cue: Some("sndExplosion"),
             ..Default::default()
         }
     }
@@ -1666,7 +1673,7 @@ impl FireTrap {
 
 /// GML `Trap/Step_0.gml` + `Trap/Alarm_0.gml`. Paused ticks and steps
 /// with a live `Portal` suppress emission (`current_frame_active`,
-/// `!instance_exists(Portal)`); the sound cue is the audio layer's job.
+/// `!instance_exists(Portal)`).
 /// Driven from [`tick_environment_hazards`] because `schedule.rs` owns
 /// the system list and has no slot for the trap cycle.
 fn step_fire_traps(
@@ -1677,6 +1684,7 @@ fn step_fire_traps(
     walls: &Query<&Pos, With<WallTile>>,
     traps: &mut Query<(Entity, &Pos, &mut FireTrap), With<Prop>>,
     rng: &mut RunnerRng,
+    cues: &mut Queue<AudioCue>,
 ) {
     let steps = dt * crate::SIM_HZ as f32;
     let emit = !paused && !portal_open;
@@ -1696,6 +1704,11 @@ fn step_fire_traps(
                 trap.side = !trap.side;
                 trap.alarm = 90.0;
                 trap.fire = 45;
+                cues.push(AudioCue {
+                    name: "sndFiretrap",
+                    volume: 1.0,
+                    variance: 0.0,
+                });
             }
         }
 

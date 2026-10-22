@@ -3210,12 +3210,23 @@ pub fn in_blast_box(at: Vec2, left: f32, top: f32, right: f32, bottom: f32) -> b
 /// barrels, obstacles) and the player.
 fn melting_corpse_explosion(
     commands: &mut Commands,
+    cues: &mut Queue<AudioCue>,
     from: Vec2,
     at: Vec2,
     size: i32,
     tb: bool,
     rng: &mut RunnerRng,
 ) {
+    cue(
+        cues,
+        if tb {
+            "sndCorpseExploUpg"
+        } else {
+            "sndCorpseExplo"
+        },
+        1.0,
+        0.0,
+    );
     // GML `:466` - one BloodStreak thrown away from the player at 8px/step.
     let away = (at - from).normalize_or_zero();
     commands.spawn((
@@ -3607,6 +3618,7 @@ pub fn player_ability(
                 }
                 melting_corpse_explosion(
                     &mut commands,
+                    &mut cues,
                     ppos.0,
                     cpos.0,
                     ccorpse.size,
@@ -3626,6 +3638,7 @@ pub fn player_ability(
                     if in_blast_box(epos.0, left, top, right, bottom) {
                         melting_corpse_explosion(
                             &mut commands,
+                            &mut cues,
                             ppos.0,
                             epos.0,
                             crate::enemy_data::enemy_def(enemy.kind).size as i32,

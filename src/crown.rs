@@ -13,7 +13,7 @@ use repame_sim::rng::Rng;
 use crate::audio::AudioCue;
 use crate::comps_a::{
     CrownState, FloorStarted, GameCleanup, Health, Hitbox, Inventory, LevelCleanup, NextHurt,
-    Player, Projectile, Run, Team, Toast, Velocity,
+    Player, Projectile, RaceState, Run, Team, Toast, Velocity,
 };
 use crate::comps_b::{
     Ally, ChestKind, CrownObject, CrownPedestal, Enemy, Pickup, PickupKind, Prop, PropHpTracker,
@@ -672,6 +672,7 @@ pub fn tick_crown_pedestal(
             &mut Health,
             &mut Inventory,
             &mut CrownState,
+            &RaceState,
         ),
         With<Player>,
     >,
@@ -680,8 +681,9 @@ pub fn tick_crown_pedestal(
     crowns: Query<Entity, With<CrownObject>>,
     mut shots: Query<(Entity, &Team), With<Projectile>>,
     mut streams: ResMut<SimStreams>,
+    mut cues: ResMut<Queue<AudioCue>>,
 ) {
-    let Ok((ppos, mut player, mut health, mut inv, mut state)) = q_player.single_mut() else {
+    let Ok((ppos, mut player, mut health, mut inv, mut state, race)) = q_player.single_mut() else {
         return;
     };
     let p = ppos.0;
@@ -691,6 +693,11 @@ pub fn tick_crown_pedestal(
         }
         apply_crown_to_spawn(ped.kind, &mut player, &mut health, &mut inv);
         *state = CrownState::new(ped.kind);
+        cues.push(AudioCue {
+            name: crate::audio::crown_voice(race.race),
+            volume: 1.0,
+            variance: 0.0,
+        });
         // GML `scrCrowns:126,131`: equipping Destiny grants the free mutation
         // pick and saves the run on both of its branches.
         if ped.kind == CrownKind::Destiny {
@@ -699,7 +706,15 @@ pub fn tick_crown_pedestal(
             });
         }
         // GML `CrownPickup/Collision_Player:12-16`: taking a crown uncurses.
+        let had_cursed = inv.cursed.iter().any(|&cursed| cursed);
         inv.cursed = [false, false, false];
+        if had_cursed {
+            cues.push(AudioCue {
+                name: "sndUncurse",
+                volume: 1.0,
+                variance: 0.0,
+            });
+        }
 
         // GML `CrownPickup/Collision_Player:18-20`: an undefended pedestal
         // (no `VaultStatue`) opens the type-3 portal on the spot, so the

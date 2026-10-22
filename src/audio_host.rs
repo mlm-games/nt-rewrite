@@ -196,6 +196,12 @@ impl AudioHost {
     fn play(&mut self, stem: &str, volume: f32, variance: f32, rng: &mut RunnerRng) -> bool {
         let jitter = rng.random::<f32>();
         let rate = 1.0 + (2.0 * jitter - 1.0) * variance * 0.5;
+        // GML `snd_play_loop` stems: start a sustained voice so the
+        // matching `stop_<stem>` cue actually silences it. One-shot
+        // playback was leaving these audible only once.
+        if LOOP_CUES.binary_search(&stem).is_ok() {
+            return self.sfx.play_loop(stem, volume, rate).is_some();
+        }
         let now_ms = self.epoch.elapsed().as_millis() as u64;
         self.sfx
             .bank()
@@ -430,6 +436,20 @@ const LOOP_FAMILY: [&str; 8] = [
     "sndFrogLoopButt",
     "sndHorrorLoop",
     "sndHorrorLoopTB",
+    "sndSalamanderFireLoop",
+];
+
+/// GML `snd_play_loop` stems the port already drives with a `stop_` cue.
+const LOOP_CUES: [&str; 10] = [
+    "sndCarLoop",
+    "sndChickenHeadlessLoop",
+    "sndEyesLoop",
+    "sndEyesLoopUpg",
+    "sndFrogLoop",
+    "sndFrogLoopButt",
+    "sndHorrorLoop",
+    "sndHorrorLoopTB",
+    "sndPortalLoop",
     "sndSalamanderFireLoop",
 ];
 

@@ -223,6 +223,9 @@ pub fn build_sim_schedule() -> Schedule {
                 effects::tick_hitstop_slowmo.in_set(NtSimSet::Always),
                 audio::update_amb_filter.in_set(NtSimSet::Always),
                 audio::sync_area_audio.in_set(NtSimSet::Always),
+                audio::tick_player_footsteps
+                    .in_set(NtSimSet::Always)
+                    .run_if(gameplay_active),
                 audio::tick_area_audio_fades.in_set(NtSimSet::Always),
             )
                 .chain(),
@@ -707,6 +710,9 @@ pub fn build_sim_schedule() -> Schedule {
                 progression::flush_dirty_save
                     .in_set(NtSimSet::Cleanup)
                     .run_if(in_game),
+                audio::tick_player_low_health
+                    .in_set(NtSimSet::Cleanup)
+                    .run_if(gameplay_active),
                 // Drops sampled pulses/axes when paused or out of game,
                 // after all consumers ran. GML has no per-frame sweep:
                 // pause deactivates the instances outright

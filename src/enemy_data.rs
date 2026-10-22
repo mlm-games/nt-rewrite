@@ -280,6 +280,30 @@ pub fn gml_snd_hurt(kind: EnemyKind, oasis: bool, hp_frac: f32, rng: &mut Runner
     }
 }
 
+/// GML enemy base `snd_mele` (`enemy/Create_0.gml:26`), overridden by the
+/// per-object `Create_0` assignments.
+pub fn gml_snd_melee(kind: EnemyKind) -> &'static str {
+    use EnemyKind::*;
+    match kind {
+        BigMaggot => "sndBigMaggotBite",
+        BoneFish | Crab => "sndOasisMelee",
+        DogGuardian => "sndDogGuardianMelee",
+        ExploFreak => "sndExploFreakKillself",
+        FastRat => "sndFastRatMelee",
+        Freak | PopoFreak => "sndFreakMelee",
+        GoldScorpion => "sndGoldScorpionMelee",
+        JungleFly => "sndFlyMelee",
+        Mimic | SuperMimic | WepMimic => "sndMimicMelee",
+        Rat => "sndRatMelee",
+        RhinoFreak => "sndRhinoFreakMelee",
+        Salamander => "sndSalamanderFire",
+        Scorpion => "sndScorpionMelee",
+        Spider | InvSpider => "sndSpiderMelee",
+        Turtle => "sndTurtleMelee",
+        _ => "sndMaggotBite",
+    }
+}
+
 /// GML bosses that opt out of the inherited rad drop by commenting out
 /// `event_inherited()` in their `Destroy_0`: `Nothing` (the Throne,
 /// `objects/Nothing/Destroy_0.gml`) and `Nothing2` (Throne II,

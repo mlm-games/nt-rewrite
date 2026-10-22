@@ -661,6 +661,66 @@ pub struct DropCtx<'a> {
 /// No `scrDrop` context: `Cocoon/Destroy_0.gml:2` then has no player to weigh
 /// against and drops nothing (GML's own `if (_player == noone) exit`).
 #[allow(clippy::too_many_arguments)]
+/// GML per-prop `snd_hurt` (`prop/Create_0.gml:9` default `sndHitPlant`,
+/// overridden by the object Creates). Keyed by the idle sprite the prop
+/// already carries, which is exactly the GML object's art.
+fn prop_hurt_cue(idle: &str) -> &'static str {
+    match idle {
+        "images/sprBigGenerator.png" => "sndBigGeneratorHurt",
+        "images/sprStreetLight.png" => "sndStreetLightBreak",
+        "images/sprBarrel.png"
+        | "images/sprGoldBarrel.png"
+        | "images/sprCarIdle.png"
+        | "images/sprVenusCar.png"
+        | "images/sprVenusCarFixed.png"
+        | "images/sprVenuzCar2.png"
+        | "images/sprHydrant.png"
+        | "images/sprSodaMachine.png"
+        | "images/sprNewsStand.png"
+        | "images/sprTube.png"
+        | "images/sprMutantTube.png"
+        | "images/sprSmallGenerator.png"
+        | "images/sprWaterMine.png"
+        | "images/sprVenuzTV.png"
+        | "images/sprGiantWepChest.png"
+        | "images/sprGiantAmmoChest.png" => "sndHitMetal",
+        "images/sprBigSkullOpen.png"
+        | "images/sprIcicle.png"
+        | "images/sprSnowMan.png"
+        | "images/sprCrystalProp.png"
+        | "images/sprNuclearPillar.png"
+        | "images/sprAnchor.png"
+        | "images/sprBigGeneratorInactive.png"
+        | "images/sprThroneStatue.png"
+        | "images/sprYVStatue.png"
+        | "images/sprTorch.png" => "sndHitRock",
+        _ => "sndHitPlant",
+    }
+}
+
+/// GML per-prop `snd_dead` (base prop defaults to `-1`), played by
+/// `prop/Destroy_0` with `snd_play_hit(..., 0.2)`.
+fn prop_dead_cue(idle: &str) -> Option<&'static str> {
+    match idle {
+        "images/sprHydrant.png" => Some("sndHydrantBreak"),
+        "images/sprIcicle.png" => Some("sndIcicleBreak"),
+        "images/sprSnowMan.png" => Some("sndSnowmanBreak"),
+        "images/sprSodaMachine.png" | "images/sprNewsStand.png" => Some("sndSodaMachineBreak"),
+        "images/sprSewerPipe.png" => Some("sndSewerPipeBreak"),
+        "images/sprTires.png" => Some("sndWheelPileBreak"),
+        "images/sprMoneyPile.png" => Some("sndMoneyPileBreak"),
+        "images/sprPizzaBox.png" => Some("sndPizzaBoxBreak"),
+        "images/sprPlantPotIdle.png" => Some("sndPlantPotBreak"),
+        "images/sprTube.png" => Some("sndLabsTubeBreak"),
+        "images/sprMutantTube.png" => Some("sndLabsMutantTubeBreak"),
+        "images/sprSmallGenerator.png" => Some("sndGeneratorBreak"),
+        "images/sprBigGenerator.png" => Some("sndBigGeneratorBreak"),
+        "images/sprCocoon.png" => Some("sndCocoonBreak"),
+        "images/sprCrystalProp.png" => Some("sndCrystalPropBreak"),
+        _ => None,
+    }
+}
+
 pub fn damage_destructible_prop(
     commands: &mut Commands,
     catalog: &AnimCatalog,
@@ -771,7 +831,14 @@ pub fn damage_destructible_prop_ctx(
                 dead = true;
             }
         }
-        audio.play_hit(cues);
+        let hurt = sprites
+            .map(|s| prop_hurt_cue(s.idle))
+            .unwrap_or("sndHitPlant");
+        cues.push(AudioCue {
+            name: hurt,
+            volume: 1.0,
+            variance: 0.2,
+        });
         legacy_explosive = prop.explosive;
         death_copy = de.copied();
         sprites_copy = sprites.copied();
@@ -796,6 +863,15 @@ pub fn damage_destructible_prop_ctx(
         cues,
         rng,
     );
+    if let Some(sprites) = sprites_copy
+        && let Some(dead) = prop_dead_cue(sprites.idle)
+    {
+        cues.push(AudioCue {
+            name: dead,
+            volume: 1.0,
+            variance: 0.2,
+        });
+    }
     commands.entity(prop_e).try_despawn();
     if let Ok(entrance) = entrances.get(prop_e) {
         secrets.queue(entrance.target);

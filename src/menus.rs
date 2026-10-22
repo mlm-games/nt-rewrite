@@ -1423,9 +1423,24 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 emit_denied(world);
                 return;
             }
+            let closing = world
+                .get_resource::<MenuState>()
+                .is_some_and(|menu| menu.loadout_open);
             if let Some(mut menu) = world.get_resource_mut::<MenuState>() {
                 menu.loadout_open = !menu.loadout_open;
             }
+            emit_sfx(
+                world,
+                crate::audio::AudioCue {
+                    name: if closing {
+                        "sndClickBack"
+                    } else {
+                        "sndMenuLoadout"
+                    },
+                    volume: 1.0,
+                    variance: 0.0,
+                },
+            );
             emit_cue(world, &UiAction::ToggleLoadout);
         }
         UiAction::ToggleHardmode => {
@@ -1497,6 +1512,14 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                 .race_loadout_mut(race)
                 .start_crown = next;
             mark_dirty(world);
+            emit_sfx(
+                world,
+                crate::audio::AudioCue {
+                    name: "sndMenuCrown",
+                    volume: 1.0,
+                    variance: 0.1,
+                },
+            );
             emit_cue(world, &UiAction::CycleCrown(dir));
         }
         UiAction::SelectCrown(crown_id) => {
@@ -1517,7 +1540,7 @@ pub fn apply_menu_action(world: &mut World, action: UiAction) {
                     .race_loadout_mut(race)
                     .start_crown = crown_gml_to_port(crown_id);
                 mark_dirty(world);
-                emit_sfx(world, crown_select_sfx());
+                emit_sfx(world, crown_select_sfx(crown_id));
                 emit_cue(world, &UiAction::SelectCrown(crown_id));
             } else {
                 emit_denied(world);

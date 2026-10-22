@@ -442,6 +442,7 @@ pub fn spawn_player_loaded(
 /// `setup_run_with_seed` and `setup_title_campfire` funnel through here so
 /// menu transitions never inherit a dead run's world.
 pub fn teardown_session_entities(world: &mut World) {
+    crate::audio::stop_all_loops(world);
     //
     let stale: Vec<Entity> = world
         .query::<Entity>()

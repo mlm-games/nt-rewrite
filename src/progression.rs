@@ -1093,6 +1093,7 @@ pub fn apply_mutation(
         MutationId::ImpactWrists => {}
         MutationId::ExtraFeet => {
             player.speed_mult *= 1.5;
+            player.footextra += 1;
         }
         MutationId::Bloodlust => {
             player.bloodlust = true;

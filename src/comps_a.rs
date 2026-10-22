@@ -721,6 +721,12 @@ pub struct Player {
     pub melee_flip: bool,
     /// Skeleton Blood Gamble streak (GML skeletongamble).
     pub skeleton_gamble: u32,
+    /// GML `Player.footstep`: animation frame where the next footfall
+    /// fires (`scrFootSteps`), advanced by race-specific step sizes.
+    pub footstep: f32,
+    /// GML `Player.footextra`: Extra Feet retriggers every frame past the
+    /// threshold (`scrFootSteps.gml:9`).
+    pub footextra: u32,
 }
 
 impl Default for Player {
@@ -786,6 +792,8 @@ impl Default for Player {
             mutations: Vec::new(),
             melee_flip: false,
             skeleton_gamble: 0,
+            footstep: 0.0,
+            footextra: 0,
         }
     }
 }

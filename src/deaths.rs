@@ -72,7 +72,11 @@ pub fn resolve_player_revives(
         phealth.hp = 1;
         phealth.invuln = GTimer::from_seconds(1.5, TimerMode::Once);
         crate::combat::HitFlash::apply(&mut commands, player_e, [1.0, 0.95, 0.6, 1.0], 0.25);
-        audio.play_pickup(&mut cues);
+        cues.push(AudioCue {
+            name: "sndChickenLoseHead",
+            volume: 1.0,
+            variance: 0.0,
+        });
         crate::effects::spawn_burst(
             &mut commands,
             &mut streams.fx,
@@ -94,7 +98,11 @@ pub fn resolve_player_revives(
             phealth.hp = 1;
             phealth.invuln = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
             crate::combat::HitFlash::apply(&mut commands, player_e, [0.3, 1.0, 0.5, 1.0], 0.3);
-            audio.play_pickup(&mut cues);
+            cues.push(AudioCue {
+                name: "sndStrongSpiritLost",
+                volume: 1.0,
+                variance: 0.0,
+            });
             return;
         }
 
@@ -227,6 +235,7 @@ pub fn resolve_player_gameover(
     }
 
     run.game_over = true;
+    crate::audio::push_loop_stops(&mut cues);
     // GML `GameOver/Create_0:55`: the run save is dropped when the run ends.
     crate::run_save::delete_run_save();
 

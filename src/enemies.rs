@@ -816,6 +816,15 @@ fn enemy_cue(cues: &mut Queue<AudioCue>, stem: &'static str) {
     });
 }
 
+/// GML `snd_play_hit`/`snd_play_hit_big`: gain 1, pitch spread 0.2.
+fn enemy_hit_cue(cues: &mut Queue<AudioCue>, stem: &'static str) {
+    cues.push(AudioCue {
+        name: stem,
+        volume: 1.0,
+        variance: 0.2,
+    });
+}
+
 /// True when a kind owns a dedicated verbatim `tick_*` in this module. The
 /// generic block in [`enemy_ai`] must skip these, or they fire twice per
 /// cycle: once through their own GML `Alarm_1` port and once through the
@@ -2997,6 +3006,14 @@ pub fn enemy_ai(
                 };
                 pos.0 = guardian_reappear(rng, epos, player_pos, &mask);
                 vel.0 = glam::Vec2::ZERO;
+                enemy_cue(
+                    &mut cues,
+                    if enemy.kind == EnemyKind::Guardian {
+                        "sndGuardianAppear"
+                    } else {
+                        "sndCrownGuardianAppear"
+                    },
+                );
             }
 
             if enemy.kind == EnemyKind::DogGuardian
@@ -3093,7 +3110,7 @@ pub fn enemy_ai(
             // `ExploFreak/Collision_Wall`: it blows itself up on any wall
             // contact while the player is within 96 px.
             EnemyKind::ExploFreak if contact.is_some() && dist < 96.0 => {
-                enemy_cue(&mut cues, "snd_mele");
+                enemy_cue(&mut cues, "sndExploFreakKillself");
                 commands.entity(entity).despawn();
                 continue;
             }
@@ -3195,6 +3212,9 @@ pub fn enemy_ai(
                             brain.gunangle,
                             euphoria,
                         );
+                        if enemy.kind == EnemyKind::Guardian {
+                            enemy_hit_cue(&mut cues, "sndGuardianFire");
+                        }
                     } else if matches!(
                         enemy.kind,
                         EnemyKind::LaserCrystal | EnemyKind::InvLaserCrystal
@@ -3354,6 +3374,7 @@ pub fn enemy_ai(
                         if enemy.kind == EnemyKind::Guardian && los && rng.random::<f32>() < 0.5 {
                             // GML `Guardian/Alarm_1:35-40`: a coin flip to
                             // vanish instead of firing.
+                            enemy_hit_cue(&mut cues, "sndGuardianDisappear");
                             brain.fire = 1;
                             brain.attack = GTimer::from_seconds(
                                 (10.0 + rng.random_range(0.0_f32..40.0) + 60.0) / 30.0,
@@ -3875,6 +3896,23 @@ pub fn enemy_ai(
                     }
                 } else if fire_due {
                     fire_enemy_shot(&mut commands, rng, entity, &*enemy, def, epos, dir);
+                    match enemy.kind {
+                        EnemyKind::FireBaller => enemy_cue(&mut cues, "sndFireballerFire"),
+                        EnemyKind::SuperFireBaller => {
+                            enemy_cue(&mut cues, "sndSuperFireballerFire")
+                        }
+                        EnemyKind::Molefish => {
+                            enemy_cue(&mut cues, "sndEnemyFire");
+                            enemy_cue(&mut cues, "sndMolefishFire");
+                        }
+                        EnemyKind::Molesarge => {
+                            enemy_cue(&mut cues, "sndMolesargeFire");
+                            enemy_cue(&mut cues, "sndEnemyFire");
+                        }
+                        EnemyKind::Jock => enemy_hit_cue(&mut cues, "sndJockFire"),
+                        EnemyKind::CrownGuardian => enemy_cue(&mut cues, "sndBigBallFire"),
+                        _ => {}
+                    }
                     show_enemy_fire(
                         &mut commands,
                         &catalog,
@@ -8599,7 +8637,22 @@ pub fn tick_popo_rolls(
         if !elite && enemy.kind != EnemyKind::IdpdGrunt {
             continue;
         }
-        let male = *males.entry(entity).or_insert_with(|| rng.random_bool(0.5));
+        let male = match males.entry(entity) {
+            std::collections::hash_map::Entry::Occupied(entry) => *entry.get(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let male = rng.random_bool(0.5);
+                entry.insert(male);
+                let enter = if elite {
+                    "sndEliteGruntEnter"
+                } else if male {
+                    "sndGruntEnterM"
+                } else {
+                    "sndGruntEnterF"
+                };
+                enemy_hit_cue(&mut cues, enter);
+                male
+            }
+        };
         let epos = pos.0;
         let to_player = player_pos.0 - epos;
         let dist = to_player.length();
@@ -9469,7 +9522,26 @@ pub fn tick_popo_gunners(
         if !shielder && enemy.kind != EnemyKind::IdpdInspector {
             continue;
         }
-        let male = *males.entry(entity).or_insert_with(|| rng.random_bool(0.5));
+        let male = match males.entry(entity) {
+            std::collections::hash_map::Entry::Occupied(entry) => *entry.get(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let male = rng.random_bool(0.5);
+                entry.insert(male);
+                let enter = if shielder {
+                    if male {
+                        "sndShielderEnterM"
+                    } else {
+                        "sndShielderEnterF"
+                    }
+                } else if male {
+                    "sndInspectorEnterM"
+                } else {
+                    "sndInspectorEnterF"
+                };
+                enemy_hit_cue(&mut cues, enter);
+                male
+            }
+        };
         let epos = pos.0;
         let to_player = player_at - epos;
         let dist = to_player.length();
@@ -9851,6 +9923,7 @@ pub fn tick_turrets(
         let epos = pos.0;
         if !inited.contains(&entity) {
             inited.insert(entity);
+            enemy_hit_cue(&mut cues, "sndTurretSpawn");
             // GML `Create_0`: `ammo = 0`, `gunangle = random_angle`,
             // `offset = 0`, `alarm[3] = 1`. `Alarm_3` destroys every wall
             // the turret is embedded in, and it lands on this first step.
@@ -10213,6 +10286,7 @@ pub fn tick_elite_inspectors(
     mut last_seen: Local<HashMap<Entity, glam::Vec2>>,
     mut headings: Local<HashMap<Entity, glam::Vec2>>,
     mut inited: Local<std::collections::HashSet<Entity>>,
+    mut cues: ResMut<Queue<AudioCue>>,
 
     mut streams: ResMut<SimStreams>,
 ) {
@@ -10240,6 +10314,7 @@ pub fn tick_elite_inspectors(
         let epos = pos.0;
         if !inited.contains(&entity) {
             inited.insert(entity);
+            enemy_hit_cue(&mut cues, "sndEliteInspectorEnter");
             // GML `Create_0`: `walk = 30`, `grenades = 5`,
             // `alarm[1] = 30 + random(15)`.
             brain.walk = 30.0;
@@ -10455,6 +10530,7 @@ pub fn tick_elite_shielders(
     >,
     mut headings: Local<HashMap<Entity, glam::Vec2>>,
     mut inited: Local<std::collections::HashSet<Entity>>,
+    mut cues: ResMut<Queue<AudioCue>>,
 
     mut streams: ResMut<SimStreams>,
 ) {
@@ -10476,6 +10552,7 @@ pub fn tick_elite_shielders(
         let epos = pos.0;
         if !inited.contains(&entity) {
             inited.insert(entity);
+            enemy_hit_cue(&mut cues, "sndEliteShielderEnter");
             // GML `Create_0`: `walk = 30`, `freeze = 20`,
             // `alarm[1] = 30 + random(15)`.
             brain.walk = 30.0;
@@ -10763,10 +10840,26 @@ pub fn tick_boss_intro(
     time: Res<SimTime>,
     mut commands: Commands,
     mut q: Query<(Entity, &mut BossIntro)>,
+    mut started: Local<std::collections::HashSet<Entity>>,
+    mut cues: ResMut<Queue<AudioCue>>,
 ) {
+    started.retain(|e| q.contains(*e));
     for (e, mut intro) in &mut q {
+        if started.insert(e) {
+            cues.push(AudioCue {
+                name: "sndBossIntroIn",
+                volume: 1.0,
+                variance: 0.0,
+            });
+        }
         intro.timer.tick(time.delta_secs);
         if intro.timer.just_finished() {
+            started.remove(&e);
+            cues.push(AudioCue {
+                name: "sndBossIntroOut",
+                volume: 1.0,
+                variance: 0.0,
+            });
             commands.entity(e).despawn();
         }
     }

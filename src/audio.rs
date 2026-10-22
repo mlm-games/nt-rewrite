@@ -12,12 +12,15 @@
 use bevy_ecs::prelude::*;
 use repame_sim::SimTime;
 
-use crate::comps_a::{Player, RaceState, Run};
+use crate::anim::{PlayerAnim, SpriteAnim};
+use crate::comps_a::{FloorMask, Health, Player, Pos, RaceState, Run};
 use crate::comps_b::{
-    BossBrain, CampfireProp, CrownPedestal, Enemy, FloorTransition, LoopTransition,
+    BossBrain, CampfireProp, CrownPedestal, Dash, Enemy, FloorTransition, LoopTransition,
+    ThroneCarpet,
 };
-use crate::data::{AreaId, EnemyKind, RaceId};
+use crate::data::{AreaId, EnemyKind, RaceId, SkinLetter};
 use crate::msg::Queue;
+use crate::rng_streams::SimStreams;
 use crate::state::{AppState, Paused};
 
 /// One fire-and-forget sound with playback variation.
@@ -840,6 +843,304 @@ pub fn sync_area_audio(
     state.current_ambience = wanted_ambience;
 }
 
+const FOOT_ORG_SAND: [&str; 6] = [
+    "sndFootOrgSand1",
+    "sndFootOrgSand2",
+    "sndFootOrgSand3",
+    "sndFootOrgSand4",
+    "sndFootOrgSand5",
+    "sndFootOrgSand6",
+];
+const FOOT_ORG_ROCK: [&str; 6] = [
+    "sndFootOrgRock1",
+    "sndFootOrgRock2",
+    "sndFootOrgRock3",
+    "sndFootOrgRock4",
+    "sndFootOrgRock5",
+    "sndFootOrgRock6",
+];
+const FOOT_ORG_METAL: [&str; 6] = [
+    "sndFootOrgMetal1",
+    "sndFootOrgMetal2",
+    "sndFootOrgMetal3",
+    "sndFootOrgMetal4",
+    "sndFootOrgMetal5",
+    "sndFootOrgMetal6",
+];
+const FOOT_MET_SAND: [&str; 6] = [
+    "sndFootMetSand1",
+    "sndFootMetSand2",
+    "sndFootMetSand3",
+    "sndFootMetSand4",
+    "sndFootMetSand5",
+    "sndFootMetSand6",
+];
+const FOOT_MET_ROCK: [&str; 6] = [
+    "sndFootMetRock1",
+    "sndFootMetRock2",
+    "sndFootMetRock3",
+    "sndFootMetRock4",
+    "sndFootMetRock5",
+    "sndFootMetRock6",
+];
+const FOOT_MET_METAL: [&str; 6] = [
+    "sndFootMetMetal1",
+    "sndFootMetMetal2",
+    "sndFootMetMetal3",
+    "sndFootMetMetal4",
+    "sndFootMetMetal5",
+    "sndFootMetMetal6",
+];
+const FOOT_PLA_SAND: [&str; 6] = [
+    "sndFootPlaSand1",
+    "sndFootPlaSand2",
+    "sndFootPlaSand3",
+    "sndFootPlaSand4",
+    "sndFootPlaSand5",
+    "sndFootPlaSand6",
+];
+const FOOT_PLA_ROCK: [&str; 6] = [
+    "sndFootPlaRock1",
+    "sndFootPlaRock2",
+    "sndFootPlaRock3",
+    "sndFootPlaRock4",
+    "sndFootPlaRock5",
+    "sndFootPlaRock6",
+];
+const FOOT_PLA_METAL: [&str; 6] = [
+    "sndFootPlaMetal1",
+    "sndFootPlaMetal2",
+    "sndFootPlaMetal3",
+    "sndFootPlaMetal4",
+    "sndFootPlaMetal5",
+    "sndFootPlaMetal6",
+];
+const FOOT_SHO_SAND: [&str; 6] = [
+    "sndFootShoSand1",
+    "sndFootShoSand2",
+    "sndFootShoSand3",
+    "sndFootShoSand4",
+    "sndFootShoSand5",
+    "sndFootShoSand6",
+];
+const FOOT_SHO_ROCK: [&str; 6] = [
+    "sndFootShoRock1",
+    "sndFootShoRock2",
+    "sndFootShoRock3",
+    "sndFootShoRock4",
+    "sndFootShoRock5",
+    "sndFootShoRock6",
+];
+const FOOT_SHO_METAL: [&str; 6] = [
+    "sndFootShoMetal1",
+    "sndFootShoMetal2",
+    "sndFootShoMetal3",
+    "sndFootShoMetal4",
+    "sndFootShoMetal5",
+    "sndFootShoMetal6",
+];
+const FOOT_SLIME: [&str; 6] = [
+    "sndFootSlime1",
+    "sndFootSlime2",
+    "sndFootSlime3",
+    "sndFootSlime4",
+    "sndFootSlime5",
+    "sndFootSlime6",
+];
+
+/// GML `Floor/Create_0.gml:45-105` material by area, including the
+/// `styleb` ruin override.
+fn footstep_material(area: AreaId, styleb: bool) -> u8 {
+    match crate::vortex::gml_area_for_area(area) {
+        1 | 101 => {
+            if styleb {
+                4
+            } else {
+                1
+            }
+        }
+        5 => {
+            if styleb {
+                3
+            } else {
+                1
+            }
+        }
+        2 | 6 | 102 | 106 => {
+            if styleb {
+                3
+            } else {
+                2
+            }
+        }
+        4 | 104 => {
+            if styleb {
+                5
+            } else {
+                2
+            }
+        }
+        3 | 7 | 100 => 2,
+        105 => 4,
+        _ => 1,
+    }
+}
+
+/// GML `scrFootSteps.gml:23-53`: race/material bank (sand 1/4, rock 2/5,
+/// metal 3/6) and the pitch spread passed to `snd_play_pitchvol`.
+fn footstep_variants(race: RaceId, material: u8) -> (&'static [&'static str; 6], f32) {
+    let sand = material == 1 || material == 4;
+    let rock = material == 2 || material == 5;
+    match race {
+        RaceId::Robot => (
+            if sand {
+                &FOOT_MET_SAND
+            } else if rock {
+                &FOOT_MET_ROCK
+            } else {
+                &FOOT_MET_METAL
+            },
+            0.1,
+        ),
+        RaceId::Venuz | RaceId::Rebel => (
+            if sand {
+                &FOOT_SHO_SAND
+            } else if rock {
+                &FOOT_SHO_ROCK
+            } else {
+                &FOOT_SHO_METAL
+            },
+            0.2,
+        ),
+        RaceId::Plant => (
+            if sand {
+                &FOOT_PLA_SAND
+            } else if rock {
+                &FOOT_PLA_ROCK
+            } else {
+                &FOOT_PLA_METAL
+            },
+            0.1,
+        ),
+        _ => (
+            if sand {
+                &FOOT_ORG_SAND
+            } else if rock {
+                &FOOT_ORG_ROCK
+            } else {
+                &FOOT_ORG_METAL
+            },
+            0.2,
+        ),
+    }
+}
+
+/// GML `Player/Step_0.gml:780` -> `scrFootSteps`: one bank hit when the
+/// walk strip crosses the next footfall frame, plus the 20% slime squelch
+/// on soft/metal ground (and for Melting).
+pub fn tick_player_footsteps(
+    run: Res<Run>,
+    mask: Option<Res<FloorMask>>,
+    carpets: Query<(&Pos, &ThroneCarpet)>,
+    mut streams: ResMut<SimStreams>,
+    mut cues: ResMut<Queue<AudioCue>>,
+    mut players: Query<
+        (
+            &Pos,
+            &mut Player,
+            &RaceState,
+            Option<&SpriteAnim>,
+            Option<&PlayerAnim>,
+            Option<&Dash>,
+        ),
+        With<Player>,
+    >,
+) {
+    let Some(mask) = mask else {
+        return;
+    };
+    let Ok((pos, mut player, race, anim, p_anim, dash)) = players.single_mut() else {
+        return;
+    };
+    let (Some(anim), Some(p_anim)) = (anim, p_anim) else {
+        return;
+    };
+    if !p_anim.moving || anim.path.as_str() != p_anim.walk {
+        player.footstep = 0.0;
+        return;
+    }
+    if race.race == RaceId::Venuz && race.skin == SkinLetter::B {
+        player.footstep = 0.0;
+        return;
+    }
+    if dash.is_some() {
+        return;
+    }
+    let frame = anim.frame as f32;
+    let threshold = player.footstep + 2.0;
+    if frame < threshold || (frame - 1.0 >= threshold && player.footextra != 1) {
+        return;
+    }
+
+    let cell = mask.world_to_cell(pos.0);
+    let mut material = footstep_material(run.area, mask.styleb.contains(&cell));
+    if carpets.iter().any(|(carpet_pos, carpet)| {
+        let d = (pos.0 - carpet_pos.0).abs();
+        d.x <= carpet.half_extents.x && d.y <= carpet.half_extents.y
+    }) {
+        material = 1;
+    }
+
+    let rng = &mut streams.fx;
+    if race.race == RaceId::BigDog {
+        cues.push(AudioCue {
+            name: "sndBigDogWalk",
+            volume: 0.2,
+            variance: 0.1,
+        });
+    } else {
+        let (variants, variance) = footstep_variants(race.race, material);
+        let index = rng.random_range(0..variants.len());
+        cues.push(AudioCue {
+            name: variants[index],
+            volume: 0.2,
+            variance,
+        });
+        if (material > 3 || race.race == RaceId::Melting) && rng.random_range(0..5) == 0 {
+            let index = rng.random_range(0..FOOT_SLIME.len());
+            cues.push(AudioCue {
+                name: FOOT_SLIME[index],
+                volume: 0.2,
+                variance: 0.2,
+            });
+        }
+    }
+
+    match race.race {
+        RaceId::Plant => {
+            player.footstep += 1.0;
+            if player.footstep >= 3.0 {
+                player.footstep -= 3.0;
+            }
+        }
+        RaceId::Robot | RaceId::Horror => {
+            player.footstep += 1.0;
+            if player.footstep == 2.0 || player.footstep == 5.0 {
+                player.footstep += 1.0;
+            }
+            if player.footstep >= 6.0 {
+                player.footstep -= 6.0;
+            }
+        }
+        _ => {
+            player.footstep += 3.0;
+            if player.footstep >= 6.0 {
+                player.footstep -= 6.0;
+            }
+        }
+    }
+}
+
 /// Remix layer volumes every tick (GML `MusCont/Step_0.gml:13-14`:
 /// song `opt_musvol`, ambience `opt_ambvol * ambfilter`; the backend
 /// applies `channels.master` itself).
@@ -1187,12 +1488,138 @@ pub fn hover_sfx() -> AudioCue {
     }
 }
 
-/// Crown pick sting (GML `scrCampfireMenuCreate.gml:822`
-/// `snd_play(sndMenuCrown, 0.95 + random(0.1))` - ±0.05 pitch jitter).
-pub fn crown_select_sfx() -> AudioCue {
+/// Crown icon pick sting (GML `CrownIcon/Other_10.gml:5`
+/// `snd_play(scr_crown_get_sound(crown))`, keyed by the GML crown id).
+pub fn crown_select_sfx(crown: u8) -> AudioCue {
+    let name = match crown {
+        0 => "sndCrownRandom",
+        1 => "sndCrownNo",
+        2 => "sndCrownDeath",
+        3 => "sndCrownLife",
+        4 => "sndCrownHaste",
+        5 => "sndCrownGuns",
+        6 => "sndCrownHatred",
+        7 => "sndCrownBlood",
+        8 => "sndCrownDestiny",
+        9 => "sndCrownLove",
+        10 => "sndCrownLuck",
+        11 => "sndCrownCurses",
+        12 => "sndCrownRisk",
+        13 => "sndCrownProtection",
+        _ => "sndCrownRandom",
+    };
     AudioCue {
-        name: "sndMenuCrown",
+        name,
         volume: 1.0,
-        variance: 0.1,
+        variance: 0.0,
+    }
+}
+
+/// GML `Player.snd_crwn` (`scrPlayerCreate.gml:52`): the race's
+/// `sndMutant<n>Crwn` line, played when the pedestal crown is taken
+/// (`CrownPickup/Collision_Player.gml:22`).
+pub fn crown_voice(race: RaceId) -> &'static str {
+    const VOICES: [&str; 16] = [
+        "sndMutant1Crwn",
+        "sndMutant2Crwn",
+        "sndMutant3Crwn",
+        "sndMutant4Crwn",
+        "sndMutant5Crwn",
+        "sndMutant6Crwn",
+        "sndMutant7Crwn",
+        "sndMutant8Crwn",
+        "sndMutant9Crwn",
+        "sndMutant10Crwn",
+        "sndMutant11Crwn",
+        "sndMutant12Crwn",
+        "sndMutant13Crwn",
+        "sndMutant14Crwn",
+        "sndMutant15Crwn",
+        "sndMutant16Crwn",
+    ];
+    VOICES
+        .get((race as usize).saturating_sub(1))
+        .copied()
+        .unwrap_or(VOICES[0])
+}
+
+/// GML `Player.snd_lowh` (`scrPlayerCreate.gml:50`): the race's low-health
+/// line, replayed whenever a hit lands at 4 HP or less.
+pub fn low_health_voice(race: RaceId) -> &'static str {
+    const VOICES: [&str; 16] = [
+        "sndMutant1LowH",
+        "sndMutant2LowH",
+        "sndMutant3LowH",
+        "sndMutant4LowH",
+        "sndMutant5LowH",
+        "sndMutant6LowH",
+        "sndMutant7LowH",
+        "sndMutant8LowH",
+        "sndMutant9LowH",
+        "sndMutant10LowH",
+        "sndMutant11LowH",
+        "sndMutant12LowH",
+        "sndMutant13LowH",
+        "sndMutant14LowH",
+        "sndMutant15LowH",
+        "sndMutant16LowH",
+    ];
+    VOICES
+        .get((race as usize).saturating_sub(1))
+        .copied()
+        .unwrap_or(VOICES[0])
+}
+
+/// GML `Player/Step_0.gml:527-536`: a low-health line on every hit that
+/// leaves at most 4 HP. The ghost-bar re-trigger is subsumed by the same
+/// per-hit event.
+pub fn tick_player_low_health(
+    mut players: Query<(Entity, &Health, &RaceState), With<Player>>,
+    mut last_hp: Local<std::collections::HashMap<Entity, i32>>,
+    mut cues: ResMut<Queue<AudioCue>>,
+) {
+    for (entity, health, race) in &mut players {
+        let previous = last_hp.insert(entity, health.hp);
+        if let Some(previous) = previous
+            && health.hp < previous
+            && health.hp <= 4
+        {
+            cues.push(AudioCue {
+                name: low_health_voice(race.race),
+                volume: 1.0,
+                variance: 0.0,
+            });
+        }
+    }
+}
+
+/// Stop every loop the port can start: GML `CleanUp_0`/`Destroy_0` sites
+/// silence these when the owning instance disappears, but the port's
+/// entity teardown has no per-entity audio hook.
+pub fn push_loop_stops(cues: &mut Queue<AudioCue>) {
+    const STOPS: [&str; 10] = [
+        "stop_sndCarLoop",
+        "stop_sndChickenHeadlessLoop",
+        "stop_sndEyesLoop",
+        "stop_sndEyesLoopUpg",
+        "stop_sndFrogLoop",
+        "stop_sndFrogLoopButt",
+        "stop_sndHorrorLoop",
+        "stop_sndHorrorLoopTB",
+        "stop_sndPortalLoop",
+        "stop_sndSalamanderFireLoop",
+    ];
+    for name in STOPS {
+        cues.push(AudioCue {
+            name,
+            volume: 1.0,
+            variance: 0.0,
+        });
+    }
+}
+
+pub fn stop_all_loops(world: &mut World) {
+    if let Some(mut cues) = world.get_resource_mut::<Queue<AudioCue>>() {
+        push_loop_stops(&mut cues);
     }
 }

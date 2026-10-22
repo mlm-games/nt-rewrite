@@ -2484,7 +2484,15 @@ pub fn collect_pickups(
                 // `num` with no multiplier, so the spawn-time amount is
                 // authoritative.
                 health.hp = (health.hp + amount).min(health.max);
+                let had_spirit = player.strong_spirit_ready;
                 try_recharge_strong_spirit(&mut player, &health);
+                if !had_spirit && player.strong_spirit_ready {
+                    cues.push(crate::audio::AudioCue {
+                        name: "sndStrongSpiritGain",
+                        volume: 1.0,
+                        variance: 0.0,
+                    });
+                }
                 repame_fx::spawn_number(
                     &mut commands,
                     player_pos.x,
@@ -2520,7 +2528,15 @@ pub fn collect_pickups(
                         _ => 1,
                     };
                     health.hp = (health.hp + heal).min(health.max);
+                    let had_spirit = player.strong_spirit_ready;
                     try_recharge_strong_spirit(&mut player, &health);
+                    if !had_spirit && player.strong_spirit_ready {
+                        cues.push(crate::audio::AudioCue {
+                            name: "sndStrongSpiritGain",
+                            volume: 1.0,
+                            variance: 0.0,
+                        });
+                    }
                     repame_fx::spawn_number(
                         &mut commands,
                         player_pos.x,

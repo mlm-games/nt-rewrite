@@ -114,6 +114,7 @@ pub fn gamma_guts_aura(
     mut commands: Commands,
     player_q: Query<(&Pos, &Player), (With<Player>, Without<Enemy>)>,
     mut enemies: Query<(Entity, &Pos, &mut Health), (With<Enemy>, Without<Player>)>,
+    mut cues: ResMut<Queue<AudioCue>>,
 ) {
     let Ok((ppos, player)) = player_q.single() else {
         return;
@@ -128,9 +129,17 @@ pub fn gamma_guts_aura(
         if !health.invuln.is_finished() {
             continue;
         }
+        let before = health.hp;
         health.hp -= 6;
         health.invuln = GTimer::from_seconds(5.0 / 30.0, TimerMode::Once);
         HitFlash::apply(&mut commands, e, [0.4, 1.0, 0.4, 1.0], 0.1);
+        if before > 0 && health.hp <= 0 {
+            cues.push(AudioCue {
+                name: "sndGammaGutsKill",
+                volume: 1.0,
+                variance: 0.0,
+            });
+        }
     }
 }
 
@@ -286,6 +295,12 @@ pub fn contact_damage(
         rumble(&mut rumble_queue, 0.2, 0.8, 0.16);
         cues.push(AudioCue {
             name: crate::enemy_data::gml_race_hurt(race_state.race),
+            volume: 1.0,
+            variance: 0.2,
+        });
+        // GML `enemy/Collision_Player.gml:8` `snd_play_hit(snd_mele)`.
+        cues.push(AudioCue {
+            name: crate::enemy_data::gml_snd_melee(enemy.kind),
             volume: 1.0,
             variance: 0.2,
         });
@@ -1766,9 +1781,19 @@ pub fn resolve_death_drops(
         let rng = &mut deaths_rng;
         if player.bloodlust && rng.random_range(0..15) == 0 {
             phealth.hp = (phealth.hp + 2).min(phealth.max);
+            cues.push(crate::audio::AudioCue {
+                name: "sndBloodlustProc",
+                volume: 1.0,
+                variance: 0.0,
+            });
         }
         if player.lucky_shot && rng.random_range(0..10) == 0 {
             give_ammo(&mut pinv, &player, &mut streams.pickups);
+            cues.push(crate::audio::AudioCue {
+                name: "sndLuckyShotProc",
+                volume: 1.0,
+                variance: 0.0,
+            });
         }
 
         if player.mutations.contains(&MutationId::TriggerFingers)
@@ -2743,6 +2768,7 @@ fn retaliate_sharp_teeth(
     damage: i32,
     center: glam::Vec2,
     frame: &CurrentFrame,
+    cues: &mut Queue<AudioCue>,
     targets: &mut Query<
         (
             Entity,
@@ -2761,6 +2787,7 @@ fn retaliate_sharp_teeth(
         Without<Projectile>,
     >,
 ) {
+    let mut hit_any = false;
     for (ee, epos, team, _, mut health, _, _, nexthurt, missile, leap, _, _) in targets.iter_mut() {
         if missile.is_some() || *team != Team::Enemy {
             continue;
@@ -2768,11 +2795,19 @@ fn retaliate_sharp_teeth(
         if epos.0.distance(center) > 900.0 {
             continue;
         }
+        hit_any = true;
         health.hp -= damage * 2;
         if let Some(mut nh) = nexthurt {
             nh.0 = if airborne_leap(leap) { 0 } else { frame.0 + 5 };
         }
         HitFlash::apply(commands, ee, [1.0, 0.4, 0.4, 1.0], 0.12);
+    }
+    if hit_any {
+        cues.push(AudioCue {
+            name: "sndSharpTeeth",
+            volume: 1.0,
+            variance: 0.0,
+        });
     }
 }
 
@@ -3267,7 +3302,7 @@ pub fn projectile_hits(
             && let Some((p, _, _)) = &player_state
             && p.sharp_teeth
         {
-            retaliate_sharp_teeth(&mut commands, proj.damage, hit_pos, &frame, &mut targets);
+            retaliate_sharp_teeth(&mut commands, proj.damage, hit_pos, &frame, &mut cues, &mut targets);
         }
 
         // GML `TrapFire/Collision_hitme.gml:2-7`: the flame hit never
